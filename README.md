@@ -57,7 +57,7 @@ The checker requires Python 3.9 or later and uses Python's standard library. Whe
 
 ### Local Windows development setup
 
-The private remote is https://github.com/admiraly/sutekh. The engine remains
+The public remote is https://github.com/admiraly/sutekh. The engine remains
 unimplemented; dependency setup is not M0 acceptance.
 
 ```powershell
@@ -75,9 +75,22 @@ tool versions and the verified LLVM installer checksum are recorded in
 `planning/toolchain-windows.json`. Setup evidence is in
 [the dependency handoff](planning/handoffs/2026-10-07-dependencies.md).
 
-### Decisions intentionally left to the owner
+### License and commercial use
 
-Remote repository name/location, final engine license, commercial branding, and any paid compute authorization remain unset. RED HORIZON's GPLv3 choice is not automatically applied to this different project. These decisions do not block local prototyping. Exact dependency versions must be resolved, reviewed, and pinned by the bootstrap agent rather than invented in this document.
+Sutekh is licensed under the [MIT License](LICENSE), the same permissive license
+used by [Godot](https://godotengine.org/license/). You may use it to build and
+sell proprietary games, sell engine distributions, and offer paid support,
+hosting, training, or development services. MIT also lets others use, modify,
+and redistribute Sutekh commercially without paying royalties. Redistributed
+copies or substantial portions must retain the copyright and license notices.
+Games and assets you create can have their own licenses; third-party components
+retain their respective terms.
+
+The owner selected MIT and public repository visibility on 7 October 2026.
+RED HORIZON's GPLv3 choice belongs to that separate project. Final commercial
+branding and any paid compute authorization remain owner decisions. Exact
+dependency versions must be resolved, reviewed, and pinned by the bootstrap
+agent rather than invented in this document.
 
 ### Rebuild the handoff archive
 

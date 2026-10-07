@@ -10,11 +10,12 @@
   "engine_benchmarks": "not_run",
   "original_bfme_compatibility": "not_run",
   "remote_repository": "https://github.com/admiraly/sutekh",
-  "license_decision": null,
+  "license_decision": "MIT",
   "active_leases": [],
   "pending_jobs": [],
   "next_ready_tasks": [
     "M0-00"
   ],
-  "note": "Specification pack only. Private repository initialized on 2026-10-07; see planning/handoffs/2026-10-07-repository-setup.md. Pack/example checks are separate from native engine evidence."
+  "note": "Specification pack only. Owner selected a public repository and MIT license on 2026-10-07; see planning/handoffs/2026-10-07-public-license.md. Pack/example checks are separate from native engine evidence.",
+  "repository_visibility": "public"
 }

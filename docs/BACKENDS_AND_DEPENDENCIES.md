@@ -48,7 +48,7 @@ Do not fetch dependencies at runtime in a shipped game. Development builds can o
 | AsmJit C-ABI adapter | Selected for M1 | Documented unsupported need/performance evidence |
 | No CPU/GPU autotuner in M0 | Selected | Representative GPU workloads and cost model exist |
 | Static SoA before auto-layout | Selected | Real access traces and migration tests exist |
-| Engine license | Owner decision pending | Before public distribution |
-| Final name/repository | Owner decision pending | Before publication/branding |
+| Engine license | MIT, selected by owner on 7 October 2026 | Third-party components retain their own terms |
+| Repository / final name | Public `admiraly/sutekh`; final branding pending | Before commercial branding |
 
 Sources: [SOURCE_NOTES.md](SOURCE_NOTES.md).
