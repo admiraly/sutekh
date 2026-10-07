@@ -55,6 +55,26 @@ python3 tools/validate_pack.py
 
 The checker requires Python 3.9 or later and uses Python's standard library. When `jsonschema` is installed it also performs Draft 2020-12 validation; otherwise it reports that specific layer as skipped. The core package checks and executable-example checks still run. No C/ASM compilation is performed by this checker.
 
+### Local Windows development setup
+
+The private remote is https://github.com/admiraly/sutekh. The engine remains
+unimplemented; dependency setup is not M0 acceptance.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r tools/requirements-dev.txt
+. .\tools\env-windows.ps1
+python tools/validate_pack.py
+```
+
+`env-windows.ps1` enables the project-local LLVM 23.1.3 toolchain and discovers
+installed MSVC headers/libraries and the Windows SDK for x64 compilation.
+LLVM is extracted under `local/toolchains/llvm-23.1.3/LLVM`; `.venv` and
+`local` are ignored by Git and excluded from handoff archives. Exact installed
+tool versions and the verified LLVM installer checksum are recorded in
+`planning/toolchain-windows.json`. Setup evidence is in
+[the dependency handoff](planning/handoffs/2026-10-07-dependencies.md).
+
 ### Decisions intentionally left to the owner
 
 Remote repository name/location, final engine license, commercial branding, and any paid compute authorization remain unset. RED HORIZON's GPLv3 choice is not automatically applied to this different project. These decisions do not block local prototyping. Exact dependency versions must be resolved, reviewed, and pinned by the bootstrap agent rather than invented in this document.

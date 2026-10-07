@@ -10,6 +10,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from validate_pack import pack_files
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_ORDER = [
@@ -65,8 +66,8 @@ def main() -> int:
             'extracted specification pack. Give each specialist only its role prompt and task packet. '
             'The role prompts are copy-ready; no provider-specific agent API is assumed.')
     subprocess.run([sys.executable, str(ROOT/'tools/validate_pack.py')], check=True)
-    files = sorted(p for p in ROOT.rglob('*') if p.is_file() and '__pycache__' not in p.parts
-                   and p.name not in ('PACK_INDEX.json', 'SHA256SUMS'))
+    files = sorted(p for p in pack_files()
+                   if p.name not in ('PACK_INDEX.json', 'SHA256SUMS'))
     index = {
         'project':'Sutekh', 'spec_version':'0.1', 'date':'2026-10-06',
         'status':'specification_and_prompt_package; native engine not implemented',
@@ -78,15 +79,14 @@ def main() -> int:
                   'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in files],
     }
     (ROOT/'PACK_INDEX.json').write_text(json.dumps(index, indent=2)+'\n', encoding='utf-8')
-    checksum_files = sorted(p for p in ROOT.rglob('*') if p.is_file() and '__pycache__' not in p.parts
-                            and p.name != 'SHA256SUMS')
+    checksum_files = sorted(p for p in pack_files()
+                            if p.name != 'SHA256SUMS')
     (ROOT/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  '
                                          f'{p.relative_to(ROOT).as_posix()}\n' for p in checksum_files), encoding='utf-8')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(args.output, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-        for p in sorted(ROOT.rglob('*')):
-            if p.is_file() and '__pycache__' not in p.parts:
-                z.write(p, arcname=f'{ROOT.name}/{p.relative_to(ROOT).as_posix()}')
+        for p in sorted(pack_files()):
+            z.write(p, arcname=f'{ROOT.name}/{p.relative_to(ROOT).as_posix()}')
     with zipfile.ZipFile(args.output) as z:
         bad = z.testzip()
         if bad:

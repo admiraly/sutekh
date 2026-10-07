@@ -1,15 +1,16 @@
 {
   "scope": "specification_pack_and_python_example_model_only",
   "status": "passed",
-  "strict_json_files_checked": 15,
+  "strict_json_files_checked": 16,
   "task_dag_nodes_checked": 24,
   "positive_fixture_checks": 10,
   "negative_ir_checks": 7,
   "additional_opcode_known_answer_checks": 4,
-  "internal_markdown_links_checked": 45,
+  "internal_markdown_links_checked": 46,
   "json_schema": {
-    "status": "skipped",
-    "reason": "Optional jsonschema package is not installed; standard-library checks still ran."
+    "status": "passed",
+    "schemas_checked": 6,
+    "instances_checked": 7
   },
   "native_engine_compilation": "not_run",
   "native_runtime_tests": "not_run",

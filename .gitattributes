@@ -1,0 +1,2 @@
+# Keep source bytes and package checksums stable across Windows/Linux clones.
+* text=auto eol=lf

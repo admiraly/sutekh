@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -16,6 +17,21 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 MASK = (1 << 32) - 1
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+def pack_files():
+    """Walk package sources without local environments, secrets, or artifacts."""
+    excluded = {'.git', '.venv', '.cache', 'build', 'out', 'local',
+                'local-assets', 'original-assets', '__pycache__'}
+    for directory, dirs, files in os.walk(ROOT, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d not in excluded
+                         and not d.startswith('build-')
+                         and not (Path(directory) / d).is_symlink())
+        for name in sorted(files):
+            path = Path(directory) / name
+            if (path.is_symlink() or name.endswith(('.pyc', '.pyo', '.zip'))
+                    or name == '.env' or (name.startswith('.env.') and name != '.env.example')):
+                continue
+            yield path
 
 class SpecError(Exception):
     def __init__(self, code: str, message: str):
@@ -208,7 +224,7 @@ def check_task_graph() -> int:
 def check_links() -> int:
     total = 0
     pattern = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
-    for path in ROOT.rglob("*.md"):
+    for path in (p for p in pack_files() if p.suffix == '.md'):
         for match in pattern.finditer(path.read_text(encoding="utf-8")):
             target = match.group(1).strip().split("#", 1)[0]
             if not target or "://" in target or target.startswith(("mailto:", "sandbox:")):
@@ -287,7 +303,7 @@ def schema_checks() -> dict[str, Any]:
 def main() -> int:
     try:
         json_count = 0
-        for path in ROOT.rglob("*.json"):
+        for path in (p for p in pack_files() if p.suffix == '.json'):
             if "invalid" in path.parts or path.name in ("PACK_VALIDATION.json", "PACK_INDEX.json"):
                 continue
             load(path)

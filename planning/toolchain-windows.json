@@ -1,0 +1,30 @@
+{
+  "scope": "development_dependencies_only",
+  "date": "2026-10-07",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "target": "x86_64-pc-windows-msvc",
+  "python": "3.14.7",
+  "cmake": "4.3.4",
+  "ninja_package": "1.13.0",
+  "llvm": {
+    "version": "23.1.3",
+    "commit": "0d261d1ca552c95a8f007e061c787ac7132fbcbc",
+    "origin": "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.3/LLVM-23.1.3-win64.msi",
+    "installer_sha256": "5153f848ac87553118340f16f8d3cd4351d729bcba6e4785c6a4a9af29676de9",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "path": "local/toolchains/llvm-23.1.3/LLVM",
+    "artifacts": {
+      "clang.exe": "f3425b2bff01bc401c84af6e5e180629182fafc2eb35cf971a3e50c9cf13f263",
+      "clang-cl.exe": "f3425b2bff01bc401c84af6e5e180629182fafc2eb35cf971a3e50c9cf13f263",
+      "lld-link.exe": "8d1dd3ba3a3810afc78a8bd97406b30bc5b9c301f9238224d35d030b0a826680"
+    }
+  },
+  "msvc": "14.29.30133",
+  "windows_sdk": "10.0.19041.0",
+  "checks": {
+    "c17_compile_link_execute": "passed",
+    "native_engine": "not_run"
+  },
+  "smoke_source_sha256": "e5a46cf505657b30e774e5ed382b0d31a997830f21b149bd307444625602ae13",
+  "smoke_executable_sha256": "8f33a2c1e60a251f75fa82ac113fac0724a57e9e50ff3af46a1c48a7a470b5d1"
+}
