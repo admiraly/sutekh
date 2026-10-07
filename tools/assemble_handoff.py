@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 admiraly
+# SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 """Rebuild combined handoff documents, validate them, and create the ZIP."""
 from __future__ import annotations
 import argparse
@@ -41,7 +43,16 @@ def root_links(text: str, source: Path) -> str:
     return LINK.sub(replace, text)
 
 def combine(filename: str, title: str, paths: list[str], introduction: str) -> None:
-    chunks = [f'# {title}\n\n{introduction}\n\n## Contents\n']
+    chunks = [f'# {title}\n\n',
+              '<!-- SPDX-FileCopyrightText: 2026 admiraly -->\n'
+              '<!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->\n\n'
+              '**Licensing:** This revision is source-available under '
+              '[PolyForm Perimeter License 1.0.1](LICENSE), not OSI Open Source. '
+              '[NOTICE.md](NOTICE.md) governs attribution and explains historical '
+              'license-decision entries; those entries do not grant a different '
+              'current license. Commercial/OEM rights require a separate agreement '
+              'where community terms do not cover the use.\n\n',
+              f'{introduction}\n\n## Contents\n']
     for i, rel in enumerate(paths, 1):
         heading = (ROOT/rel).read_text(encoding='utf-8').splitlines()[0].lstrip('# ')
         chunks.append(f'{i}. [{heading}](#{"section-" + str(i)}) — `{rel}`\n')
@@ -71,6 +82,9 @@ def main() -> int:
     index = {
         'project':'Sutekh', 'spec_version':'0.1', 'date':'2026-10-06',
         'status':'specification_and_prompt_package; native engine not implemented',
+        'license_spdx_expression':'LicenseRef-PolyForm-Perimeter-1.0.1',
+        'license_file':'LICENSE', 'notice_file':'NOTICE.md',
+        'distribution_model':'source-available; not OSI Open Source',
         'spec_documents':SPEC_ORDER,
         'prompts':prompts,
         'task_count':len(json.loads((ROOT/'planning/tasks.json').read_text())['tasks']),

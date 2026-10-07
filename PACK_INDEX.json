@@ -3,6 +3,10 @@
   "spec_version": "0.1",
   "date": "2026-10-06",
   "status": "specification_and_prompt_package; native engine not implemented",
+  "license_spdx_expression": "LicenseRef-PolyForm-Perimeter-1.0.1",
+  "license_file": "LICENSE",
+  "notice_file": "NOTICE.md",
+  "distribution_model": "source-available; not OSI Open Source",
   "spec_documents": [
     "ENGINE_CONSTITUTION.md",
     "ARCHITECTURE.md",
@@ -52,6 +56,16 @@
       "sha256": "72d0d03994f70dc120b28a763285260abaa443b812bbd073775bc543b782b937"
     },
     {
+      "path": ".github/PULL_REQUEST_TEMPLATE.md",
+      "bytes": 906,
+      "sha256": "fa0ae01803018b2075b2fa2b2c3e9a29a2f809502799761ee05cb024f7e4c9b2"
+    },
+    {
+      "path": ".github/workflows/repository-checks.yml",
+      "bytes": 1004,
+      "sha256": "c50fa711490cc4f2ebd6f1e8ec47988fb6f49aff0d92e3da76000ed87450b707"
+    },
+    {
       "path": ".gitignore",
       "bytes": 284,
       "sha256": "e3027406143eb16514cfd04a89dce5113c35603d6565b81652b95ff0356330ef"
@@ -70,6 +84,21 @@
       "path": "ARCHITECTURE.md",
       "bytes": 11878,
       "sha256": "4b26b3974e020bc6c7c7fb99dda41f3f98f4cbd7c4d4fdbcc65ae06992b2ed61"
+    },
+    {
+      "path": "CLA.md",
+      "bytes": 3783,
+      "sha256": "1337bd675be5614ac8040824d6f2ff48e08007f58e880a4b1a3a13f898e341d6"
+    },
+    {
+      "path": "COMMERCIAL_LICENSE.md",
+      "bytes": 1491,
+      "sha256": "72d71964279821d1affe7252d3e5e547e2d84564b0119577c8c5cb29b790024e"
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "bytes": 4020,
+      "sha256": "9486096227166f429c65a679db8fe07b5f0bb4c0f7da7176e138aad5ba82d72c"
     },
     {
       "path": "docs/AGENT_RPC.md",
@@ -213,8 +242,13 @@
     },
     {
       "path": "LICENSE",
-      "bytes": 1065,
-      "sha256": "249476f05cca98ab27c8872dd157e582afdd024b9900831cfa66a311a7d4c330"
+      "bytes": 4529,
+      "sha256": "5c7a5ccd847fcc285dda039e511ba013693fe979dfc5faee47f6fb59c7add337"
+    },
+    {
+      "path": "LICENSES/LicenseRef-PolyForm-Perimeter-1.0.1.txt",
+      "bytes": 4529,
+      "sha256": "5c7a5ccd847fcc285dda039e511ba013693fe979dfc5faee47f6fb59c7add337"
     },
     {
       "path": "LIVE_IR_SPEC.md",
@@ -227,29 +261,39 @@
       "sha256": "3a1d8480e075c92aab9554360f0672e2ac4a6bb74c0676d2a1043000fda69607"
     },
     {
+      "path": "NOTICE.md",
+      "bytes": 3724,
+      "sha256": "923a926b2db04b711d9eb3f1b4f9af58375b3ffca98308c9d373fcd4a7ceb276"
+    },
+    {
       "path": "PACK_VALIDATION.json",
       "bytes": 556,
-      "sha256": "0b1715aa146241c0b233e7f3ff653aa51766a3f5e637eaf88ffa303ca2e50c0c"
+      "sha256": "eb92e4a6b98975f04e4f31dc6c60227a6ded127ed669d24e7b3da56a0ecb30d8"
     },
     {
       "path": "planning/handoffs/2026-10-07-dependencies.md",
-      "bytes": 2494,
-      "sha256": "99cc83f7fdfd77480940104e53ae0bce8190f2a94567ce003c8906a2cd194d55"
+      "bytes": 2654,
+      "sha256": "5c02dfea834bf7f613a694cd5013733417db13ea14d13df4249544ab2a2caf93"
+    },
+    {
+      "path": "planning/handoffs/2026-10-07-perimeter-setup.md",
+      "bytes": 2931,
+      "sha256": "515d7aa5f0f4b46e331db7549b97f96cba65b7f08da0c66477d62341936622f0"
     },
     {
       "path": "planning/handoffs/2026-10-07-public-license.md",
-      "bytes": 1707,
-      "sha256": "192985cfb283881a15172b085f8b3aa42b3e043b847b2e771625a62a57f22f6f"
+      "bytes": 1867,
+      "sha256": "a2725e5dd53d4d0341f25b18a25a412652199653ebdd09e139a389d3c7abd901"
     },
     {
       "path": "planning/handoffs/2026-10-07-repository-setup.md",
-      "bytes": 2535,
-      "sha256": "5066933bb8d42d37fd1bd9f4ac8bdcdd23b99ed0327709cfa821ad8bc5203267"
+      "bytes": 2695,
+      "sha256": "f07a338bd522051cda46d739ae8d630314245cd4a8f7dc6082b3ea0d92389bfb"
     },
     {
       "path": "planning/status.json",
-      "bytes": 743,
-      "sha256": "7062eef3bd14b1e68cd569f19f044b0a6658ef2524c054504ec7c58ad3d85ebf"
+      "bytes": 1048,
+      "sha256": "0035f09725b6c8879a69d21d79e130b0626a78e334edc4caf777dc7d6ecddfbd"
     },
     {
       "path": "planning/tasks.json",
@@ -318,8 +362,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 7514,
-      "sha256": "a5aa9cff075d9d868ee1ae0e44334847dd37fe7f8ffbd4e4d50bfa12bdb76c0b"
+      "bytes": 9004,
+      "sha256": "f82a7715a2aef0404cd399d28a933807aedc80958c333ea333d4f42ffecbcd2f"
     },
     {
       "path": "schemas/capsule.schema.json",
@@ -352,34 +396,49 @@
       "sha256": "182803670a263840cfdad5ecaf4e82d059e337a980aea69bda307963233564b4"
     },
     {
+      "path": "SECURITY.md",
+      "bytes": 1362,
+      "sha256": "18484cb84ee5028e4916ccb78afcd04c997438c7bb14569bbe46302cd613db79"
+    },
+    {
       "path": "SUTEKH_ALL_PROMPTS.md",
-      "bytes": 29574,
-      "sha256": "555fc3b9f8b11f13234ae18c56f9d5eec8155613b3d660aebb774bb067db7b54"
+      "bytes": 30058,
+      "sha256": "fd259ea735be95bd3a92315144b7f70f451aa9738ffce1d8e0b946c1bcb953c6"
     },
     {
       "path": "SUTEKH_FULL_SPEC.md",
-      "bytes": 119529,
-      "sha256": "35f2ae8b22e43e92c93b6d50029065e254c557d320c55d85867cd98b06bfde87"
+      "bytes": 120013,
+      "sha256": "6a962c9d5faa1131dba7eb49316892a5b73be6abb9addccff277f74f46e7b952"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "bytes": 3171,
+      "sha256": "783a4ac1dec750229529b977b63f5b924e3b1484db181c80813b970db4bcd365"
     },
     {
       "path": "tools/assemble_handoff.py",
-      "bytes": 5560,
-      "sha256": "c154f26271a29f087b8b6993c86949c17c2e0663b3033670ddf676a24864ca66"
+      "bytes": 6512,
+      "sha256": "26f5815fb0f6e32d6d79f34477faccfd1d222c0a389434c78e894ffd176ede3a"
+    },
+    {
+      "path": "tools/check_repository_license.py",
+      "bytes": 5078,
+      "sha256": "d2282324b5625fddfe1c0ec4dccebc2c5f71d82eaf4dcc6d765450b87d7dbbf7"
     },
     {
       "path": "tools/env-windows.ps1",
-      "bytes": 1671,
-      "sha256": "698fea075c524cad1698a69a5ebcbc01d5f6c45ea5c481e97318aa975df7d154"
+      "bytes": 1774,
+      "sha256": "79d822899b9a8e99e64a4e21049661947598b4b2496b054b34011a7c236aaf56"
     },
     {
       "path": "tools/requirements-dev.txt",
-      "bytes": 207,
-      "sha256": "158a10882041cb2394232550c21604fc8a105274e860f7d9e397cb8c758d7995"
+      "bytes": 310,
+      "sha256": "9a5230ed79b6fb0081c735ef2b4f51e5c0119358e1e8e6fd9b5eb1f0ff83ced9"
     },
     {
       "path": "tools/validate_pack.py",
-      "bytes": 16130,
-      "sha256": "d4f0dc0dd51976a8c07b8a4fea19729f9ebf3c8ca120e673d4e256523e349142"
+      "bytes": 16233,
+      "sha256": "451f818574af372dcd4892036d534b7f3868927ae026b9415a4240cfcea04058"
     }
   ]
 }

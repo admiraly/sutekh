@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 admiraly
+# SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 """Validate the specification package and tiny SU-LIR examples, not an engine.
 
 Standard-library checks always run. Draft 2020-12 checks also run when the

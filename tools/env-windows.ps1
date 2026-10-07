@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 admiraly
+# SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 # Dot-source this file to enable the project-local x64 Windows toolchain.
 $sutekhRoot = Split-Path -Parent $PSScriptRoot
 $sutekhLlvmBin = Join-Path $sutekhRoot 'local\toolchains\llvm-23.1.3\LLVM\bin'

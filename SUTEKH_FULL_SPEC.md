@@ -1,5 +1,10 @@
 # SUTEKH — Complete engineering specification
 
+<!-- SPDX-FileCopyrightText: 2026 admiraly -->
+<!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
+
+**Licensing:** This revision is source-available under [PolyForm Perimeter License 1.0.1](LICENSE), not OSI Open Source. [NOTICE.md](NOTICE.md) governs attribution and explains historical license-decision entries; those entries do not grant a different current license. Commercial/OEM rights require a separate agreement where community terms do not cover the use.
+
 Version 0.1 • 6 October 2026. This convenience copy combines the authoritative individual specifications. Timing values are unmeasured targets. Machine-readable schemas, examples, task DAG, checker, and specialized prompts are in the accompanying archive. Edit individual documents, then regenerate this copy. This is not an implemented engine.
 
 ## Contents

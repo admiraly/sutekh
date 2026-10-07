@@ -6,7 +6,7 @@
   "positive_fixture_checks": 10,
   "negative_ir_checks": 7,
   "additional_opcode_known_answer_checks": 4,
-  "internal_markdown_links_checked": 47,
+  "internal_markdown_links_checked": 82,
   "json_schema": {
     "status": "passed",
     "schemas_checked": 6,

@@ -10,12 +10,16 @@
   "engine_benchmarks": "not_run",
   "original_bfme_compatibility": "not_run",
   "remote_repository": "https://github.com/admiraly/sutekh",
-  "license_decision": "MIT",
+  "license_decision": "PolyForm-Perimeter-1.0.1",
   "active_leases": [],
   "pending_jobs": [],
   "next_ready_tasks": [
     "M0-00"
   ],
-  "note": "Specification pack only. Owner selected a public repository and MIT license on 2026-10-07; see planning/handoffs/2026-10-07-public-license.md. Pack/example checks are separate from native engine evidence.",
-  "repository_visibility": "public"
+  "note": "Specification pack only. Public source-available repository under PolyForm Perimeter 1.0.1; see NOTICE.md and planning/handoffs/2026-10-07-perimeter-setup.md. Pack/example checks are separate from native engine evidence.",
+  "repository_visibility": "public",
+  "license_spdx_expression": "LicenseRef-PolyForm-Perimeter-1.0.1",
+  "distribution_model": "source-available; not OSI Open Source",
+  "copyright_holder": "admiraly",
+  "contributor_policy": "CLA v1.0: express acceptance before merge; contributor copyright retained"
 }

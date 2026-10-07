@@ -1,5 +1,10 @@
 # SUTEKH — All implementation and continuation prompts
 
+<!-- SPDX-FileCopyrightText: 2026 admiraly -->
+<!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
+
+**Licensing:** This revision is source-available under [PolyForm Perimeter License 1.0.1](LICENSE), not OSI Open Source. [NOTICE.md](NOTICE.md) governs attribution and explains historical license-decision entries; those entries do not grant a different current license. Commercial/OEM rights require a separate agreement where community terms do not cover the use.
+
 Version 0.1 • 6 October 2026. Give the master prompt to the orchestrator with the extracted specification pack. Give each specialist only its role prompt and task packet. The role prompts are copy-ready; no provider-specific agent API is assumed.
 
 ## Contents

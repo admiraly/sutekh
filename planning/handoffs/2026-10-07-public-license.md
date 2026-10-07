@@ -1,3 +1,5 @@
+> Historical record. Current licensing is governed by [LICENSE](../../LICENSE) and [NOTICE.md](../../NOTICE.md); prior decisions below are not current grants.
+
 # Public repository and license — 7 October 2026
 
 The owner requested a public repository and commercial monetization along

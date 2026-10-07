@@ -1,5 +1,13 @@
 # SUTEKH — Agent-native game execution engine
-## Specification and implementation handoff • v0.1 • 6 October 2026
+
+<!-- SPDX-FileCopyrightText: 2026 admiraly -->
+<!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
+
+**An agent-native game execution engine — source-available under PolyForm Perimeter 1.0.1.**
+
+[Specifications](#start-here) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Commercial/OEM licensing](COMMERCIAL_LICENSE.md)
+
+Specification v0.1 • 6 October 2026
 
 **Objective:** maximize verified game functionality delivered per agent-hour, while retaining a path to workload-specific, near-hardware-limit execution. Ordinary gameplay edits must not trigger native project builds, link steps, or executable restarts.
 
@@ -75,22 +83,41 @@ tool versions and the verified LLVM installer checksum are recorded in
 `planning/toolchain-windows.json`. Setup evidence is in
 [the dependency handoff](planning/handoffs/2026-10-07-dependencies.md).
 
-### License and commercial use
+### Licensing and commercial use
 
-Sutekh is licensed under the [MIT License](LICENSE), the same permissive license
-used by [Godot](https://godotengine.org/license/). You may use it to build and
-sell proprietary games, sell engine distributions, and offer paid support,
-hosting, training, or development services. MIT also lets others use, modify,
-and redistribute Sutekh commercially without paying royalties. Redistributed
-copies or substantial portions must retain the copyright and license notices.
-Games and assets you create can have their own licenses; third-party components
-retain their respective terms.
+Copyright (c) 2026 **admiraly**, the current project owner. Sutekh is
+**source-available, not OSI Open Source**, under the
+[PolyForm Perimeter License 1.0.1](LICENSE).
 
-The owner selected MIT and public repository visibility on 7 October 2026.
-RED HORIZON's GPLv3 choice belongs to that separate project. Final commercial
-branding and any paid compute authorization remain owner decisions. Exact
-dependency versions must be resolved, reviewed, and pinned by the bootstrap
-agent rather than invented in this document.
+Normal use of Sutekh to build games and applications, including commercial
+games, is permitted subject to the actual license terms. Providing others a
+product that competes with Sutekh—such as a competing engine or platform—is
+excluded by the Noncompete and Competition provisions. Distribution, changes,
+and notices must comply with the license. This summary grants no additional
+rights and does not guarantee that every game, service, or integration qualifies.
+
+Separate [commercial/OEM licenses](COMMERCIAL_LICENSE.md) may be available for
+uses requiring rights beyond the community license, especially competitive
+engine/platform redistribution and OEM arrangements requiring excluded rights.
+No pricing, sales address, or automatic commercial entitlement is published.
+
+Read [NOTICE.md](NOTICE.md) for attribution, historical releases, trademark
+boundaries, and licensing scope. The Sutekh name and any logo are not
+automatically licensed by the source license; no registered trademark status
+is claimed. [Third-party material](THIRD_PARTY_NOTICES.md) retains its original
+licenses and notices. User-created game/application content remains separate.
+
+Contributors retain copyright while granting the owner sufficient rights for
+commercial relicensing and dual licensing through an explicitly accepted
+[CLA](CLA.md). Follow [CONTRIBUTING.md](CONTRIBUTING.md); PR submission alone
+is not acceptance. Earlier MIT-licensed revisions and dated specification
+license-decision entries are historical, not a competing current grant; rights
+already granted in earlier releases are not withdrawn by this change.
+
+The engineering specifications are preserved. Current licensing metadata is
+set by `LICENSE` and `NOTICE.md`, superseding archived license-decision entries.
+Final branding and paid compute remain owner decisions. Engine implementation
+and dependency admission continue through the existing milestone gates.
 
 ### Rebuild the handoff archive
 

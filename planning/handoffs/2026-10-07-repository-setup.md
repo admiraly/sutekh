@@ -1,3 +1,5 @@
+> Historical record. Current licensing is governed by [LICENSE](../../LICENSE) and [NOTICE.md](../../NOTICE.md); prior decisions below are not current grants.
+
 # Repository setup and orientation — 7 October 2026
 
 Created the private GitHub repository https://github.com/admiraly/sutekh and
