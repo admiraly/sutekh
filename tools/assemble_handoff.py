@@ -49,7 +49,7 @@ def combine(filename: str, title: str, paths: list[str], introduction: str) -> N
         source = ROOT / rel
         text = root_links(source.read_text(encoding='utf-8'), source)
         chunks.append(f'\n---\n\n<a id="section-{i}"></a>\n\n**Source document: `{rel}`**\n\n{text}')
-    (ROOT/filename).write_text(''.join(chunks), encoding='utf-8')
+    (ROOT/filename).write_bytes(''.join(chunks).encode('utf-8'))
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -78,11 +78,11 @@ def main() -> int:
         'files':[{'path':p.relative_to(ROOT).as_posix(), 'bytes':p.stat().st_size,
                   'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in files],
     }
-    (ROOT/'PACK_INDEX.json').write_text(json.dumps(index, indent=2)+'\n', encoding='utf-8')
+    (ROOT/'PACK_INDEX.json').write_bytes((json.dumps(index, indent=2)+'\n').encode('utf-8'))
     checksum_files = sorted(p for p in pack_files()
                             if p.name != 'SHA256SUMS')
-    (ROOT/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  '
-                                         f'{p.relative_to(ROOT).as_posix()}\n' for p in checksum_files), encoding='utf-8')
+    (ROOT/'SHA256SUMS').write_bytes(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  '
+                                         f'{p.relative_to(ROOT).as_posix()}\n' for p in checksum_files).encode('utf-8'))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(args.output, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for p in sorted(pack_files()):

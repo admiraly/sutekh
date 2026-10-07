@@ -343,18 +343,18 @@
     },
     {
       "path": "SUTEKH_ALL_PROMPTS.md",
-      "bytes": 29874,
-      "sha256": "fcd13f961b030e8f8ede0b9d9602bec63d27e56440b1b1abdbe1af115e53af2b"
+      "bytes": 29574,
+      "sha256": "555fc3b9f8b11f13234ae18c56f9d5eec8155613b3d660aebb774bb067db7b54"
     },
     {
       "path": "SUTEKH_FULL_SPEC.md",
-      "bytes": 120878,
-      "sha256": "f2a0bbf65576ab4a88e64d0300bdf79a245f63ecede4b389d28b275c07c9bc18"
+      "bytes": 119465,
+      "sha256": "91cdd1a6e1c5c75f3a2ca9b27d3db72a3d4bf5f0c55b2c7b33a6ab36be2053c3"
     },
     {
       "path": "tools/assemble_handoff.py",
-      "bytes": 5561,
-      "sha256": "16218d3540ffb7115cf45915c0084ce8df94253b39054ff6b804010b746a20b2"
+      "bytes": 5560,
+      "sha256": "c154f26271a29f087b8b6993c86949c17c2e0663b3033670ddf676a24864ca66"
     },
     {
       "path": "tools/env-windows.ps1",
@@ -368,8 +368,8 @@
     },
     {
       "path": "tools/validate_pack.py",
-      "bytes": 16129,
-      "sha256": "1aca0ee5fdbe82b1d063408865bb1dd82d78539cff5fafa8ab3b323f400925e9"
+      "bytes": 16130,
+      "sha256": "d4f0dc0dd51976a8c07b8a4fea19729f9ebf3c8ca120e673d4e256523e349142"
     }
   ]
 }

@@ -327,7 +327,7 @@ def main() -> int:
             "engine_performance":"not_run",
             "original_bfme_fidelity":"not_run",
         }
-        (ROOT / "PACK_VALIDATION.json").write_text(json.dumps(result, indent=2)+"\n", encoding="utf-8")
+        (ROOT / "PACK_VALIDATION.json").write_bytes((json.dumps(result, indent=2)+"\n").encode("utf-8"))
         print(json.dumps(result, indent=2))
         return 0
     except (SpecError, OSError, KeyError, TypeError, ValueError) as exc:
