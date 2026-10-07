@@ -1,0 +1,129 @@
+{
+  "type": "object",
+  "properties": {
+    "format": {
+      "const": "0.1"
+    },
+    "policy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^M[0-5]-[0-9]{2}$"
+          },
+          "milestone": {
+            "enum": [
+              "M0",
+              "M1",
+              "M2",
+              "M3",
+              "M4",
+              "M5"
+            ]
+          },
+          "goal": {
+            "type": "string",
+            "minLength": 1
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true
+          },
+          "base_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "write_scope": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "read_scope": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "change_class": {
+            "enum": [
+              "native_core",
+              "native_backend",
+              "schema",
+              "gameplay",
+              "docs_tooling",
+              "integration",
+              "render_assets"
+            ]
+          },
+          "requires_native_validation": {
+            "type": "boolean"
+          },
+          "acceptance": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "status": {
+            "enum": [
+              "planned",
+              "ready",
+              "leased",
+              "implementing",
+              "submitted",
+              "checking",
+              "blocked",
+              "rejected",
+              "verified",
+              "integration_check",
+              "integrated",
+              "stale"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "milestone",
+          "goal",
+          "depends_on",
+          "base_revision",
+          "write_scope",
+          "read_scope",
+          "change_class",
+          "requires_native_validation",
+          "acceptance",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "format",
+    "policy",
+    "tasks"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:sutekh:task-graph:0.1"
+}

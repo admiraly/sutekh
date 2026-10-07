@@ -1,0 +1,36 @@
+{
+  "report_format": "0.1",
+  "kind": "specification_example_only",
+  "status": "not_run",
+  "source_tree_hash": null,
+  "artifact_hash": null,
+  "hardware": null,
+  "commands": [],
+  "measurements": {
+    "prepare_p95": {
+      "value": null,
+      "unit": "ms",
+      "status": "not_run",
+      "reason": "No native engine has been implemented or benchmarked by this specification pack."
+    },
+    "cycles_per_entity": {
+      "value": null,
+      "unit": "cycles/entity",
+      "status": "unavailable",
+      "reason": "No runtime or PMU measurement exists."
+    }
+  },
+  "checks": [
+    {
+      "name": "M0 native runtime",
+      "status": "not_run",
+      "reason": "Specification package only."
+    },
+    {
+      "name": "original BFME fidelity",
+      "status": "not_run",
+      "reason": "No original-game fixture execution performed."
+    }
+  ],
+  "notes": "Schema-valid example showing how to avoid fabricated PASS or performance results."
+}

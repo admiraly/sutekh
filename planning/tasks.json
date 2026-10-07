@@ -1,0 +1,678 @@
+{
+  "format": "0.1",
+  "policy": "M0 first. All tasks planned, not implemented. Assign base revisions and leases at execution; only one canonical integrator.",
+  "tasks": [
+    {
+      "id": "M0-00",
+      "milestone": "M0",
+      "goal": "Freeze minimal M0 ABI, numeric/effect contract, error codes and fixtures; assign owners.",
+      "depends_on": [],
+      "base_revision": null,
+      "write_scope": [
+        "include/sutekh/",
+        "planning/contracts/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "schema",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Headers describe sizes/lifetimes/statuses and M0 only.",
+        "Independent fixture review; contract consumers can implement without guessing."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-01",
+      "milestone": "M0",
+      "goal": "Inventory/pin tools and dependencies; create small C17 native build and platform skeleton.",
+      "depends_on": [
+        "M0-00"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "CMakeLists.txt",
+        "cmake/",
+        "src/platform/",
+        "tools/dev.py",
+        "third_party/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "T00 clean native build with real version/command evidence.",
+        "No mandatory JIT/GPU dependency; small independent targets."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-02",
+      "milestone": "M0",
+      "goal": "Implement strict JSON SU-LIR decoder and semantic verifier.",
+      "depends_on": [
+        "M0-00",
+        "M0-01"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/ir/",
+        "tests/ir/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "T03/T04 malformed, typed/effect, duplicate/limit tests pass.",
+        "Valid examples normalize consistently."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-03",
+      "milestone": "M0",
+      "goal": "Implement fixed SoA u32 table, staged outputs and committed/working roots.",
+      "depends_on": [
+        "M0-00",
+        "M0-01"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/world/",
+        "tests/world/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Zero/edge row counts and overflow-safe size checks.",
+        "Working-root failures never publish partial state."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-04",
+      "milestone": "M0",
+      "goal": "Implement reference VM and deterministic serial invocation.",
+      "depends_on": [
+        "M0-02",
+        "M0-03"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/vm/",
+        "tests/vm/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "T01/T02/T03 fixtures match exact expected fields.",
+        "Invocation-entry reads and one staged store per writable field."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-05",
+      "milestone": "M0",
+      "goal": "Implement local supervisor/worker lifecycle and bounded structured control.",
+      "depends_on": [
+        "M0-00",
+        "M0-01"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/agent/",
+        "src/runtime/worker.c",
+        "tests/control/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "T10/T15 candidate isolation and structured errors.",
+        "No public listener or native candidate execution in supervisor."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-06",
+      "milestone": "M0",
+      "goal": "Create independent fixture, negative and end-to-end test harness inputs.",
+      "depends_on": [
+        "M0-00",
+        "M0-01"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "tests/fixtures/",
+        "tests/harness/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "docs_tooling",
+      "requires_native_validation": false,
+      "acceptance": [
+        "Known-answer fixtures cover wrap, empty data and intentional behavior edit.",
+        "Expected results independent of VM output; no fake runtime passes."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-07",
+      "milestone": "M0",
+      "goal": "Implement version registry, prepared schedule, safe-point capsule publication.",
+      "depends_on": [
+        "M0-04",
+        "M0-05"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/runtime/registry.c",
+        "src/runtime/schedule.c",
+        "src/runtime/reload.c",
+        "tests/reload/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "T05/T06/T07/T11 preserve PID/state; reject invalid/stale revisions.",
+        "Record exact effective tick and semantic revisions."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-08",
+      "milestone": "M0",
+      "goal": "Implement canonical snapshots/restore and committed checkpoint ownership.",
+      "depends_on": [
+        "M0-03",
+        "M0-05",
+        "M0-07"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/world/snapshot.c",
+        "src/runtime/checkpoint.c",
+        "tests/snapshot/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "T08/T09 round-trip exact state/manifest; no partial tick publication.",
+        "Checkpoint costs and retained memory are observable."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-09",
+      "milestone": "M0",
+      "goal": "Wire reproducible no-build gameplay demo and full M0 integration checks.",
+      "depends_on": [
+        "M0-06",
+        "M0-07",
+        "M0-08"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "tests/e2e/",
+        "tools/demo_zero_wait.py"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "integration",
+      "requires_native_validation": true,
+      "acceptance": [
+        "T00–T15 runtime evidence, with timings reported as actuals.",
+        "T12 instrumentation proves no compiler/assembler/linker on capsule edit."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-10",
+      "milestone": "M0",
+      "goal": "Measure decomposed live latency and native build latency; document real commands.",
+      "depends_on": [
+        "M0-09"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "bench/reload/",
+        "docs/IMPLEMENTATION_STATUS.md",
+        "planning/evidence/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "docs_tooling",
+      "requires_native_validation": false,
+      "acceptance": [
+        "Warm/cold and queue/boundary costs separated.",
+        "All unmeasured counters are null; publish real sample data."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M0-11",
+      "milestone": "M0",
+      "goal": "Independent M0 closure audit and accepted-source checkpoint.",
+      "depends_on": [
+        "M0-09",
+        "M0-10"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "planning/status.json",
+        "planning/handoffs/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "integration",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Verifier reproduces required demo and gates on exact tree.",
+        "M0 not closed on missing native tests; next M1 handoff explicit."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M1-00",
+      "milestone": "M1",
+      "goal": "Add bounded build/specialization broker and freeze native invocation ABI.",
+      "depends_on": [
+        "M0-11"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "tools/broker/",
+        "include/sutekh/native/",
+        "tests/broker/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Durable deduplicated jobs and stale-result rejection.",
+        "Actual ABI tests and compilation; no gameplay build dependency."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M1-01",
+      "milestone": "M1",
+      "goal": "Implement one AsmJit scalar SU-LIR backend behind the C ABI.",
+      "depends_on": [
+        "M1-00"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "backends/native/",
+        "tests/native/scalar/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_backend",
+      "requires_native_validation": true,
+      "acceptance": [
+        "All supported opcodes match reference corpus.",
+        "W^X, failure handling, source maps and actual platform calling convention."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M1-02",
+      "milestone": "M1",
+      "goal": "Qualify native isolation, code lifetime, cache invalidation and recovery.",
+      "depends_on": [
+        "M1-01"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "tests/native/qualification/",
+        "src/runtime/native_versions.c"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_backend",
+      "requires_native_validation": true,
+      "acceptance": [
+        "No stale pointers after repeated swaps or in-flight jobs.",
+        "Native worker crash recovery records replaced PID and correct checkpoint replay."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M1-03",
+      "milestone": "M1",
+      "goal": "Add capability-checked AVX2 lowering only after scalar qualification.",
+      "depends_on": [
+        "M1-02"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "backends/native/avx2/",
+        "tests/native/avx2/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_backend",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Zero/tails/unaligned/overflow corpus exact.",
+        "Real isolated throughput and end-to-end cost; scalar fallback works."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M1-04",
+      "milestone": "M1",
+      "goal": "Add disjoint chunk scheduling and canonical effect merge tests.",
+      "depends_on": [
+        "M1-02"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/runtime/jobs/",
+        "tests/scheduler/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Serial/parallel canonical results match for varied completion orders.",
+        "Conflicts and ordering cycles rejected."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M1-05",
+      "milestone": "M1",
+      "goal": "Qualify Windows/platform paths and small-agent throughput experiment.",
+      "depends_on": [
+        "M1-03",
+        "M1-04"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "tests/platform/",
+        "bench/agent_workflow/",
+        "planning/evidence/m1/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "integration",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Actual Linux/Windows results distinguished from not-run environments.",
+        "Queue/rework/accepted-task metrics before increasing agent count."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M2-00",
+      "milestone": "M2",
+      "goal": "Introduce generational entities, chunked schemas and bounded structural events.",
+      "depends_on": [
+        "M1-05"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/world/entities/",
+        "src/world/chunks/",
+        "tests/entities/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "schema",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Stale handles, churn and deterministic event merge validated.",
+        "IR extensions versioned with verifier/reference/backend tests."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M2-01",
+      "milestone": "M2",
+      "goal": "Implement additive and explicit destructive schema migrations.",
+      "depends_on": [
+        "M2-00"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/world/migration/",
+        "tests/migration/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "schema",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Memory failure, rollback and layout invalidation tests.",
+        "Large migrations separated from small code-reload timing."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-00",
+      "milestone": "M3",
+      "goal": "Build synthetic RTS microcosm with mixed/congested workloads.",
+      "depends_on": [
+        "M2-01"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "profiles/rts/",
+        "capsules/rts/",
+        "bench/rts/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": false,
+      "acceptance": [
+        "Movement/formation/target/projectile/damage/death reference tests.",
+        "End-to-end tick/stress/replay measurements; no BFME fidelity claim."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M4-00",
+      "milestone": "M4",
+      "goal": "Establish BFME variant/evidence registry and one behavior adapter slice.",
+      "depends_on": [
+        "M3-00"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "profiles/bfme/",
+        "tests/bfme/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": false,
+      "acceptance": [
+        "Version-labelled confirmed/inferred/unknown behavior evidence.",
+        "No original assets in public artifacts; fidelity versus regression separated."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M4-01",
+      "milestone": "M4",
+      "goal": "Add command replay and headless multi-peer development tests.",
+      "depends_on": [
+        "M3-00"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/net/",
+        "tests/network/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Manifest pinning and controlled delay/loss/reorder tests.",
+        "Explicit transport limits, input validation and desync diagnostics."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M5-00",
+      "milestone": "M5",
+      "goal": "Add minimal presentation and granular asset pipeline after headless gates.",
+      "depends_on": [
+        "M4-00",
+        "M4-01"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "render/",
+        "tools/import/",
+        "tests/render/"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "ARCHITECTURE.md",
+        "LIVE_IR_SPEC.md",
+        "docs/TEST_SPEC.md"
+      ],
+      "change_class": "render_assets",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Committed snapshot boundary, resource retirement and device capability tests.",
+        "No synchronous broad asset cook/shader build on ordinary gameplay edit."
+      ],
+      "status": "planned"
+    }
+  ]
+}

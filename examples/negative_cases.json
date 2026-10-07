@@ -1,0 +1,33 @@
+{
+  "capsule": "movement.capsule.json",
+  "cases": [
+    {
+      "path": "invalid/unknown_opcode.lir.json",
+      "expected_code": "SU_E_UNKNOWN_OPCODE"
+    },
+    {
+      "path": "invalid/undefined_register.lir.json",
+      "expected_code": "SU_E_UNDEFINED_REGISTER"
+    },
+    {
+      "path": "invalid/duplicate_register.lir.json",
+      "expected_code": "SU_E_DUPLICATE_REGISTER"
+    },
+    {
+      "path": "invalid/undeclared_write.lir.json",
+      "expected_code": "SU_E_UNDECLARED_WRITE"
+    },
+    {
+      "path": "invalid/negative_u32.lir.json",
+      "expected_code": "SU_E_TYPE"
+    },
+    {
+      "path": "invalid/wrong_store_type.lir.json",
+      "expected_code": "SU_E_TYPE"
+    },
+    {
+      "path": "invalid/duplicate_key.lir.json",
+      "expected_code": "SU_E_DUPLICATE_KEY"
+    }
+  ]
+}

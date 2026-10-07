@@ -1,0 +1,66 @@
+{
+  "type": "object",
+  "properties": {
+    "test_format": {
+      "const": "0.1"
+    },
+    "system_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capsule": {
+      "type": "string",
+      "minLength": 1
+    },
+    "world": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ticks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "expected_columns": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              }
+            }
+          }
+        },
+        "required": [
+          "name",
+          "ticks",
+          "expected_columns"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "test_format",
+    "system_id",
+    "capsule",
+    "world",
+    "cases"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:sutekh:tests:0.1"
+}

@@ -1,0 +1,19 @@
+# Native build output and local tooling
+/build/
+/build-*/
+/out/
+/.cache/
+/.venv/
+__pycache__/
+*.py[cod]
+
+# Local secrets and proprietary game content
+.env
+.env.*
+!.env.example
+/local/
+/local-assets/
+/original-assets/
+
+# Generated handoff archives
+/SUTEKH_Engine_Specs_and_Prompts.zip

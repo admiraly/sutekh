@@ -1,0 +1,158 @@
+{
+  "type": "object",
+  "properties": {
+    "capsule_format": {
+      "const": "0.1"
+    },
+    "system_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "layout_generation": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "layout_generation"
+      ],
+      "additionalProperties": false
+    },
+    "numeric_profile": {
+      "const": "u32_mod_v1"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "type": {
+            "const": "u32"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "write": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "read",
+          "write"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 256
+    },
+    "schedule": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "type": "string",
+          "minLength": 1
+        },
+        "after": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "before": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "parallel": {
+          "const": "serial"
+        }
+      },
+      "required": [
+        "phase",
+        "after",
+        "before",
+        "parallel"
+      ],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "max_instructions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "allocation": {
+          "const": "forbidden"
+        }
+      },
+      "required": [
+        "max_instructions",
+        "max_rows",
+        "allocation"
+      ],
+      "additionalProperties": false
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "capsule_format",
+    "system_id",
+    "source",
+    "schema",
+    "numeric_profile",
+    "fields",
+    "schedule",
+    "limits",
+    "tests"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:sutekh:capsule:0.1"
+}

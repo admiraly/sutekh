@@ -1,0 +1,20 @@
+{
+  "format": "0.1",
+  "project": "Sutekh",
+  "spec_date": "2026-10-06",
+  "engine_implemented": false,
+  "current_milestone": "M0",
+  "accepted_source_revision": null,
+  "accepted_artifact_hash": null,
+  "runtime_tests": "not_run",
+  "engine_benchmarks": "not_run",
+  "original_bfme_compatibility": "not_run",
+  "remote_repository": "https://github.com/admiraly/sutekh",
+  "license_decision": null,
+  "active_leases": [],
+  "pending_jobs": [],
+  "next_ready_tasks": [
+    "M0-00"
+  ],
+  "note": "Specification pack only. Private repository initialized on 2026-10-07; see planning/handoffs/2026-10-07-repository-setup.md. Pack/example checks are separate from native engine evidence."
+}

@@ -1,0 +1,41 @@
+{
+  "capsule_format": "0.1",
+  "system_id": "demo.movement",
+  "source": "movement.lir.json",
+  "schema": {
+    "id": "demo.actor",
+    "version": 1,
+    "layout_generation": 1
+  },
+  "numeric_profile": "u32_mod_v1",
+  "fields": [
+    {
+      "id": 1,
+      "name": "position_x",
+      "type": "u32",
+      "read": true,
+      "write": true
+    },
+    {
+      "id": 2,
+      "name": "velocity_x",
+      "type": "u32",
+      "read": true,
+      "write": false
+    }
+  ],
+  "schedule": {
+    "phase": "simulate",
+    "after": [],
+    "before": [],
+    "parallel": "serial"
+  },
+  "limits": {
+    "max_instructions": 4096,
+    "max_rows": 1000000,
+    "allocation": "forbidden"
+  },
+  "tests": [
+    "movement.test.json"
+  ]
+}
