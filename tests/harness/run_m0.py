@@ -2517,6 +2517,99 @@ def t15(t: TestCtx):
 
 _EVAL = ("world.create", "world.step", "world.inspect", "capsule.submit", "candidate.evaluate", "candidate.install")
 
+SPEC_WORLD = "examples/world.json"
+SPEC_CAP = "examples/movement.capsule.json"
+SPEC_SYSTEM = "demo.movement"
+
+
+def _spec_envelope(tctx, sess, wid, rev, backend, system=SPEC_SYSTEM, extra=None):
+    params = {"world_id": wid, "expected_world_revision": rev, "system_id": system, "backend": backend}
+    params.update(extra or {})
+    return sess.request("world.specialize", params)
+
+
+def tx3(t: TestCtx):
+    """Native specialization through the real binary (extra check; not a TEST_SPEC id). Skipped with the
+    reason when engine.info does not advertise world.specialize (default build). For scalar and avx2 (when the
+    host reports it): the movement system is specialized in one world at tick 10 while a VM-only control world
+    keeps ticking; both worlds are compared column by column at every tick to tick 50, and tick 50 is also
+    compared with the independent reference evaluator. The world revision does not change. Rejections: stale
+    revision, stale semantic hash, unknown system, unknown backend, and avx2 refusal on a host without it."""
+    cap, lir_doc, _ = t.load_system(SPEC_CAP)
+    initial = t.load(SPEC_WORLD)["columns"]
+    sess = t.session("TX3 serve")
+    info = call(t, sess, "engine.info", {})
+    host = info.get("native", {}).get("specialization", {}).get("host_caps", {})
+    backends = [("scalar", "native_scalar")]
+    if host.get("avx2") is True:
+        backends.append(("avx2", "native_avx2"))
+    else:
+        t.details["avx2"] = "host does not report AVX2; avx2 refusal checked instead"
+    for backend, tier in backends:
+        ctrl, ctrl_rev = create_world(t, sess, SPEC_WORLD, [SPEC_CAP])
+        nat, nat_rev = create_world(t, sess, SPEC_WORLD, [SPEC_CAP])
+        for _ in range(10):
+            step(t, sess, ctrl, 1)
+            step(t, sess, nat, 1)
+        res = call(t, sess, "world.specialize", {"world_id": nat, "expected_world_revision": sess.revs[nat],
+                                                 "system_id": SPEC_SYSTEM, "backend": backend})
+        t.check(f"TX3 {backend} state", "installed", res.get("state"))
+        t.check(f"TX3 {backend} tier", tier, res.get("execution_tier"))
+        t.check(f"TX3 {backend} mismatches", 0, res.get("source", {}).get("admission", {}).get("mismatches"))
+        t.check(f"TX3 {backend} artifact_hash is 64 hex", True,
+                isinstance(res.get("artifact_hash"), str) and len(res["artifact_hash"]) == 64)
+        t.check(f"TX3 {backend} revision unchanged by specialize", sess.revs[nat], res.get("world_revision"))
+        for tick in range(11, 51):
+            step(t, sess, ctrl, 1)
+            step(t, sess, nat, 1)
+            c_state = inspect(t, sess, ctrl)
+            n_state = inspect(t, sess, nat)
+            t.check(f"TX3 {backend} tick {tick} native == VM control", c_state.get("columns"), n_state.get("columns"))
+        derived = ref.run_ticks(lir_doc, cap, initial, 50)
+        t.check_mismatches(f"TX3 {backend} tick 50 vs reference",
+                           verify_state(50, derived, inspect(t, sess, nat)))
+        # Rejections leave the world on its tier and revision unchanged.
+        env = _spec_envelope(t, sess, nat, "bogus-rev", "scalar")
+        t.check_mismatches(f"TX3 {backend} stale revision", classify_error(env, "SU_E_STALE_REVISION"))
+        env = _spec_envelope(t, sess, nat, sess.revs[nat], "scalar", system="no.such.system")
+        t.check_mismatches(f"TX3 {backend} unknown system", classify_error(env, "SU_E_INVALID_ARGUMENT"))
+        env = _spec_envelope(t, sess, nat, sess.revs[nat], "scalar", extra={"expected_semantic_hash": "0" * 64})
+        t.check_mismatches(f"TX3 {backend} stale semantic hash", classify_error(env, "SU_E_STALE_REVISION"))
+        env = _spec_envelope(t, sess, nat, sess.revs[nat], "turbo")
+        t.check_mismatches(f"TX3 {backend} unknown backend", classify_error(env, "SU_E_INVALID_ARGUMENT"))
+        close_world(t, sess, ctrl)
+        close_world(t, sess, nat)
+    # Code-only install of a new semantic revision after specialization: the kernel is dropped at the
+    # effective tick (tier back to vm), the old artifact is released, and outputs follow the new semantics.
+    sched, expected = _swap_expected(t)
+    swap_tick = sched["swap"]["effective_tick"]
+    nat, nat_rev = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
+    step(t, sess, nat, swap_tick)
+    pre = inspect(t, sess, nat)
+    sys_id = pre["semantic_manifest"][0]["system_id"]
+    res = call(t, sess, "world.specialize", {"world_id": nat, "expected_world_revision": sess.revs[nat],
+                                             "system_id": sys_id, "backend": "scalar"})
+    t.check("TX3 swap: specialized before the install", "native_scalar", res.get("execution_tier"))
+    t.check("TX3 swap: manifest reports native tier before install", "native_scalar",
+            inspect(t, sess, nat)["semantic_manifest"][0].get("execution_tier"))
+    cid = prepare(t, sess, EDIT_V2, V2_SRC, EDIT_V2_TEST)
+    install(t, sess, nat, cid, pre["world_revision"], swap_tick)
+    post = inspect(t, sess, nat)
+    t.check_mismatches("TX3 swap: install does not step", verify_state(swap_tick, expected[swap_tick], post))
+    t.check("TX3 swap: kernel dropped at the install (tier vm)", "vm",
+            post["semantic_manifest"][0].get("execution_tier"))
+    for tick in range(swap_tick + 1, sched["total_ticks"] + 1):
+        step(t, sess, nat, 1)
+        t.check_mismatches(f"TX3 swap: tick {tick} follows the new semantics",
+                           verify_state(tick, expected[tick], inspect(t, sess, nat)))
+    close_world(t, sess, nat)
+    if "avx2" not in [b for b, _ in backends]:
+        ctrl, _ = create_world(t, sess, SPEC_WORLD, [SPEC_CAP])
+        env = _spec_envelope(t, sess, ctrl, sess.revs[ctrl], "avx2")
+        t.check_mismatches(f"TX3 avx2 refused without host support", classify_error(env, "SU_E_CAPABILITY_DENIED"))
+        close_world(t, sess, ctrl)
+
+
 TESTS = [
     ("T00", "Clean bootstrap", (), t00),
     ("T01", "Reference movement", ("world.create", "world.step", "world.inspect"), t01),
@@ -2538,6 +2631,7 @@ TESTS = [
     ("TX1", "World close beyond the 4-world cap (extra)", ("world.create", "world.step", "world.inspect",
                                                           "world.close"), tx1),
     ("TX2", "Worker crash recovery (extra)", _EVAL + ("engine.info", "world.close"), tx2),
+    ("TX3", "Native specialization (extra)", _EVAL + ("world.close", "world.specialize"), tx3),
 ]
 
 

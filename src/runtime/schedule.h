@@ -39,6 +39,9 @@ typedef struct SuSysEntry {
     char source_hash[65];
     char capsule_hash[65];
     char semantic_hash[65];
+#ifdef SU_HAVE_NATIVE
+    uint64_t native_seq;     /* native kernel handle (native_versions.h); 0 = VM tier */
+#endif
 } SuSysEntry;
 
 typedef struct SuSchedule {
@@ -88,7 +91,7 @@ uint32_t su_sched_run_ticks(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFa
 /* Swaps entry idx with *fresh (ownership of its module and context moves into the
  * schedule) and returns the replaced entry in *old for the caller to destroy. */
 void su_sched_swap(SuSchedule *s, uint32_t idx, SuSysEntry *fresh, SuSysEntry *old);
-/* Destroys a standalone entry's context and module. */
+/* Destroys a standalone entry's context and module. Releases its native kernel, if any. */
 void su_sched_entry_destroy(SuSysEntry *e);
 
 #endif

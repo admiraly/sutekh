@@ -2,6 +2,10 @@
 
 #include "runtime/schedule.h"
 
+#ifdef SU_HAVE_NATIVE
+#include "runtime/native_versions.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +18,11 @@ void su_sched_init(SuSchedule *s) {
 }
 
 void su_sched_entry_destroy(SuSysEntry *e) {
+#ifdef SU_HAVE_NATIVE
+    if (e->native_seq != 0u) {
+        su_nv_release(e->native_seq);
+    }
+#endif
     su_vm_context_destroy(e->ctx);
     if (e->mod != NULL) {
         su_lir_module_free(e->mod);
@@ -220,7 +229,14 @@ uint32_t su_sched_run_ticks(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFa
             if (fault != NULL && fault(i, fault_ctx) != 0) {
                 st = SU_E_CANDIDATE_FAILED;
             } else {
-                st = su_vm_run_system(w, s->sys[i].ctx);
+#ifdef SU_HAVE_NATIVE
+                if (s->sys[i].native_seq != 0u) {
+                    st = su_nv_run_system(s->sys[i].native_seq, w);
+                } else
+#endif
+                {
+                    st = su_vm_run_system(w, s->sys[i].ctx);
+                }
             }
             if (st != SU_OK) {
                 break;

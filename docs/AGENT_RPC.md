@@ -149,3 +149,39 @@ its world unrecoverable (fail closed). Windows is not implemented.
 **Internal worker methods** (supervisor to worker only, never advertised): `internal.world.seed`,
 `internal.world.capture`, `internal.world.digest`, `internal.world.restore_bytes`. `world.create` also
 accepts `world_id`, `fixture_sha256`, and per-capsule `capsule_sha256` and `source_sha256`.
+
+## 9. Native specialization (`world.specialize`, M1-02b; SUTEKH_NATIVE builds only)
+
+Present only in builds configured with `-DSUTEKH_NATIVE=ON`. In the default build the method is not
+advertised in `engine.info` and answers `SU_E_UNSUPPORTED_METHOD`.
+
+`world.specialize {world_id, expected_world_revision, system_id, backend, expected_semantic_hash?}`
+where `backend` is `scalar`, `avx2` or `auto`. `expected_semantic_hash` is optional and must equal the
+installed system's semantic hash when given.
+
+Result: `{world_id, specialization_id, state: "installed", system_id, backend, requested_backend,
+execution_tier, artifact_hash, semantic_hash, fallback, source: {kind, admission: {cases, rows_checked,
+mismatches}, recompile_hash_equal}, world_revision, tick, worker_pid}`.
+
+- Pipeline: the worker compiles the installed semantic revision (AsmJit, in process), runs differential
+  admission against the reference VM over a seeded corpus (row counts 0,1,7,8,9,17,1024; aligned and
+  one-element-unaligned columns; edge and seeded random words), recompiles, requires the same
+  `artifact_hash`, and installs the kernel into that schedule entry between requests (a tick boundary).
+  Any compile, admission or hash failure is `SU_E_CANDIDATE_FAILED` and changes nothing.
+- `world_revision` is not changed: a kernel is not canonical state. Worker PID is unchanged.
+- `avx2` on a host without AVX2 is `SU_E_CAPABILITY_DENIED` with the scalar fallback named in the message.
+  `auto` selects AVX2 when the host reports it, falls back to scalar on an AVX2 frame-bound failure
+  (`fallback` names it), and is scalar otherwise.
+- A stale `expected_world_revision` or `expected_semantic_hash` is `SU_E_STALE_REVISION`; an unknown
+  `system_id` is `SU_E_INVALID_ARGUMENT`.
+- `candidate.install` of a new semantic revision of the system replaces the entry: the kernel is released
+  with the old module and the system runs on the VM tier from that boundary.
+- `world.inspect` `semantic_manifest` entries carry `execution_tier` (`vm`, `native_scalar`,
+  `native_avx2`). `engine.info` reports `native.specialization` with the backends, tiers, host caps and
+  the pinned AsmJit commit.
+- Kernels are not canonical state. Snapshot and restore return the system to the VM tier. Worker
+  recovery (`SU_E_WORKER_FAILED`) rebuilds the worlds on the VM tier. **Specialization is not replayed
+  yet (M1-02c).**
+- Not yet implemented: running admission and the recompile in a disposable worker (C07 asks for
+  isolation of unreviewed candidates; the current path is in process); the system's own test cases in
+  the admission corpus; test-only perturbation hooks for the hash and admission rejection paths.

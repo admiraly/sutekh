@@ -159,6 +159,12 @@ if(SUTEKH_NATIVE)
         $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra -Werror -pedantic>
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra -Werror>)
 
+    # M1-02b: the engine (supervisor and worker) gets the native artifact registry. The compile
+    # definition SU_HAVE_NATIVE gates world.specialize; the default build does not define it.
+    target_sources(su_agent PRIVATE src/runtime/native_versions.c)
+    target_compile_definitions(su_agent PUBLIC SU_HAVE_NATIVE)
+    target_link_libraries(su_agent PUBLIC su_native)
+
     add_executable(test_native_scalar tests/native/scalar/test_native_scalar.c)
     target_link_libraries(test_native_scalar PRIVATE su_native su_vm su_world su_ir)
     sutekh_apply_warnings(test_native_scalar)
@@ -187,6 +193,13 @@ if(SUTEKH_NATIVE)
     add_test(NAME native_avx2 COMMAND test_native_avx2 "${SU_NATIVE_AVX2_CORPUS_DIR}"
              WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     set_tests_properties(native_avx2 PROPERTIES DEPENDS native_avx2_corpus_gen)
+
+    # M1-02b: artifact registry lifetime, admission and mapping hygiene (tests/native/qualification/).
+    add_executable(test_native_versions tests/native/qualification/test_native_versions.c)
+    target_link_libraries(test_native_versions PRIVATE su_agent su_native su_ir)
+    sutekh_apply_warnings(test_native_versions)
+    add_test(NAME native_versions COMMAND test_native_versions "${CMAKE_CURRENT_SOURCE_DIR}"
+             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 # ---- END M1-01 optional native scalar backend ----
 

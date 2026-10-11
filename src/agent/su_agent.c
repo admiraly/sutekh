@@ -8,6 +8,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifdef SU_HAVE_NATIVE
+#include "backends/native/su_native.h"
+#endif
 #include "agent/su_module.h"
 #include "agent/su_path.h"
 #include "agent/su_proc.h"
@@ -200,6 +203,9 @@ static const char *const k_capabilities[] = {
     "engine.info",   "capsule.submit", "candidate.status", "candidate.evaluate",
     "candidate.install", "world.create", "world.inspect", "world.step",
     "world.snapshot", "world.restore", "world.close",
+#ifdef SU_HAVE_NATIVE
+    "world.specialize",
+#endif
 };
 
 static uint32_t call_fail(AgentCall *c, uint32_t code, const char *msg) {
@@ -1663,6 +1669,14 @@ static uint32_t h_engine_info(SuAgent *a, const SuJsonValue *params, SuBuf *res,
         su_buf_str(res, "}");
     }
     su_buf_str(res, "]}");
+#ifdef SU_HAVE_NATIVE
+    /* Only what the build implements: scalar always; avx2 when the host reports it. */
+    su_buf_str(res, ",\"native\":{\"specialization\":{\"method\":\"world.specialize\",\"backends\":[\"scalar\",\"avx2\",\"auto\"],\"tiers\":[\"vm\",\"native_scalar\",\"native_avx2\"],\"host_caps\":{\"scalar\":true,\"avx2\":");
+    su_buf_str(res, (su_native_host_caps() & SU_NCAP_X86_64_AVX2) != 0u ? "true" : "false");
+    su_buf_str(res, "},\"asmjit_commit\":");
+    su_buf_quoted(res, su_native_asmjit_commit(), strlen(su_native_asmjit_commit()));
+    su_buf_str(res, ",\"replay\":\"not_replayed_yet_M1-02c\"}}");
+#endif
     su_buf_str(res, ",\"capabilities\":[");
     for (i = 0; i < sizeof k_capabilities / sizeof k_capabilities[0]; i++) {
         if (i > 0) {
@@ -2915,6 +2929,75 @@ static uint32_t h_candidate_install(SuAgent *a, const SuJsonValue *params, SuBuf
 
 /* ---------- dispatch ---------- */
 
+#ifdef SU_HAVE_NATIVE
+/* world.specialize {world_id, expected_world_revision, system_id, backend, expected_semantic_hash?}
+ * (M1-02b). The worker compiles, admits and installs; the answer is relayed unchanged. A kernel is
+ * not canonical state, so nothing is logged or checkpointed. A worker death answers
+ * SU_E_WORKER_FAILED and recovers the world; the specialization is then gone and the system runs
+ * on the VM tier (specialization is not replayed yet: M1-02c). */
+static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"world_id", "expected_world_revision", "system_id", "backend",
+                                          "expected_semantic_hash"};
+    const char *world_id = NULL;
+    const char *expect = NULL;
+    const char *system_id = NULL;
+    const char *backend = NULL;
+    const char *sem = NULL;
+    AgentWorld *w = NULL;
+    SuBuf req;
+    SuBuf resp;
+    uint32_t st;
+
+    if (check_keys(params, allowed, 5, c) != SU_OK ||
+        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK ||
+        param_str(params, "system_id", 1, &system_id, c) != SU_OK ||
+        param_str(params, "backend", 1, &backend, c) != SU_OK ||
+        param_str(params, "expected_semantic_hash", 0, &sem, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    if (strcmp(backend, "scalar") != 0 && strcmp(backend, "avx2") != 0 && strcmp(backend, "auto") != 0) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "backend must be scalar, avx2 or auto");
+    }
+    w = find_world(a, world_id);
+    if (w == NULL) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown world_id");
+    }
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    req_begin(&req, c->id, "world.specialize");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, world_id, strlen(world_id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, expect, strlen(expect));
+    su_buf_str(&req, ",\"system_id\":");
+    su_buf_quoted(&req, system_id, strlen(system_id));
+    su_buf_str(&req, ",\"backend\":");
+    su_buf_quoted(&req, backend, strlen(backend));
+    if (sem != NULL) {
+        su_buf_str(&req, ",\"expected_semantic_hash\":");
+        su_buf_quoted(&req, sem, strlen(sem));
+    }
+    req_end(&req);
+    if (req.failed) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "world.specialize request too large");
+    }
+    su_buf_init(&resp);
+    st = roundtrip(a, c->id, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, NULL);
+    }
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+#endif /* SU_HAVE_NATIVE */
+
 static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c) {
     const SuJsonValue *p = req->params;
     if (strcmp(req->method, "engine.info") == 0) {
@@ -2950,6 +3033,11 @@ static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c
     if (strcmp(req->method, "world.close") == 0) {
         return h_world_close(a, p, res, c);
     }
+#ifdef SU_HAVE_NATIVE
+    if (strcmp(req->method, "world.specialize") == 0) {
+        return h_world_specialize(a, p, res, c);
+    }
+#endif
     return call_fail(c, SU_E_UNSUPPORTED_METHOD, "method is unknown or not implemented in M0");
 }
 

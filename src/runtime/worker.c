@@ -20,6 +20,10 @@
 #include "runtime/registry.h"
 #include "runtime/reload.h"
 #include "runtime/schedule.h"
+#ifdef SU_HAVE_NATIVE
+#include "backends/native/su_native.h"
+#include "runtime/native_versions.h"
+#endif
 #include "sutekh/ir.h"
 #include "sutekh/status.h"
 #include "vm/su_vm.h"
@@ -363,6 +367,20 @@ static void write_manifest(SuBuf *res, const SuSchedule *s) {
         su_buf_u64(res, e->system_rev);
         su_buf_str(res, ",\"installed_tick\":");
         su_buf_u64(res, e->installed_tick);
+#ifdef SU_HAVE_NATIVE
+        /* Execution tier of the system (M1-02b). Present only in native builds. */
+        su_buf_str(res, ",\"execution_tier\":");
+        if (e->native_seq == 0u) {
+            su_buf_quoted(res, "vm", 2u);
+        } else {
+            uint32_t bid = 0;
+            const char *tier = "native_scalar";
+            if (su_nv_backend_id(e->native_seq, &bid) == SU_OK && bid == SU_NATIVE_BACKEND_ASMJIT_AVX2) {
+                tier = "native_avx2";
+            }
+            su_buf_quoted(res, tier, strlen(tier));
+        }
+#endif
         su_buf_str(res, "}");
     }
     su_buf_str(res, "]");
@@ -1914,6 +1932,173 @@ static uint32_t h_internal_stats(WorkerState *s, SuBuf *res) {
 
 /* ---------- dispatch and main loop ---------- */
 
+#ifdef SU_HAVE_NATIVE
+/* world.specialize {world_id, expected_world_revision, system_id, backend, expected_semantic_hash?}
+ * (M1-02b). Compiles the system's INSTALLED semantic revision with the requested backend, runs
+ * differential admission against the reference VM, recompiles and requires the same artifact
+ * hash, then installs the kernel into that schedule entry. The VM keeps running until the swap,
+ * which happens between requests (a tick boundary). The world revision is not changed: a kernel
+ * is not canonical state. Admission and the recompile run in this worker (not in a disposable
+ * one): see docs/AGENT_RPC.md section 9. */
+static uint32_t h_world_specialize(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const char *system_id = str_of(params, "system_id");
+    const char *backend = str_of(params, "backend");
+    const char *exp_sem = str_of(params, "expected_semantic_hash");
+    char rev[64];
+    char msg[WORKER_MSG_CAP];
+    char hash1[65];
+    char hash2[65];
+    char fallback[64];
+    uint32_t caps = 0;
+    uint32_t backend_id = 0;
+    uint32_t cases = 0;
+    uint64_t rows = 0;
+    uint64_t bad = 0;
+    uint64_t seq1 = 0;
+    uint64_t seq2 = 0;
+    uint64_t old_seq;
+    int tier_auto = 0;
+    int j;
+    uint32_t st = SU_OK;
+    uint32_t host;
+    const char *tier;
+
+    fallback[0] = '\0';
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (expect == NULL || system_id == NULL || backend == NULL) {
+        fail(f, SU_E_TYPE, "world.specialize needs expected_world_revision, system_id and backend");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+    j = su_sched_find(&ww->sched, system_id);
+    if (j < 0) {
+        fail(f, SU_E_INVALID_ARGUMENT, "system_id is not part of this world");
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (exp_sem != NULL && strcmp(exp_sem, ww->sched.sys[j].semantic_hash) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_semantic_hash does not match the installed system revision");
+        return SU_E_STALE_REVISION;
+    }
+    host = su_native_host_caps();
+    if (strcmp(backend, "scalar") == 0) {
+        caps = SU_NCAP_X86_64_SCALAR;
+    } else if (strcmp(backend, "avx2") == 0) {
+        caps = SU_NCAP_X86_64_AVX2;
+        if ((host & SU_NCAP_X86_64_AVX2) == 0u) {
+            fail(f, SU_E_CAPABILITY_DENIED,
+                 "avx2 is not usable on this host; fallback: backend scalar (request auto to fall back automatically)");
+            return SU_E_CAPABILITY_DENIED;
+        }
+    } else if (strcmp(backend, "auto") == 0) {
+        caps = su_native_best_backend();
+        tier_auto = 1;
+    } else {
+        fail(f, SU_E_INVALID_ARGUMENT, "backend must be scalar, avx2 or auto");
+        return SU_E_INVALID_ARGUMENT;
+    }
+
+    /* Stage 1: compile and admit against the reference VM. */
+    st = su_nv_prepare(ww->sched.sys[j].mod, ww->sched.layout_generation, caps, &seq1, msg, sizeof msg);
+    if (st == SU_E_RESOURCE_LIMIT && tier_auto && caps == SU_NCAP_X86_64_AVX2) {
+        snprintf(fallback, sizeof fallback, "avx2 frame bound exceeded; fell back to scalar");
+        caps = SU_NCAP_X86_64_SCALAR;
+        st = su_nv_prepare(ww->sched.sys[j].mod, ww->sched.layout_generation, caps, &seq1, msg, sizeof msg);
+    }
+    if (st != SU_OK) {
+        fail(f, SU_E_CANDIDATE_FAILED, msg);
+        return SU_E_CANDIDATE_FAILED;
+    }
+    st = su_nv_admit(seq1, 20261011u, &cases, &rows, &bad);
+    if (st != SU_OK) {
+        su_nv_release(seq1);
+        snprintf(msg, sizeof msg, "differential admission failed: %llu mismatches in %u cases",
+                 (unsigned long long)bad, (unsigned)cases);
+        fail(f, SU_E_CANDIDATE_FAILED, msg);
+        return SU_E_CANDIDATE_FAILED;
+    }
+    /* Stage 2: recompile; the artifact identity must equal the admitted one. */
+    st = su_nv_prepare(ww->sched.sys[j].mod, ww->sched.layout_generation, caps, &seq2, msg, sizeof msg);
+    if (st != SU_OK || su_nv_artifact_hash(seq1, hash1) != SU_OK || su_nv_artifact_hash(seq2, hash2) != SU_OK) {
+        su_nv_release(seq1);
+        su_nv_release(seq2);
+        fail(f, SU_E_CANDIDATE_FAILED, st != SU_OK ? msg : "recompile failed");
+        return SU_E_CANDIDATE_FAILED;
+    }
+    if (strcmp(hash1, hash2) != 0) {
+        su_nv_release(seq1);
+        su_nv_release(seq2);
+        fail(f, SU_E_CANDIDATE_FAILED,
+             "artifact_hash differs between the admitted build and the recompile (stale or non-deterministic)");
+        return SU_E_CANDIDATE_FAILED;
+    }
+    su_nv_release(seq1);
+    st = su_nv_admit(seq2, 20261011u, &cases, &rows, &bad);
+    if (st != SU_OK || su_nv_install(seq2) != SU_OK) {
+        su_nv_release(seq2);
+        fail(f, SU_E_CANDIDATE_FAILED, "recompiled artifact failed admission");
+        return SU_E_CANDIDATE_FAILED;
+    }
+    /* Publish between requests: the schedule entry switches; the previous kernel is released at
+     * once (no tick is in flight in the serial worker). */
+    old_seq = ww->sched.sys[j].native_seq;
+    ww->sched.sys[j].native_seq = seq2;
+    if (old_seq != 0u) {
+        su_nv_release(old_seq);
+    }
+    (void)su_nv_backend_id(seq2, &backend_id);
+    tier = backend_id == SU_NATIVE_BACKEND_ASMJIT_AVX2 ? "native_avx2" : "native_scalar";
+
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"specialization_id\":\"spec-");
+    su_buf_u64(res, seq2);
+    su_buf_str(res, "\",\"state\":\"installed\",\"system_id\":");
+    su_buf_quoted(res, system_id, strlen(system_id));
+    su_buf_str(res, ",\"backend\":");
+    if (caps == SU_NCAP_X86_64_AVX2) {
+        su_buf_quoted(res, "avx2", 4u);
+    } else {
+        su_buf_quoted(res, "scalar", 6u);
+    }
+    su_buf_str(res, ",\"requested_backend\":");
+    su_buf_quoted(res, backend, strlen(backend));
+    su_buf_str(res, ",\"execution_tier\":");
+    su_buf_quoted(res, tier, strlen(tier));
+    su_buf_str(res, ",\"artifact_hash\":");
+    su_buf_quoted(res, hash2, strlen(hash2));
+    su_buf_str(res, ",\"semantic_hash\":");
+    su_buf_quoted(res, ww->sched.sys[j].semantic_hash, strlen(ww->sched.sys[j].semantic_hash));
+    su_buf_str(res, ",\"fallback\":");
+    if (fallback[0] != '\0') {
+        su_buf_quoted(res, fallback, strlen(fallback));
+    } else {
+        su_buf_str(res, "null");
+    }
+    su_buf_str(res, ",\"source\":{\"kind\":\"worker_in_process\",\"admission\":{\"cases\":");
+    su_buf_u64(res, cases);
+    su_buf_str(res, ",\"rows_checked\":");
+    su_buf_u64(res, rows);
+    su_buf_str(res, ",\"mismatches\":0},\"recompile_hash_equal\":true}");
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"tick\":");
+    su_buf_u64(res, su_world_tick(ww->inst.w));
+    su_buf_str(res, ",\"worker_pid\":");
+    su_buf_u64(res, (uint64_t)getpid());
+    su_buf_str(res, "}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+#endif /* SU_HAVE_NATIVE */
+
 static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int overflow, SuBuf *out) {
     SuJsonDoc doc;
     SuRequest req;
@@ -1946,6 +2131,10 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
         st = h_world_restore(s, req.params, &res, &f);
     } else if (strcmp(req.method, "world.close") == 0) {
         st = h_world_close(s, req.params, &res, &f);
+#ifdef SU_HAVE_NATIVE
+    } else if (strcmp(req.method, "world.specialize") == 0) {
+        st = h_world_specialize(s, req.params, &res, &f);
+#endif
     } else if (strcmp(req.method, "internal.stats") == 0) {
         st = h_internal_stats(s, &res);
     } else if (strcmp(req.method, "internal.world.seed") == 0) {
