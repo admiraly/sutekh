@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 admiraly
 # SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
-"""M0-10 latency bench: live edit (hot reload) and native build latency (stdlib only).
+"""M0-13 latency bench: live edit (hot reload) and native build latency (stdlib only).
 
 Live edit mode drives the REAL `<binary> serve` over JSON lines (docs/AGENT_RPC.md)
 and times each control call with the host monotonic clock. Native mode times a
@@ -64,7 +64,7 @@ VERSIONS = {
            "source": "tests/fixtures/edit/movement_v2.lir.json", "mult": 2},
 }
 WRONG_TEST = "tests/fixtures/edit/movement_v2_wrong.test.json"  # one value off by +1 on purpose
-CAPSULE_SLOTS = 16  # src/agent/su_agent.c AGENT_MAX_CANDIDATES; slots are never evicted
+CAPSULE_SLOTS = 16  # src/agent/su_agent.c AGENT_MAX_CANDIDATES; the oldest record is evicted when full
 SEED_WORLD_1024 = 1024
 SEED_WORLD_STRESS = 1000000
 
@@ -388,15 +388,21 @@ def failed_candidate_trial(serve, w, segments, label):
 
 
 def warm_mode(args, world, env_rec):
+    """Warm epochs. By default one serve process serves all epochs (candidate slots and registry
+    records are evicted when full, see su_agent.c and registry.c). --restart-per-epoch starts a
+    fresh serve process per epoch, which was the M0-10 workaround for the old 16-slot table."""
     samples, failed, epochs = [], [], []
-    per_epoch_slots = 1 + args.per_epoch + 2  # warm-up + timed + failed trials, must fit CAPSULE_SLOTS
-    if per_epoch_slots > CAPSULE_SLOTS:
-        raise BenchError("per-epoch capsule submissions exceed the candidate slot table")
-    for ep in range(args.epochs):
-        serve = Serve(args.binary)
-        try:
-            env, info_ms = serve.call("engine.info", {})
-            info = ok(env, "engine.info")
+    per_epoch_slots = 1 + args.per_epoch + 2  # warm-up + timed + failed trials
+    serve, info, info_ms, serve_index = None, None, None, -1
+    try:
+        for ep in range(args.epochs):
+            if serve is None or args.restart_per_epoch:
+                if serve is not None:
+                    serve.close()
+                serve = Serve(args.binary)
+                serve_index += 1
+                env, info_ms = serve.call("engine.info", {})
+                info = ok(env, "engine.info")
             w, create_ms = create_world(serve, world["path"])
             w["active"] = "v1"
             segments = segments_for(world)
@@ -419,10 +425,12 @@ def warm_mode(args, world, env_rec):
             epochs.append({"epoch": ep, "engine_info_ms": info_ms, "world_create_ms": create_ms,
                            "worker_pid": w["worker_pid"], "warm_up_total_ms": warm["total_edit_to_first_effect_ms"],
                            "worker_rss_before": rss_before, "worker_rss_after": rss_after,
-                           "supervisor_pid": info.get("process", {}).get("pid"), "submissions": per_epoch_slots})
-        finally:
+                           "supervisor_pid": info.get("process", {}).get("pid"), "submissions": per_epoch_slots,
+                           "serve_process_index": serve_index})
+            print(f"  warm epoch {ep + 1}/{args.epochs} done ({len(samples)} timed edits)", flush=True)
+    finally:
+        if serve is not None:
             serve.close()
-        print(f"  warm epoch {ep + 1}/{args.epochs} done ({len(samples)} timed edits)", flush=True)
     return samples, failed, epochs
 
 
@@ -473,7 +481,7 @@ def stress_mode(args, world_big, env_rec):
             res["status"] = "refused"
             res["refused_code"] = err.get("code")
             res["reason"] = (f"engine refused world.create of {n} rows: {err.get('code')}: {err.get('message')} "
-                             f"(fixture {world_big['bytes']} bytes; src/runtime/worker.c WORKER_FIXTURE_MAX)")
+                             f"(fixture {world_big['bytes']} bytes; see SUTEKH_FIXTURE_MAX_BYTES in src/runtime/worker.c)")
             return res
         rc = ok(env, "world.create")
         w = {"wid": rc["world_id"], "rev": rc["world_revision"], "tick": rc["tick"], "worker_pid": rc["worker_pid"],
@@ -668,7 +676,7 @@ def run_live(args):
     summary_cold = summarize_edits(cold_samples) if cold_samples else None
     fr_pub = sum(1 for f in failed_trials if f["published"])
     raw = {
-        "report": "M0-10 raw live-edit samples", "profile_label": label,
+        "report": "M0-13 raw live-edit samples", "profile_label": label,
         "environment": env_rec,
         "configuration": {
             "binary": binary, "epochs": args.epochs, "timed_edits_per_epoch": args.per_epoch,
@@ -677,8 +685,11 @@ def run_live(args):
             "cold_policy": "each cold trial starts a new serve process; first request = engine.info; "
                            "world.create (spawns worker) untimed; first edit (install v2) timed",
             "cold_trials": args.cold_trials, "failed_candidate_trials_per_epoch": args.failed_per_epoch,
-            "candidate_slot_budget": f"{1 + args.per_epoch + args.failed_per_epoch} submissions per warm epoch "
-                                     f"of {CAPSULE_SLOTS} slots (slots are never evicted)",
+            "serve_policy": ("one serve process for all warm epochs; candidate records are evicted oldest-first "
+                             "when the table is full" if not args.restart_per_epoch
+                             else "fresh serve process per warm epoch (the M0-10 workaround)"),
+            "candidate_submissions_per_epoch": 1 + args.per_epoch + args.failed_per_epoch,
+            "candidate_slots": CAPSULE_SLOTS,
             "world_1024": {k: world_1024[k] for k in ("path", "rows", "seed", "sha256", "bytes")},
             "versions": {k: dict(v, source_bytes=os.path.getsize(os.path.join(REPO, v["source"])),
                                  source_sha256=sha256_file(os.path.join(REPO, v["source"])))
@@ -885,7 +896,7 @@ def run_native(args):
                 "p95": None, "p95_reason": "n is below 20, so a p95 would not be meaningful; min/median/max and raw values are reported"}
     _, head = git("rev-parse", "HEAD")
     doc = {
-        "report": "M0-10 native build latency (separate from live edit latency)",
+        "report": "M0-13 native build latency (separate from live edit latency)",
         "status": status, "reason": reason,
         "source": {"git_head": head},
         "commands": [
@@ -925,9 +936,11 @@ def main(argv=None):
     live.add_argument("--per-epoch", type=int, default=12)
     live.add_argument("--failed-per-epoch", type=int, default=2)
     live.add_argument("--cold-trials", type=int, default=60)
+    live.add_argument("--restart-per-epoch", action="store_true",
+                      help="start a fresh serve process for every warm epoch (M0-10 behaviour)")
     live.add_argument("--stress-rows", default="1000000,250000",
-                      help="comma-separated stress world sizes; 1000000 is expected to be refused by the "
-                           "engine's 8 MiB fixture cap, 250000 is the largest size that fits it")
+                      help="comma-separated stress world sizes (the engine caps fixtures at "
+                           "SUTEKH_FIXTURE_MAX_BYTES, default 64 MiB)")
     live.add_argument("--stress-steps", type=int, default=20)
     live.add_argument("--stress-edits", type=int, default=6)
     live.add_argument("--stress-cap-s", type=float, default=900.0)
