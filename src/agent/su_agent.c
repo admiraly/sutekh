@@ -52,6 +52,7 @@ typedef struct AgentCandidate {
     uint64_t install_txid;
     uint64_t install_tick;    /* effective tick of the last installation */
     uint64_t install_code;    /* SU_E_* status of the last rejection */
+    uint64_t seq;             /* creation order; the oldest record is evicted when the table is full */
 } AgentCandidate;
 
 typedef struct AgentSystemPaths {
@@ -326,12 +327,18 @@ static uint32_t h_capsule_submit(SuAgent *a, const SuJsonValue *params, SuBuf *r
         }
     }
     if (slot == NULL) {
-        su_lir_module_free(&mod);
-        return call_fail(c, SU_E_RESOURCE_LIMIT, "candidate registry is full");
+        /* Bounded retention: evict the oldest candidate record (candidate work is synchronous, so
+         * nothing in flight references it; a later lookup of the evicted id reports it unknown). */
+        for (i = 0; i < AGENT_MAX_CANDIDATES; i++) {
+            if (slot == NULL || a->cand[i].seq < slot->seq) {
+                slot = &a->cand[i];
+            }
+        }
     }
     memset(slot, 0, sizeof *slot);
     slot->used = 1;
     a->next_candidate++;
+    slot->seq = a->next_candidate;
     snprintf(slot->id, sizeof slot->id, "candidate-%llu", (unsigned long long)a->next_candidate);
     snprintf(slot->system_id, sizeof slot->system_id, "%s", mod.system_id);
     snprintf(slot->capsule_real, sizeof slot->capsule_real, "%s", cap_real);
