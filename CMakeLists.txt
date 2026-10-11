@@ -246,6 +246,15 @@ if(SUTEKH_NATIVE)
     add_test(NAME specialize_churn COMMAND test_specialize_churn $<TARGET_FILE:native_test_worker>
              "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/specialize_churn_scratch"
              WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Under AddressSanitizer the allocator quarantine (256 MB by default) inflates RSS for reasons
+    # unrelated to the engine, and the churn test's 16 MB RSS bound would fail. Cap the quarantine for
+    # this test only; any ASAN_OPTIONS already set in the environment are kept. Non-sanitizer builds
+    # ignore ASAN_OPTIONS.
+    set(_su_churn_asan "quarantine_size_mb=1")
+    if(DEFINED ENV{ASAN_OPTIONS} AND NOT "$ENV{ASAN_OPTIONS}" STREQUAL "")
+        set(_su_churn_asan "$ENV{ASAN_OPTIONS}:${_su_churn_asan}")
+    endif()
+    set_tests_properties(specialize_churn PROPERTIES ENVIRONMENT "ASAN_OPTIONS=${_su_churn_asan}")
     add_test(NAME release_seams COMMAND python3
              "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/qualification/check_release_seams.py"
              $<TARGET_FILE:sutekh>)
