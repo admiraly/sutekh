@@ -101,6 +101,30 @@ static int run_serve(int argc, char **argv) {
             }
         }
     }
+    /* Tick workers (M1 closure B). SUTEKH_TICK_WORKERS=N (1..64, default 1 = serial path) and
+     * SUTEKH_TICK_CHUNK_MIN_ROWS (default 4096) are sent by the supervisor with every world.step. */
+    {
+        const char *tw_env = getenv("SUTEKH_TICK_WORKERS");
+        const char *cm_env = getenv("SUTEKH_TICK_CHUNK_MIN_ROWS");
+        if (tw_env != NULL) {
+            char *end = NULL;
+            unsigned long long v = strtoull(tw_env, &end, 10);
+            if (tw_env[0] < '0' || tw_env[0] > '9' || end == NULL || *end != '\0' || v < 1u || v > 64u) {
+                fprintf(stderr, "sutekh: SUTEKH_TICK_WORKERS must be an integer 1..64\n");
+                return 2;
+            }
+            cfg.tick_workers = (uint32_t)v;
+        }
+        if (cm_env != NULL) {
+            char *end = NULL;
+            unsigned long long v = strtoull(cm_env, &end, 10);
+            if (cm_env[0] < '0' || cm_env[0] > '9' || end == NULL || *end != '\0' || v < 1u || v > UINT32_MAX) {
+                fprintf(stderr, "sutekh: SUTEKH_TICK_CHUNK_MIN_ROWS must be an integer 1..4294967295\n");
+                return 2;
+            }
+            cfg.tick_chunk_min_rows = (uint64_t)v;
+        }
+    }
     return su_agent_serve(0, 1, &cfg) == 0 ? 0 : 1;
 }
 #endif

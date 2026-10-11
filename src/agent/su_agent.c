@@ -51,6 +51,8 @@
 #define AGENT_MAX_LOG 1024u
 #define AGENT_DEFAULT_QUARANTINE 2u
 #define AGENT_DEFAULT_SPOOL (UINT64_C(32) << 20)
+#define AGENT_DEFAULT_CHUNK_MIN_ROWS UINT64_C(4096)
+#define AGENT_MAX_TICK_WORKERS 64u
 #define AGENT_FIXTURE_MAX (UINT64_C(64) << 20)
 #define AGENT_RECOVERY_ATTEMPTS 3u
 /* M1-02c-2 limits (docs/AGENT_RPC.md section 10). */
@@ -211,6 +213,8 @@ typedef struct SuAgent {
     uint64_t recoveries;     /* completed worker replacements */
     SuSpool *spool;
     uint64_t spool_max;
+    uint32_t tick_workers;
+    uint64_t tick_chunk_min_rows;
     uint32_t interval;
     uint32_t retain;
     uint32_t log_cap;
@@ -255,6 +259,14 @@ static const char *const k_capabilities[] = {
     "world.specialize",
 #endif
 };
+
+/* Tick options appended to every world.step request the supervisor sends to a worker. */
+static void append_tick_opts(SuBuf *b, const SuAgent *a) {
+    su_buf_str(b, ",\"tick_workers\":");
+    su_buf_u64(b, a->tick_workers);
+    su_buf_str(b, ",\"chunk_min_rows\":");
+    su_buf_u64(b, a->tick_chunk_min_rows);
+}
 
 static uint32_t call_fail(AgentCall *c, uint32_t code, const char *msg) {
     snprintf(c->msg, sizeof c->msg, "%s", msg);
@@ -1175,6 +1187,7 @@ static int rebuild_world(SuAgent *a, AgentWorld *w, RecStats *s) {
             su_buf_quoted(&req, cur, strlen(cur));
             su_buf_str(&req, ",\"ticks\":");
             su_buf_u64(&req, op->ticks);
+            append_tick_opts(&req, a);
             req_end(&req);
         } else {
             char cap[SU_PATH_BUF];
@@ -1838,6 +1851,11 @@ static uint32_t h_engine_info(SuAgent *a, const SuJsonValue *params, SuBuf *res,
     su_buf_u64(res, a->generation);
     su_buf_str(res, ",\"recoveries\":");
     su_buf_u64(res, a->recoveries);
+    su_buf_str(res, ",\"tick_workers\":{\"workers\":");
+    su_buf_u64(res, a->tick_workers);
+    su_buf_str(res, ",\"chunk_min_rows\":");
+    su_buf_u64(res, a->tick_chunk_min_rows);
+    su_buf_str(res, "}");
     su_buf_str(res, ",\"recovery\":{\"limits\":{\"checkpoint_interval_ticks\":");
     su_buf_u64(res, a->interval);
     su_buf_str(res, ",\"checkpoint_retain\":");
@@ -2772,6 +2790,7 @@ static uint32_t h_world_step(SuAgent *a, const SuJsonValue *params, SuBuf *res, 
     su_buf_quoted(&req, expect, strlen(expect));
     su_buf_str(&req, ",\"ticks\":");
     su_buf_u64(&req, ticks);
+    append_tick_opts(&req, a);
     req_end(&req);
     if (req.failed) {
         su_buf_free(&req);
@@ -3940,6 +3959,11 @@ static int config_limits(SuAgent *a, const SuAgentConfig *cfg) {
         return -1;
     }
     a->install_ck = !cfg->no_install_checkpoint;
+    a->tick_workers = cfg->tick_workers == 0 ? 1u : cfg->tick_workers;
+    a->tick_chunk_min_rows = cfg->tick_chunk_min_rows == 0 ? AGENT_DEFAULT_CHUNK_MIN_ROWS : cfg->tick_chunk_min_rows;
+    if (a->tick_workers > AGENT_MAX_TICK_WORKERS) {
+        return -1;
+    }
     return 0;
 }
 

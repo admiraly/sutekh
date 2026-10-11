@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include "ir/su_lir.h"
+#include "runtime/jobs/su_jobs.h"
 #include "sutekh/abi.h"
 #include "world/su_world.h"
 
@@ -58,6 +59,18 @@ typedef struct SuSchedule {
  * with SU_E_CANDIDATE_FAILED. The worker passes NULL outside tests. */
 typedef int (*SuSchedFault)(uint32_t system_index, void *ctx);
 
+/* Tick execution options (M1 closure B). workers == 1 (default) runs every system serially
+ * through its VM context or native kernel, exactly as before. workers > 1 runs a system whose
+ * world has at least chunk_min_rows rows through su_jobs_run_system_chunked (VM tier only; a
+ * native kernel runs as one call on the whole range). chunk_fault is a test seam (NULL outside
+ * tests) that fails one chunk with SU_E_CANDIDATE_FAILED. */
+typedef struct SuSchedTickOpts {
+    uint32_t workers;          /* 1..SU_JOBS_MAX_WORKERS */
+    uint64_t chunk_min_rows;   /* chunked execution only when rows >= this */
+    SuJobsFault chunk_fault;   /* test seam, may be NULL */
+    void *chunk_ctx;
+} SuSchedTickOpts;
+
 void su_sched_init(SuSchedule *s);
 /* Destroys every context and module, and frees the field table. */
 void su_sched_free(SuSchedule *s);
@@ -87,6 +100,11 @@ uint32_t su_sched_check_candidate(const SuSchedule *s, const SuLirModule *m, uin
  * failing system (UINT32_MAX for begin/publish), and *done counts published ticks. */
 uint32_t su_sched_run_ticks(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
                             void *fault_ctx, uint64_t *done, uint32_t *failed_index);
+/* As su_sched_run_ticks, with the tick options. opt == NULL means the serial path. The result
+ * is canonical for every workers value: chunk boundaries depend only on the row count. */
+uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
+                                void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
+                                uint32_t *failed_index);
 
 /* Swaps entry idx with *fresh (ownership of its module and context moves into the
  * schedule) and returns the replaced entry in *old for the caller to destroy. */

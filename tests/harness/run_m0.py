@@ -2695,6 +2695,316 @@ def tx4(t: TestCtx):
     t.details["tx4_exec_summary"] = (evidence or {}).get("summary", {}).get("distinct_executed_basenames")
 
 
+# ---- M1 closure B: chunked tick workers (TX5) and large-world containment (TX6) ----
+TICK_COUNTS = (1, 2, 4)            # SUTEKH_TICK_WORKERS values TX5 runs the real binary with
+TICK_ROWS = 100001                 # TX5 world size (chunked path: rows >= 4096 threshold)
+TICK_TICKS = 20                    # TX5 ticks, each compared with the reference evaluator
+BIG_ROWS = 1000000                 # TX6 world size, DEFAULT limits
+BIG_TICKS = 3
+RLIMIT_AS_BOUND = 4 * 1024 * 1024 * 1024   # constitution C07 bound stated in the task (4 GiB)
+SPOOL_NEEDED_FOR_1M = 128 * 1024 * 1024    # regression guard: the earlier 32 MiB default blocked 1M rows
+SECRET_NAME = "SECRET_X"
+TX_DIR = "build"                   # generated fixtures live under the project root (path policy)
+U32_MASK = (1 << 32) - 1
+MOVEMENT_CAP_DIR = "tests/fixtures/t02"
+CONFLICT_DIR = "tests/fixtures/tick_workers/conflict"
+CYCLE_DIR = "tests/fixtures/tick_workers/cycle"
+ORDER_DIR = "tests/fixtures/tick_workers/order"
+
+
+def gen_columns(rows: int, seed: int):
+    """Deterministic u32 columns with the edge values the reference exercises (no RNG library)."""
+    pos = [0] * rows
+    vel = [0] * rows
+    x = seed & ((1 << 64) - 1)
+    for i in range(rows):
+        x = (x * 6364136223846793005 + 1442695040888963407) & ((1 << 64) - 1)
+        p = (x >> 32) & U32_MASK
+        x = (x * 6364136223846793005 + 1442695040888963407) & ((1 << 64) - 1)
+        v = (x >> 32) & U32_MASK
+        if i % 11 == 3:
+            p = U32_MASK
+        if i % 5 == 0:
+            v = p
+        if i % 13 == 4:
+            v = 0
+        pos[i] = p
+        vel[i] = v
+    return pos, vel
+
+
+def write_world_fixture(path: str, rows: int, pos, vel) -> None:
+    doc = {"fixture_format": "0.1", "schema_id": "demo.actor", "schema_version": 1, "tick": 0,
+           "entity_ids": list(range(1, rows + 1)), "columns": {"position_x": pos, "velocity_x": vel}}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, separators=(",", ":"))
+
+
+def pid_constant_mismatches(pids: list) -> list:
+    """Every observation of the active worker must name the same pid (no silent restart)."""
+    distinct = {p for p in pids}
+    if len(distinct) != 1 or None in distinct or any(type(p) is not int for p in pids):
+        return [f"worker_pid over the ticks: expected one integer pid, observed {sorted(map(repr, distinct))}"]
+    return []
+
+
+def rlimit_as_mismatches(limits_text: str, bound: int = RLIMIT_AS_BOUND) -> list:
+    """Parses one `Max address space` line of /proc/<pid>/limits: the soft limit must be a number <= bound."""
+    for line in limits_text.splitlines():
+        if line.startswith("Max address space"):
+            parts = line.split()
+            if len(parts) < 5:
+                return [f"RLIMIT_AS line is malformed: {line!r}"]
+            soft = parts[3]
+            if soft == "unlimited":
+                return ["RLIMIT_AS soft limit is unlimited (C07 requires a limit)"]
+            if not soft.isdigit():
+                return [f"RLIMIT_AS soft limit is not a number: {soft!r}"]
+            if int(soft) > bound or int(soft) == 0:
+                return [f"RLIMIT_AS soft limit {soft} is outside (0, {bound}]"]
+            return []
+    return ["no Max address space line in /proc limits"]
+
+
+def environ_secret_mismatches(environ: bytes, name: str = SECRET_NAME) -> list:
+    """A child's environment (NUL-separated /proc/<pid>/environ) must not carry the named variable."""
+    prefix = name.encode("ascii") + b"="
+    if any(entry.startswith(prefix) for entry in environ.split(b"\0")):
+        return [f"{name} is present in the child environment (scrubbed environment failed)"]
+    return []
+
+
+def spool_mismatches(spool_bytes_max, needed: int = SPOOL_NEEDED_FOR_1M) -> list:
+    if type(spool_bytes_max) is not int or spool_bytes_max < needed:
+        return [f"recovery spool default {spool_bytes_max!r} is below the {needed} bytes a 1,000,000-row world needs"]
+    return []
+
+
+def sample_mismatches(expected: dict, pages: list, offsets_ok=True) -> list:
+    """Compares inspect pages (offset, result) with reference columns at the same rows."""
+    out = []
+    for offset, page in pages:
+        n = page.get("returned_rows")
+        if type(n) is not int or n <= 0:
+            out.append(f"page at offset {offset}: returned_rows is {n!r}")
+            continue
+        for f in INSPECT_FIELDS:
+            vals = (page.get("columns") or {}).get(f)
+            if not isinstance(vals, list) or len(vals) != n:
+                out.append(f"page at offset {offset}: column {f} has the wrong length")
+                continue
+            exp = expected[f][offset:offset + n]
+            if vals != exp:
+                first = next(i for i, (a, b) in enumerate(zip(vals, exp)) if a != b)
+                out.append(f"{f}[{offset + first}]: expected {exp[first]} actual {vals[first]}")
+            if len(out) >= 20:
+                return out
+    return out
+
+
+def _sample_offsets(rows: int, seed: int, count: int) -> list:
+    rng = __import__("random").Random(seed)
+    pages = max(1, (rows + INSPECT_PAGE - 1) // INSPECT_PAGE)
+    picks = {0, pages - 1}
+    while len(picks) < count:
+        picks.add(rng.randrange(pages))
+    return sorted(p * INSPECT_PAGE for p in picks)
+
+
+def _inspect_sampled(tctx, sess, wid, rows: int, seed: int, count: int) -> list:
+    out = []
+    for off in _sample_offsets(rows, seed, count):
+        res = call(tctx, sess, "world.inspect",
+                   {"world_id": wid, "fields": list(INSPECT_FIELDS), "limit": INSPECT_PAGE, "offset": off})
+        out.append((off, res))
+    return out
+
+
+def _proc_read(path: str):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _write_scratch_dir(tctx, prefix: str) -> str:
+    root = os.path.join(REPO, TX_DIR)
+    os.makedirs(root, exist_ok=True)
+    return tempfile.mkdtemp(prefix=prefix, dir=root)
+
+
+def tx5(t: TestCtx):
+    cap_rel = f"{MOVEMENT_CAP_DIR}/movement.capsule.json"
+    cap, lir_doc, _ = t.load_system(cap_rel)
+    pos0, vel0 = gen_columns(TICK_ROWS, 5)
+    expected = []
+    cols = {"position_x": pos0, "velocity_x": vel0}
+    for _k in range(TICK_TICKS):
+        cols = ref.run_tick(lir_doc, cap, cols)
+        expected.append({"position_x": cols["position_x"], "velocity_x": cols["velocity_x"]})
+    scratch = _write_scratch_dir(t, "m0-tickw-")
+    try:
+        world_path = os.path.join(scratch, "world.json")
+        write_world_fixture(world_path, TICK_ROWS, pos0, vel0)
+        world_rel = t.rel(world_path)
+        pids_by_n = {}
+        for n in TICK_COUNTS:
+            env = dict(t.env)
+            env["SUTEKH_TICK_WORKERS"] = str(n)
+            sess = t.session(f"TX5 serve workers={n}", env=env)
+            tw = call(t, sess, "engine.info", {}).get("tick_workers")
+            if not isinstance(tw, dict):
+                raise Unavailable("engine.info does not advertise tick_workers")
+            t.check(f"TX5 workers={n}: engine.info advertises the configured workers", n, tw.get("workers"))
+            t.check(f"TX5 workers={n}: engine.info advertises the chunk threshold", 4096, tw.get("chunk_min_rows"))
+            wid, _rev = create_world(t, sess, world_rel, [cap_rel])
+            pids = []
+            for k, exp in enumerate(expected, start=1):
+                step(t, sess, wid, 1)
+                state = inspect(t, sess, wid)
+                pids.append(state.get("worker_pid"))
+                t.check_mismatches(f"TX5 workers={n} tick {k} columns", verify_state(k, exp, state))
+            t.check_mismatches(f"TX5 workers={n} worker_pid constant over {TICK_TICKS} ticks",
+                               pid_constant_mismatches(pids))
+            pids_by_n[n] = pids[0]
+            close_world(t, sess, wid)
+            sess.close()
+        # Effect analysis at world.create (one serve session): conflicting and cyclic schedules are refused.
+        sess = t.session("TX5 refusals")
+        for label, dirn, order, want in (
+                ("conflict", CONFLICT_DIR, ("advance", "damp"), "SU_E_SCHEMA_MISMATCH"),
+                ("cycle", CYCLE_DIR, ("advance", "damp"), "SU_E_INVALID_ARGUMENT"),
+                ("capsule-order", ORDER_DIR, ("damp", "advance"), "SU_E_INVALID_ARGUMENT")):
+            env = sess.request("world.create", {
+                "fixture_path": f"{dirn}/pipe_world.json",
+                "capsule_paths": [f"{dirn}/{name}.capsule.json" for name in order]})
+            code = env.get("error", {}).get("code") if not env.get("ok") else "created"
+            t.check(f"TX5 {label}: world.create refuses the schedule with {want}", want, code)
+        sess.close()
+        t.details["worker_pids"] = {str(k): v for k, v in pids_by_n.items()}
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def tx6(t: TestCtx):
+    base_env = {k: v for k, v in t.env.items() if not k.startswith("SUTEKH_")}  # DEFAULT limits, no overrides
+    base_env[SECRET_NAME] = "1"
+    sess = t.session("TX6 serve", env=base_env)
+    info = call(t, sess, "engine.info", {})
+    spool = (((info.get("recovery") or {}).get("limits") or {}).get("spool_bytes_max"))
+    # (d) the recovery spool default admits a 1,000,000-row world (regression guard)
+    t.check_mismatches("TX6 (d) recovery spool default admits a 1,000,000-row world", spool_mismatches(spool))
+    scratch = _write_scratch_dir(t, "m0-big-")
+    try:
+        # (a) 1,000,000-row world: create, step 3, snapshot, step 2, restore, sampled rows vs reference
+        pos, vel = gen_columns(BIG_ROWS, 7)
+        big_path = os.path.join(scratch, "world.json")
+        write_world_fixture(big_path, BIG_ROWS, pos, vel)
+        big_rel = t.rel(big_path)
+        cap, lir_doc, _ = t.load_system(f"{MOVEMENT_CAP_DIR}/movement.capsule.json")
+        res = call(t, sess, "world.create", {"fixture_path": big_rel,
+                                             "capsule_path": f"{MOVEMENT_CAP_DIR}/movement.capsule.json"})
+        wid = res.get("world_id")
+        sess.revs[wid] = res.get("world_revision")
+        worker_pid = res.get("worker_pid")
+        t.check("TX6 (a) 1,000,000-row world created with default limits", BIG_ROWS, res.get("row_count"))
+        step(t, sess, wid, BIG_TICKS)
+        ref3 = ref.run_ticks(lir_doc, cap, {"position_x": pos, "velocity_x": vel}, BIG_TICKS)
+        expected3 = {"position_x": ref3["position_x"], "velocity_x": ref3["velocity_x"]}
+        pages = _inspect_sampled(t, sess, wid, BIG_ROWS, 3, 12)
+        t.check("TX6 (a) sampled reads report tick 3", BIG_TICKS, pages[0][1].get("tick"))
+        t.check_mismatches("TX6 (a) sampled rows at tick 3 equal the reference",
+                           sample_mismatches(expected3, pages))
+        snap = call(t, sess, "world.snapshot", {"world_id": wid, "expected_world_revision": sess.revs[wid]})
+        sid = snap.get("snapshot_id")
+        if not isinstance(sid, str):
+            raise Failed("world.snapshot result lacks snapshot_id")
+        step(t, sess, wid, 2)
+        rest = call(t, sess, "world.restore", {"world_id": wid, "snapshot_id": sid,
+                                               "expected_world_revision": sess.revs[wid]})
+        sess.revs[wid] = rest.get("world_revision")
+        t.check("TX6 (a) restore returns to tick 3", BIG_TICKS, rest.get("tick"))
+        t.check_mismatches("TX6 (a) sampled rows after restore equal the tick-3 reference",
+                           sample_mismatches(expected3, _inspect_sampled(t, sess, wid, BIG_ROWS, 9, 8)))
+        # (b) the active worker runs under an address-space limit
+        limits = _proc_read(f"/proc/{worker_pid}/limits")
+        if limits is None:
+            raise NotRun("active worker /proc limits are not readable on this platform")
+        t.check_mismatches("TX6 (b) active worker RLIMIT_AS is limited to <= 4 GiB",
+                           rlimit_as_mismatches(limits.decode("utf-8", "replace")))
+        # (c) SECRET_X is absent from the active worker's environment
+        active_env = _proc_read(f"/proc/{worker_pid}/environ")
+        if active_env is None:
+            raise NotRun("active worker /proc environ is not readable on this platform")
+        t.check_mismatches("TX6 (c) active worker environment is scrubbed",
+                           environ_secret_mismatches(active_env))
+        close_world(t, sess, wid, systems=1, snapshots=1)
+        # (c) disposable worker: poll the children of the supervisor while candidate.evaluate runs
+        cap8_dir = _write_scratch_dir(t, "m0-cand-")
+        seen = {}
+        try:
+            rel_dir = t.rel(cap8_dir)
+            for name in ("movement.capsule.json", "movement.lir.json"):
+                src_name = f"{MOVEMENT_CAP_DIR}/{name}"
+                with open(t.abspath(src_name), "rb") as fh_in, open(os.path.join(cap8_dir, name), "wb") as fh_out:
+                    fh_out.write(fh_in.read())
+            w8 = t.load(f"{MOVEMENT_CAP_DIR}/world_8.json")
+            cap8, lir8, _ = t.load_system(f"{rel_dir}/movement.capsule.json")
+            cols8 = {"position_x": w8["columns"]["position_x"], "velocity_x": w8["columns"]["velocity_x"]}
+            end8 = ref.run_ticks(lir8, cap8, cols8, 100000)
+            with open(os.path.join(cap8_dir, "world.json"), "w", encoding="utf-8") as fh:
+                json.dump(w8, fh)
+            test_doc = {"test_format": "m0-test/0.1", "system_id": "movement", "capsule": "movement.capsule.json",
+                        "world": "world.json",
+                        "cases": [{"name": "tx6_long", "ticks": 100000,
+                                   "expected_columns": {"position_x": end8["position_x"],
+                                                        "velocity_x": end8["velocity_x"]}}]}
+            with open(os.path.join(cap8_dir, "movement.test.json"), "w", encoding="utf-8") as fh:
+                json.dump(test_doc, fh)
+            cid = submit(t, sess, f"{rel_dir}/movement.capsule.json", f"{rel_dir}/movement.lir.json")
+            stop = threading.Event()
+
+            def poll(sup=sess.proc.pid, active=worker_pid, out=seen, stop=stop):
+                while not stop.is_set():
+                    for kid in _children_fast(sup):
+                        if kid == active or kid in out:
+                            continue
+                        # A forked child carries the supervisor's environment until execve replaces
+                        # it, so only a child whose argv is the worker role (`sutekh worker`) counts.
+                        cmd_b = _proc_read(f"/proc/{kid}/cmdline")
+                        if not cmd_b or cmd_b.rstrip(b"\0").split(b"\0")[-1:] != [b"worker"]:
+                            continue
+                        env_b = _proc_read(f"/proc/{kid}/environ")
+                        if env_b is not None:
+                            out[kid] = {"environ": env_b, "limits": _proc_read(f"/proc/{kid}/limits")}
+                    time.sleep(0.001)
+
+            th = threading.Thread(target=poll, daemon=True)
+            th.start()
+            try:
+                ev = sess.request("candidate.evaluate", {"candidate_id": cid,
+                                                         "test_path": f"{rel_dir}/movement.test.json"},
+                                  timeout=120.0)
+            finally:
+                stop.set()
+                th.join(5)
+            t.check("TX6 (c) evaluation answered", True, bool(ev.get("ok")))
+        finally:
+            shutil.rmtree(cap8_dir, ignore_errors=True)
+        if not seen:
+            t.details["disposable_worker_environ"] = "not caught: no disposable child was observed during evaluate"
+        for kid, rec in seen.items():
+            t.check_mismatches(f"TX6 (c) disposable worker {kid} environment is scrubbed",
+                               environ_secret_mismatches(rec["environ"]))
+            if rec["limits"] is not None:
+                t.check_mismatches(f"TX6 (b) disposable worker {kid} RLIMIT_AS is limited",
+                                   rlimit_as_mismatches(rec["limits"].decode("utf-8", "replace")))
+        t.details["disposable_workers_observed"] = len(seen)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 TESTS = [
     ("T00", "Clean bootstrap", (), t00),
     ("T01", "Reference movement", ("world.create", "world.step", "world.inspect"), t01),
@@ -2718,6 +3028,13 @@ TESTS = [
     ("TX2", "Worker crash recovery (extra)", _EVAL + ("engine.info", "world.close"), tx2),
     ("TX3", "Native specialization (extra)", _EVAL + ("world.close", "world.specialize"), tx3),
     ("TX4", "Native specialization spawns no build tool (extra)", _EVAL + ("world.close", "world.specialize"), tx4),
+    ("TX5", "Chunked tick workers (extra)", ("engine.info", "world.create", "world.step", "world.inspect",
+                                            "world.close", "capsule.submit"), tx5),
+    ("TX6", "Large world within default limits and containment (extra)", ("engine.info", "world.create",
+                                                                          "world.step", "world.inspect",
+                                                                          "world.snapshot", "world.restore",
+                                                                          "world.close", "capsule.submit",
+                                                                          "candidate.evaluate"), tx6),
 ]
 
 
@@ -3418,6 +3735,58 @@ def self_test() -> int:
     ok("close: T02 and T03 require world.close (they close each world)",
        all("world.close" in req for tid, _n, req, _f in TESTS if tid in ("T02", "T03")))
 
+    # ---- M1 closure B: TX5 / TX6 comparison logic (pure; no binary)
+    ok("tx5: a single worker pid over every tick is a pass",
+       pid_constant_mismatches([42, 42, 42]) == [])
+    ok("tx5: a pid that changes between ticks is a mismatch",
+       pid_constant_mismatches([42, 43]) != [])
+    ok("tx5: a missing or boolean pid is a mismatch",
+       pid_constant_mismatches([None, None]) != [] and pid_constant_mismatches([True]) != [])
+    ok("tx5: the test is registered with engine.info and the world methods",
+       any(tid == "TX5" and "engine.info" in req for tid, _n, req, _f in TESTS))
+    ok("tx5: the worker counts are 1, 2 and 4, over at least 20 ticks of 100,001 rows",
+       TICK_COUNTS == (1, 2, 4) and TICK_TICKS >= 20 and TICK_ROWS == 100001)
+    gen_a = gen_columns(12, 1)
+    ok("tx5: generated columns are deterministic and u32",
+       gen_a == gen_columns(12, 1) and all(0 <= v <= U32_MASK for v in gen_a[0] + gen_a[1]))
+    ok("tx5: generated columns include the u32 maximum and equal-column rows",
+       gen_a[0][3] == U32_MASK and gen_a[1][0] == gen_a[0][0])
+    ok("tx6: RLIMIT_AS of 4 GiB is accepted",
+       rlimit_as_mismatches("Limit                     Soft Limit           Hard Limit           Units\n"
+                            "Max address space         4294967296           4294967296           bytes\n") == [])
+    ok("tx6: an unlimited RLIMIT_AS is a mismatch",
+       rlimit_as_mismatches("Max address space         unlimited            unlimited            bytes\n") != [])
+    ok("tx6: an RLIMIT_AS above 4 GiB is a mismatch",
+       rlimit_as_mismatches("Max address space         8589934592           unlimited            bytes\n") != [])
+    ok("tx6: a limits text without the address-space line is a mismatch",
+       rlimit_as_mismatches("Max cpu time              unlimited            unlimited            seconds\n") != [])
+    ok("tx6: a clean environment has no SECRET_X",
+       environ_secret_mismatches(b"PATH=/usr/bin\0SUTEKH_TICK_WORKERS=2\0") == [])
+    ok("tx6: SECRET_X in an environment is a mismatch",
+       environ_secret_mismatches(b"PATH=/usr/bin\0SECRET_X=1\0") != [])
+    ok("tx6: a variable that only ends in SECRET_X is not SECRET_X",
+       environ_secret_mismatches(b"MY_SECRET_X=1\0") == [])
+    ok("tx6: a 512 MiB spool admits a 1,000,000-row world",
+       spool_mismatches(512 * 1024 * 1024) == [])
+    ok("tx6: the earlier 32 MiB spool default is a mismatch (regression guard)",
+       spool_mismatches(32 * 1024 * 1024) != [])
+    ok("tx6: a missing spool limit is a mismatch", spool_mismatches(None) != [])
+    exp_s = {"position_x": [1, 2, 3, 4], "velocity_x": [9, 8, 7, 6]}
+    ok("tx6: sampled pages equal to the reference give no mismatch",
+       sample_mismatches(exp_s, [(2, {"returned_rows": 2, "columns": {"position_x": [3, 4],
+                                                                       "velocity_x": [7, 6]}})]) == [])
+    ok("tx6: a sampled value that differs from the reference is a mismatch",
+       sample_mismatches(exp_s, [(2, {"returned_rows": 2, "columns": {"position_x": [3, 5],
+                                                                       "velocity_x": [7, 6]}})]) != [])
+    ok("tx6: a sampled page with the wrong length is a mismatch",
+       sample_mismatches(exp_s, [(0, {"returned_rows": 2, "columns": {"position_x": [1],
+                                                                       "velocity_x": [9, 8]}})]) != [])
+    offs = _sample_offsets(1000000, 3, 12)
+    ok("tx6: sample offsets are page-aligned, sorted, in range, and deterministic",
+       offs == _sample_offsets(1000000, 3, 12) and offs == sorted(offs)
+       and all(o % INSPECT_PAGE == 0 and 0 <= o < 1000000 for o in offs) and 0 in offs)
+    ok("tx6: the test is registered and needs candidate.evaluate",
+       any(tid == "TX6" and "candidate.evaluate" in req for tid, _n, req, _f in TESTS))
     failed = [name for name, passed in checks if not passed]
     for name in failed:
         print(f"self-test FAILED: {name}")

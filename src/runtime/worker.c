@@ -19,6 +19,8 @@
 #include "runtime/checkpoint.h"
 #include "runtime/registry.h"
 #include "runtime/reload.h"
+#include "runtime/jobs/su_effects.h"
+#include "runtime/jobs/su_jobs.h"
 #include "runtime/schedule.h"
 #ifdef SU_HAVE_NATIVE
 #include "backends/native/su_native.h"
@@ -386,6 +388,182 @@ static void write_manifest(SuBuf *res, const SuSchedule *s) {
     su_buf_str(res, "]");
 }
 
+/* ---------- schedule facts and effect check (M1 closure B) ---------- */
+
+/* Reads a capsule file's schedule block (phase, after, before). The strings point into doc,
+ * which the caller frees with su_json_doc_free. A capsule without a schedule block has phase ""
+ * and no edges. buf is malloc'd and must be freed after doc. */
+static uint32_t read_schedule_facts(const char *cap, SuJsonDoc *doc, uint8_t **buf, const char **phase,
+                                    const SuJsonValue **after, const SuJsonValue **before, WorkerFail *f) {
+    static const SuJsonLimits lim = {16u * 1024u * 1024u, 32u};
+    FILE *fh = fopen(cap, "rb");
+    long sz = -1;
+    size_t got = 0;
+    SuJsonError err;
+    const SuJsonValue *sch;
+    const SuJsonValue *ph;
+
+    *buf = NULL;
+    *phase = "";
+    *after = NULL;
+    *before = NULL;
+    memset(doc, 0, sizeof *doc);
+    if (fh == NULL) {
+        fail(f, SU_E_IO, "capsule cannot be read for its schedule block");
+        return SU_E_IO;
+    }
+    if (fseek(fh, 0, SEEK_END) == 0) {
+        sz = ftell(fh);
+    }
+    if (sz < 0 || (size_t)sz > lim.max_bytes) {
+        fclose(fh);
+        fail(f, SU_E_IO, "capsule cannot be read for its schedule block");
+        return SU_E_IO;
+    }
+    rewind(fh);
+    *buf = malloc((size_t)sz + 1u);
+    if (*buf == NULL) {
+        fclose(fh);
+        fail(f, SU_E_RESOURCE_LIMIT, "out of memory reading a capsule");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    got = fread(*buf, 1, (size_t)sz, fh);
+    fclose(fh);
+    if (got != (size_t)sz || su_json_parse(*buf, got, &lim, doc, &err) != SU_OK) {
+        free(*buf);
+        *buf = NULL;
+        fail(f, SU_E_PARSE, "capsule is not valid JSON");
+        return SU_E_PARSE;
+    }
+    sch = su_json_member(doc->root, "schedule");
+    if (sch == NULL) {
+        return SU_OK;
+    }
+    if (sch->type != SU_JSON_OBJECT) {
+        fail(f, SU_E_TYPE, "capsule schedule must be an object");
+        return SU_E_TYPE;
+    }
+    ph = su_json_member(sch, "phase");
+    if (ph != NULL && ph->type == SU_JSON_STRING) {
+        *phase = ph->u.string.data;
+    }
+    *after = su_json_member(sch, "after");
+    *before = su_json_member(sch, "before");
+    return SU_OK;
+}
+
+/* Collects string items of a JSON array into out (at most cap), returns the count. */
+static uint32_t string_items(const SuJsonValue *arr, const char **out, uint32_t cap) {
+    uint32_t k;
+    uint32_t n = 0;
+    if (arr == NULL || arr->type != SU_JSON_ARRAY) {
+        return 0;
+    }
+    for (k = 0; k < arr->u.array.count && n < cap; k++) {
+        const SuJsonValue *e = arr->u.array.items[k];
+        if (e->type == SU_JSON_STRING) {
+            out[n++] = e->u.string.data;
+        }
+    }
+    return n;
+}
+
+/* Effect analysis (su_effects.h) over the world's systems, run at world.create when there is more
+ * than one system. Every system is declared parallel, so an unordered pair with a write/write or
+ * read/write conflict is rejected (SU_E_SCHEMA_MISMATCH). Ordering cycles and unknown or
+ * cross-phase edges are rejected by su_effects_build (SU_E_INVALID_ARGUMENT). The message names
+ * the pair, the field or the cycle. */
+static uint32_t check_system_effects(const SuSchedule *sched, const RevPaths *paths, WorkerFail *f) {
+    uint32_t n = sched->count;
+    uint32_t i;
+    uint32_t st = SU_OK;
+    SuJsonDoc *docs = NULL;
+    uint8_t **bufs = NULL;
+    SuEffectInput *in = NULL;
+    const char **afters = NULL;
+    const char **befores = NULL;
+    uint32_t *after_n = NULL;
+    uint32_t *before_n = NULL;
+    SuEffectGraph *g = NULL;
+    char err[WORKER_MSG_CAP];
+
+    if (n < 2u) {
+        return SU_OK;
+    }
+    docs = calloc(n, sizeof *docs);
+    bufs = calloc(n, sizeof *bufs);
+    in = calloc(n, sizeof *in);
+    afters = calloc((size_t)n * SU_SCHED_MAX_SYSTEMS, sizeof *afters);
+    befores = calloc((size_t)n * SU_SCHED_MAX_SYSTEMS, sizeof *befores);
+    after_n = calloc(n, sizeof *after_n);
+    before_n = calloc(n, sizeof *before_n);
+    if (docs == NULL || bufs == NULL || in == NULL || afters == NULL || befores == NULL || after_n == NULL ||
+        before_n == NULL) {
+        fail(f, SU_E_RESOURCE_LIMIT, "out of memory for the effect analysis");
+        st = SU_E_RESOURCE_LIMIT;
+        goto done;
+    }
+    for (i = 0; i < n; i++) {
+        const SuJsonValue *aft = NULL;
+        const SuJsonValue *bef = NULL;
+        const char *phase = "";
+        st = read_schedule_facts(paths[i].capsule, &docs[i], &bufs[i], &phase, &aft, &bef, f);
+        if (st != SU_OK) {
+            goto done;
+        }
+        after_n[i] = string_items(aft, &afters[(size_t)i * SU_SCHED_MAX_SYSTEMS], SU_SCHED_MAX_SYSTEMS);
+        before_n[i] = string_items(bef, &befores[(size_t)i * SU_SCHED_MAX_SYSTEMS], SU_SCHED_MAX_SYSTEMS);
+        in[i].system_id = sched->sys[i].system_id;
+        in[i].mod = sched->sys[i].mod;
+        in[i].phase = phase;
+        in[i].priority = 0u;
+        in[i].declared_parallel = 1u;
+        in[i].after = &afters[(size_t)i * SU_SCHED_MAX_SYSTEMS];
+        in[i].after_count = after_n[i];
+        in[i].before = &befores[(size_t)i * SU_SCHED_MAX_SYSTEMS];
+        in[i].before_count = before_n[i];
+    }
+    st = su_effects_build(in, n, &g, err, sizeof err);
+    if (st != SU_OK) {
+        fail(f, st, err);
+        goto done;
+    }
+    /* The world runs its systems in capsule order, so every `after` edge must point at an earlier
+     * system of this world. An unknown target is already refused by su_effects_build. */
+    for (i = 0; i < n && st == SU_OK; i++) {
+        uint32_t k;
+        for (k = 0; k < after_n[i] && st == SU_OK; k++) {
+            uint32_t j;
+            for (j = 0; j < n; j++) {
+                if (strcmp(in[i].after[k], sched->sys[j].system_id) == 0) {
+                    break;
+                }
+            }
+            if (j < n && j >= i) {
+                snprintf(err, sizeof err, "schedule edge %s after %s runs against the capsule order",
+                         sched->sys[i].system_id, in[i].after[k]);
+                fail(f, SU_E_INVALID_ARGUMENT, err);
+                st = SU_E_INVALID_ARGUMENT;
+            }
+        }
+    }
+
+done:
+    su_effects_free(g);
+    for (i = 0; docs != NULL && bufs != NULL && i < n; i++) {
+        su_json_doc_free(&docs[i]);
+        free(bufs[i]);
+    }
+    free(docs);
+    free(bufs);
+    free(in);
+    free(afters);
+    free(befores);
+    free(after_n);
+    free(before_n);
+    return st;
+}
+
 /* Parses the capsules array of world.create and builds a finalized schedule. Systems
  * are added in array order; the first failure leaves sched holding only what was added
  * (the caller frees it). */
@@ -432,8 +610,9 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPat
     st = su_sched_finalize(sched);
     if (st != SU_OK) {
         fail(f, st, "systems disagree on a field's ID, name or type");
+        return st;
     }
-    return st;
+    return check_system_effects(sched, paths, f);
 }
 
 /* ---------- handlers ---------- */
@@ -810,8 +989,36 @@ static int fault_seam_wanted(const WorkerState *s) {
     return s->hooks.fail_system != NULL;
 }
 
+/* Optional tick options of world.step (the supervisor sends them from SUTEKH_TICK_WORKERS and
+ * SUTEKH_TICK_CHUNK_MIN_ROWS). Absent: serial execution, threshold 4096 rows. */
+static uint32_t tick_opts_of(const SuJsonValue *params, SuSchedTickOpts *o, WorkerFail *f) {
+    const SuJsonValue *v;
+    uint64_t x = 0;
+    memset(o, 0, sizeof *o);
+    o->workers = 1u;
+    o->chunk_min_rows = 4096u;
+    v = su_json_member(params, "tick_workers");
+    if (v != NULL) {
+        if (!su_json_get_uint(v, &x) || x < 1u || x > SU_JOBS_MAX_WORKERS) {
+            fail(f, SU_E_TYPE, "tick_workers must be an integer 1..64");
+            return SU_E_TYPE;
+        }
+        o->workers = (uint32_t)x;
+    }
+    v = su_json_member(params, "chunk_min_rows");
+    if (v != NULL) {
+        if (!su_json_get_uint(v, &x) || x < 1u || x > UINT32_MAX) {
+            fail(f, SU_E_TYPE, "chunk_min_rows must be an integer 1..4294967295");
+            return SU_E_TYPE;
+        }
+        o->chunk_min_rows = x;
+    }
+    return SU_OK;
+}
+
 static uint32_t h_world_step(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
     WorkerWorld *ww;
+    SuSchedTickOpts topt;
     const char *expect = str_of(params, "expected_world_revision");
     uint64_t ticks = 0;
     uint64_t done = 0;
@@ -833,9 +1040,13 @@ static uint32_t h_world_step(WorkerState *s, const SuJsonValue *params, SuBuf *r
         fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
         return SU_E_STALE_REVISION;
     }
+    st = tick_opts_of(params, &topt, f);
+    if (st != SU_OK) {
+        return st;
+    }
     s->cur_ww = ww;
-    st = su_sched_run_ticks(ww->inst.w, &ww->sched, ticks, fault_seam_wanted(s) ? fault_thunk : NULL,
-                            s, &done, &failed_index);
+    st = su_sched_run_ticks_opt(ww->inst.w, &ww->sched, ticks, fault_seam_wanted(s) ? fault_thunk : NULL,
+                                s, &topt, &done, &failed_index);
     s->cur_ww = NULL;
     ww->revision += done;
     if (st != SU_OK) {

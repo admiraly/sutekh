@@ -12,6 +12,7 @@
 
 #include "sutekh/status.h"
 #include "vm/su_vm.h"
+#include "runtime/jobs/su_jobs.h"
 
 void su_sched_init(SuSchedule *s) {
     memset(s, 0, sizeof *s);
@@ -214,8 +215,31 @@ uint32_t su_sched_check_candidate(const SuSchedule *s, const SuLirModule *m, uin
     return SU_OK;
 }
 
-uint32_t su_sched_run_ticks(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
-                            void *fault_ctx, uint64_t *done, uint32_t *failed_index) {
+static uint32_t run_one_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt) {
+#ifdef SU_HAVE_NATIVE
+    if (s->sys[i].native_seq != 0u) {
+        /* Native kernels run as one call over the whole range (see SuSchedTickOpts). */
+        return su_nv_run_system(s->sys[i].native_seq, w);
+    }
+#endif
+    if (opt != NULL && opt->workers > 1u && su_world_row_count(w) >= opt->chunk_min_rows) {
+        SuJobsOptions jo;
+        SuJobsReport rep;
+        uint32_t st;
+        memset(&jo, 0, sizeof jo);
+        jo.workers = opt->workers;
+        jo.fault = opt->chunk_fault;
+        jo.fault_ctx = opt->chunk_ctx;
+        st = su_jobs_run_system_chunked(w, s->sys[i].mod, s->layout_generation, &jo, &rep);
+        su_jobs_report_free(&rep);
+        return st;
+    }
+    return su_vm_run_system(w, s->sys[i].ctx);
+}
+
+uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
+                                void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
+                                uint32_t *failed_index) {
     uint64_t t;
     *done = 0;
     *failed_index = UINT32_MAX;
@@ -229,14 +253,7 @@ uint32_t su_sched_run_ticks(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFa
             if (fault != NULL && fault(i, fault_ctx) != 0) {
                 st = SU_E_CANDIDATE_FAILED;
             } else {
-#ifdef SU_HAVE_NATIVE
-                if (s->sys[i].native_seq != 0u) {
-                    st = su_nv_run_system(s->sys[i].native_seq, w);
-                } else
-#endif
-                {
-                    st = su_vm_run_system(w, s->sys[i].ctx);
-                }
+                st = run_one_system(w, s, i, opt);
             }
             if (st != SU_OK) {
                 break;
@@ -255,6 +272,11 @@ uint32_t su_sched_run_ticks(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFa
         *done = t + 1u;
     }
     return SU_OK;
+}
+
+uint32_t su_sched_run_ticks(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
+                            void *fault_ctx, uint64_t *done, uint32_t *failed_index) {
+    return su_sched_run_ticks_opt(w, s, ticks, fault, fault_ctx, NULL, done, failed_index);
 }
 
 void su_sched_swap(SuSchedule *s, uint32_t idx, SuSysEntry *fresh, SuSysEntry *old) {

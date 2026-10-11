@@ -37,6 +37,12 @@ typedef struct SuAgentConfig {
     uint32_t log_max_entries;           /* 256 per world (max 1024); reaching it forces a checkpoint */
     uint32_t quarantine_after;          /* 2: identical crashes in a row before the revision is quarantined */
     uint64_t spool_bytes_max;           /* 32 MiB: capsule, source and checkpoint bytes held by the supervisor */
+    /* Tick workers (M1 closure B): 1 (0 selects 1) runs every system serially, as before. N > 1 makes
+     * the active worker run a system over a world of at least tick_chunk_min_rows rows in N chunked
+     * workers (su_jobs_run_system_chunked). Range 1..64. Sent with every world.step. */
+    uint32_t tick_workers;
+    /* Row threshold for chunked execution. 0 selects 4096. */
+    uint64_t tick_chunk_min_rows;
     /* Directory for the content-addressed spool. NULL: a private directory is created under
      * $TMPDIR (or /tmp) and removed at exit. A given directory must exist. */
     const char *spool_dir;

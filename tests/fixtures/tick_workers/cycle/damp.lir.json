@@ -1,0 +1,12 @@
+{
+  "ir_version": "0.1",
+  "system_id": "pipe.damp",
+  "numeric_profile": "u32_mod_v1",
+  "query": "demo.actor",
+  "instructions": [
+    { "op": "load_u32", "dst": "v", "field": "velocity_x" },
+    { "op": "load_u32", "dst": "p", "field": "position_x" },
+    { "op": "sub_u32", "dst": "d", "a": "v", "b": "p" },
+    { "op": "store_u32", "field": "velocity_x", "src": "d" }
+  ]
+}

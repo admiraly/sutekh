@@ -79,7 +79,7 @@ MOVE_FIELDS = [(1, "position_x", True, True), (2, "velocity_x", True, False)]
 DRIFT_FIELDS = [(2, "velocity_x", True, True)]
 
 
-def capsule(stem, system_id, gen, fields, tests):
+def capsule(stem, system_id, gen, fields, tests, after=()):
     return {
         "capsule_format": "0.1",
         "system_id": system_id,
@@ -90,7 +90,7 @@ def capsule(stem, system_id, gen, fields, tests):
             {"id": fid, "name": name, "type": "u32", "read": rd, "write": wr}
             for (fid, name, rd, wr) in fields
         ],
-        "schedule": {"phase": "simulate", "after": [], "before": [], "parallel": "serial"},
+        "schedule": {"phase": "simulate", "after": list(after), "before": [], "parallel": "serial"},
         "limits": {"max_instructions": 4096, "max_rows": 1000000, "allocation": "forbidden"},
         "tests": tests,
     }
@@ -151,7 +151,7 @@ def main():
     write("sys_a_v2.capsule.json", capsule("sys_a_v2", "demo.movement", 1, MOVE_FIELDS, ["sys_a_v2.test.json"]))
     write("sys_a_bad.capsule.json", capsule("sys_a_bad", "demo.movement", 1, MOVE_FIELDS, ["sys_a_bad.test.json"]))
     write("sys_a_gen2.capsule.json", capsule("sys_a_gen2", "demo.movement", 2, MOVE_FIELDS, ["sys_a_gen2.test.json"]))
-    write("sys_b.capsule.json", capsule("sys_b", "demo.drift", 1, DRIFT_FIELDS, ["sys_b.test.json"]))
+    write("sys_b.capsule.json", capsule("sys_b", "demo.drift", 1, DRIFT_FIELDS, ["sys_b.test.json"], after=["demo.movement"]))
 
     # Evaluations: each candidate runs alone against world4.json. sys_a_bad is checked
     # against the v1 expectations, so its evaluation must fail.

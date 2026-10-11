@@ -19,7 +19,9 @@
   ],
   "schedule": {
     "phase": "simulate",
-    "after": [],
+    "after": [
+      "demo.movement"
+    ],
     "before": [],
     "parallel": "serial"
   },
