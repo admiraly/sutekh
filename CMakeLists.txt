@@ -19,8 +19,8 @@ target_include_directories(su_platform PUBLIC src/platform)
 sutekh_apply_warnings(su_platform)
 
 add_executable(sutekh src/platform/sutekh_main.c)
-target_include_directories(sutekh PRIVATE "${SUTEKH_CONTRACT_INCLUDE}")
-target_link_libraries(sutekh PRIVATE su_platform)
+target_include_directories(sutekh PRIVATE "${SUTEKH_CONTRACT_INCLUDE}" src)
+target_link_libraries(sutekh PRIVATE su_platform su_agent)
 target_compile_definitions(sutekh PRIVATE
     SUTEKH_VERSION_STRING="${PROJECT_VERSION}"
     SUTEKH_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
@@ -57,3 +57,21 @@ add_executable(test_vm tests/vm/test_vm.c)
 target_link_libraries(test_vm PRIVATE su_vm)
 sutekh_apply_warnings(test_vm)
 add_test(NAME vm COMMAND test_vm WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+file(GLOB SU_AGENT_SOURCES CONFIGURE_DEPENDS src/agent/*.c src/runtime/worker.c)
+add_library(su_agent STATIC ${SU_AGENT_SOURCES})
+target_include_directories(su_agent PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
+target_link_libraries(su_agent PUBLIC su_vm su_world su_ir su_platform)
+target_compile_definitions(su_agent PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(su_agent)
+
+add_executable(worker_stub tests/control/worker_stub.c)
+target_link_libraries(worker_stub PRIVATE su_agent)
+target_compile_definitions(worker_stub PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(worker_stub)
+
+add_executable(test_control tests/control/test_control.c)
+target_link_libraries(test_control PRIVATE su_agent)
+target_compile_definitions(test_control PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_control)
+add_test(NAME control COMMAND test_control $<TARGET_FILE:worker_stub> WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
