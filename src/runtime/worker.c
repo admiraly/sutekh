@@ -24,7 +24,22 @@
 #include "world/su_world.h"
 
 #define WORKER_MAX_WORLDS 4u
-#define WORKER_FIXTURE_MAX (8u * 1024u * 1024u)
+/* Default and hard ceiling for world fixture JSON read by the worker. The default can be changed with
+ * the SUTEKH_FIXTURE_MAX_BYTES environment variable (1 .. hard ceiling); invalid values are ignored. */
+#define WORKER_FIXTURE_DEFAULT_MAX (64u * 1024u * 1024u)
+#define WORKER_FIXTURE_HARD_MAX (256u * 1024u * 1024u)
+
+static size_t worker_fixture_max(void) {
+    const char *env = getenv("SUTEKH_FIXTURE_MAX_BYTES");
+    if (env != NULL && env[0] >= '0' && env[0] <= '9') {
+        char *end = NULL;
+        unsigned long long v = strtoull(env, &end, 10);
+        if (end != NULL && *end == '\0' && v >= 1u && v <= WORKER_FIXTURE_HARD_MAX) {
+            return (size_t)v;
+        }
+    }
+    return WORKER_FIXTURE_DEFAULT_MAX;
+}
 #define WORKER_CAPSULE_MAX (64u * 1024u)
 #define WORKER_TEST_MAX (256u * 1024u)
 #define WORKER_INSPECT_DEFAULT_ROWS 16u
@@ -155,7 +170,7 @@ static uint32_t world_open(const SuSchedule *s, const char *fixture_path, WorldI
     uint32_t st;
 
     memset(in, 0, sizeof *in);
-    st = su_path_read_file(fixture_path, WORKER_FIXTURE_MAX, &data, &len);
+    st = su_path_read_file(fixture_path, worker_fixture_max(), &data, &len);
     if (st != SU_OK) {
         fail(f, st, "cannot read world fixture");
         return st;

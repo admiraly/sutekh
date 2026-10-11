@@ -30,7 +30,7 @@
 #include "world/su_world.h"
 
 #define SU_SNAPSHOT_FORMAT "0.1"
-#define SU_SNAPSHOT_MAX_BYTES (16u * 1024u * 1024u)  /* input and output cap */
+#define SU_SNAPSHOT_MAX_BYTES (64u * 1024u * 1024u)  /* input and output cap */
 #define SU_SNAPSHOT_MAX_DEPTH 8u                     /* JSON nesting depth */
 #define SU_SNAPSHOT_MAX_MANIFEST 1024u               /* manifest entries */
 #define SU_SNAPSHOT_MAX_NAME 255u                    /* system IDs, revisions */
