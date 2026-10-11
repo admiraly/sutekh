@@ -1,0 +1,4 @@
+{
+  "_schema": "Optional input for bench/agent_workflow/collect.py. Key: worktree agent id (the suffix after 'worktree-agent-'). Value: integers copied verbatim from the harness completion notification (tokens = total tokens reported, tool_calls = tool uses reported, duration_ms = duration reported). Use null when the harness did not report a value. Never estimate or infer a value. Entries are added only when the orchestrator can verify them against a harness notification.",
+  "agents": {}
+}

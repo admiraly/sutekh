@@ -290,3 +290,57 @@ Compiles and runs for Windows without change: `su_ir` (SHA-256, JSON, LIR), `su_
 3. Unwind registration for generated kernels, if in-process exception handling is ever required.
 4. A Windows-native build and test run on a real host (MSVC or clang-cl with `tools/env-windows.ps1`).
 5. A portable replacement for the native scalar and AVX2 test files (their POSIX parts).
+
+---
+
+## M1 evidence refresh (M1 evidence worker, 2026-10-12)
+
+Scope: the four audit blockers addressed by this pass (`planning/audit/M1-audit.md`, blockers 1, 2 and 6, plus the stress item). M1 is NOT closed: the audit's other blockers (M1-04 scheduler not integrated, C07 containment defects, stale-artifact mutants surviving) are unchanged. Every figure below is copied from the cited file. All timings are on one shared 4-vCPU VM (Intel Xeon @ 2.10 GHz, AVX2 and AVX-512F flags present, no frequency pinning). They are observations, not qualification (ENGINE_CONSTITUTION C10). `git.head_at_start` in each JSON names the measured tree.
+
+### Native build latency (audit blocker 1) — `planning/evidence/m1/native-build-latency.json`
+
+Cold = fresh build directory with the pinned AsmJit sources compiled. Warm = same directory with AsmJit already built (no-op, or mtime-only touch of one file). n = 7 per case, nearest-rank p95.
+
+| Case | Cold configure (median s) | Cold clean full build, median (p95) s | Compile / link+archive / other steps |
+|---|---|---|---|
+| gcc 13.3 Release | 0.52 | 12.73 (16.57) | 104 / 30 / 1 |
+| gcc Debug | 0.50 | 9.87 (10.45) | 104 / 30 / 1 |
+| clang Release | 0.86 | 11.08 (14.69) | 104 / 30 / 1 |
+| clang Debug | 0.89 | 7.80 (11.16) | 104 / 30 / 1 |
+
+Warm (gcc Release medians; the other cases are in the JSON): no-op 0.035 s, 0 compile, 0 link, 1 other (CMake glob check). Incremental after an mtime-only touch: `backends/native/su_native_asmjit.cpp` 2.13 s (1 compile, 16 link/archive); `backends/native/su_native.c` 0.60 s (1, 16); `src/vm/su_vm.c` 0.58 s (1, 18); `include/sutekh/native/abi.h` 3.13 s (18, 18); `include/sutekh/abi.h` 4.63 s (37, 28).
+
+Caveats: a first run classified the CMake glob step as a link step; that run was discarded and the measurement repeated after the classifier fix (commit 2fa3a11). Build directories were outside the repository and deleted after each sample. The live gameplay edit path runs none of these builds (ENGINE_CONSTITUTION C01): the only `exec` in `src/` is `src/agent/su_proc.c:237`, the supervisor re-executing its own worker binary; no cmake, ninja, gcc or clang appears in `src/`. No Windows build; no ccache.
+
+### Isolated native throughput (audit blocker 2) — `planning/evidence/m1/native-throughput.json`
+
+Driver: `bench/native/su_native_throughput.c`, built without CMake (compile and link lines recorded in the JSON; `CMakeLists.txt` untouched). Every configuration was verified byte-for-byte against the reference VM before timing. 21 samples per series after 3 warm-up invocations; the 1,024-row series use K back-to-back invocations per sample. Formulas: ns/row = median ns per invocation / rows; GB/s-equivalent = rows x bytes_per_row / median ns (nominal column bytes, 12 per row for both programs, not measured bandwidth). Pinned frequency: unknown.
+
+Median ns/row, 1,000,000 rows, aligned columns:
+
+| Program | VM wrapper | Scalar wrapper | Scalar kernel | AVX2 wrapper | AVX2 kernel |
+|---|---|---|---|---|---|
+| movement (2 loads, add, store) | 7.31 | 1.17 | 1.20 | 0.548 | 0.553 |
+| arith20 (20 instructions) | 53.78 | 6.35 | 6.34 | 3.15 | 2.68 |
+
+Unaligned (1 element) columns differ from aligned by up to about 25 percent in either direction (see the JSON; some scalar cases are faster unaligned, which is noise on this VM). The 1,024-row series fit in L1/L2 (about 12 KB per program's columns), so their GB/s figures are cache-resident and not comparable with the 1,000,000-row figures. The VM has no separate kernel, so no VM kernel figure exists. The brief's movement shape "3 loads/adds/store" was read as the shipped `examples/movement.lir.json` shape (2 loads, 1 add, 1 store); the JSON says so.
+
+### 1,000,000-row stress, current default release binary (audit item) — `planning/evidence/m1/stress-1m-current.json`
+
+Result: passed, on `build/sutekh` built by `tools/dev.py build --profile release` (SUTEKH_NATIVE off). Recorded values: world.create 797 ms; step median 193 ms, p95 200 ms (n = 20, each verified); snapshot 203.7 ms host, 28,092,684 bytes; restore 895.7 ms host; worker VmHWM 178.5 MB after create and steps, 262.1 MB at end; RLIMIT_AS 4 GiB and 512 MiB spool are source defaults (`src/platform/sutekh_main.c`). The engine returned `engine_capture_ns: null`, which is recorded as null. This is a diagnostic, not a game-scale claim.
+
+### Multi-agent experiment hygiene (audit blocker 6) — `planning/evidence/m1/agent_workflow.json`
+
+- `agent_outcomes.json`: `a0b496d125408ea84` corrected from `in_progress` to `accepted_as_is`.
+- Implementation rows: 29; accepted as is 20; accepted with integrator fix 7; partial 2. First-pass acceptance 0.690 (20/29); rework 0.310 (9/29). Agent wall time (git-derived proxy): median 581 s, p95 1,325 s, n = 36.
+- `planning/evidence/m1/agent_usage.json` exists with a schema note and empty `agents`. Tokens, tool calls and harness duration are therefore null in every row. Integration latency remains null.
+- Four worktrees have no outcome class yet and are reported as `unclassified` (the collector exits 1 for them): `abb2fd2a4c686b3e8`, `a2600552f6d79bae8`, `ade4ddc3da6586da0`, `a564d896d74db497b`. They do not affect the implementation rates.
+
+### Not done (honest list)
+
+- M1 closure is not claimed. Scheduler chunk runner not integrated into the runtime (audit item 3). C07 containment defects (audit item 4) open. Stale-artifact mutants H1, L1, L2 survive (audit item 5).
+- No Windows-native build or run; Win64 results remain under wine only.
+- No pinned-frequency, PMU, or repeated-run throughput; no AVX-512 backend or measurement.
+- Build latency is one host and one tree; no ccache/sccache comparison; no clang sanitizer runs.
+- Stress is one run on one VM; no reboot or repeat; not a game-scale claim.
+- No token or tool-call values for any agent; no integration-latency values.

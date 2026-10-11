@@ -6,14 +6,35 @@ time on each `worktree-agent-<id>` branch (finish proxy), `git diff --shortstat`
 base, whether/when the branch tip became reachable from the main checkout's first-parent history
 (integration latency), and the orchestrator-recorded outcome classification in
 planning/evidence/m1/agent_outcomes.json. Timing is wall clock; launch is a PROXY (worktree creation)
-and finish is the last commit (agents may idle after it). Nothing here measures tokens: token and
-tool-call counts were only reported in session notifications and are not stored, so they are null.
+and finish is the last commit (agents may idle after it).
+
+Tokens and tool calls are OPTIONAL INPUT and are never estimated here. The orchestrator copies the
+values from the harness completion notification into planning/evidence/m1/agent_usage.json:
+
+    {"_schema": "...", "agents": {"<agent id>": {"tokens": <int>, "tool_calls": <int>, "duration_ms": <int>}}}
+
+When the file is absent, or an agent has no entry, its tokens and tool_calls stay null. duration_ms is the
+harness-reported duration; it is kept apart from the git-derived agent_wall_s.
 """
 import json, os, statistics, subprocess, sys
 from datetime import datetime, timezone
 
 ROOT = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
+GITDIR = os.path.abspath(os.path.join(ROOT, subprocess.check_output(
+    ["git", "-C", ROOT, "rev-parse", "--git-common-dir"], text=True).strip()))
 OUT = os.path.join(ROOT, "planning/evidence/m1/agent_workflow.json")
+USAGE = os.path.join(ROOT, "planning/evidence/m1/agent_usage.json")
+
+def load_usage():
+    if not os.path.exists(USAGE):
+        return {}, "absent"
+    with open(USAGE) as fh:
+        agents = json.load(fh).get("agents", {})
+    for aid, v in agents.items():
+        for k in ("tokens", "tool_calls", "duration_ms"):
+            if v.get(k) is not None and not isinstance(v.get(k), int):
+                raise SystemExit(f"agent_usage.json: {aid}.{k} must be an integer or null")
+    return agents, "present"
 
 def git(*a):
     return subprocess.check_output(["git", "-C", ROOT, *a], text=True).strip()
@@ -37,10 +58,11 @@ def main():
     main_branch = git("rev-parse", "--abbrev-ref", "HEAD")
     fp = [l.split() for l in git("log", main_branch, "--first-parent", "--format=%H %ct").splitlines()]
     fp.reverse()  # oldest first
+    usage, usage_state = load_usage()
     rows = []
     for ref in git("for-each-ref", "--format=%(refname:short)", "refs/heads/worktree-agent-*").splitlines():
         aid = ref.replace("worktree-agent-", "")
-        wt = os.path.join(ROOT, ".git/worktrees", "agent-" + aid)
+        wt = os.path.join(GITDIR, "worktrees", "agent-" + aid)  # common dir: works from any linked worktree
         launch = birth(wt) if os.path.exists(wt) else None
         tip = git("rev-parse", ref)
         # Own commits = commits reachable from the branch tip made after the worktree was created.
@@ -76,7 +98,9 @@ def main():
             "agent_wall_s": (last - launch) if (launch and ncommits and last >= launch) else None,
             "commits": ncommits, "diffstat": stat or None,
             "integrated_utc": None, "integration_latency_s": None,  # not derivable from git history reliably (see caveats)
-            "tokens": None, "tool_calls": None,
+            "tokens": usage.get(aid, {}).get("tokens"),
+            "tool_calls": usage.get(aid, {}).get("tool_calls"),
+            "harness_duration_ms": usage.get(aid, {}).get("duration_ms"),
         })
     rows.sort(key=lambda r: r["launch_proxy_utc"] or "")
     done = [r for r in rows if r["outcome"] != "in_progress"]
@@ -94,7 +118,14 @@ def main():
     ev.sort(); cur = peak = 0
     for _, d in ev:
         cur += d; peak = max(peak, cur)
+    toks = [r["tokens"] for r in done if r["tokens"] is not None]
+    calls = [r["tool_calls"] for r in done if r["tool_calls"] is not None]
     summary = {
+        "usage_input": usage_state,
+        "tokens": {"n": len(toks), "total": sum(toks) if toks else None,
+                   "median": statistics.median(toks) if toks else None},
+        "tool_calls": {"n": len(calls), "total": sum(calls) if calls else None,
+                       "median": statistics.median(calls) if calls else None},
         "tasks_total": len(done), "implementation_tasks": len(impl), "review_or_audit_tasks": len(rev),
         "impl_accepted_as_is": cnt(impl, "accepted_as_is"),
         "impl_accepted_with_integrator_fix": cnt(impl, "accepted_with_integrator_fix"),
@@ -111,7 +142,7 @@ def main():
             "single orchestrator session, model tier fixed (Haiku-class workers), one repository; no controlled comparison and no baseline of other agent counts",
             "launch is a proxy (worktree creation); finish is last commit; integration latency is only derivable when the integrator made derivable from git history; it was not recorded at merge time, so it is null for all rows",
             "outcome classes are the orchestrator's judgement, recorded in agent_outcomes.json before this script ran",
-            "tokens/tool calls were not stored; reported as null",
+            "tokens and tool calls come only from planning/evidence/m1/agent_usage.json (harness values copied by the orchestrator); null where absent",
             "this is an observation and does not justify raising the agent count by itself; verification debt and rework rate are the gating metrics"
         ],
     }
