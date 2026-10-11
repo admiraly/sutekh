@@ -1,0 +1,111 @@
+{
+  "description": "M0-12 T04 negative matrix. Expected codes follow M0_CONTRACT section 1 stage order.",
+  "generator": "tests/harness/make_m0_12_negative.py",
+  "capsule": "tests/fixtures/m0_neg/valid.capsule.json",
+  "cases": [
+    {
+      "id": "oversize_ir",
+      "path": "oversize_ir.lir.json",
+      "capsule": "oversize_ir.capsule.json",
+      "stage": 1,
+      "expected_code": "SU_E_RESOURCE_LIMIT",
+      "note": "valid JSON of 262145 bytes (one byte over SU_LIMIT_IR_SOURCE_BYTES)"
+    },
+    {
+      "id": "capsule_depth_40",
+      "path": "capsule_depth_40.lir.json",
+      "capsule": "capsule_depth_40.capsule.json",
+      "stage": 1,
+      "expected_code": "SU_E_RESOURCE_LIMIT",
+      "note": "capsule with an unknown key holding 40 nested arrays (cap 32)"
+    },
+    {
+      "id": "ir_depth_40",
+      "path": "ir_depth_40.lir.json",
+      "capsule": "ir_depth_40.capsule.json",
+      "stage": 1,
+      "expected_code": "SU_E_RESOURCE_LIMIT",
+      "note": "IR with an unknown key holding 40 nested arrays (cap 32)"
+    },
+    {
+      "id": "malformed_json_truncated",
+      "path": "malformed_json_truncated.lir.json",
+      "capsule": "malformed_json_truncated.capsule.json",
+      "stage": 2,
+      "expected_code": "SU_E_PARSE",
+      "note": "IR cut off in the middle of an instruction object"
+    },
+    {
+      "id": "invalid_utf8_in_ir",
+      "path": "invalid_utf8_in_ir.lir.json",
+      "capsule": "invalid_utf8_in_ir.capsule.json",
+      "stage": 2,
+      "expected_code": "SU_E_PARSE",
+      "note": "byte 0xff inside a string value (not UTF-8)"
+    },
+    {
+      "id": "duplicate_key_in_ir",
+      "path": "duplicate_key_in_ir.lir.json",
+      "capsule": "duplicate_key_in_ir.capsule.json",
+      "stage": 3,
+      "expected_code": "SU_E_DUPLICATE_KEY",
+      "note": "instruction 0 has the key dst twice"
+    },
+    {
+      "id": "capsule_profile_unsupported",
+      "path": "capsule_profile_unsupported.lir.json",
+      "capsule": "capsule_profile_unsupported.capsule.json",
+      "stage": 4,
+      "expected_code": "SU_E_TYPE",
+      "note": "capsule names a profile M0 does not support; stage 4 covers unsupported profiles"
+    },
+    {
+      "id": "schema_system_id_mismatch",
+      "path": "schema_system_id_mismatch.lir.json",
+      "capsule": "schema_system_id_mismatch.capsule.json",
+      "stage": 5,
+      "expected_code": "SU_E_SCHEMA_MISMATCH",
+      "note": "IR system_id demo.other, capsule demo.movement"
+    },
+    {
+      "id": "schema_query_mismatch",
+      "path": "schema_query_mismatch.lir.json",
+      "capsule": "schema_query_mismatch.capsule.json",
+      "stage": 5,
+      "expected_code": "SU_E_SCHEMA_MISMATCH",
+      "note": "IR query demo.other, capsule schema.id demo.actor"
+    },
+    {
+      "id": "schema_duplicate_field_id",
+      "path": "schema_duplicate_field_id.lir.json",
+      "capsule": "schema_duplicate_field_id.capsule.json",
+      "stage": 5,
+      "expected_code": "SU_E_SCHEMA_MISMATCH",
+      "note": "two fields with id 1 (position_x and velocity_x)"
+    },
+    {
+      "id": "schema_duplicate_field_name",
+      "path": "schema_duplicate_field_name.lir.json",
+      "capsule": "schema_duplicate_field_name.capsule.json",
+      "stage": 5,
+      "expected_code": "SU_E_SCHEMA_MISMATCH",
+      "note": "two fields named position_x with ids 1 and 2"
+    },
+    {
+      "id": "undeclared_read_unknown_field",
+      "path": "undeclared_read_unknown_field.lir.json",
+      "capsule": "undeclared_read_unknown_field.capsule.json",
+      "stage": 6,
+      "expected_code": "SU_E_UNDECLARED_READ",
+      "note": "load of velocity_y, which the capsule does not declare"
+    },
+    {
+      "id": "missing_store",
+      "path": "missing_store.lir.json",
+      "capsule": "missing_store.capsule.json",
+      "stage": 7,
+      "expected_code": "SU_E_MISSING_STORE",
+      "note": "writable position_x is never stored"
+    }
+  ]
+}

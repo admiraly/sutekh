@@ -15,9 +15,11 @@ Method (the only one used here; a fallback is not needed because strace is insta
   * Violations inside the edit window (capsule.submit .. candidate.install) and violations
     anywhere in the run are reported separately. Any violation anywhere fails the probe.
 
-Self-check (positive control): before the demo is trusted, the same detector wraps
-`sh -c 'cc --version'` (or a stub named cc on PATH when no compiler is installed). The
-control must be detected. If it is not, the probe exits 2 (inconclusive), never 0.
+Self-check (two positive controls): before the demo is trusted, the same detector must catch
+(1) `cc --version` resolved through PATH and (2) `<absolute path to cc> --version`, which a PATH
+shim cannot see (this is the form the M13 mutant uses). Either one missed means the probe exits 2
+(inconclusive), never 0. With no compiler installed, a stub named cc is used for both controls.
+The demo is run with --binary (default build/sutekh) so the probe drives the binary under test.
 
 Static scan: the linked binary's printable strings and dynamic imports are checked for
 build-tool names and for exec/popen/system calls; src/ is scanned for the same calls and for
@@ -140,28 +142,49 @@ def summarise(records: list, window=None) -> dict:
     }
 
 
-def positive_control(tmp: str) -> dict:
-    """Spawn a build tool inside the monitored tree; the detector must catch it."""
+def _cc_location(tmp: str):
+    """(absolute path of a C compiler driver, how it was obtained). Falls back to a stub named cc."""
     cc = shutil.which("cc")
     if cc is not None:
-        argv = ["sh", "-c", "cc --version >/dev/null 2>&1; exit 0"]
-        kind = "real cc --version"
-        env = None
-    else:
-        stubdir = os.path.join(tmp, "stub")
-        os.makedirs(stubdir, exist_ok=True)
-        stub = os.path.join(stubdir, "cc")
-        with open(stub, "w", encoding="utf-8") as fh:
-            fh.write("#!/bin/sh\necho stub-cc\n")
-        os.chmod(stub, 0o755)
-        argv = ["sh", "-c", "cc --version >/dev/null 2>&1; exit 0"]
-        env = dict(os.environ, PATH=stubdir + os.pathsep + os.environ.get("PATH", ""))
-        kind = "stub cc on PATH (no compiler installed)"
-    run = strace_run(argv, os.path.join(tmp, "control.strace"), REPO, env=env)
+        return os.path.abspath(cc), "installed cc"
+    stubdir = os.path.join(tmp, "stub")
+    os.makedirs(stubdir, exist_ok=True)
+    stub = os.path.join(stubdir, "cc")
+    with open(stub, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\necho stub-cc\n")
+    os.chmod(stub, 0o755)
+    return stub, "stub cc (no compiler installed)"
+
+
+def _control(name: str, argv: list, tmp: str, env, log_name: str) -> dict:
+    """Run one deliberate build-tool invocation under strace; the detector must report it."""
+    run = strace_run(argv, os.path.join(tmp, log_name), REPO, env=env)
     summary = summarise(run["records"])
     detected = any(os.path.basename(r["path"]) == "cc" for r in summary["build_tool_execs_total"])
-    return {"kind": kind, "argv": argv, "detected": detected, "strace_returncode": run["returncode"],
+    return {"name": name, "argv": argv, "detected": detected, "strace_returncode": run["returncode"],
             "summary": summary}
+
+
+def positive_controls(tmp: str) -> list:
+    """Two deliberate invocations, both of which the detector must catch before any absence claim:
+      bare   `cc` resolved through PATH (the only form a PATH shim can see)
+      abs    `cc` invoked by its absolute path (the form M13 uses; a PATH shim cannot see it)
+    """
+    cc_path, how = _cc_location(tmp)
+    stub_env = None
+    if shutil.which("cc") is None:
+        stub_env = dict(os.environ, PATH=os.path.dirname(cc_path) + os.pathsep + os.environ.get("PATH", ""))
+    bare = _control(f"bare cc via PATH ({how})", ["sh", "-c", "cc --version >/dev/null 2>&1; exit 0"],
+                    tmp, stub_env, "control_bare.strace")
+    absolute = _control(f"absolute path {cc_path} ({how})",
+                        ["sh", "-c", f"{cc_path} --version >/dev/null 2>&1; exit 0"],
+                        tmp, None, "control_abs.strace")
+    return [bare, absolute]
+
+
+def positive_control(tmp: str) -> dict:
+    """Backward-compatible view of the first (bare-name) control."""
+    return positive_controls(tmp)[0]
 
 
 def static_scan() -> dict:
@@ -208,6 +231,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", default=None, help="probe evidence JSON (default outside the repository)")
     parser.add_argument("--demo-arg", action="append", default=[], help="extra argument for the demo")
+    parser.add_argument("--binary", default=BINARY, help="executable the demo drives (default build/sutekh)")
     args = parser.parse_args(argv)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = args.out or os.path.join(os.path.expanduser("~"), ".cache", "sutekh", "no_build_probe",
@@ -223,18 +247,23 @@ def main(argv=None) -> int:
 
     tmp = tempfile.mkdtemp(prefix="no-build-probe-")
     try:
-        control = positive_control(tmp)
-        evidence["positive_control"] = control
-        print(f"positive control ({control['kind']}): detected={control['detected']}")
-        if not control["detected"]:
+        controls = positive_controls(tmp)
+        evidence["positive_controls"] = controls
+        evidence["positive_control"] = controls[0]
+        for control in controls:
+            print(f"positive control ({control['name']}): detected={control['detected']}")
+        missed = [c["name"] for c in controls if not c["detected"]]
+        if missed:
             evidence.update(verdict="inconclusive",
-                            reason="positive control was not detected; the probe cannot show absence")
-            print("inconclusive: the detector missed the deliberate cc invocation")
+                            reason="positive control was not detected (" + "; ".join(missed)
+                                   + "); the probe cannot show absence")
+            print("inconclusive: the detector missed a deliberate cc invocation")
             write(out_path, evidence)
             return 2
 
         demo_out = os.path.join(tmp, "demo_evidence.json")
-        demo_argv = [sys.executable, "-I", DEMO, "--out", demo_out, *args.demo_arg]
+        demo_argv = [sys.executable, "-I", DEMO, "--binary", os.path.abspath(args.binary), "--out", demo_out,
+                     *args.demo_arg]
         print("running: " + " ".join(demo_argv) + " (under strace)", flush=True)
         run = strace_run(demo_argv, os.path.join(tmp, "run.strace"), REPO)
         evidence["traced_run"] = {"argv": run["argv"], "strace_returncode": run["returncode"],
@@ -275,8 +304,8 @@ def main(argv=None) -> int:
             code = 2
         else:
             evidence.update(verdict="pass",
-                            reason="positive control detected; zero build-tool execs in the whole traced run, "
-                                   "including the capsule edit/install window")
+                            reason="both positive controls (bare and absolute-path cc) detected; zero build-tool "
+                                   "execs in the whole traced run, including the capsule edit/install window")
             code = 0
         print(f"verdict: {evidence['verdict']} ({evidence['reason']})")
         write(out_path, evidence)

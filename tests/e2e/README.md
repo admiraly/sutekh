@@ -67,9 +67,16 @@ supervisor's worker children. A successful exec of a build tool (cc, gcc, clang,
 cmake, ninja, make and versioned names) is a violation. Violations are counted both in the
 edit window (candidate submit through install, from the demo's evidence) and in the whole run.
 
-Before the result is trusted, a positive control runs `sh -c 'cc --version'` under the same
-detector (a stub `cc` on PATH when no compiler is installed). If the control is not detected,
-the verdict is `inconclusive` and the exit status is 2.
+Before the result is trusted, two positive controls run under the same detector: `cc --version`
+resolved through PATH, and `<absolute path to cc> --version`. The second matters because a PATH
+shim cannot see an absolute-path exec (the M13 mutant). If either control is not detected, the
+verdict is `inconclusive` and the exit status is 2. With no compiler installed, a stub `cc` is used.
+
+The T12 harness test (`tests/harness/run_m0.py`) uses this probe as its primary evidence and runs
+it against the binary under test (`--binary PATH` is passed to the demo). An `inconclusive` probe
+makes T12 `not_run`, never `passed`. Under AddressSanitizer the probe is `inconclusive`: the
+ASan `serve` process exits 1 at shutdown when LeakSanitizer runs under ptrace (observed on this
+host), so use the plain build for this probe.
 
 Static scan: the linked binary's printable strings and dynamic imports, plus `src/`, are
 checked for build-tool names and for `system`/`popen`/`exec*`/`fork` call sites.
