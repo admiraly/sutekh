@@ -23,7 +23,6 @@ in the specification are planned dependencies, not evidence of bundled code.
 | rpds-py | 2026.9.1 | MIT; distribution `licenses/LICENSE` |
 | Python interpreter | 3.14.7 | Python and bundled-component licenses in the installed interpreter distribution |
 | MSVC headers/libraries and Windows SDK | 14.29.30133 / 10.0.19041.0 | Microsoft's applicable product and redistribution terms; not licensed by Sutekh |
-
 | AsmJit (optional native backend, fetched at bootstrap, not redistributed in this repository) | commit `0d7f01052f2d3f6d6b9bb6714ef32bd7b80177eb` (library 1.23.0) from https://github.com/asmjit/asmjit.git | zlib License, Copyright (c) 2008-2025 Petr Kobalicek; LICENSE.md sha256 `13870bd53bce53fb9a9bd72e72dcceeffc547c84d9a00d3d4833737a79651828`; recorded in [third_party/asmjit.lock.json](third_party/asmjit.lock.json) |
 
 Versions are recorded in [tools/requirements-dev.txt](tools/requirements-dev.txt)
