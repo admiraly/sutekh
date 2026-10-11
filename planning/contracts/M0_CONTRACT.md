@@ -35,7 +35,7 @@ The **verified field table** is the capsule's fields sorted ascending by field i
 ## 4. Tick and publish (M0)
 Copy committed columns into the working root; run systems serially, each system's committed staging visible to later systems; publish a new committed root only if the whole tick succeeds (T09). Code-only swaps install at a tick boundary after revalidating expected world revision (`SU_E_STALE_REVISION`) and layout generation (`SU_E_SCHEMA_MISMATCH`).
 
-Error mapping beyond section 3: malformed JSON/UTF-8/duplicate keys in a protocol line -> `SU_E_PARSE`; message over 1 MiB or collection limits -> `SU_E_RESOURCE_LIMIT`; path escape or denied path -> `SU_E_CAPABILITY_DENIED`; file errors -> `SU_E_IO`; worker death/timeout -> `SU_E_WORKER_FAILED`. Codes 18-20 are engine-wide additions to the RPC error list.
+Error mapping beyond section 3: malformed JSON/UTF-8 in a protocol line -> `SU_E_PARSE`; duplicate keys in a protocol line -> `SU_E_DUPLICATE_KEY` (same as IR files; ruling r3.2); message over 1 MiB or collection limits -> `SU_E_RESOURCE_LIMIT`; path escape or denied path -> `SU_E_CAPABILITY_DENIED`; file errors -> `SU_E_IO`; worker death/timeout -> `SU_E_WORKER_FAILED`. Codes 18-20 are engine-wide additions to the RPC error list.
 
 ## 5. Identities and canonical hash
 - `source_hash`: SHA-256 of the exact `.lir.json` bytes. `capsule_hash`: SHA-256 of exact capsule bytes. Both lowercase hex.
