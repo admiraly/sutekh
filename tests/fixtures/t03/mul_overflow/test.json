@@ -1,0 +1,28 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.movement",
+  "capsule": "capsule.json",
+  "world": "world.json",
+  "cases": [
+    {
+      "name": "mul_overflow_one_tick",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [
+          0,
+          4294967294,
+          2,
+          1,
+          0
+        ],
+        "velocity_x": [
+          65536,
+          2,
+          1431655766,
+          4294967295,
+          4294967295
+        ]
+      }
+    }
+  ]
+}

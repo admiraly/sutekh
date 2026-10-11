@@ -1,0 +1,47 @@
+{
+  "capsule": "invalid/movement.capsule.json",
+  "cases": [
+    {
+      "path": "invalid/too_many_instructions.lir.json",
+      "capsule": "invalid/movement.capsule.json",
+      "expected_code": "SU_E_RESOURCE_LIMIT",
+      "note": "4097 instructions; cap is 4096"
+    },
+    {
+      "path": "invalid/nested_depth_33.lir.json",
+      "capsule": "invalid/movement.capsule.json",
+      "expected_code": "SU_E_RESOURCE_LIMIT",
+      "note": "container depth 33; cap is 32"
+    },
+    {
+      "path": "invalid/store_same_field_twice.lir.json",
+      "capsule": "invalid/movement.capsule.json",
+      "expected_code": "SU_E_UNDECLARED_WRITE",
+      "note": "position_x stored twice; no dedicated code exists in the initial error set (judgment call, see handoff)"
+    },
+    {
+      "path": "invalid/denied_read.lir.json",
+      "capsule": "invalid/denied_read.capsule.json",
+      "expected_code": "SU_E_UNDECLARED_READ",
+      "note": "velocity_x has read: false in the capsule"
+    },
+    {
+      "path": "invalid/bool_as_u32.lir.json",
+      "capsule": "invalid/movement.capsule.json",
+      "expected_code": "SU_E_TYPE",
+      "note": "bool register used as add_u32 operand"
+    },
+    {
+      "path": "invalid/fractional_constant.lir.json",
+      "capsule": "invalid/movement.capsule.json",
+      "expected_code": "SU_E_TYPE",
+      "note": "const_u32 value 1.5"
+    },
+    {
+      "path": "invalid/constant_4294967296.lir.json",
+      "capsule": "invalid/movement.capsule.json",
+      "expected_code": "SU_E_TYPE",
+      "note": "const_u32 value 2^32 is out of u32 range"
+    }
+  ]
+}

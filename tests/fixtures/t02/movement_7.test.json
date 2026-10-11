@@ -1,0 +1,56 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.movement",
+  "capsule": "movement.capsule.json",
+  "world": "world_7.json",
+  "cases": [
+    {
+      "name": "n7_ticks1",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [
+          1,
+          3,
+          0,
+          7,
+          2425163946,
+          3031454930,
+          3637745914
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0,
+          397355487,
+          2644178006,
+          596033229
+        ]
+      }
+    },
+    {
+      "name": "n7_ticks3",
+      "ticks": 3,
+      "expected_columns": {
+        "position_x": [
+          3,
+          7,
+          2,
+          7,
+          3219874920,
+          4024843646,
+          534845076
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0,
+          397355487,
+          2644178006,
+          596033229
+        ]
+      }
+    }
+  ]
+}
