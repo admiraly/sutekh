@@ -1,0 +1,16 @@
+{
+  "test_format": "0.1",
+  "system_id": "pipe.damp",
+  "capsule": "damp.capsule.json",
+  "world": "pipe_world.json",
+  "cases": [
+    {
+      "name": "damp_one_tick",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [5, 4294967295, 10],
+        "velocity_x": [2, 2, 10]
+      }
+    }
+  ]
+}
