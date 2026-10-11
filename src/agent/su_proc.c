@@ -3,6 +3,7 @@
 #include "agent/su_proc.h"
 
 #include <errno.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -97,6 +98,14 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
         if (dup2(a, 0) < 0 || dup2(b, 1) < 0) {
             _exit(127);
         }
+        /* The worker must hold only stdin/stdout: close every other pipe end so it never keeps
+         * its own stdin writer or the supervisor's read end alive (EOF would never arrive). */
+        close(a);
+        close(b);
+        if (pin[0] > 2) close(pin[0]);
+        if (pin[1] > 2) close(pin[1]);
+        if (pout[0] > 2) close(pout[0]);
+        if (pout[1] > 2) close(pout[1]);
         if (limits != NULL && limits->address_space_bytes > 0) {
             struct rlimit rl;
             rl.rlim_cur = (rlim_t)limits->address_space_bytes;
@@ -135,6 +144,10 @@ uint32_t su_proc_request(SuProc *p, const uint8_t *req, size_t req_len, int64_t 
     *resp_len = 0;
     if (!p->alive) {
         return SU_E_WORKER_FAILED;
+    }
+    if (req_len == SIZE_MAX) {
+        su_proc_kill(p);
+        return SU_E_RESOURCE_LIMIT;
     }
     framed = malloc(req_len + 1u);
     if (framed == NULL) {
