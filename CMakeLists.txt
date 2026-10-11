@@ -27,3 +27,14 @@ target_compile_definitions(sutekh PRIVATE
     SUTEKH_C_COMPILER_ID="${CMAKE_C_COMPILER_ID}"
     SUTEKH_C_COMPILER_VERSION="${CMAKE_C_COMPILER_VERSION}")
 sutekh_apply_warnings(sutekh)
+
+enable_testing()
+
+add_library(su_world STATIC src/world/su_world.c)
+target_include_directories(su_world PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
+sutekh_apply_warnings(su_world)
+
+add_executable(test_world tests/world/test_world.c)
+target_link_libraries(test_world PRIVATE su_world)
+sutekh_apply_warnings(test_world)
+add_test(NAME world COMMAND test_world)
