@@ -1,0 +1,26 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.movement",
+  "capsule": "capsule.json",
+  "world": "world.json",
+  "cases": [
+    {
+      "name": "sub_underflow_one_tick",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [
+          4294967295,
+          4294967294,
+          0,
+          7
+        ],
+        "velocity_x": [
+          1,
+          7,
+          4294967295,
+          0
+        ]
+      }
+    }
+  ]
+}

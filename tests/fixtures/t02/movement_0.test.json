@@ -1,0 +1,24 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.movement",
+  "capsule": "movement.capsule.json",
+  "world": "world_0.json",
+  "cases": [
+    {
+      "name": "n0_ticks1",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [],
+        "velocity_x": []
+      }
+    },
+    {
+      "name": "n0_ticks3",
+      "ticks": 3,
+      "expected_columns": {
+        "position_x": [],
+        "velocity_x": []
+      }
+    }
+  ]
+}

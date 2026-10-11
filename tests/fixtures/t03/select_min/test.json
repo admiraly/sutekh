@@ -1,0 +1,28 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.movement",
+  "capsule": "capsule.json",
+  "world": "world.json",
+  "cases": [
+    {
+      "name": "select_min_one_tick",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [
+          0,
+          0,
+          0,
+          4294967295,
+          5
+        ],
+        "velocity_x": [
+          4294967295,
+          0,
+          0,
+          4294967295,
+          9
+        ]
+      }
+    }
+  ]
+}
