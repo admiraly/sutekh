@@ -1,0 +1,32 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.drift",
+  "capsule": "sys_b.capsule.json",
+  "world": "world4.json",
+  "cases": [
+    {
+      "name": "sys_b_1_ticks",
+      "ticks": 1,
+      "expected_columns": {
+        "velocity_x": [
+          2,
+          3,
+          2,
+          1
+        ]
+      }
+    },
+    {
+      "name": "sys_b_3_ticks",
+      "ticks": 3,
+      "expected_columns": {
+        "velocity_x": [
+          4,
+          5,
+          4,
+          3
+        ]
+      }
+    }
+  ]
+}

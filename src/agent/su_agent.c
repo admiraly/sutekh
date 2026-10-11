@@ -32,6 +32,8 @@
 #define AGENT_MSG_CAP 640u
 #define AGENT_MAX_PARAM_STRING 255u
 #define AGENT_MAX_FIELD_ARGS 64u
+#define AGENT_MAX_SYSTEMS 8u
+#define AGENT_MAX_OFFSET (UINT64_C(1) << 40)
 
 typedef struct AgentCandidate {
     int used;
@@ -45,7 +47,17 @@ typedef struct AgentCandidate {
     char eval_status[16]; /* not_run | passed | failed | worker_failed */
     uint64_t eval_total;
     uint64_t eval_passed;
+    uint64_t worker_pid;      /* pid of the last worker that evaluated or installed it; 0 = none */
+    char install_state[16];   /* not_attempted | installed | rejected */
+    uint64_t install_txid;
+    uint64_t install_tick;    /* effective tick of the last installation */
+    uint64_t install_code;    /* SU_E_* status of the last rejection */
 } AgentCandidate;
+
+typedef struct AgentSystemPaths {
+    char capsule[SU_PATH_BUF];
+    char source[SU_PATH_BUF];
+} AgentSystemPaths;
 
 typedef struct SuAgent {
     SuAgentConfig cfg;
@@ -63,9 +75,11 @@ typedef struct AgentCall {
     int relay; /* res holds one complete worker response line, to be sent as-is */
 } AgentCall;
 
+/* Exactly the methods routed below. world.snapshot, world.restore and the other
+ * AGENT_RPC methods are not implemented and must not be advertised. */
 static const char *const k_capabilities[] = {
     "engine.info",   "capsule.submit", "candidate.status", "candidate.evaluate",
-    "world.create",  "world.inspect",  "world.step",
+    "candidate.install", "world.create", "world.inspect", "world.step",
 };
 
 static uint32_t call_fail(AgentCall *c, uint32_t code, const char *msg) {
@@ -325,6 +339,7 @@ static uint32_t h_capsule_submit(SuAgent *a, const SuJsonValue *params, SuBuf *r
     snprintf(slot->capsule_hash, sizeof slot->capsule_hash, "%s", mod.capsule_hash_hex);
     snprintf(slot->semantic_hash, sizeof slot->semantic_hash, "%s", mod.semantic_hash_hex);
     snprintf(slot->eval_status, sizeof slot->eval_status, "not_run");
+    snprintf(slot->install_state, sizeof slot->install_state, "not_attempted");
 
     su_buf_str(res, "{\"candidate_id\":");
     su_buf_quoted(res, slot->id, strlen(slot->id));
@@ -376,6 +391,16 @@ static uint32_t h_candidate_status(SuAgent *a, const SuJsonValue *params, SuBuf 
     su_buf_u64(res, cd->eval_total);
     su_buf_str(res, ",\"cases_passed\":");
     su_buf_u64(res, cd->eval_passed);
+    su_buf_str(res, "},\"worker_pid\":");
+    su_buf_u64(res, cd->worker_pid);
+    su_buf_str(res, ",\"install\":{\"state\":\"");
+    su_buf_str(res, cd->install_state);
+    su_buf_str(res, "\",\"txid\":");
+    su_buf_u64(res, cd->install_txid);
+    su_buf_str(res, ",\"effective_tick\":");
+    su_buf_u64(res, cd->install_tick);
+    su_buf_str(res, ",\"error_status\":");
+    su_buf_u64(res, cd->install_code);
     su_buf_str(res, "}}");
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
@@ -525,6 +550,7 @@ static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBu
         const uint8_t *line = NULL;
         size_t len = 0;
         su_buf_init(&resp);
+        cd->worker_pid = (uint64_t)p.pid;
         st = su_proc_request(&p, req.data, req.len, su_now_ms() + (int64_t)timeout, &line, &len);
         su_buf_free(&req);
         if (st != SU_OK) {
@@ -638,41 +664,86 @@ static void req_begin(SuBuf *req, const char *id, const char *method) {
     su_buf_str(req, "\",\"params\":{");
 }
 
+/* world.create takes exactly one of capsule_path (one system, as before) or
+ * capsule_paths (an ordered array of 1..8 systems, run in that order every tick). */
 static uint32_t h_world_create(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
-    static const char *const allowed[] = {"fixture_path", "capsule_path"};
+    static const char *const allowed[] = {"fixture_path", "capsule_path", "capsule_paths"};
     const char *fixture = NULL;
-    const char *capsule = NULL;
+    const char *one = NULL;
+    const SuJsonValue *many = su_json_member(params, "capsule_paths");
     char fx_real[SU_PATH_BUF];
-    char cap_real[SU_PATH_BUF];
-    char src_real[SU_PATH_BUF];
-    uint8_t *cap = NULL;
-    size_t cap_len = 0;
+    AgentSystemPaths *sys = NULL;
+    size_t n = 0;
+    size_t i;
     SuBuf req;
     uint32_t st;
 
-    if (check_keys(params, allowed, 2, c) != SU_OK ||
+    if (check_keys(params, allowed, 3, c) != SU_OK ||
         param_str(params, "fixture_path", 1, &fixture, c) != SU_OK ||
-        param_str(params, "capsule_path", 1, &capsule, c) != SU_OK) {
+        param_str(params, "capsule_path", 0, &one, c) != SU_OK) {
         return SU_E_TYPE;
+    }
+    if ((one != NULL) == (many != NULL)) {
+        return call_fail(c, SU_E_TYPE, "give exactly one of capsule_path or capsule_paths");
+    }
+    if (many != NULL) {
+        if (many->type != SU_JSON_ARRAY || many->u.array.count == 0 || many->u.array.count > AGENT_MAX_SYSTEMS) {
+            return call_fail(c, SU_E_TYPE, "capsule_paths must be an array of 1..8 path strings");
+        }
+        n = many->u.array.count;
+    } else {
+        n = 1;
+    }
+    sys = calloc(n, sizeof *sys);
+    if (sys == NULL) {
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "allocation failed");
     }
     st = su_path_resolve(a->root, fixture, fx_real, sizeof fx_real);
     if (st != SU_OK) {
+        free(sys);
         return call_fail(c, st, "fixture path rejected by the project path policy");
     }
-    st = locate_capsule(a, capsule, cap_real, src_real, &cap, &cap_len, c);
-    if (st != SU_OK) {
-        return st;
+    for (i = 0; i < n; i++) {
+        char rel_buf[AGENT_MAX_PARAM_STRING + 1];
+        const char *rel = one;
+        uint8_t *cap = NULL;
+        size_t cap_len = 0;
+        if (many != NULL) {
+            const SuJsonValue *item = many->u.array.items[i];
+            if (!su_json_is_string(item) || item->u.string.len == 0 || item->u.string.len > AGENT_MAX_PARAM_STRING) {
+                free(sys);
+                return call_fail(c, SU_E_TYPE, "capsule_paths entries must be 1..255 byte strings");
+            }
+            memcpy(rel_buf, item->u.string.data, item->u.string.len);
+            rel_buf[item->u.string.len] = '\0';
+            rel = rel_buf;
+        }
+        st = locate_capsule(a, rel, sys[i].capsule, sys[i].source, &cap, &cap_len, c);
+        if (st != SU_OK) {
+            free(sys);
+            return st;
+        }
+        free(cap);
     }
-    free(cap);
 
-    req_begin(&req, c->id, "world.create");
-    su_buf_str(&req, "\"fixture_path\":");
+    su_buf_init(&req);
+    su_buf_str(&req, "{\"protocol\":\"" SU_PROTOCOL_VERSION "\",\"id\":");
+    su_buf_quoted(&req, c->id, strlen(c->id));
+    su_buf_str(&req, ",\"method\":\"world.create\",\"params\":{\"fixture_path\":");
     su_buf_quoted(&req, fx_real, strlen(fx_real));
-    su_buf_str(&req, ",\"capsule_path\":");
-    su_buf_quoted(&req, cap_real, strlen(cap_real));
-    su_buf_str(&req, ",\"source_path\":");
-    su_buf_quoted(&req, src_real, strlen(src_real));
-    su_buf_str(&req, "}}");
+    su_buf_str(&req, ",\"capsules\":[");
+    for (i = 0; i < n; i++) {
+        if (i > 0) {
+            su_buf_str(&req, ",");
+        }
+        su_buf_str(&req, "{\"capsule_path\":");
+        su_buf_quoted(&req, sys[i].capsule, strlen(sys[i].capsule));
+        su_buf_str(&req, ",\"source_path\":");
+        su_buf_quoted(&req, sys[i].source, strlen(sys[i].source));
+        su_buf_str(&req, "}");
+    }
+    su_buf_str(&req, "]}}");
+    free(sys);
     if (req.failed) {
         su_buf_free(&req);
         return call_fail(c, SU_E_RESOURCE_LIMIT, "world.create request too large");
@@ -683,17 +754,19 @@ static uint32_t h_world_create(SuAgent *a, const SuJsonValue *params, SuBuf *res
 }
 
 static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
-    static const char *const allowed[] = {"world_id", "fields", "limit"};
+    static const char *const allowed[] = {"world_id", "fields", "limit", "offset"};
     const char *world_id = NULL;
     uint64_t limit = 16;
+    uint64_t offset = 0;
     const SuJsonValue *fields = su_json_member(params, "fields");
     SuBuf req;
     size_t i;
     uint32_t st;
 
-    if (check_keys(params, allowed, 3, c) != SU_OK ||
+    if (check_keys(params, allowed, 4, c) != SU_OK ||
         param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
-        param_uint(params, "limit", 0, 1, 256, 16, &limit, c) != SU_OK) {
+        param_uint(params, "limit", 0, 1, 256, 16, &limit, c) != SU_OK ||
+        param_uint(params, "offset", 0, 0, AGENT_MAX_OFFSET, 0, &offset, c) != SU_OK) {
         return SU_E_TYPE;
     }
     if (fields != NULL && (fields->type != SU_JSON_ARRAY || fields->u.array.count > AGENT_MAX_FIELD_ARGS)) {
@@ -707,6 +780,8 @@ static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *re
     su_buf_quoted(&req, world_id, strlen(world_id));
     su_buf_str(&req, ",\"limit\":");
     su_buf_u64(&req, limit);
+    su_buf_str(&req, ",\"offset\":");
+    su_buf_u64(&req, offset);
     if (fields != NULL) {
         su_buf_str(&req, ",\"fields\":[");
         for (i = 0; i < fields->u.array.count; i++) {
@@ -766,6 +841,114 @@ static uint32_t h_world_step(SuAgent *a, const SuJsonValue *params, SuBuf *res, 
     return st;
 }
 
+/* Records the worker's answer on the candidate. Only the worker's own response is read
+ * here; the client never supplies these fields. */
+static void note_install(AgentCandidate *cd, const uint8_t *data, size_t len, uint64_t pid) {
+    SuJsonLimits lim;
+    SuJsonDoc doc;
+    SuJsonError err;
+    const SuJsonValue *root;
+    const SuJsonValue *ok_v;
+    uint32_t st;
+
+    cd->worker_pid = pid;
+    memset(&doc, 0, sizeof doc);
+    lim.max_bytes = len;
+    lim.max_depth = SU_PROTO_MAX_DEPTH + 4u;
+    st = su_json_parse(data, len, &lim, &doc, &err);
+    root = st == SU_OK && doc.root != NULL && doc.root->type == SU_JSON_OBJECT ? doc.root : NULL;
+    ok_v = root != NULL ? su_json_member(root, "ok") : NULL;
+    if (ok_v != NULL && ok_v->type == SU_JSON_BOOL && ok_v->u.boolean) {
+        const SuJsonValue *r = su_json_member(root, "result");
+        const SuJsonValue *state = r != NULL ? su_json_member(r, "state") : NULL;
+        snprintf(cd->install_state, sizeof cd->install_state, "%s",
+                 su_json_is_string(state) ? "installed" : "rejected");
+        cd->install_txid = 0;
+        su_json_get_uint(su_json_member(r, "txid"), &cd->install_txid);
+        cd->install_tick = 0;
+        su_json_get_uint(su_json_member(r, "effective_tick"), &cd->install_tick);
+        cd->install_code = 0;
+    } else {
+        const SuJsonValue *e = root != NULL ? su_json_member(root, "error") : NULL;
+        snprintf(cd->install_state, sizeof cd->install_state, "rejected");
+        cd->install_txid = 0;
+        cd->install_tick = 0;
+        cd->install_code = 0;
+        su_json_get_uint(e != NULL ? su_json_member(e, "status") : NULL, &cd->install_code);
+    }
+    su_json_doc_free(&doc);
+}
+
+/* candidate.install {candidate_id, world_id, expected_world_revision, allowed_effective_tick}.
+ * The evidence the worker gates on is the supervisor's evaluation record of this
+ * candidate (eval_status), never a client-supplied value. The worker answers with an
+ * installed result or a structured rejection, and that answer is relayed unchanged. */
+static uint32_t h_candidate_install(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"candidate_id", "world_id", "expected_world_revision",
+                                          "allowed_effective_tick"};
+    const char *id = NULL;
+    const char *world_id = NULL;
+    const char *expect = NULL;
+    uint64_t tick = 0;
+    AgentCandidate *cd;
+    SuBuf req;
+    SuBuf resp;
+    uint32_t st;
+
+    if (check_keys(params, allowed, 4, c) != SU_OK ||
+        param_str(params, "candidate_id", 1, &id, c) != SU_OK ||
+        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK ||
+        param_uint(params, "allowed_effective_tick", 1, 0, AGENT_MAX_OFFSET, 0, &tick, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    cd = find_candidate(a, id);
+    if (cd == NULL) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown candidate_id");
+    }
+    if (!a->worker.alive) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "no active worker holds worlds; call world.create");
+    }
+    su_buf_init(&req);
+    su_buf_str(&req, "{\"protocol\":\"" SU_PROTOCOL_VERSION "\",\"id\":");
+    su_buf_quoted(&req, c->id, strlen(c->id));
+    su_buf_str(&req, ",\"method\":\"internal.candidate.install\",\"params\":{\"world_id\":");
+    su_buf_quoted(&req, world_id, strlen(world_id));
+    su_buf_str(&req, ",\"candidate_id\":");
+    su_buf_quoted(&req, cd->id, strlen(cd->id));
+    su_buf_str(&req, ",\"capsule_path\":");
+    su_buf_quoted(&req, cd->capsule_real, strlen(cd->capsule_real));
+    su_buf_str(&req, ",\"source_path\":");
+    su_buf_quoted(&req, cd->source_real, strlen(cd->source_real));
+    su_buf_str(&req, ",\"expected_source_hash\":");
+    su_buf_quoted(&req, cd->source_hash, strlen(cd->source_hash));
+    su_buf_str(&req, ",\"expected_capsule_hash\":");
+    su_buf_quoted(&req, cd->capsule_hash, strlen(cd->capsule_hash));
+    su_buf_str(&req, ",\"evidence\":");
+    su_buf_quoted(&req, cd->eval_status, strlen(cd->eval_status));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, expect, strlen(expect));
+    su_buf_str(&req, ",\"allowed_effective_tick\":");
+    su_buf_u64(&req, tick);
+    su_buf_str(&req, "}}");
+    if (req.failed) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "candidate.install request too large");
+    }
+    su_buf_init(&resp);
+    st = active_roundtrip(a, c->id, &req, &resp, c);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return st;
+    }
+    note_install(cd, resp.data, resp.len, (uint64_t)a->worker.pid);
+    su_buf_put(res, resp.data, resp.len);
+    su_buf_free(&resp);
+    c->relay = 1;
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
 /* ---------- dispatch ---------- */
 
 static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c) {
@@ -790,6 +973,9 @@ static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c
     }
     if (strcmp(req->method, "world.step") == 0) {
         return h_world_step(a, p, res, c);
+    }
+    if (strcmp(req->method, "candidate.install") == 0) {
+        return h_candidate_install(a, p, res, c);
     }
     return call_fail(c, SU_E_UNSUPPORTED_METHOD, "method is unknown or not implemented in M0");
 }

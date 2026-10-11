@@ -1,0 +1,44 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.movement",
+  "capsule": "sys_a_bad.capsule.json",
+  "world": "world4.json",
+  "cases": [
+    {
+      "name": "sys_a_bad_1_ticks",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [
+          1,
+          3,
+          0,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "name": "sys_a_bad_3_ticks",
+      "ticks": 3,
+      "expected_columns": {
+        "position_x": [
+          3,
+          7,
+          2,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      }
+    }
+  ]
+}

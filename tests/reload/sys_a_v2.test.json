@@ -1,0 +1,62 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.movement",
+  "capsule": "sys_a_v2.capsule.json",
+  "world": "world4.json",
+  "cases": [
+    {
+      "name": "sys_a_v2_0_ticks",
+      "ticks": 0,
+      "expected_columns": {
+        "position_x": [
+          0,
+          1,
+          4294967295,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "name": "sys_a_v2_1_ticks",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [
+          2,
+          5,
+          1,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "name": "sys_a_v2_3_ticks",
+      "ticks": 3,
+      "expected_columns": {
+        "position_x": [
+          6,
+          13,
+          5,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      }
+    }
+  ]
+}

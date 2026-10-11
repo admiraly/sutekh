@@ -1,0 +1,29 @@
+{
+  "ir_version": "0.1",
+  "system_id": "demo.drift",
+  "numeric_profile": "u32_mod_v1",
+  "query": "demo.actor",
+  "instructions": [
+    {
+      "op": "load_u32",
+      "dst": "v",
+      "field": "velocity_x"
+    },
+    {
+      "op": "const_u32",
+      "dst": "one",
+      "value": 1
+    },
+    {
+      "op": "add_u32",
+      "dst": "next",
+      "a": "v",
+      "b": "one"
+    },
+    {
+      "op": "store_u32",
+      "field": "velocity_x",
+      "src": "next"
+    }
+  ]
+}
