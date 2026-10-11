@@ -373,68 +373,109 @@ def rss_window_median(samples, lo: int, hi: int):
 
 
 # Proposed targets from docs/PERFORMANCE.md section 2 (all unmeasured there; C10: shared VM, provisional).
-# gates: conditions the measurement must satisfy for a verdict; caveats: reporting requirements that are
-# recorded but do not change the verdict. proxy: the measured RPC is an upper bound on the target quantity.
+# gates: conditions the measurement must satisfy. Each gate is observed by the harness (or taken from
+# the engine's own report) and given as (True | False | None, reason); None means the fact was not
+# observed, which makes the verdict not_comparable. caveats: reporting requirements recorded in the
+# verdict that do not change it.
 TIMING_TARGETS = (
     {"id": "ir_prepare", "row": "IR prepare latency: p95 <= 20 ms (<=64 KiB source, fixed schema, warm process, 1,024-row preview)",
-     "metric": "prepare_submit_and_evaluate", "p95_ms_max": 20.0, "proxy": False,
-     "gates": ("source <= 64 KiB", "existing fixed schema", "warm process", "1,024-row preview"), "caveats": ()},
-    {"id": "preview_response", "row": "Isolated preview response: p95 <= 100 ms (reusable worker, small fixture)",
-     "metric": "evaluate_reusable_worker", "p95_ms_max": 100.0, "proxy": False,
-     "gates": ("reusable worker", "small fixture", "excludes long qualification suites"), "caveats": ()},
-    {"id": "install_critical_section", "row": "Code installation critical section: p95 <= 1 ms (code-only swap, prepared, no migration)",
-     "metric": "install_call_round_trip", "p95_ms_max": 1.0, "proxy": True,
-     "gates": ("code-only swap", "bindings already prepared", "no migration"),
-     "caveats": ("the measured RPC contains the critical section; the section itself is not isolated",)},
+     "metric": "ir_prepare_warm_1024", "p95_ms_max": 20.0,
+     "gates": ("source <= 64 KiB", "existing fixed schema", "warm process", "1,024-row preview"),
+     "caveats": ("submit (capsule.submit: parse, verify, prepare) and the isolated preview are timed together",)},
+    {"id": "preview_response", "row": "Isolated preview response: p95 <= 100 ms (reusable worker, small fixture; excludes long qualification suites)",
+     "metric": "preview_reusable_worker", "p95_ms_max": 100.0,
+     "gates": ("reusable worker", "small fixture", "excludes long qualification suites"),
+     "caveats": ("the timed call is candidate.evaluate on an already submitted candidate",)},
+    {"id": "install_critical_section", "row": "Code installation critical section: p95 <= 1 ms (code-only swap, bindings prepared, no migration)",
+     "metric": "install_critical_section_engine", "p95_ms_max": 1.0,
+     "gates": ("code-only swap", "bindings already prepared", "no migration", "engine clock readable"),
+     "caveats": ("measured inside the engine (src/runtime/reload.c): from the start of the registry publish to the "
+                 "new schedule entry being in place; the install RPC is reported separately",)},
     {"id": "warm_edit_to_first_effect", "row": "Warm edit to first preview effect: p95 <= 100 ms",
-     "metric": "edit_to_first_effect", "p95_ms_max": 100.0, "proxy": False,
+     "metric": "edit_to_first_effect_warm", "p95_ms_max": 100.0,
      "gates": ("warm process",),
-     "caveats": ("queue and worker delays are inside one install RPC and are not separated",)},
-    {"id": "native_incremental_check", "row": "Targeted native incremental check: aim p95 <= 2 s",
-     "metric": None, "p95_ms_max": 2000.0, "proxy": False, "gates": (), "caveats": ()},
+     "caveats": ("submit, evaluate, install RPC and first step are also reported separately in latency_ms",)},
+    {"id": "native_incremental_check", "row": "Targeted native incremental check: aim p95 <= 2 s (reference machine)",
+     "metric": "native_incremental_rebuild", "p95_ms_max": 2000.0,
+     "gates": ("small changed target", "cached dependencies", "reference machine"),
+     "caveats": ("aim: harness touches src/vm/su_vm.c in a scratch copy and times cmake --build",)},
 )
 TIMING_VERDICTS = ("met", "not_met", "not_comparable")
+REFERENCE_CPU = "14700K"  # docs/PERFORMANCE.md section 3: the user-reported primary development machine
+
+
+def _p95_valid(stats) -> bool:
+    p = stats.get("p95") if isinstance(stats, dict) else None
+    return (isinstance(p, (int, float)) and not isinstance(p, bool) and math.isfinite(p)
+            and bool(stats.get("n")))
 
 
 def compare_target(target: dict, stats, gates: dict, caveats=()) -> dict:
-    """Verdict for one proposed target. gates maps each gate name to (met: bool, reason: str).
+    """Verdict for one proposed target. gates maps each gate name to (observed: True | False | None, reason).
 
-    met            p95 <= target and every gate met (install: upper-bound proxy within target is also met)
-    not_met        p95 > target and every gate met, not a proxy
-    not_comparable a gate is unmet, the metric is not measured, or the proxy exceeds the target (the
-                   section itself is not isolated); the numbers are still recorded
-    A missing or non-finite p95 raises ValueError: a target without a measurement must not be silently skipped.
+    not_comparable  any gate is False or None (None = fact not observed); the measured p95 is still recorded
+    met             every gate True and p95 <= target
+    not_met         every gate True and p95 > target
+    A gate set that differs from the declared set, a malformed gate value, or (with every gate True) a
+    missing, empty or non-finite p95 raises ValueError: a target without a measurement is never skipped.
     """
     if set(gates) != set(target["gates"]):
         raise ValueError(f"{target['id']}: gate set {sorted(gates)} differs from declared {sorted(target['gates'])}")
+    for name, val in gates.items():
+        if not (isinstance(val, tuple) and len(val) == 2 and (val[0] is None or isinstance(val[0], bool))
+                and isinstance(val[1], str)):
+            raise ValueError(f"{target['id']}: gate {name!r} must be (True | False | None, reason)")
     base = {"id": target["id"], "row": target["row"], "metric": target["metric"], "provisional": True,
-            "target_p95_ms_max": target["p95_ms_max"], "gates": {k: {"met": bool(v[0]), "reason": v[1]}
-                                                                   for k, v in gates.items()},
+            "target_p95_ms_max": target["p95_ms_max"],
+            "gates": {k: {"met": v[0], "reason": v[1]} for k, v in gates.items()},
             "caveats": list(target["caveats"]) + list(caveats),
             "note": "provisional: shared VM, C10 (proposed budgets are not measurements)"}
-    if target["metric"] is None:
-        return {**base, "p95_ms": None, "n": 0, "verdict": "not_comparable",
-                "reason": "not measured by T13 (native edit lane; no native measurement in this harness)"}
-    if not isinstance(stats, dict) or not isinstance(stats.get("p95"), (int, float)) \
-            or isinstance(stats.get("p95"), bool) or not math.isfinite(stats["p95"]) or not stats.get("n"):
+    unmet = [name for name, (ok, _r) in gates.items() if ok is not True]
+    if unmet:
+        reasons = "; ".join(f"{name}: {gates[name][1]}" + (" (not observed)" if gates[name][0] is None else "")
+                            for name in unmet)
+        p95 = float(stats["p95"]) if _p95_valid(stats) else None
+        n = stats.get("n", 0) if isinstance(stats, dict) else 0
+        return {**base, "p95_ms": p95, "n": n, "verdict": "not_comparable",
+                "reason": f"conditions not met or not observed ({reasons}); measured p95 {p95} ms"}
+    if not _p95_valid(stats):
         raise ValueError(f"{target['id']}: no finite measured p95 for {target['metric']}")
     p95 = float(stats["p95"])
-    within = p95 <= target["p95_ms_max"]
-    unmet = [name for name, (ok, _r) in gates.items() if not ok]
-    if unmet:
-        reasons = "; ".join(f"{name}: {gates[name][1]}" for name in unmet)
-        verdict, reason = "not_comparable", f"unmet conditions ({reasons}); measured p95 {p95} ms"
-    elif within:
-        verdict = "met"
-        reason = f"measured p95 {p95} ms <= {target['p95_ms_max']} ms"
-    elif target["proxy"]:
-        verdict = "not_comparable"
-        reason = (f"measured RPC p95 {p95} ms exceeds {target['p95_ms_max']} ms, but the RPC is only an upper "
-                  "bound on the critical section, which is not isolated: no conclusion about the section")
+    if p95 <= target["p95_ms_max"]:
+        verdict, reason = "met", f"measured p95 {p95} ms <= {target['p95_ms_max']} ms with every condition observed"
     else:
-        verdict = "not_met"
-        reason = f"measured p95 {p95} ms > {target['p95_ms_max']} ms with every gate met"
+        verdict, reason = "not_met", f"measured p95 {p95} ms > {target['p95_ms_max']} ms with every condition observed"
     return {**base, "p95_ms": p95, "n": stats["n"], "verdict": verdict, "reason": reason}
+
+
+def identities_stable(keys: list) -> bool:
+    """True when there is at least one key, none is None, and all equal the first: one OS process throughout."""
+    return bool(keys) and keys[0] is not None and all(k == keys[0] for k in keys)
+
+
+def pids_reused(pids: list) -> bool:
+    """True when at least two evaluations reported a pid and every report is the same integer pid."""
+    return (len(pids) >= 2 and all(isinstance(p, int) and not isinstance(p, bool) for p in pids)
+            and all(p == pids[0] for p in pids))
+
+
+def worker_record_mismatches(reported, active_ident, sup_pid) -> list:
+    """Checks a worker_pid the engine reports for a candidate against the OS. active_ident is the OS identity
+    of the active worker, observed by the harness from the world (not from the candidate record). The
+    reported pid must be a live process whose parent is the supervisor and whose identity is that worker."""
+    if not isinstance(reported, int) or isinstance(reported, bool):
+        return ["candidate record worker_pid is not an integer"]
+    if active_ident is None:
+        return ["active worker identity is not observable"]
+    ident = os_identity(reported)
+    if is_dead(ident):
+        return [f"candidate record worker_pid {reported} is not a live process"]
+    out = []
+    if ident["ppid"] != sup_pid:
+        out.append(f"candidate record worker_pid {reported} has ppid {ident['ppid']}, not the supervisor {sup_pid}")
+    if identity_key(ident) != identity_key(active_ident):
+        out.append(f"candidate record worker_pid {reported} is not the active worker (OS identity differs)")
+    return out
 
 
 # ------------------------------------------------------------------ process I/O
@@ -722,6 +763,7 @@ HARNESS_RSS_GROWTH_BOUND_KIB = 8192
 EDIT_V1_TEST = "tests/fixtures/edit/movement.test.json"
 EDIT_V2_TEST = "tests/fixtures/edit/movement_v2.test.json"
 EDIT_V2_WRONG_TEST = "tests/fixtures/edit/movement_v2_wrong.test.json"
+EDIT_V1_WRONG_TEST = "tests/fixtures/edit/movement_v1_wrong.test.json"
 
 
 def call(tctx, sess, method, params, timeout=60.0) -> dict:
@@ -1162,6 +1204,37 @@ def _candidate_probe(sess) -> list:
     return present
 
 
+MAX_ROWS_CAP = "tests/fixtures/t04/movement_max_rows_4.capsule.json"
+MAX_ROWS_WORLD = "tests/fixtures/t02/world_8.json"
+MOVEMENT_CAP = "tests/fixtures/t02/movement.capsule.json"
+
+
+def _max_rows_case(t) -> dict:
+    """Runtime part of T04: a capsule whose limits.max_rows is below the world's row count must make world.step
+    fail with SU_E_RESOURCE_LIMIT, and the committed root must not change (su_vm.c row limit). A control with
+    the unmodified capsule on the same world must step, so the failure is the limit and not the world."""
+    rows = _rows_of(t.load(MAX_ROWS_WORLD)["columns"])
+    limit = t.load(MAX_ROWS_CAP)["limits"]["max_rows"]
+    t.check("T04 max_rows fixture: limit is positive and below the world row count", True, 0 < limit < rows)
+    ctl = t.session("T04 max_rows control serve")
+    wid_c, rev_c = create_world(t, ctl, MAX_ROWS_WORLD, [MOVEMENT_CAP])
+    env_c = ctl.request("world.step", {"world_id": wid_c, "expected_world_revision": rev_c, "ticks": 1})
+    t.check("T04 max_rows control: the unmodified capsule steps on the same world", True, env_c["ok"])
+    sess = t.session("T04 max_rows serve")
+    wid, rev = create_world(t, sess, MAX_ROWS_WORLD, [MAX_ROWS_CAP])
+    before = inspect(t, sess, wid)
+    env = sess.request("world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": 1})
+    if env["ok"] is False and env["error"].get("code") == UNSUPPORTED:
+        raise Unavailable("world.step answered SU_E_UNSUPPORTED_METHOD")
+    mism = classify_error(env, "SU_E_RESOURCE_LIMIT")
+    mism += verify_rejections_leave_state(before, inspect(t, sess, wid))
+    t.check_mismatches("T04 max_rows: world.step over capsule limits.max_rows is SU_E_RESOURCE_LIMIT "
+                       "with the committed root unchanged", mism)
+    t.check("T04 session answers after the max_rows failure", True, sess.request("engine.info", {})["ok"])
+    return {"world": MAX_ROWS_WORLD, "rows": rows, "max_rows": limit, "control_stepped": env_c["ok"],
+            "step_ok": env["ok"], "code": None if env["ok"] else env["error"].get("code")}
+
+
 def t04(t: TestCtx):
     sess = t.session("T04 serve")
     world_rel = "tests/fixtures/t02/world_1.json"
@@ -1229,6 +1302,7 @@ def t04(t: TestCtx):
                     "stage": 1, "expected": "SU_E_RESOURCE_LIMIT",
                     "actual": "accepted" if env["ok"] else env["error"].get("code"), "ok": not mism})
     t.check("session answers after the oversize line", True, sess.request("engine.info", {})["ok"])
+    t.details["max_rows_case"] = _max_rows_case(t)
     t.details["negative_cases"] = results
     t.details["negative_case_count"] = len(results)
     if failures:
@@ -1291,6 +1365,9 @@ def t05(t: TestCtx):
     t.check("T05 semantic manifest changes at install", True, mid.get("semantic_manifest") != pre.get("semantic_manifest"))
     t.check("T05 worker pid unchanged by install", worker_pid, mid.get("worker_pid"))
     t.check("T05 worker OS identity unchanged by install", w_id0, identity_key(os_identity(worker_pid)))
+    rec = call(t, sess, "candidate.status", {"candidate_id": cid})
+    t.check_mismatches("T05 candidate record names the live active worker (OS ppid and identity)",
+                       worker_record_mismatches(rec.get("worker_pid"), os_identity(worker_pid), pid0))
     # The swap must be observable: v1 would give different values at the first post-swap tick.
     v1_next = ref.run_tick(v1_lir, v1_cap, expected[swap_tick])
     t.check("T05 v1 and v2 differ at the first post-swap tick", True, v1_next != expected[swap_tick + 1])
@@ -1570,11 +1647,13 @@ def _rss_kib(pid):
         return next((int(line.split()[1]) for line in fh if line.startswith("VmRSS:")), None)
 
 
-T11_CYCLE = ("install", "revert", "fail_stale_revision", "fail_past_tick", "fail_layout_generation")
+T11_CYCLE = ("install", "revert", "fail_stale_revision", "fail_past_tick", "fail_layout_generation",
+             "fail_evidence")
 T11_SUCCESS = ("install", "revert")
 T11_EXPECT = {"fail_stale_revision": "SU_E_STALE_REVISION",
               "fail_past_tick": "SU_E_STALE_REVISION",
-              "fail_layout_generation": "SU_E_SCHEMA_MISMATCH"}
+              "fail_layout_generation": "SU_E_SCHEMA_MISMATCH",
+              "fail_evidence": "SU_E_CANDIDATE_FAILED"}
 LAYOUT_CAP = "tests/fixtures/m0_neg/layout_gen2.capsule.json"
 LAYOUT_SRC = "tests/fixtures/m0_neg/layout_gen2.lir.json"
 LAYOUT_TEST = "tests/fixtures/m0_neg/layout_gen2.test.json"
@@ -1589,7 +1668,7 @@ def _raw_install(sess, wid, cid, rev, tick):
 
 
 def t11(t: TestCtx):
-    """Repeated reload (TEST_SPEC T11): 1,000 iterations by default, in a fixed five-kind cycle.
+    """Repeated reload (TEST_SPEC T11): 1,000 iterations by default, in a fixed six-kind cycle.
 
       install               successful install of the other version (v1 <-> v2), then one tick
       revert                successful install back to the previous version (install v2, re-install v1)
@@ -1597,6 +1676,8 @@ def t11(t: TestCtx):
       fail_past_tick        install with allowed_effective_tick one behind the world -> SU_E_STALE_REVISION
                             (src/runtime/reload.c requires allowed_effective_tick == current tick)
       fail_layout_generation a candidate with layout_generation 2 that evaluates correctly -> SU_E_SCHEMA_MISMATCH
+      fail_evidence         a candidate of the other version whose evaluation FAILED (one expectation wrong) ->
+                            SU_E_CANDIDATE_FAILED; the engine refuses it on its own evidence record
 
     Every iteration also submits an invalid capsule (refused at submission). After each kind the state is
     verified: a refused install leaves tick, revision, columns and manifest unchanged; a successful install
@@ -1623,6 +1704,14 @@ def t11(t: TestCtx):
     v1_cid = prepare(t, sess, EDIT_V1, V1_SRC, EDIT_V1_TEST)
     v2_cid = prepare(t, sess, EDIT_V2, V2_SRC, EDIT_V2_TEST)
     layout_cid = prepare(t, sess, LAYOUT_CAP, LAYOUT_SRC, LAYOUT_TEST)
+    # Candidates whose evaluation fails: valid capsules, one expected value wrong on purpose.
+    fail_cid = {}
+    for name, cap_rel, src_rel, wrong_rel in (("v1", EDIT_V1, V1_SRC, EDIT_V1_WRONG_TEST),
+                                              ("v2", EDIT_V2, V2_SRC, EDIT_V2_WRONG_TEST)):
+        fid = submit(t, sess, cap_rel, src_rel)
+        fev = evaluate(t, sess, fid, wrong_rel)
+        t.check(f"T11 {name} wrong-expectation candidate evaluates as failed", "failed", fev.get("status"))
+        fail_cid[name] = fid
     bad_item, bad_cap, bad_src = _find_candidate(t, EDIT_CANDS, "wrong_permission")
     v1_lir, v1_cap = t.load(V1_SRC), t.load(EDIT_V1)
     v2_lir, v2_cap = t.load(V2_SRC), t.load(EDIT_V2)
@@ -1666,8 +1755,10 @@ def t11(t: TestCtx):
             elif kind == "fail_past_tick":
                 t.check(f"iteration {i}: a past tick exists", True, pre["tick"] >= 1)
                 env = _raw_install(sess, wid, cid_o, pre["world_revision"], pre["tick"] - 1)
-            else:  # fail_layout_generation
+            elif kind == "fail_layout_generation":
                 env = _raw_install(sess, wid, layout_cid, pre["world_revision"], pre["tick"])
+            else:  # fail_evidence: the other version's failed-evaluation candidate
+                env = _raw_install(sess, wid, fail_cid[other], pre["world_revision"], pre["tick"])
             t.check_mismatches(f"iteration {i} {kind}: install refused with {T11_EXPECT[kind]}",
                                classify_error(env, T11_EXPECT[kind]))
             counts["failed_install"] += 1
@@ -1691,6 +1782,10 @@ def t11(t: TestCtx):
     t.check("worker pid preserved across all reloads", worker0, end_worker)
     t.check("worker OS identity preserved across all reloads", w_id0, identity_key(os_identity(worker0)))
     t.check("supervisor OS identity preserved across all reloads", sup_id0, identity_key(os_identity(sup)))
+    # The candidate record of an installed candidate names the live active worker (OS facts, not the record).
+    rec = call(t, sess, "candidate.status", {"candidate_id": v2_cid})
+    t.check_mismatches("T11 candidate record names the live active worker after the reloads",
+                       worker_record_mismatches(rec.get("worker_pid"), os_identity(worker0), sup))
     missing = [k for k in T11_CYCLE if counts[k] == 0]
     t.check_mismatches("every kind ran at least once", [f"{k} never ran" for k in missing]
                        + ([] if iters >= len(T11_CYCLE) else [f"{iters} iterations is fewer than one cycle"]))
@@ -1873,120 +1968,321 @@ def _rows_of(columns: dict) -> int:
     return len(next(iter(columns.values()))) if columns else 0
 
 
+W_UP = 3                     # untimed warm-up cycles before each warm series
+NATIVE_MIN_SAMPLES = 5       # TEST_SPEC/M0-14: the incremental check needs n >= 5
+IR_WORLD = "tests/fixtures/t02/world_1024.json"
+IR_CAP = "tests/fixtures/t02/movement.capsule.json"
+IR_SRC = "tests/fixtures/t02/movement.lir.json"
+IR_TEST = "tests/fixtures/t02/movement_1024.test.json"
+NATIVE_EDIT_FILE = "src/vm/su_vm.c"
+
+
+def _schema_fixed(cap: dict, world: dict) -> bool:
+    """The capsule's schema identity equals the world fixture's (id and version)."""
+    sch = cap.get("schema") if isinstance(cap, dict) else None
+    return isinstance(sch, dict) and sch.get("id") == world.get("schema_id") and sch.get("version") == world.get("schema_version")
+
+
+def _ir_warm_series(t, reps):
+    """capsule.submit + candidate.evaluate of the movement capsule against the 1,024-row preview, in one serve
+    process after W_UP untimed cycles. Also returns the OS facts that back the warm-process and row gates."""
+    sess = t.session("T13 serve ir_prepare warm (1,024-row preview)")
+    try:
+        wid, _ = create_world(t, sess, IR_WORLD, [IR_CAP])
+        sup = sess.proc.pid
+        sup0 = identity_key(os_identity(sup))
+        worker0 = inspect(t, sess, wid).get("worker_pid")
+        w0 = identity_key(os_identity(worker0))
+        sup_keys, worker_keys, samples, cases_seen = [], [], [], []
+        for i in range(W_UP + reps):
+            t0 = time.monotonic()
+            cid = submit(t, sess, IR_CAP, IR_SRC)
+            ev = evaluate(t, sess, cid, IR_TEST)
+            t1 = time.monotonic()
+            t.check(f"T13 ir_prepare warm cycle {i} evaluation passed", "passed", ev.get("status"))
+            sup_keys.append(identity_key(os_identity(sup)))
+            worker_keys.append(identity_key(os_identity(worker0)))
+            cases_seen.append(ev.get("cases_total"))
+            if i >= W_UP:
+                samples.append(t1 - t0)
+        worker1 = inspect(t, sess, wid).get("worker_pid")
+        return {"samples": samples, "cases_total": cases_seen,
+                "supervisor_stable": identities_stable(sup_keys) and sup0 is not None,
+                "worker_stable": identities_stable(worker_keys) and worker1 == worker0 and w0 is not None,
+                "warm_up_cycles": W_UP,
+                "supervisor_pid": sup, "worker_pid": worker0}
+    finally:
+        sess.close()
+
+
+def _edit_warm_series(t, reps, swap_tick):
+    """One serve process: W_UP untimed cycles, then reps timed cycles of submit -> evaluate -> install ->
+    first step. Then the same candidate is evaluated reps times to observe whether the evaluation worker is reused."""
+    sess = t.session("T13 serve warm edit")
+    try:
+        wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
+        step(t, sess, wid, swap_tick)
+        sup = sess.proc.pid
+        sup_keys, worker_keys, reported_workers = [identity_key(os_identity(sup))], [], []
+        worker0 = inspect(t, sess, wid).get("worker_pid")
+        w0 = identity_key(os_identity(worker0))
+        ser = {"edit": [], "submit": [], "evaluate": [], "install": [], "step": []}
+        install_facts = {"prepared": [], "critical_ns": [], "prepare_ns": [], "states": []}
+        for i in range(W_UP + reps):
+            pre = inspect(t, sess, wid)
+            t0 = time.monotonic()
+            cid = submit(t, sess, EDIT_V2, V2_SRC)
+            t1 = time.monotonic()
+            ev = evaluate(t, sess, cid, EDIT_V2_TEST)
+            t2 = time.monotonic()
+            t.check(f"T13 warm edit cycle {i} evaluation passed", "passed", ev.get("status"))
+            res = install(t, sess, wid, cid, pre["world_revision"], pre["tick"])
+            t3 = time.monotonic()
+            step(t, sess, wid, 1)
+            t4 = time.monotonic()
+            sup_keys.append(identity_key(os_identity(sup)))
+            worker_keys.append(identity_key(os_identity(worker0)))
+            reported_workers.append(res.get("worker_pid"))
+            if i >= W_UP:
+                ser["edit"].append(t4 - t0)
+                ser["submit"].append(t1 - t0)
+                ser["evaluate"].append(t2 - t1)
+                ser["install"].append(t3 - t2)
+                ser["step"].append(t4 - t3)
+                install_facts["prepared"].append(res.get("bindings_prepared") is True)
+                install_facts["critical_ns"].append(res.get("critical_section_ns"))
+                install_facts["prepare_ns"].append(res.get("prepare_ns"))
+                install_facts["states"].append(res.get("state"))
+        # Evaluation worker reuse: the same candidate evaluated repeatedly; the record names each worker.
+        cid = submit(t, sess, EDIT_V2, V2_SRC)
+        reuse_s, reuse_pids, reuse_cases = [], [], []
+        for i in range(reps):
+            t0 = time.monotonic()
+            ev = evaluate(t, sess, cid, EDIT_V2_TEST)
+            reuse_s.append(time.monotonic() - t0)
+            t.check(f"T13 reusable evaluation {i} passed", "passed", ev.get("status"))
+            rec = call(t, sess, "candidate.status", {"candidate_id": cid})
+            reuse_pids.append(rec.get("worker_pid"))
+            reuse_cases.append(ev.get("cases_total"))
+        worker1 = inspect(t, sess, wid).get("worker_pid")
+        return {"series": ser, "install": install_facts, "reuse_s": reuse_s, "reuse_pids": reuse_pids,
+                "reuse_cases_total": reuse_cases,
+                "supervisor_stable": identities_stable(sup_keys) and sup_keys[0] is not None,
+                "worker_stable": identities_stable(worker_keys) and worker1 == worker0 and w0 is not None,
+                "reported_worker_pids_equal": all(p == worker0 for p in reported_workers),
+                "warm_up_cycles": W_UP, "supervisor_pid": sup, "worker_pid": worker0}
+    finally:
+        sess.close()
+
+
+def _build_type(t) -> str:
+    _rc, out = t.run_cmd([t.binary, "--version"], timeout=30)
+    bt = parse_version_output(out).get("build_type")
+    if bt not in ("Debug", "Release"):
+        raise Failed(f"binary under test reports unsupported build_type {bt!r} for the native check")
+    return bt
+
+
+def _native_incremental(t, n):
+    """Incremental native rebuild: configure and build a scratch copy of the repository once (untimed), then
+    n times touch src/vm/su_vm.c and time `cmake --build`. The repository itself is not modified."""
+    build_type = _build_type(t)
+    root = tempfile.mkdtemp(prefix="m0-native-inc-")  # outside the repository
+    res = {"build_type": build_type, "samples_s": [], "compile_units": [], "vm_compiled": [],
+           "reconfigured": [], "build_rc": [], "generator": "Ninja" if shutil.which("ninja") else "default"}
+    try:
+        src = os.path.join(root, "repo")
+        shutil.copytree(REPO, src, ignore=shutil.ignore_patterns(".git", "build", "planning"))
+        bdir = os.path.join(root, "build")
+        gen = ["-G", "Ninja"] if shutil.which("ninja") else []
+        res["configure_rc"], _ = t.run_cmd(["cmake", "-S", src, "-B", bdir, f"-DCMAKE_BUILD_TYPE={build_type}"] + gen,
+                                           timeout=900)
+        res["full_build_rc"], _ = t.run_cmd(["cmake", "--build", bdir, "--parallel"], timeout=1800)
+        vm = os.path.join(src, *NATIVE_EDIT_FILE.split("/"))
+        for _i in range(n):
+            os.utime(vm, None)  # the touch: content unchanged, modification time advanced
+            t0 = time.monotonic()
+            rc, text = t.run_cmd(["cmake", "--build", bdir, "--parallel"], timeout=900)
+            dt = time.monotonic() - t0
+            lines = text.splitlines()
+            compiles = [ln for ln in lines if "Building C object" in ln]
+            res["samples_s"].append(dt)
+            res["build_rc"].append(rc)
+            res["compile_units"].append(len(compiles))
+            res["vm_compiled"].append(any("su_vm.c" in ln for ln in compiles))
+            res["reconfigured"].append(any("Re-running CMake" in ln or "Configuring done" in ln for ln in lines))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    res["scratch_root_removed"] = not os.path.exists(root)
+    return res
+
+
 def t13(t: TestCtx):
     """Latency measurement compared with the proposed targets in docs/PERFORMANCE.md section 2.
 
-    Distributions (all milliseconds, nearest-rank p95, host clock):
-      prepare_submit_and_evaluate  submit + evaluate, fresh serve process per sample
-      evaluate_fresh_session       evaluate alone, fresh serve process per sample
-      evaluate_reusable_worker     evaluate alone, one serve process and one candidate, repeated
-      install_call_round_trip      candidate.install RPC (includes queue, boundary and publish)
-      first_step_after_install     the first tick that runs the new code
-      edit_to_first_effect         submit through first step, per sample
-    Each target gets a verdict met / not_met / not_comparable with its reason and every gate it depends on.
-    All verdicts are provisional: the host is a shared VM (C10). The test passes when the measurements are
-    collected and a verdict is recorded for every target; the verdicts themselves are report fields.
+    Warm series (the figures the targets are compared with) run in one serve process after untimed warm-up
+    cycles; the process identity is read from the OS on every cycle:
+      ir_prepare_warm_1024            capsule.submit + candidate.evaluate, 1,024-row preview
+      preview_reusable_worker         candidate.evaluate of one candidate repeated (evaluation worker pid recorded)
+      install_critical_section_engine critical_section_ns reported by candidate.install (engine clock)
+      edit_to_first_effect_warm       submit -> evaluate -> install -> first step
+      native_incremental_rebuild      touch src/vm/su_vm.c in a scratch copy; cmake --build (n >= 5)
+    Cold series (fresh serve process per sample) are reported, not compared.
+
+    Gate facts are observed, never assumed: each one is True, False or None (not observed) and is checked
+    against the OS, the engine's own report, or the fixture files. Each target gets a verdict met / not_met /
+    not_comparable with its reason and every gate. All verdicts are provisional: the host is a shared VM (C10).
+    The test passes when measurements are collected and a verdict is recorded for every target; the verdicts
+    are report fields, not the test status.
     """
-    sched, expected = _swap_expected(t)
+    sched, _expected = _swap_expected(t)
     swap_tick = sched["swap"]["effective_tick"]
     reps = t.run.latency_samples
-    prepare_s, eval_fresh_s, install_s, step_s, edit_s = [], [], [], [], []
+
+    # Cold: fresh serve process per sample. Reported only.
+    cold_prep, cold_eval, cold_edit = [], [], []
     for i in range(reps):
-        sess = t.session(f"T13 serve sample {i}")
+        sess = t.session(f"T13 cold sample {i}")
         wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
         step(t, sess, wid, swap_tick)
         pre = inspect(t, sess, wid)
         t0 = time.monotonic()
         cid = submit(t, sess, EDIT_V2, V2_SRC)
-        tsub = time.monotonic()
-        ev = evaluate(t, sess, cid, EDIT_V2_TEST)
         t1 = time.monotonic()
-        t.check(f"T13 sample {i} evaluation passed", "passed", ev.get("status"))
-        install(t, sess, wid, cid, pre["world_revision"], swap_tick)
+        ev = evaluate(t, sess, cid, EDIT_V2_TEST)
         t2 = time.monotonic()
+        t.check(f"T13 cold sample {i} evaluation passed", "passed", ev.get("status"))
+        install(t, sess, wid, cid, pre["world_revision"], swap_tick)
         step(t, sess, wid, 1)
         t3 = time.monotonic()
-        prepare_s.append(t1 - t0)
-        eval_fresh_s.append(t1 - tsub)
-        install_s.append(t2 - t1)
-        step_s.append(t3 - t2)
-        edit_s.append(t3 - t0)
+        cold_prep.append(t2 - t0)
+        cold_eval.append(t2 - t1)
+        cold_edit.append(t3 - t0)
         sess.close()
-    # Reusable worker: one serve process, one candidate, the same test file evaluated repeatedly.
-    reuse_s = []
-    sess = t.session("T13 serve reusable worker")
-    wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
-    step(t, sess, wid, swap_tick)
-    cid = submit(t, sess, EDIT_V2, V2_SRC)
-    for i in range(reps):
-        t0 = time.monotonic()
-        ev = evaluate(t, sess, cid, EDIT_V2_TEST)
-        reuse_s.append(time.monotonic() - t0)
-        t.check(f"T13 reusable evaluation {i} passed", "passed", ev.get("status"))
-    sess.close()
 
-    metrics = {
-        "prepare_submit_and_evaluate": latency_stats(prepare_s),
-        "evaluate_fresh_session": latency_stats(eval_fresh_s),
-        "evaluate_reusable_worker": latency_stats(reuse_s),
-        "install_call_round_trip": latency_stats(install_s),
-        "first_step_after_install": latency_stats(step_s),
-        "edit_to_first_effect": latency_stats(edit_s),
-    }
-    # Gate facts from the fixtures themselves.
+    ir = _ir_warm_series(t, reps)
+    ed = _edit_warm_series(t, reps, swap_tick)
+    native = _native_incremental(t, max(NATIVE_MIN_SAMPLES, reps))
+
+    # Gate facts, from the fixtures and the observations above.
     v1_cap, v2_cap = t.load(EDIT_V1), t.load(EDIT_V2)
-    src_bytes = os.path.getsize(t.abspath(V2_SRC))
-    rows = _rows_of(t.load(EDIT_WORLD)["columns"])
-    cases = len(t.load(EDIT_V2_TEST)["cases"])
-    same_schema = _schema_signature(v1_cap) == _schema_signature(v2_cap)
+    edit_world = t.load(EDIT_WORLD)
+    ir_world, ir_cap = t.load(IR_WORLD), t.load(IR_CAP)
+    ir_test = t.load(IR_TEST)
+    ir_src_bytes = os.path.getsize(t.abspath(IR_SRC))
+    ir_rows = _rows_of(ir_world["columns"])
+    ir_resolved = os.path.normpath(os.path.join(os.path.dirname(IR_TEST), ir_test["world"])).replace(os.sep, "/")
+    edit_rows = _rows_of(edit_world["columns"])
+    edit_cases = len(t.load(EDIT_V2_TEST)["cases"])
     same_layout = v1_cap["schema"]["layout_generation"] == v2_cap["schema"]["layout_generation"]
-    warm = (True, "one world created and stepped before the timed window; each sample is a fresh serve process, "
-                  "so process spawn is outside the timed window")
+    same_schema = _schema_signature(v1_cap) == _schema_signature(v2_cap)
+    cs_ns = ed["install"]["critical_ns"]
+    clock_ok = all(isinstance(v, int) and not isinstance(v, bool) for v in cs_ns) and len(cs_ns) > 0
+    cs_stats = latency_stats([v / 1e9 for v in cs_ns if isinstance(v, int) and not isinstance(v, bool)])
+    prep_ns = ed["install"]["prepare_ns"]
+    prep_stats = latency_stats([v / 1e9 for v in prep_ns if isinstance(v, int) and not isinstance(v, bool)])
+    machine = machine_info()
+    cpu = machine.get("cpu_model") or ""
+    native_s = native["samples_s"]
+    native_ok = (native["configure_rc"] == 0 and native["full_build_rc"] == 0 and len(native_s) >= NATIVE_MIN_SAMPLES
+                 and all(rc == 0 for rc in native["build_rc"]))
+    native_stats = latency_stats(native_s)
+
     gates = {
         "ir_prepare": {
-            "source <= 64 KiB": (src_bytes <= 65536, f"source is {src_bytes} bytes"),
-            "existing fixed schema": (same_schema, "capsule schema, fields and profile equal to the installed one"
-                                      if same_schema else "capsule schema differs from the installed one"),
-            "warm process": warm,
-            "1,024-row preview": (rows == 1024, f"fixture has {rows} rows; the target names a 1,024-row preview"),
+            "source <= 64 KiB": (ir_src_bytes <= 65536, f"source is {ir_src_bytes} bytes"),
+            "existing fixed schema": (_schema_fixed(ir_cap, ir_world),
+                                      "capsule schema id and version equal the world fixture's"
+                                      if _schema_fixed(ir_cap, ir_world) else "capsule schema differs from the world fixture"),
+            "warm process": (ir["supervisor_stable"] and ir["worker_stable"] and ir["warm_up_cycles"] >= 1,
+                             f"one serve process (pid {ir['supervisor_pid']}) and active worker (pid "
+                             f"{ir['worker_pid']}) kept their OS identity across {W_UP} warm-up and {len(ir['samples'])} "
+                             "timed cycles" if ir["supervisor_stable"] and ir["worker_stable"]
+                             else "the serve process or worker identity changed during the series"),
+            "1,024-row preview": (ir_rows == 1024 and ir_resolved == IR_WORLD,
+                                  f"evaluation resolves {ir_resolved} with {ir_rows} rows"),
         },
         "preview_response": {
-            "reusable worker": (True, f"one serve process evaluated the same candidate {reps} times"),
-            "small fixture": (rows <= 16 and cases <= 8, f"{rows} rows, {cases} cases"),
-            "excludes long qualification suites": (True, "only the edit candidate test file is evaluated"),
+            "reusable worker": (pids_reused(ed["reuse_pids"]),
+                                "the evaluation worker pid was the same across repeated evaluations"
+                                if pids_reused(ed["reuse_pids"]) else
+                                "each evaluation ran in a new worker process (candidate.evaluate spawns a disposable "
+                                "worker per request, su_agent.c h_candidate_evaluate); the pids reported were "
+                                f"{len(set(ed['reuse_pids']))} distinct values in {len(ed['reuse_pids'])} evaluations"),
+            "small fixture": (edit_rows <= 16 and edit_cases <= 8, f"{edit_rows} rows, {edit_cases} cases"),
+            "excludes long qualification suites": (
+                all(c == edit_cases for c in ed["reuse_cases_total"]) and len(ed["reuse_cases_total"]) > 0,
+                f"the engine reported cases_total {edit_cases} for every evaluation: only the edit test file ran"),
         },
         "install_critical_section": {
-            "code-only swap": (same_schema and same_layout, "same schema and layout_generation as the installed capsule"),
-            "bindings already prepared": (True, "the candidate was submitted and evaluated before every install"),
+            "code-only swap": (same_schema and same_layout and all(s == "installed" for s in ed["install"]["states"]),
+                               "same schema and layout_generation as the installed capsule; every install installed"
+                               if same_schema and same_layout else "capsule schema or layout differs"),
+            "bindings already prepared": (all(ed["install"]["prepared"]) and len(ed["install"]["prepared"]) > 0,
+                                          "candidate.install reported bindings_prepared=true for every sample"),
             "no migration": (same_layout, "layout_generation unchanged" if same_layout else "layout changed"),
+            "engine clock readable": (clock_ok, "critical_section_ns is an integer for every install" if clock_ok
+                                      else "critical_section_ns was null (monotonic clock unreadable)"),
         },
-        "warm_edit_to_first_effect": {"warm process": warm},
-        "native_incremental_check": {},
+        "warm_edit_to_first_effect": {
+            "warm process": (ed["supervisor_stable"] and ed["worker_stable"] and ed["reported_worker_pids_equal"]
+                             and ed["warm_up_cycles"] >= 1,
+                             f"one serve process (pid {ed['supervisor_pid']}) and its active worker (pid "
+                             f"{ed['worker_pid']}) kept their OS identity; {W_UP} untimed warm-up cycles"
+                             if ed["supervisor_stable"] and ed["worker_stable"] else
+                             "the serve process or active worker identity changed during the series"),
+        },
+        "native_incremental_check": {
+            "small changed target": (native_ok and all(native["vm_compiled"]) and all(c == 1 for c in native["compile_units"]),
+                                     "each incremental build compiled exactly one unit, src/vm/su_vm.c"),
+            "cached dependencies": (native_ok and not any(native["reconfigured"]),
+                                    "no reconfigure in any incremental build; all other units came from the cache"),
+            "reference machine": (REFERENCE_CPU in cpu, f"CPU model is {cpu!r}; the reference is the i7-14700K "
+                                                         "(docs/PERFORMANCE.md section 3)"),
+        },
     }
-    verdicts = [compare_target(tg, metrics.get(tg["metric"]) if tg["metric"] else None, gates[tg["id"]], ())
-                for tg in TIMING_TARGETS]
+    metrics = {
+        "ir_prepare_warm_1024": latency_stats(ir["samples"]),
+        "preview_reusable_worker": latency_stats(ed["reuse_s"]),
+        "install_critical_section_engine": cs_stats if clock_ok else {"n": 0, "units": "ms"},
+        "edit_to_first_effect_warm": latency_stats(ed["series"]["edit"]),
+        "native_incremental_rebuild": native_stats if native_ok else {"n": 0, "units": "ms"},
+    }
+    verdicts = [compare_target(tg, metrics[tg["metric"]], gates[tg["id"]]) for tg in TIMING_TARGETS]
     t.check("T13 a verdict is recorded for every proposed target",
             [tg["id"] for tg in TIMING_TARGETS], [v["id"] for v in verdicts])
     t.check("T13 every verdict is met, not_met or not_comparable", True,
             all(v["verdict"] in TIMING_VERDICTS and v["reason"] for v in verdicts))
-    t.check("T13 measured samples equal the requested count", [reps] * 5,
-            [len(prepare_s), len(eval_fresh_s), len(reuse_s), len(install_s), len(edit_s)])
+    t.check("T13 measured samples equal the requested count", [reps, reps, reps, reps, max(NATIVE_MIN_SAMPLES, reps)],
+            [len(ir["samples"]), len(ed["reuse_s"]), len(ed["series"]["edit"]), len(cold_edit), len(native_s)])
     t.details["latency_ms"] = {
-        "prepare_submit_and_evaluate": metrics["prepare_submit_and_evaluate"],
-        "evaluate_fresh_session": metrics["evaluate_fresh_session"],
-        "evaluate_reusable_worker": metrics["evaluate_reusable_worker"],
-        "install_call_round_trip": metrics["install_call_round_trip"],
-        "first_step_after_install": metrics["first_step_after_install"],
-        "edit_to_first_effect": metrics["edit_to_first_effect"],
+        "cold_prepare_submit_and_evaluate": latency_stats(cold_prep),
+        "cold_evaluate_fresh_session": latency_stats(cold_eval),
+        "cold_edit_to_first_effect": latency_stats(cold_edit),
+        "ir_prepare_warm_1024": metrics["ir_prepare_warm_1024"],
+        "preview_reusable_worker": metrics["preview_reusable_worker"],
+        "warm_submit": latency_stats(ed["series"]["submit"]),
+        "warm_evaluate": latency_stats(ed["series"]["evaluate"]),
+        "warm_install_rpc": latency_stats(ed["series"]["install"]),
+        "warm_first_step_after_install": latency_stats(ed["series"]["step"]),
+        "edit_to_first_effect_warm": metrics["edit_to_first_effect_warm"],
+        "native_incremental_rebuild": native_stats,
     }
+    t.details["engine_timings_ms"] = {"critical_section_ns_to_ms": cs_stats, "prepare_ns_to_ms": prep_stats,
+                                      "critical_section_ns_raw": cs_ns, "prepare_ns_raw": prep_ns}
+    t.details["native_incremental"] = native
+    t.details["gate_facts"] = {"warm_identities": {"ir_prepare": {k: ir[k] for k in ("supervisor_stable", "worker_stable", "warm_up_cycles")},
+                                                   "warm_edit": {k: ed[k] for k in ("supervisor_stable", "worker_stable", "warm_up_cycles")}},
+                               "reuse_worker_pids": ed["reuse_pids"], "reuse_cases_total": ed["reuse_cases_total"]}
     t.details["timing_targets"] = verdicts
     t.details["timing_target_source"] = "docs/PERFORMANCE.md section 2 (proposed, unmeasured there)"
-    t.details["timing_target_note"] = ("provisional: shared VM (C10). p95 from "
-                                       f"{reps} samples is nearest-rank; with fewer than 20 samples it is close to the maximum.")
-    t.details["decomposition_limits"] = ("candidate.install is synchronous: queue, worker and publish happen inside one "
-                                         "RPC, so they cannot be separated from the host clock. The install figure "
-                                         "includes them; the step figure is the first tick that runs the new code.")
-    t.details["machine"] = machine_info()
+    t.details["timing_target_note"] = (f"provisional: shared VM (C10). Warm series use {reps} timed cycles after "
+                                       f"{W_UP} untimed warm-up cycles; p95 is nearest-rank, so with fewer than 20 "
+                                       "samples it is close to the maximum.")
+    t.details["decomposition_limits"] = ("candidate.install is one RPC. The engine reports prepare_ns and "
+                                         "critical_section_ns from the monotonic clock; queue and worker "
+                                         "transport are inside the RPC figure only.")
+    t.details["machine"] = machine
     t.details["status_meaning"] = ("passed = measurements collected and a verdict recorded for every proposed target. "
                                    "The verdicts (timing_targets) are provisional and are not the test status.")
 
@@ -2179,7 +2475,7 @@ def main(argv=None) -> int:
     parser.add_argument("--no-build", action="store_true", help="skip the T00 build command")
     parser.add_argument("--only", default="", help="comma-separated test ids, e.g. T00,T15")
     parser.add_argument("--reload-iterations", type=int, default=DEFAULT_RELOAD_ITERATIONS,
-                        help="T11 iterations of the five-kind reload cycle (default 1000, the TEST_SPEC count; "
+                        help="T11 iterations of the six-kind reload cycle (default 1000, the TEST_SPEC count; "
                              "a smaller value is a shorter run, not a closure result)")
     parser.add_argument("--latency-samples", type=int, default=30, help="T13 fresh-session samples")
     parser.add_argument("--self-test", action="store_true", help="unit-test the harness logic and exit")
@@ -2484,46 +2780,15 @@ def self_test() -> int:
     ok("latency: p95 nearest rank", st["p95"] == 100.0)
     ok("latency: empty input reports zero samples", latency_stats([]) == {"n": 0, "units": "ms"})
 
-    # ---- M0-12: timing-target comparison (docs/PERFORMANCE.md section 2)
+    # ---- M0-12 / M0-14: timing-target comparison (docs/PERFORMANCE.md section 2)
     tg = {x["id"]: x for x in TIMING_TARGETS}
 
     def gates_for(target, flag=True, reason="ok", only=None):
         names = target["gates"]
         out = {n: (flag, reason) for n in names}
         if only is not None:
-            out[only] = (False, "fresh serve process per sample")
+            out[only] = (False, "fact observed as false")
         return out
-
-    st_ok = {"n": 30, "p95": 9.0}
-    ok("timing: p95 within target with every gate met is met",
-       compare_target(tg["preview_response"], st_ok, gates_for(tg["preview_response"]))["verdict"] == "met")
-    ok("timing: p95 over target with every gate met is not_met (a comparator that never fails would not)",
-       compare_target(tg["preview_response"], {"n": 30, "p95": 150.0},
-                      gates_for(tg["preview_response"]))["verdict"] == "not_met")
-    v_gate = compare_target(tg["preview_response"], {"n": 30, "p95": 150.0},
-                            gates_for(tg["preview_response"], only="reusable worker"))
-    ok("timing: an unmet gate makes an over-target number not_comparable, with the gate named",
-       v_gate["verdict"] == "not_comparable" and "fresh serve process" in v_gate["reason"]
-       and v_gate["gates"]["reusable worker"]["met"] is False)
-    ok("timing: an unmet gate also blocks a within-target number from being called met",
-       compare_target(tg["preview_response"], st_ok, gates_for(tg["preview_response"], only="reusable worker"))
-       ["verdict"] == "not_comparable")
-    ok("timing: the boundary p95 == target is met",
-       compare_target(tg["preview_response"], {"n": 30, "p95": 100.0},
-                      gates_for(tg["preview_response"]))["verdict"] == "met")
-    ok("timing: install proxy within 1 ms is met (the RPC bounds the section from above)",
-       compare_target(tg["install_critical_section"], {"n": 30, "p95": 0.8},
-                      gates_for(tg["install_critical_section"]))["verdict"] == "met")
-    v_proxy = compare_target(tg["install_critical_section"], {"n": 30, "p95": 1.3},
-                             gates_for(tg["install_critical_section"]))
-    ok("timing: install proxy over 1 ms is not_comparable, never not_met, and says why",
-       v_proxy["verdict"] == "not_comparable" and "upper bound" in v_proxy["reason"])
-    ok("timing: native target is not_comparable without a measurement",
-       compare_target(tg["native_incremental_check"], None, {})["verdict"] == "not_comparable")
-    ok("timing: every verdict carries provisional=True and a reason",
-       all(v["provisional"] is True and v["reason"] for v in (
-           compare_target(tg["preview_response"], st_ok, gates_for(tg["preview_response"])),
-           v_gate, v_proxy)))
 
     def raises_value(fn):
         try:
@@ -2532,19 +2797,72 @@ def self_test() -> int:
         except ValueError:
             return True
 
-    ok("timing: a missing measurement raises instead of being skipped",
-       raises_value(lambda: compare_target(tg["preview_response"], None, gates_for(tg["preview_response"]))))
-    ok("timing: an empty sample set raises",
-       raises_value(lambda: compare_target(tg["preview_response"], {"n": 0, "p95": 1.0},
-                                           gates_for(tg["preview_response"]))))
-    ok("timing: a NaN p95 raises",
-       raises_value(lambda: compare_target(tg["preview_response"], {"n": 3, "p95": float("nan")},
-                                           gates_for(tg["preview_response"]))))
-    ok("timing: a boolean p95 raises",
-       raises_value(lambda: compare_target(tg["preview_response"], {"n": 3, "p95": True},
-                                           gates_for(tg["preview_response"]))))
+    st_ok = {"n": 30, "p95": 9.0}
+    pv, ir, ins, nat = tg["preview_response"], tg["ir_prepare"], tg["install_critical_section"], tg["native_incremental_check"]
+    ok("timing: p95 within target with every gate observed true is met",
+       compare_target(pv, st_ok, gates_for(pv))["verdict"] == "met")
+    ok("timing: a slow synthetic sample (p95 over target) with every gate observed true is not_met",
+       compare_target(ir, {"n": 30, "p95": 35.0}, gates_for(ir))["verdict"] == "not_met")
+    ok("timing: the boundary p95 == target is met",
+       compare_target(pv, {"n": 30, "p95": 100.0}, gates_for(pv))["verdict"] == "met")
+    v_false = compare_target(pv, {"n": 30, "p95": 150.0}, gates_for(pv, only="reusable worker"))
+    ok("timing: a gate observed false makes an over-target number not_comparable, with the gate named",
+       v_false["verdict"] == "not_comparable" and "fact observed as false" in v_false["reason"]
+       and v_false["gates"]["reusable worker"]["met"] is False)
+    ok("timing: a gate observed false also blocks a within-target number from being called met",
+       compare_target(pv, st_ok, gates_for(pv, only="reusable worker"))["verdict"] == "not_comparable")
+    v_none = compare_target(ir, {"n": 30, "p95": 3.0}, {**gates_for(ir), "warm process": (None, "not observed")})
+    ok("timing: a missing gate fact (None) is not_comparable even when the number is within target",
+       v_none["verdict"] == "not_comparable" and v_none["gates"]["warm process"]["met"] is None
+       and "not observed" in v_none["reason"])
+    ok("timing: a malformed gate value raises",
+       raises_value(lambda: compare_target(ir, st_ok, {**gates_for(ir), "warm process": ("yes", "x")})))
+    ok("timing: install over 1 ms with every condition observed is not_met (engine-measured section)",
+       compare_target(ins, {"n": 30, "p95": 1.3}, gates_for(ins))["verdict"] == "not_met")
+    ok("timing: install at 0.8 ms with every condition observed is met",
+       compare_target(ins, {"n": 30, "p95": 0.8}, gates_for(ins))["verdict"] == "met")
+    v_nat = compare_target(nat, {"n": 5, "p95": 2500.0}, gates_for(nat, only="reference machine"))
+    ok("timing: native p95 over the aim with the reference machine not observed is not_comparable, p95 kept",
+       v_nat["verdict"] == "not_comparable" and v_nat["p95_ms"] == 2500.0)
+    ok("timing: native p95 over the aim with every condition observed is not_met",
+       compare_target(nat, {"n": 5, "p95": 2500.0}, gates_for(nat))["verdict"] == "not_met")
+    ok("timing: native p95 within the aim with every condition observed is met",
+       compare_target(nat, {"n": 5, "p95": 1500.0}, gates_for(nat))["verdict"] == "met")
+    ok("timing: an unmeasured target with an unmet condition is not_comparable (no raise)",
+       compare_target(nat, None, gates_for(nat, flag=False))["verdict"] == "not_comparable")
+    ok("timing: a missing measurement with every condition observed raises instead of being skipped",
+       raises_value(lambda: compare_target(pv, None, gates_for(pv))))
+    ok("timing: an empty sample set with every condition observed raises",
+       raises_value(lambda: compare_target(pv, {"n": 0, "p95": 1.0}, gates_for(pv))))
+    ok("timing: a NaN p95 with every condition observed raises",
+       raises_value(lambda: compare_target(pv, {"n": 3, "p95": float("nan")}, gates_for(pv))))
+    ok("timing: a boolean p95 with every condition observed raises",
+       raises_value(lambda: compare_target(pv, {"n": 3, "p95": True}, gates_for(pv))))
     ok("timing: a gate set that differs from the declared set raises",
-       raises_value(lambda: compare_target(tg["preview_response"], st_ok, {"reusable worker": (True, "x")})))
+       raises_value(lambda: compare_target(pv, st_ok, {"reusable worker": (True, "x")})))
+    ok("timing: every verdict carries provisional=True and a reason",
+       all(v["provisional"] is True and v["reason"] for v in (
+           compare_target(pv, st_ok, gates_for(pv)), v_false, v_none, v_nat)))
+    ok("timing: identities_stable accepts one process throughout",
+       identities_stable([(1, 2, 3), (1, 2, 3)]))
+    ok("timing: identities_stable rejects a changed identity and a missing one",
+       not identities_stable([(1, 2, 3), (4, 2, 3)]) and not identities_stable([None]) and not identities_stable([]))
+    ok("timing: pids_reused needs two equal integer pids",
+       pids_reused([7, 7, 7]) and not pids_reused([7, 8]) and not pids_reused([7]) and not pids_reused([7, None]))
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        cid_ident = os_identity(child.pid)
+        ok("worker record: a live child of this process is accepted",
+           worker_record_mismatches(child.pid, cid_ident, os.getpid()) == [])
+        ok("worker record: a pid+1 lie is refused (not the active worker, or not live)",
+           worker_record_mismatches(child.pid + 1, cid_ident, os.getpid()) != [])
+        ok("worker record: a wrong supervisor pid is refused (ppid check)",
+           worker_record_mismatches(child.pid, cid_ident, os.getpid() + 1) != [])
+        ok("worker record: a non-integer pid is refused",
+           worker_record_mismatches("12", cid_ident, os.getpid()) != [])
+    finally:
+        child.kill()
+        child.wait()
 
     # ---- stage table and the M0-12 negative matrix
     ok("stage: RESOURCE_LIMIT is a stage-1 code only",
@@ -2658,12 +2976,12 @@ def self_test() -> int:
     ok("version identity: a different abi_version is a difference",
        stable_version_fields({"abi_version": "1"}) != stable_version_fields({"abi_version": "2"}))
 
-    # ---- T11 cycle: five kinds, two successful, three refused with the contract codes
-    ok("T11 cycle: five kinds, install and revert are the successful ones",
-       len(T11_CYCLE) == 5 and T11_SUCCESS == ("install", "revert"))
+    # ---- T11 cycle: six kinds, two successful, four refused with the contract codes
+    ok("T11 cycle: six kinds, install and revert are the successful ones",
+       len(T11_CYCLE) == 6 and T11_SUCCESS == ("install", "revert"))
     ok("T11 refused kinds map to the install-time contract codes",
        T11_EXPECT == {"fail_stale_revision": "SU_E_STALE_REVISION", "fail_past_tick": "SU_E_STALE_REVISION",
-                      "fail_layout_generation": "SU_E_SCHEMA_MISMATCH"})
+                      "fail_layout_generation": "SU_E_SCHEMA_MISMATCH", "fail_evidence": "SU_E_CANDIDATE_FAILED"})
 
     # ---- T12 probe: absolute-path compiler is a build tool; strace parsing sees an absolute execve
     probe_spec = importlib.util.spec_from_file_location(
