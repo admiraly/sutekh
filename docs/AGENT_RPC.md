@@ -128,7 +128,9 @@ checkpoint that predates the installed revision. That state is recorded as a new
 accepted after that checkpoint are discarded (`discarded_ticks` reports how many ticks).
 
 **Limits and budgets.** The spool holds capsule, source and checkpoint bytes within `spool_bytes_max`
-(default 32 MiB). A world's checkpoint reservation is bounded from its row and field counts (11 bytes per
+(default 512 MiB in the `sutekh` binary, so a 1,000,000-row world fits; the library default of
+`SuAgentConfig.spool_bytes_max` is 32 MiB; `SUTEKH_SPOOL_BYTES_MAX` overrides the binary's value).
+A world's checkpoint reservation is bounded from its row and field counts (11 bytes per
 value, plus fixed overhead) times `checkpoint_retain + 1`, and creation is refused with `SU_E_RESOURCE_LIMIT`
 when the reservation or the spool budget does not fit. At most four worlds are held at once (the worker limit).
 
@@ -270,3 +272,37 @@ respecialization succeeds.
   then six revision swaps; checks the worker's mappings (no writable and executable mapping, count flat), RSS
   bound, the VM tier after each swap and world.close releasing the world's mapping. Sanitizer runs need
   `ASAN_OPTIONS=quarantine_size_mb=1` for the RSS bound to be meaningful.
+
+## 12. Tick workers, schedule checks and containment defaults (M1 closure B)
+
+**Tick workers (opt-in).** `SUTEKH_TICK_WORKERS=N` (1..64, default 1) and `SUTEKH_TICK_CHUNK_MIN_ROWS=R`
+(default 4096, tests may lower it) are read by the supervisor at start-up (invalid values stop the binary
+with exit 2). The supervisor sends both to the active worker as the optional internal fields `tick_workers`
+and `chunk_min_rows` of every `world.step` (including the replay of recovery). They are not client
+parameters. `engine.info` reports them as `tick_workers: {workers, chunk_min_rows}`.
+
+- N = 1 is the serial path, unchanged. N > 1 runs a system in a world of at least R rows through
+  `su_jobs_run_system_chunked` (chunks of rows over N pool workers; chunk boundaries depend only on the row
+  count, never on N). Results are canonical: identical committed columns for every N (`test_tick_workers`,
+  harness TX5 against the reference evaluator). A failing chunk aborts the whole tick; the reported system is
+  the first failing one and the committed state is unchanged.
+- Native kernels (SUTEKH_NATIVE builds) run as one call over the whole range even when N > 1; the
+  row-sliced native path is not implemented in M1 (decision recorded in planning/handoffs/2026-10-12-m1-closure-b.md).
+- Candidate evaluation (`candidate.evaluate`, disposable workers) always runs serially.
+
+**Schedule checks at `world.create`.** With more than one system the worker runs the effect analysis
+(`su_effects_build`) and the capsule-order check. Every system is treated as declared parallel, so:
+- an unordered pair with a write/write or read/write conflict is refused with `SU_E_SCHEMA_MISMATCH`
+  (message names the pair and the field);
+- an ordering cycle (`after`/`before`) is refused with `SU_E_INVALID_ARGUMENT` (`ordering cycle: a -> b -> a`);
+- an `after` edge whose target is listed later in `capsules` is refused with `SU_E_INVALID_ARGUMENT`
+  (the world runs systems in capsule order);
+- an edge to a system outside the world is refused with `SU_E_INVALID_ARGUMENT`.
+Installs (`candidate.install`) are not re-checked against the schedule in M1.
+
+**Containment defaults of the `sutekh` binary (C07).** Workers and disposable children run with
+RLIMIT_AS 4 GiB (`SUTEKH_WORKER_AS_BYTES`, 0 = unlimited for sanitizer builds) and receive only the
+scrubbed environment (`SU_TEST_*`, `SUTEKH_*`, sanitizer options). Harness TX6 checks the limit in
+`/proc/<pid>/limits`, the absence of `SECRET_X` in `/proc/<pid>/environ` of the active worker and of a
+disposable worker observed during `candidate.evaluate`, and that the spool default admits a
+1,000,000-row world with the default limits.
