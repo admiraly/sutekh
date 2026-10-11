@@ -1,0 +1,225 @@
+{
+  "artifacts_sha256": {
+    "native_abi_probe_sysv": "da639eca5b9b356b68596b2f2e1bd4a3d0886bd1ba57e95193a21bcd450fc71b"
+  },
+  "checks": [
+    {
+      "id": "linux.configure",
+      "lane": "linux-native",
+      "reason": "native backend enabled",
+      "status": "passed"
+    },
+    {
+      "id": "linux.build",
+      "lane": "linux-native",
+      "reason": "built test_ir test_world test_vm test_snapshot su_native su_asmjit su_ir",
+      "status": "passed"
+    },
+    {
+      "id": "linux.unit.test_ir",
+      "lane": "linux-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "linux.unit.test_world",
+      "lane": "linux-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "linux.unit.test_vm",
+      "lane": "linux-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "linux.unit.test_snapshot",
+      "lane": "linux-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "linux.native_abi_probe",
+      "lane": "linux-native",
+      "reason": "587 checks, 0 failures, SysV, backends=2",
+      "status": "passed"
+    }
+  ],
+  "commands": [
+    {
+      "argv": [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build-platform/linux-native",
+        "-G",
+        "Ninja",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DSUTEKH_NATIVE=ON"
+      ],
+      "check": "linux.configure",
+      "cwd": ".",
+      "duration_s": 0.116,
+      "log": "build-platform/linux_configure.log",
+      "log_sha256": "16f5d032cb59a2ac279de7c59542fcfa15140e823cb347298b94b6e0fc10f7d8",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/bin/cmake",
+        "--build",
+        "build-platform/linux-native",
+        "--target",
+        "test_ir",
+        "test_world",
+        "test_vm",
+        "test_snapshot",
+        "su_native",
+        "su_asmjit",
+        "su_ir"
+      ],
+      "check": "linux.build",
+      "cwd": ".",
+      "duration_s": 0.034,
+      "log": "build-platform/linux_build.log",
+      "log_sha256": "c2ed93ffd93c840755c0e91392ae593b1b52de9b7aaf6c208123feaceb1dde2e",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "build-platform/linux-native/test_ir"
+      ],
+      "check": "linux.unit.test_ir",
+      "cwd": ".",
+      "duration_s": 0.009,
+      "log": "build-platform/linux_unit_test_ir.log",
+      "log_sha256": "e9ecbbfabacd34c3dd4c4557db4a8c761998ee2221225aee837e0e2238b36c8a",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "build-platform/linux-native/test_world"
+      ],
+      "check": "linux.unit.test_world",
+      "cwd": ".",
+      "duration_s": 0.066,
+      "log": "build-platform/linux_unit_test_world.log",
+      "log_sha256": "f48dde76409301f1c43bacf14af5aa1286e71c516e4841823c641e524079ef54",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "build-platform/linux-native/test_vm"
+      ],
+      "check": "linux.unit.test_vm",
+      "cwd": ".",
+      "duration_s": 0.005,
+      "log": "build-platform/linux_unit_test_vm.log",
+      "log_sha256": "57d73e6bdce980def243866c4102f5cadb9ef6e2fc83e2295e06076d734351e2",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "build-platform/linux-native/test_snapshot"
+      ],
+      "check": "linux.unit.test_snapshot",
+      "cwd": ".",
+      "duration_s": 0.002,
+      "log": "build-platform/linux_unit_test_snapshot.log",
+      "log_sha256": "40d824cd6e65bc9b817fee8544e6029b2927f947adf6c78969b1b35ca6ebb009",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/bin/gcc",
+        "-std=c17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-pedantic",
+        "-pedantic",
+        "-O2",
+        "-I",
+        ".",
+        "-I",
+        "include",
+        "-I",
+        "src",
+        "-o",
+        "build-platform/linux-native/probe/native_abi_probe",
+        "tests/platform/native_abi_probe.c",
+        "build-platform/linux-native/libsu_native.a",
+        "build-platform/linux-native/libsu_asmjit.a",
+        "build-platform/linux-native/libsu_ir.a",
+        "-lstdc++",
+        "-lm"
+      ],
+      "check": "linux.native_abi_probe.compile",
+      "cwd": ".",
+      "duration_s": 0.27,
+      "log": "build-platform/linux_native_abi_probe_compile.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "build-platform/linux-native/probe/native_abi_probe"
+      ],
+      "check": "linux.native_abi_probe",
+      "cwd": ".",
+      "duration_s": 0.009,
+      "log": "build-platform/linux_native_abi_probe.log",
+      "log_sha256": "5465ddf3221569e0c371c722df468d925099a58eb836d8ea317bed86e74946e6",
+      "returncode": 0
+    }
+  ],
+  "generated_utc": "2026-10-11T22:30:53Z",
+  "host": {
+    "generated_utc": "2026-10-11T22:30:50Z",
+    "machine": "x86_64",
+    "python": "3.13.16",
+    "release": "6.18.44-fc-v114",
+    "system": "Linux"
+  },
+  "inputs_sha256": {
+    "tests/platform/capabilities.py": "887e588f74b6922c75733d6dea790615c91c688b4c79e5092a0f67ade398bfdc",
+    "tests/platform/cpu_state.c": "bc07db179bbaa76b34b0208b747d2027947f2b0e3891be7cce340a54d2d5ffc0",
+    "tests/platform/native_abi_probe.c": "a9613d5ccc750c75e84e6dc5f1272994746a4877a0c991d087f10909736f8bca",
+    "tests/platform/run_platform.py": "0d4ca87c7047842aa450e4879a770f834c13754cb7304ca8640eef9871aee218"
+  },
+  "lane": "linux-native",
+  "notes": {
+    "native_abi_probe": {
+      "backends": 2,
+      "checks": 587,
+      "failures": 0,
+      "host_abi": "sysv",
+      "host_caps": 3
+    }
+  },
+  "schema": "sutekh.platform_run.v1",
+  "tools": {
+    "cmake": {
+      "path": "/usr/bin/cmake",
+      "version": "cmake version 3.28.3"
+    },
+    "g++": {
+      "path": "/usr/bin/g++",
+      "version": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "gcc": {
+      "path": "/usr/bin/gcc",
+      "version": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    },
+    "ninja": {
+      "path": "/usr/bin/ninja",
+      "version": "1.11.1"
+    }
+  }
+}
