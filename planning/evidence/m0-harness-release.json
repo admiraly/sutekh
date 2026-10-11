@@ -3,20 +3,31 @@
     "path": "build/sutekh",
     "sha256": "c99583976107a8b96fe8d9bcdedc89503de0a3af49e5f3db98954206b1387717"
   },
-  "clean_build": null,
-  "generated_utc": "2026-10-11T17:55:20+00:00",
+  "clean_build": {
+    "binary": {
+      "path": "/tmp/m0-clean-build-z7p5pmt9/build/sutekh",
+      "sha256": "c99583976107a8b96fe8d9bcdedc89503de0a3af49e5f3db98954206b1387717"
+    },
+    "build_dir": "/tmp/m0-clean-build-z7p5pmt9/build",
+    "build_rc": 0,
+    "configure_rc": 0,
+    "generator": "Ninja",
+    "root": "/tmp/m0-clean-build-z7p5pmt9",
+    "version_output": "sutekh 0.1.0\nabi_version 1\nir_version 0.1\nartifact_format 1\nbuild_type Release\ncompiler GNU 13.3.0\npid 31329"
+  },
+  "generated_utc": "2026-10-11T17:59:08+00:00",
   "harness": {
     "argv": [
       "tests/harness/run_m0.py",
       "--binary",
       "build/sutekh",
       "--report-dir",
-      "/tmp/claude-0/-home-user-sutekh/82533bc6-e6ca-564a-ba43-39dd3091bafa/scratchpad/harness-release"
+      "/tmp/rel_final"
     ],
     "path": "tests/harness/run_m0.py",
     "python": "3.13.16",
     "reference_eval_sha256": "b9919314fd9ee2526d163e27f5a698bf8e086d3b9497e0824fd421790eec04dc",
-    "sha256": "0c6e5fee544290efe18140f1bc42a51def4cbc85374478e83903b4f0d0c4933c"
+    "sha256": "fe6edf4db46c02d354d3c8f6fe1d374c1c97d15b5a4dbdbdf4aed43ae7f1121e"
   },
   "note": "passed means every check ran and matched independently derived expectations, and a test that recorded no check cannot pass; no engine-provided flag was trusted.",
   "probe": {
@@ -54,7 +65,7 @@
       "ir_version": "0.1",
       "numeric_profile": "u32_mod_v1",
       "process": {
-        "pid": 6498,
+        "pid": 31331,
         "role": "supervisor"
       },
       "protocol": "0.1",
@@ -62,17 +73,17 @@
       "transport": "stdio"
     },
     "reason": "",
-    "reply": "{\"protocol\":\"0.1\",\"id\":\"m0-probe-1\",\"ok\":true,\"result\":{\"engine_version\":\"0.1.0\",\"protocol\":\"0.1\",\"ir_version\":\"0.1\",\"abi_version\":1,\"artifact_format\":1,\"numeric_profile\":\"u32_mod_v1\",\"runtime_mode\":\"headless-m0-posix\",\"transport\":\"stdio\",\"process\":{\"role\":\"supervisor\",\"pid\":6498},\"active_worker\":{\"pid\":0},\"capabilities\":[\"engine.info\",\"capsule.submit\",\"candidate.status\",\"candidate.evaluate\",\"candidate.install\",\"world.create\",\"world.inspect\",\"world.step\",\"world.snapshot\",\"world.restore\"]}}",
+    "reply": "{\"protocol\":\"0.1\",\"id\":\"m0-probe-1\",\"ok\":true,\"result\":{\"engine_version\":\"0.1.0\",\"protocol\":\"0.1\",\"ir_version\":\"0.1\",\"abi_version\":1,\"artifact_format\":1,\"numeric_profile\":\"u32_mod_v1\",\"runtime_mode\":\"headless-m0-posix\",\"transport\":\"stdio\",\"process\":{\"role\":\"supervisor\",\"pid\":31331},\"active_worker\":{\"pid\":0},\"capabilities\":[\"engine.info\",\"capsule.submit\",\"candidate.status\",\"candidate.evaluate\",\"candidate.install\",\"world.create\",\"world.inspect\",\"world.step\",\"world.snapshot\",\"world.restore\"]}}",
     "request": "{\"protocol\":\"0.1\",\"id\":\"m0-probe-1\",\"method\":\"engine.info\",\"params\":{}}",
     "serve_returncode": 0,
     "state": "present"
   },
-  "repo_head": "3feeacf44bd2a734bf63a50e2dea6c468a97fdde",
+  "repo_head": "6b576c32796331e78388b6249e724dab3085beec",
   "report_format": "m0-harness/0.1",
   "summary": {
-    "failed": 1,
+    "failed": 0,
     "not_run": 0,
-    "passed": 15,
+    "passed": 16,
     "unavailable": 0
   },
   "tests": [
@@ -138,17 +149,17 @@
           "expected": {
             "abi_version": "1",
             "artifact_format": "1",
-            "build_type": "Debug",
+            "build_type": "Release",
             "compiler": "GNU 13.3.0",
             "ir_version": "0.1",
             "sutekh": "0.1.0"
           },
           "name": "binary under test reports the same version fields as the clean build (pid excluded)",
-          "ok": false
+          "ok": true
         }
       ],
       "checks_dropped": 0,
-      "checks_failed": 1,
+      "checks_failed": 0,
       "checks_recorded": 9,
       "checks_total": 9,
       "commands": [
@@ -157,7 +168,7 @@
             "cmake",
             "--version"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "command",
           "output_tail": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n",
           "returncode": 0,
@@ -168,7 +179,7 @@
             "ninja",
             "--version"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "command",
           "output_tail": "1.11.1\n",
           "returncode": 0,
@@ -179,7 +190,7 @@
             "/usr/bin/cc",
             "--version"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "command",
           "output_tail": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
           "returncode": 0,
@@ -187,72 +198,101 @@
         },
         {
           "argv": [
+            "/home/user/sutekh/build/sutekh",
+            "--version"
+          ],
+          "cwd": "/home/user/sutekh",
+          "label": "command",
+          "output_tail": "sutekh 0.1.0\nabi_version 1\nir_version 0.1\nartifact_format 1\nbuild_type Release\ncompiler GNU 13.3.0\npid 31124\n",
+          "returncode": 0,
+          "stdout_sha256": "170605a091b3b63a9598e2aac4ac7c75619b9e7b19342c79733d7364712b7c7c"
+        },
+        {
+          "argv": [
             "cmake",
             "-S",
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+            "/home/user/sutekh",
             "-B",
-            "/tmp/m0-clean-build-azbugn9m/build",
-            "-DCMAKE_BUILD_TYPE=Debug",
+            "/tmp/m0-clean-build-z7p5pmt9/build",
+            "-DCMAKE_BUILD_TYPE=Release",
             "-G",
             "Ninja"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "command",
-          "output_tail": "-- The C compiler identification is GNU 13.3.0\n-- Detecting C compiler ABI info\n-- Detecting C compiler ABI info - done\n-- Check for working C compiler: /usr/bin/cc - skipped\n-- Detecting C compile features\n-- Detecting C compile features - done\n-- Configuring done (0.2s)\n-- Generating done (0.0s)\n-- Build files have been written to: /tmp/m0-clean-build-azbugn9m/build\n",
+          "output_tail": "-- The C compiler identification is GNU 13.3.0\n-- Detecting C compiler ABI info\n-- Detecting C compiler ABI info - done\n-- Check for working C compiler: /usr/bin/cc - skipped\n-- Detecting C compile features\n-- Detecting C compile features - done\n-- Configuring done (0.2s)\n-- Generating done (0.0s)\n-- Build files have been written to: /tmp/m0-clean-build-z7p5pmt9/build\n",
           "returncode": 0,
-          "stdout_sha256": "6fa705e41448f8738b231ec64f88bd50d4059d32c3b76630049f94896591bf5d"
+          "stdout_sha256": "a27ba60b0bf277044ae9ec435361dcdf605a06f83c7c5b130e5aa176dd56bdcc"
         },
         {
           "argv": [
             "cmake",
             "--build",
-            "/tmp/m0-clean-build-azbugn9m/build",
+            "/tmp/m0-clean-build-z7p5pmt9/build",
             "--parallel"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "command",
-          "output_tail": "[0/2] Re-checking globbed directories...\n[1/41] Building C object CMakeFiles/su_platform.dir/src/platform/su_platform.c.o\n[2/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_sha256.c.o\n[3/41] Building C object CMakeFiles/sutekh.dir/src/platform/sutekh_main.c.o\n[4/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_json.c.o\n[5/41] Building C object CMakeFiles/su_world.dir/src/world/su_world.c.o\n[6/41] Linking C static library libsu_platform.a\n[7/41] Building C object CMakeFiles/test_world.dir/tests/world/test_world.c.o\n[8/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_lir.c.o\n[9/41] Building C object CMakeFiles/test_ir.dir/tests/ir/test_ir.c.o\n[10/41] Building C object CMakeFiles/su_vm.dir/src/vm/su_vm.c.o\n[11/41] Linking C static library libsu_world.a\n[12/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_module.c.o\n[13/41] Linking C executable test_world\n[14/41] Linking C static library libsu_ir.a\n[15/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_path.c.o\n[16/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_proc.c.o\n[17/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_proto.c.o\n[18/41] Linking C executable test_ir\n[19/41] Linking C static library libsu_vm.a\n[20/41] Building C object CMakeFiles/su_agent.dir/src/runtime/registry.c.o\n[21/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_agent.c.o\n[22/41] Building C object CMakeFiles/test_vm.dir/tests/vm/test_vm.c.o\n[23/41] Building C object CMakeFiles/su_agent.dir/src/runtime/schedule.c.o\n[24/41] Building C object CMakeFiles/worker_stub.dir/tests/control/worker_stub.c.o\n[25/41] Building C object CMakeFiles/su_agent.dir/src/runtime/reload.c.o\n[26/41] Linking C executable test_vm\n[27/41] Building C object CMakeFiles/su_snapshot.dir/src/runtime/checkpoint.c.o\n[28/41] Building C object CMakeFiles/su_agent.dir/src/runtime/worker.c.o\n[29/41] Building C object CMakeFiles/su_snapshot.dir/src/world/snapshot.c.o\n[30/41] Linking C static library libsu_snapshot.a\n[31/41] Building C object CMakeFiles/test_snapshot.dir/tests/snapshot/test_snapshot.c.o\n[32/41] Building C object CMakeFiles/test_control.dir/tests/control/test_control.c.o\n[33/41] Linking C executable test_snapshot\n[34/41] Linking C static library libsu_agent.a\n[35/41] Building C object CMakeFiles/test_snapshot_cp.dir/tests/snapshot_cp/test_snapshot_cp.c.o\n[36/41] Linking C executable worker_stub\n[37/41] Linking C executable test_control\n[38/41] Linking C executable sutekh\n[39/41] Linking C executable test_snapshot_cp\n[40/41] Building C object CMakeFiles/test_reload.dir/tests/reload/test_reload.c.o\n[41/41] Linking C executable test_reload\n",
+          "output_tail": "[0/2] Re-checking globbed directories...\n[1/41] Building C object CMakeFiles/su_platform.dir/src/platform/su_platform.c.o\n[2/41] Building C object CMakeFiles/sutekh.dir/src/platform/sutekh_main.c.o\n[3/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_sha256.c.o\n[4/41] Linking C static library libsu_platform.a\n[5/41] Building C object CMakeFiles/su_world.dir/src/world/su_world.c.o\n[6/41] Building C object CMakeFiles/su_vm.dir/src/vm/su_vm.c.o\n[7/41] Linking C static library libsu_world.a\n[8/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_json.c.o\n[9/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_module.c.o\n[10/41] Building C object CMakeFiles/test_ir.dir/tests/ir/test_ir.c.o\n[11/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_path.c.o\n[12/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_proc.c.o\n[13/41] Building C object CMakeFiles/test_world.dir/tests/world/test_world.c.o\n[14/41] Linking C executable test_world\n[15/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_proto.c.o\n[16/41] Building C object CMakeFiles/su_agent.dir/src/runtime/registry.c.o\n[17/41] Building C object CMakeFiles/test_vm.dir/tests/vm/test_vm.c.o\n[18/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_lir.c.o\n[19/41] Building C object CMakeFiles/worker_stub.dir/tests/control/worker_stub.c.o\n[20/41] Linking C static library libsu_ir.a\n[21/41] Building C object CMakeFiles/su_agent.dir/src/runtime/reload.c.o\n[22/41] Linking C executable test_ir\n[23/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_agent.c.o\n[24/41] Building C object CMakeFiles/su_agent.dir/src/runtime/schedule.c.o\n[25/41] Linking C static library libsu_vm.a\n[26/41] Building C object CMakeFiles/su_snapshot.dir/src/runtime/checkpoint.c.o\n[27/41] Linking C executable test_vm\n[28/41] Building C object CMakeFiles/su_snapshot.dir/src/world/snapshot.c.o\n[29/41] Linking C static library libsu_snapshot.a\n[30/41] Building C object CMakeFiles/test_control.dir/tests/control/test_control.c.o\n[31/41] Building C object CMakeFiles/su_agent.dir/src/runtime/worker.c.o\n[32/41] Linking C static library libsu_agent.a\n[33/41] Linking C executable worker_stub\n[34/41] Linking C executable test_control\n[35/41] Linking C executable sutekh\n[36/41] Building C object CMakeFiles/test_snapshot.dir/tests/snapshot/test_snapshot.c.o\n[37/41] Linking C executable test_snapshot\n[38/41] Building C object CMakeFiles/test_snapshot_cp.dir/tests/snapshot_cp/test_snapshot_cp.c.o\n[39/41] Linking C executable test_snapshot_cp\n[40/41] Building C object CMakeFiles/test_reload.dir/tests/reload/test_reload.c.o\n[41/41] Linking C executable test_reload\n",
           "returncode": 0,
-          "stdout_sha256": "ff61f21fc2b77a0108142879b4847b0a6bd75643aebb9d93a502607d88192cf1"
+          "stdout_sha256": "18507771884b63c7f37fee9d1ac6761c81ec4426066c6e7307f477fd0b70bb6c"
         },
         {
           "argv": [
-            "/tmp/m0-clean-build-azbugn9m/build/sutekh",
+            "/tmp/m0-clean-build-z7p5pmt9/build/sutekh",
             "--version"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "command",
-          "output_tail": "sutekh 0.1.0\nabi_version 1\nir_version 0.1\nartifact_format 1\nbuild_type Debug\ncompiler GNU 13.3.0\npid 6496\n",
+          "output_tail": "sutekh 0.1.0\nabi_version 1\nir_version 0.1\nartifact_format 1\nbuild_type Release\ncompiler GNU 13.3.0\npid 31329\n",
           "returncode": 0,
-          "stdout_sha256": "999ca750ae3a5d55e98cbe61e71a2512f02303cfda32dab03cf100bfa306a149"
+          "stdout_sha256": "35ce37d7b6cf333c033df653533d8af581019dcb4c666e7e3822c6207a1e5483"
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "--version"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "command",
-          "output_tail": "sutekh 0.1.0\nabi_version 1\nir_version 0.1\nartifact_format 1\nbuild_type Release\ncompiler GNU 13.3.0\npid 6497\n",
+          "output_tail": "sutekh 0.1.0\nabi_version 1\nir_version 0.1\nartifact_format 1\nbuild_type Release\ncompiler GNU 13.3.0\npid 31330\n",
           "returncode": 0,
-          "stdout_sha256": "f5c89096fed82cc740d7d473f40db4dc7a8d446299c5c358173b6dd2d0094434"
+          "stdout_sha256": "81a86c6abd23a64ddcaf173ffb3d288e6f2d3d8855085805d003b888cca4b222"
         }
       ],
       "details": {
+        "binary": {
+          "path": "build/sutekh",
+          "sha256": "c99583976107a8b96fe8d9bcdedc89503de0a3af49e5f3db98954206b1387717"
+        },
+        "clean_build": {
+          "binary": {
+            "path": "/tmp/m0-clean-build-z7p5pmt9/build/sutekh",
+            "sha256": "c99583976107a8b96fe8d9bcdedc89503de0a3af49e5f3db98954206b1387717"
+          },
+          "build_dir": "/tmp/m0-clean-build-z7p5pmt9/build",
+          "build_rc": 0,
+          "configure_rc": 0,
+          "generator": "Ninja",
+          "root": "/tmp/m0-clean-build-z7p5pmt9",
+          "version_output": "sutekh 0.1.0\nabi_version 1\nir_version 0.1\nartifact_format 1\nbuild_type Release\ncompiler GNU 13.3.0\npid 31329"
+        },
+        "clean_build_type": "Release",
         "tool_versions": {
           "cmake": "cmake version 3.28.3",
           "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
           "ninja": "1.11.1"
-        }
+        },
+        "version_output": "sutekh 0.1.0\nabi_version 1\nir_version 0.1\nartifact_format 1\nbuild_type Release\ncompiler GNU 13.3.0\npid 31330"
       },
       "id": "T00",
       "inputs": {
         "CMakeLists.txt": "3c69b47d1ebdcf678a146dd09172ab3eb5672bf79bd41ff645443cd842906f6c",
-        "build/sutekh": "e9f8a3cf994d2854fac8505fd5f082bae97cb2466a4690d5dc33dc43e44d18d0"
+        "build/sutekh": "c99583976107a8b96fe8d9bcdedc89503de0a3af49e5f3db98954206b1387717"
       },
       "name": "Clean bootstrap",
-      "reason": "binary under test reports the same version fields as the clean build (pid excluded): expected {'sutekh': '0.1.0', 'abi_version': '1', 'ir_version': '0.1', 'artifact_format': '1', 'build_type': 'Debug', 'compiler': 'GNU 13.3.0'} actual {'sutekh': '0.1.0', 'abi_version': '1', 'ir_version': '0.1', 'artifact_format': '1', 'build_type': 'Release', 'compiler': 'GNU 13.3.0'}",
-      "status": "failed"
+      "reason": "",
+      "status": "passed"
     },
     {
       "checks": [
@@ -294,12 +334,12 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T01 serve",
-          "pid": 6502,
+          "pid": 31335,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -446,67 +486,67 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T02 serve world_0",
-          "pid": 6512,
+          "pid": 31345,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T02 serve world_1",
-          "pid": 6522,
+          "pid": 31355,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T02 serve world_7",
-          "pid": 6532,
+          "pid": 31365,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T02 serve world_8",
-          "pid": 6542,
+          "pid": 31375,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T02 serve world_9",
-          "pid": 6552,
+          "pid": 31385,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T02 serve world_1024",
-          "pid": 6562,
+          "pid": 31395,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -630,67 +670,67 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T03 serve eq_edges",
-          "pid": 6578,
+          "pid": 31411,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T03 serve lt_edges",
-          "pid": 6585,
+          "pid": 31418,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T03 serve mul_overflow",
-          "pid": 6592,
+          "pid": 31425,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T03 serve select_min",
-          "pid": 6599,
+          "pid": 31432,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T03 serve sub_underflow",
-          "pid": 6606,
+          "pid": 31439,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T03 serve wrap_add",
-          "pid": 6613,
+          "pid": 31446,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -914,12 +954,12 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T04 serve",
-          "pid": 6620,
+          "pid": 31453,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -1237,8 +1277,8 @@
     {
       "checks": [
         {
-          "actual": 7264,
-          "expected": 7264,
+          "actual": 32097,
+          "expected": 32097,
           "name": "engine.info pid is the serve process",
           "ok": true
         },
@@ -1326,21 +1366,21 @@
           "ok": true
         },
         {
-          "actual": 7269,
-          "expected": 7269,
+          "actual": 32102,
+          "expected": 32102,
           "name": "T05 worker pid unchanged by install",
           "ok": true
         },
         {
           "actual": [
-            7269,
-            217988,
-            7264
+            32102,
+            240794,
+            32097
           ],
           "expected": [
-            7269,
-            217988,
-            7264
+            32102,
+            240794,
+            32097
           ],
           "name": "T05 worker OS identity unchanged by install",
           "ok": true
@@ -1367,47 +1407,47 @@
           "ok": true
         },
         {
-          "actual": 7264,
-          "expected": 7264,
+          "actual": 32097,
+          "expected": 32097,
           "name": "engine.info pid is the serve process",
           "ok": true
         },
         {
-          "actual": 7264,
-          "expected": 7264,
+          "actual": 32097,
+          "expected": 32097,
           "name": "T05 supervisor pid preserved",
           "ok": true
         },
         {
-          "actual": 7269,
-          "expected": 7269,
+          "actual": 32102,
+          "expected": 32102,
           "name": "T05 worker pid preserved",
           "ok": true
         },
         {
           "actual": [
-            7264,
-            217988,
-            6279
+            32097,
+            240793,
+            31115
           ],
           "expected": [
-            7264,
-            217988,
-            6279
+            32097,
+            240793,
+            31115
           ],
           "name": "T05 supervisor OS identity preserved",
           "ok": true
         },
         {
           "actual": [
-            7269,
-            217988,
-            7264
+            32102,
+            240794,
+            32097
           ],
           "expected": [
-            7269,
-            217988,
-            7264
+            32102,
+            240794,
+            32097
           ],
           "name": "T05 worker OS identity preserved",
           "ok": true
@@ -1420,12 +1460,12 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T05 serve",
-          "pid": 7264,
+          "pid": 32097,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -1511,12 +1551,12 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T06 serve",
-          "pid": 7284,
+          "pid": 32117,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -1606,12 +1646,12 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T07 serve",
-          "pid": 7300,
+          "pid": 32133,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -1720,12 +1760,12 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T08 serve",
-          "pid": 7314,
+          "pid": 32147,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -1863,12 +1903,12 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T09 serve",
-          "pid": 7326,
+          "pid": 32159,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -1891,8 +1931,8 @@
     {
       "checks": [
         {
-          "actual": 7337,
-          "expected": 7337,
+          "actual": 32170,
+          "expected": 32170,
           "name": "engine.info pid is the serve process",
           "ok": true
         },
@@ -1932,27 +1972,27 @@
           "ok": true
         },
         {
-          "actual": 7337,
-          "expected": 7337,
+          "actual": 32170,
+          "expected": 32170,
           "name": "engine.info pid is the serve process",
           "ok": true
         },
         {
-          "actual": 7337,
-          "expected": 7337,
+          "actual": 32170,
+          "expected": 32170,
           "name": "supervisor answers after kill",
           "ok": true
         },
         {
           "actual": [
-            7337,
-            217999,
-            6279
+            32170,
+            240804,
+            31115
           ],
           "expected": [
-            7337,
-            217999,
-            6279
+            32170,
+            240804,
+            31115
           ],
           "name": "supervisor OS identity unchanged by kill",
           "ok": true
@@ -1963,21 +2003,21 @@
           "ok": true
         },
         {
-          "actual": 7342,
-          "expected": 7342,
+          "actual": 32175,
+          "expected": 32175,
           "name": "active worker pid unchanged by evaluation kill",
           "ok": true
         },
         {
           "actual": [
-            7342,
-            217999,
-            7337
+            32175,
+            240804,
+            32170
           ],
           "expected": [
-            7342,
-            217999,
-            7337
+            32175,
+            240804,
+            32170
           ],
           "name": "active worker OS identity unchanged by evaluation kill",
           "ok": true
@@ -2021,12 +2061,12 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T10 serve attempt 0",
-          "pid": 7337,
+          "pid": 32170,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -2036,18 +2076,18 @@
           {
             "attempt": 0,
             "killed": [
-              7348
+              32181
             ],
             "reply_code": "SU_E_WORKER_FAILED",
             "reply_ok": false
           }
         ],
         "kill_observation": {
-          "active_worker_pid": 7342,
+          "active_worker_pid": 32175,
           "killed": [
-            7348
+            32181
           ],
-          "supervisor_pid": 7337
+          "supervisor_pid": 32170
         }
       },
       "id": "T10",
@@ -2063,8 +2103,8 @@
     {
       "checks": [
         {
-          "actual": 7354,
-          "expected": 7354,
+          "actual": 32187,
+          "expected": 32187,
           "name": "engine.info pid is the serve process",
           "ok": true
         },
@@ -34905,35 +34945,35 @@
           "ok": true
         },
         {
-          "actual": 7359,
-          "expected": 7359,
+          "actual": 32192,
+          "expected": 32192,
           "name": "worker pid preserved across all reloads",
           "ok": true
         },
         {
           "actual": [
-            7359,
-            218003,
-            7354
+            32192,
+            240807,
+            32187
           ],
           "expected": [
-            7359,
-            218003,
-            7354
+            32192,
+            240807,
+            32187
           ],
           "name": "worker OS identity preserved across all reloads",
           "ok": true
         },
         {
           "actual": [
-            7354,
-            218003,
-            6279
+            32187,
+            240806,
+            31115
           ],
           "expected": [
-            7354,
-            218003,
-            6279
+            32187,
+            240806,
+            31115
           ],
           "name": "supervisor OS identity preserved across all reloads",
           "ok": true
@@ -34962,12 +35002,12 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T11 serve",
-          "pid": 7354,
+          "pid": 32187,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -34996,20 +35036,20 @@
         "rss_caveat": "none (no sanitizer runtime in the binary)",
         "rss_kib": {
           "baseline_median": {
-            "supervisor": 2132.0,
-            "worker": 2124.0
+            "supervisor": 2152.0,
+            "worker": 2128.0
           },
           "end_median": {
-            "supervisor": 2132.0,
-            "worker": 2128.0
+            "supervisor": 2152.0,
+            "worker": 2132.0
           },
           "final_window": [
             900,
             1000
           ],
           "start": {
-            "supervisor": 2120,
-            "worker": 2100
+            "supervisor": 2140,
+            "worker": 2104
           },
           "warm_up_window": [
             200,
@@ -35109,12 +35149,12 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T12 serve (instrumented PATH)",
-          "pid": 13379,
+          "pid": 5743,
           "returncode": 0,
           "stderr_tail": ""
         },
@@ -35122,17 +35162,17 @@
           "argv": [
             "/usr/bin/python3",
             "-I",
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/tests/e2e/no_build_probe.py",
+            "/home/user/sutekh/tests/e2e/no_build_probe.py",
             "--out",
-            "/tmp/m0-t12-probe-nc56p_7m/no_build_probe.json",
+            "/tmp/m0-t12-probe-clu6yu40/no_build_probe.json",
             "--binary",
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh"
+            "/home/user/sutekh/build/sutekh"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "command",
-          "output_tail": "positive control (bare cc via PATH (installed cc)): detected=True\npositive control (absolute path /usr/bin/cc (installed cc)): detected=True\nrunning: /usr/bin/python3 -I /home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/tools/demo_zero_wait.py --binary /home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh --out /tmp/no-build-probe-ah32lxhi/demo_evidence.json (under strace)\ntraced exec attempts: 43 (successful 7); executed basenames: git, python3, sutekh, uname\nedit window 37.479 ms: build-tool execs in window = 0\nbuild-tool execs in whole run = 0\nverdict: pass (both positive controls (bare and absolute-path cc) detected; zero build-tool execs in the whole traced run, including the capsule edit/install window)\nevidence: /tmp/m0-t12-probe-nc56p_7m/no_build_probe.json\n",
+          "output_tail": "positive control (bare cc via PATH (installed cc)): detected=True\npositive control (absolute path /usr/bin/cc (installed cc)): detected=True\nrunning: /usr/bin/python3 -I /home/user/sutekh/tools/demo_zero_wait.py --binary /home/user/sutekh/build/sutekh --out /tmp/no-build-probe-xwq5cvdz/demo_evidence.json (under strace)\ntraced exec attempts: 43 (successful 7); executed basenames: git, python3, sutekh, uname\nedit window 54.962 ms: build-tool execs in window = 0\nbuild-tool execs in whole run = 0\nverdict: pass (both positive controls (bare and absolute-path cc) detected; zero build-tool execs in the whole traced run, including the capsule edit/install window)\nevidence: /tmp/m0-t12-probe-clu6yu40/no_build_probe.json\n",
           "returncode": 0,
-          "stdout_sha256": "d6acbf08427fb69cb77b407427e836c52d101124eb82ef9fc0ffd6ac12263bf9"
+          "stdout_sha256": "f387bf60b29a57cd852a4aaa79633c211d1fa01e357296068b563bede9c8c032"
         }
       ],
       "details": {
@@ -35140,7 +35180,7 @@
         "sampling": {
           "limitation": "polling can miss processes shorter than the interval; shims see only invocations by bare name through PATH, not absolute-path execs",
           "method": "PATH shims for named tools plus /proc/<pid>/task/*/children tree polling (about every 0.5 ms)",
-          "samples": 13
+          "samples": 14
         },
         "shim_invocations_in_swap_window": [],
         "shim_invocations_total": 0,
@@ -35160,9 +35200,9 @@
           "binary_sha256": "c99583976107a8b96fe8d9bcdedc89503de0a3af49e5f3db98954206b1387717",
           "demo_status": "passed",
           "edit_window_epoch_s": {
-            "duration_ms": 37.479,
-            "end": 1791741319.2693841,
-            "start": 1791741319.231905
+            "duration_ms": 54.962,
+            "end": 1791741547.5685256,
+            "start": 1791741547.5135632
           },
           "exit_status": 0,
           "method": "strace -f -ttt -e trace=execve,execveat -s 4096 (exec-family syscalls, all children)",
@@ -35794,342 +35834,342 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 0",
-          "pid": 13417,
+          "pid": 5781,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 1",
-          "pid": 13429,
+          "pid": 5793,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 2",
-          "pid": 13441,
+          "pid": 5805,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 3",
-          "pid": 13453,
+          "pid": 5817,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 4",
-          "pid": 13465,
+          "pid": 5829,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 5",
-          "pid": 13477,
+          "pid": 5841,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 6",
-          "pid": 13489,
+          "pid": 5853,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 7",
-          "pid": 13501,
+          "pid": 5865,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 8",
-          "pid": 13513,
+          "pid": 5877,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 9",
-          "pid": 13525,
+          "pid": 5889,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 10",
-          "pid": 13537,
+          "pid": 5901,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 11",
-          "pid": 13549,
+          "pid": 5913,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 12",
-          "pid": 13561,
+          "pid": 5925,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 13",
-          "pid": 13573,
+          "pid": 5937,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 14",
-          "pid": 13585,
+          "pid": 5949,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 15",
-          "pid": 13597,
+          "pid": 5961,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 16",
-          "pid": 13609,
+          "pid": 5973,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 17",
-          "pid": 13621,
+          "pid": 5985,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 18",
-          "pid": 13633,
+          "pid": 5997,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 19",
-          "pid": 13645,
+          "pid": 6009,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 20",
-          "pid": 13657,
+          "pid": 6021,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 21",
-          "pid": 13669,
+          "pid": 6033,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 22",
-          "pid": 13681,
+          "pid": 6045,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 23",
-          "pid": 13693,
+          "pid": 6057,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 24",
-          "pid": 13705,
+          "pid": 6069,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 25",
-          "pid": 13717,
+          "pid": 6081,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 26",
-          "pid": 13729,
+          "pid": 6093,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 27",
-          "pid": 13741,
+          "pid": 6105,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 28",
-          "pid": 13753,
+          "pid": 6117,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve sample 29",
-          "pid": 13765,
+          "pid": 6129,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T13 serve reusable worker",
-          "pid": 13777,
+          "pid": 6141,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -36138,51 +36178,51 @@
         "decomposition_limits": "candidate.install is synchronous: queue, worker and publish happen inside one RPC, so they cannot be separated from the host clock. The install figure includes them; the step figure is the first tick that runs the new code.",
         "latency_ms": {
           "edit_to_first_effect": {
-            "max": 13.334,
-            "median": 9.598,
-            "min": 8.718,
+            "max": 13.884,
+            "median": 10.078,
+            "min": 8.934,
             "n": 30,
-            "p95": 12.977,
+            "p95": 11.391,
             "units": "ms"
           },
           "evaluate_fresh_session": {
-            "max": 11.415,
-            "median": 7.355,
-            "min": 6.948,
+            "max": 10.811,
+            "median": 7.546,
+            "min": 6.94,
             "n": 30,
-            "p95": 9.687,
+            "p95": 8.628,
             "units": "ms"
           },
           "evaluate_reusable_worker": {
-            "max": 11.403,
-            "median": 7.693,
-            "min": 7.245,
+            "max": 16.48,
+            "median": 8.101,
+            "min": 3.131,
             "n": 30,
-            "p95": 8.993,
+            "p95": 11.736,
             "units": "ms"
           },
           "first_step_after_install": {
-            "max": 3.209,
-            "median": 0.564,
-            "min": 0.379,
+            "max": 0.961,
+            "median": 0.637,
+            "min": 0.301,
             "n": 30,
-            "p95": 1.701,
+            "p95": 0.941,
             "units": "ms"
           },
           "install_call_round_trip": {
-            "max": 1.864,
-            "median": 0.774,
-            "min": 0.598,
+            "max": 1.919,
+            "median": 0.963,
+            "min": 0.637,
             "n": 30,
-            "p95": 1.604,
+            "p95": 1.864,
             "units": "ms"
           },
           "prepare_submit_and_evaluate": {
-            "max": 12.063,
-            "median": 8.141,
-            "min": 7.63,
+            "max": 11.753,
+            "median": 8.421,
+            "min": 7.564,
             "n": 30,
-            "p95": 10.525,
+            "p95": 9.665,
             "units": "ms"
           }
         },
@@ -36222,9 +36262,9 @@
             "metric": "prepare_submit_and_evaluate",
             "n": 30,
             "note": "provisional: shared VM, C10 (proposed budgets are not measurements)",
-            "p95_ms": 10.525,
+            "p95_ms": 9.665,
             "provisional": true,
-            "reason": "unmet conditions (1,024-row preview: fixture has 4 rows; the target names a 1,024-row preview); measured p95 10.525 ms",
+            "reason": "unmet conditions (1,024-row preview: fixture has 4 rows; the target names a 1,024-row preview); measured p95 9.665 ms",
             "row": "IR prepare latency: p95 <= 20 ms (<=64 KiB source, fixed schema, warm process, 1,024-row preview)",
             "target_p95_ms_max": 20.0,
             "verdict": "not_comparable"
@@ -36249,9 +36289,9 @@
             "metric": "evaluate_reusable_worker",
             "n": 30,
             "note": "provisional: shared VM, C10 (proposed budgets are not measurements)",
-            "p95_ms": 8.993,
+            "p95_ms": 11.736,
             "provisional": true,
-            "reason": "measured p95 8.993 ms <= 100.0 ms",
+            "reason": "measured p95 11.736 ms <= 100.0 ms",
             "row": "Isolated preview response: p95 <= 100 ms (reusable worker, small fixture)",
             "target_p95_ms_max": 100.0,
             "verdict": "met"
@@ -36278,9 +36318,9 @@
             "metric": "install_call_round_trip",
             "n": 30,
             "note": "provisional: shared VM, C10 (proposed budgets are not measurements)",
-            "p95_ms": 1.604,
+            "p95_ms": 1.864,
             "provisional": true,
-            "reason": "measured RPC p95 1.604 ms exceeds 1.0 ms, but the RPC is only an upper bound on the critical section, which is not isolated: no conclusion about the section",
+            "reason": "measured RPC p95 1.864 ms exceeds 1.0 ms, but the RPC is only an upper bound on the critical section, which is not isolated: no conclusion about the section",
             "row": "Code installation critical section: p95 <= 1 ms (code-only swap, prepared, no migration)",
             "target_p95_ms_max": 1.0,
             "verdict": "not_comparable"
@@ -36299,9 +36339,9 @@
             "metric": "edit_to_first_effect",
             "n": 30,
             "note": "provisional: shared VM, C10 (proposed budgets are not measurements)",
-            "p95_ms": 12.977,
+            "p95_ms": 11.391,
             "provisional": true,
-            "reason": "measured p95 12.977 ms <= 100.0 ms",
+            "reason": "measured p95 11.391 ms <= 100.0 ms",
             "row": "Warm edit to first preview effect: p95 <= 100 ms",
             "target_p95_ms_max": 100.0,
             "verdict": "met"
@@ -36391,23 +36431,23 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T14 run A",
-          "pid": 13845,
+          "pid": 6209,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T14 run B",
-          "pid": 13858,
+          "pid": 6222,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -36520,78 +36560,78 @@
       "commands": [
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T15 duplicate_key",
-          "pid": 13871,
+          "pid": 6235,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T15 invalid_utf8",
-          "pid": 13876,
+          "pid": 6240,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T15 wrong_protocol",
-          "pid": 13881,
+          "pid": 6245,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T15 unknown_method",
-          "pid": 13886,
+          "pid": 6250,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T15 path_traversal",
-          "pid": 13891,
+          "pid": 6255,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T15 absolute_path",
-          "pid": 13896,
+          "pid": 6260,
           "returncode": 0,
           "stderr_tail": ""
         },
         {
           "argv": [
-            "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+            "/home/user/sutekh/build/sutekh",
             "serve"
           ],
-          "cwd": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483",
+          "cwd": "/home/user/sutekh",
           "label": "T15 oversize_1mib",
-          "pid": 13901,
+          "pid": 6265,
           "returncode": 0,
           "stderr_tail": ""
         }
@@ -36676,9 +36716,9 @@
       "metric": "prepare_submit_and_evaluate",
       "n": 30,
       "note": "provisional: shared VM, C10 (proposed budgets are not measurements)",
-      "p95_ms": 10.525,
+      "p95_ms": 9.665,
       "provisional": true,
-      "reason": "unmet conditions (1,024-row preview: fixture has 4 rows; the target names a 1,024-row preview); measured p95 10.525 ms",
+      "reason": "unmet conditions (1,024-row preview: fixture has 4 rows; the target names a 1,024-row preview); measured p95 9.665 ms",
       "row": "IR prepare latency: p95 <= 20 ms (<=64 KiB source, fixed schema, warm process, 1,024-row preview)",
       "target_p95_ms_max": 20.0,
       "verdict": "not_comparable"
@@ -36703,9 +36743,9 @@
       "metric": "evaluate_reusable_worker",
       "n": 30,
       "note": "provisional: shared VM, C10 (proposed budgets are not measurements)",
-      "p95_ms": 8.993,
+      "p95_ms": 11.736,
       "provisional": true,
-      "reason": "measured p95 8.993 ms <= 100.0 ms",
+      "reason": "measured p95 11.736 ms <= 100.0 ms",
       "row": "Isolated preview response: p95 <= 100 ms (reusable worker, small fixture)",
       "target_p95_ms_max": 100.0,
       "verdict": "met"
@@ -36732,9 +36772,9 @@
       "metric": "install_call_round_trip",
       "n": 30,
       "note": "provisional: shared VM, C10 (proposed budgets are not measurements)",
-      "p95_ms": 1.604,
+      "p95_ms": 1.864,
       "provisional": true,
-      "reason": "measured RPC p95 1.604 ms exceeds 1.0 ms, but the RPC is only an upper bound on the critical section, which is not isolated: no conclusion about the section",
+      "reason": "measured RPC p95 1.864 ms exceeds 1.0 ms, but the RPC is only an upper bound on the critical section, which is not isolated: no conclusion about the section",
       "row": "Code installation critical section: p95 <= 1 ms (code-only swap, prepared, no migration)",
       "target_p95_ms_max": 1.0,
       "verdict": "not_comparable"
@@ -36753,9 +36793,9 @@
       "metric": "edit_to_first_effect",
       "n": 30,
       "note": "provisional: shared VM, C10 (proposed budgets are not measurements)",
-      "p95_ms": 12.977,
+      "p95_ms": 11.391,
       "provisional": true,
-      "reason": "measured p95 12.977 ms <= 100.0 ms",
+      "reason": "measured p95 11.391 ms <= 100.0 ms",
       "row": "Warm edit to first preview effect: p95 <= 100 ms",
       "target_p95_ms_max": 100.0,
       "verdict": "met"

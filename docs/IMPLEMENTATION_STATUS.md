@@ -45,7 +45,7 @@ Harness, `python3 -I tests/harness/run_m0.py --binary build/sutekh --report-dir 
 
 | Test | Dev (Debug) | Release | Notes |
 |---|---|---|---|
-| T00 Clean bootstrap | passed | **failed** | Compares the binary's version fields with a clean Debug build. The release binary reports `build_type Release`, so the field differs. This is a harness defect (the reference build is always Debug); see section 4. |
+| T00 Clean bootstrap | passed | passed | Fixed in 6b576c3: the clean reference build now uses the same build type (Debug or Release) as the binary under test. |
 | T01 Reference movement | passed | passed | |
 | T02 Empty and awkward counts | passed | passed | |
 | T03 Numeric edges | passed | passed | |
@@ -62,7 +62,7 @@ Harness, `python3 -I tests/harness/run_m0.py --binary build/sutekh --report-dir 
 | T14 Deterministic fixture repeat | passed | passed | |
 | T15 Structured protocol | passed | passed | |
 
-Totals: dev 16 passed, 0 failed (`planning/evidence/m0-harness-dev-summary.txt`, `planning/evidence/m0-harness-dev.json`). Release 15 passed, 1 failed (T00) (`planning/evidence/m0-harness-release-summary.txt`, `planning/evidence/m0-harness-release.json`).
+Totals: dev 16 passed, 0 failed (`planning/evidence/m0-harness-dev-summary.txt`, `planning/evidence/m0-harness-dev.json`). Release 16 passed, 0 failed after the T00 fix in 6b576c3, re-run on the committed tree (`planning/evidence/m0-harness-release-summary.txt`, `planning/evidence/m0-harness-release.json`; release binary sha256 prefix c99583976107a8b9). The dev totals were recorded before that commit with the same engine sources.
 
 Harness report, T13 per-target verdicts (provisional, shared VM, C10; `timing_targets` field of the report):
 
@@ -146,7 +146,7 @@ These are three samples each; no p95 is reported. There are no dependency builds
 
 ## 4. Known limitations and gaps
 
-- **T00 fails on the release binary.** The clean-build reference in T00 is always Debug, so the `build_type` field differs. This is a harness defect (`tests/harness/run_m0.py`, outside M0-13's write scope). The release binary passes the rest of the suite. The defect needs an owner.
+- **(Fixed in 6b576c3) T00 failed on the release binary** because the reference build was always Debug; it now follows the binary under test.
 - **Warm sessions restart per epoch.** The bench still starts one `serve` process per warm epoch. `--share-serve` (one process for all 60 epochs) was tried and failed on the fifth `world.create` in one process with `SU_E_RESOURCE_LIMIT`, "worker already holds the maximum number of worlds" (a worker holds 4) (`planning/evidence/m0-latency-dev-shared-serve-attempt.log`). Candidate-record eviction (d005726) is not the limit; the world cap is. Removing the restart needs a world-close RPC or a per-epoch world reuse design.
 - **O(tick) restore is not implemented.** `world.restore` at 1,000,000 rows took 1,313.6 ms (dev) and 1,042.7 ms (release) on this host. Only two sizes were measured (250,000 and 1,000,000 rows).
 - **Worker death loses worlds.** See section 3. The 1,000,000-row worker peaks at about 267 MiB VmHWM.
