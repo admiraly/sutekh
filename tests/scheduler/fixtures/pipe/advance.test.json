@@ -1,0 +1,16 @@
+{
+  "test_format": "0.1",
+  "system_id": "pipe.advance",
+  "capsule": "advance.capsule.json",
+  "world": "pipe_world.json",
+  "cases": [
+    {
+      "name": "advance_one_tick",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [12, 0, 30],
+        "velocity_x": [7, 1, 20]
+      }
+    }
+  ]
+}
