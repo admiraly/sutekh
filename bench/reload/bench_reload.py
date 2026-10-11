@@ -388,15 +388,15 @@ def failed_candidate_trial(serve, w, segments, label):
 
 
 def warm_mode(args, world, env_rec):
-    """Warm epochs. By default one serve process serves all epochs (candidate slots and registry
-    records are evicted when full, see su_agent.c and registry.c). --restart-per-epoch starts a
-    fresh serve process per epoch, which was the M0-10 workaround for the old 16-slot table."""
+    """Warm epochs. Default: a fresh serve process per epoch (each epoch's world lives in its own
+    worker). --share-serve reuses one serve process; that fails once the worker holds its maximum
+    number of worlds (SU_E_RESOURCE_LIMIT), because no RPC closes a world (M0-13 evidence)."""
     samples, failed, epochs = [], [], []
     per_epoch_slots = 1 + args.per_epoch + 2  # warm-up + timed + failed trials
     serve, info, info_ms, serve_index = None, None, None, -1
     try:
         for ep in range(args.epochs):
-            if serve is None or args.restart_per_epoch:
+            if serve is None or not args.share_serve:
                 if serve is not None:
                     serve.close()
                 serve = Serve(args.binary)
@@ -685,9 +685,8 @@ def run_live(args):
             "cold_policy": "each cold trial starts a new serve process; first request = engine.info; "
                            "world.create (spawns worker) untimed; first edit (install v2) timed",
             "cold_trials": args.cold_trials, "failed_candidate_trials_per_epoch": args.failed_per_epoch,
-            "serve_policy": ("one serve process for all warm epochs; candidate records are evicted oldest-first "
-                             "when the table is full" if not args.restart_per_epoch
-                             else "fresh serve process per warm epoch (the M0-10 workaround)"),
+            "serve_policy": ("one serve process for all warm epochs (--share-serve)" if args.share_serve
+                             else "fresh serve process per warm epoch; each epoch's world is in its own worker"),
             "candidate_submissions_per_epoch": 1 + args.per_epoch + args.failed_per_epoch,
             "candidate_slots": CAPSULE_SLOTS,
             "world_1024": {k: world_1024[k] for k in ("path", "rows", "seed", "sha256", "bytes")},
@@ -936,8 +935,8 @@ def main(argv=None):
     live.add_argument("--per-epoch", type=int, default=12)
     live.add_argument("--failed-per-epoch", type=int, default=2)
     live.add_argument("--cold-trials", type=int, default=60)
-    live.add_argument("--restart-per-epoch", action="store_true",
-                      help="start a fresh serve process for every warm epoch (M0-10 behaviour)")
+    live.add_argument("--share-serve", action="store_true",
+                      help="reuse one serve process for all warm epochs (fails: the worker world cap)")
     live.add_argument("--stress-rows", default="1000000,250000",
                       help="comma-separated stress world sizes (the engine caps fixtures at "
                            "SUTEKH_FIXTURE_MAX_BYTES, default 64 MiB)")
