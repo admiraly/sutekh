@@ -755,6 +755,12 @@ ENGINE_METHODS["world.restore"] = {
     "result": "world_id, world_revision, tick, restored_from, worker_pid, semantic_manifest[]",
     "source": "src/runtime/worker.c h_world_restore, src/world/snapshot.c",
 }
+ENGINE_METHODS["world.close"] = {
+    "params": "{world_id, expected_world_revision}  (stale revision: SU_E_STALE_REVISION; unknown or closed "
+              "world_id: SU_E_INVALID_ARGUMENT)",
+    "result": "world_id, closed (true), released{snapshots, systems}",
+    "source": "src/agent/su_agent.c h_world_close, src/runtime/worker.c h_world_close",
+}
 
 INSPECT_PAGE = 256            # engine maximum for world.inspect limit
 INSPECT_FIELDS = ("position_x", "velocity_x")
@@ -905,6 +911,32 @@ def inspect(tctx, sess, wid) -> dict:
         if len(pages) > 1 + 10_000_000 // INSPECT_PAGE:
             raise Failed("world.inspect paging did not terminate")
     return merge_pages(pages, INSPECT_FIELDS)
+
+
+def close_mismatches(res: dict, world_id: str, systems: int, snapshots: int) -> list:
+    """Mismatch list for a world.close result: the world, closed=true and the released counts."""
+    out = []
+    if res.get("world_id") != world_id:
+        out.append(f"world_id: expected {world_id} actual {res.get('world_id')!r}")
+    if res.get("closed") is not True:
+        out.append(f"closed: expected true actual {res.get('closed')!r}")
+    rel = res.get("released") if isinstance(res.get("released"), dict) else {}
+    for key, want in (("systems", systems), ("snapshots", snapshots)):
+        got = rel.get(key)
+        if type(got) is not int or got != want:
+            out.append(f"released.{key}: expected {want} actual {got!r}")
+    return out
+
+
+def close_world(tctx, sess, wid, systems=1, snapshots=0) -> dict:
+    """world.close at the revision the harness tracks; the world is then forgotten by the session."""
+    rev = sess.revs.get(wid)
+    if not isinstance(rev, str):
+        raise Failed(f"harness has no tracked world_revision for {wid}")
+    res = call(tctx, sess, "world.close", {"world_id": wid, "expected_world_revision": rev})
+    tctx.check_mismatches(f"world.close {wid}", close_mismatches(res, wid, systems, snapshots))
+    sess.revs.pop(wid, None)
+    return res
 
 
 def step(tctx, sess, wid, ticks: int, expect=None) -> dict:
@@ -1106,7 +1138,9 @@ def _t02_or_t03_case(t, sess, world_rel, cap_rel, cases, lir_doc, cap):
     for case in cases:
         derived = ref.run_ticks(lir_doc, cap, initial, case["ticks"])
         fixture_consistency(t, case["name"], derived, case["expected_columns"])
-        drive(t, sess, world_rel, [cap_rel], [(case["ticks"], derived)], case["name"])
+        wid = drive(t, sess, world_rel, [cap_rel], [(case["ticks"], derived)], case["name"])
+        # Each world is closed after its checks, so one serve session serves every case.
+        close_world(t, sess, wid)
 
 
 def t02(t: TestCtx):
@@ -1114,16 +1148,15 @@ def t02(t: TestCtx):
     cap, lir_doc, _ = t.load_system(cap_rel)
     counts = [0, 1, 7, 8, 9, 1024]
     seen = {}
+    sess = t.session("T02 serve")
     for n in counts:
-        # A worker holds at most 4 worlds (worker.c), so each world size gets its own serve process.
-        sess = t.session(f"T02 serve world_{n}")
         world_rel = f"tests/fixtures/t02/world_{n}.json"
         test_doc = t.load(f"tests/fixtures/t02/movement_{n}.test.json")
         if len(t.load(world_rel)["columns"]["position_x"]) != n:
             raise Failed(f"fixture world_{n} row count is not {n}")
         _t02_or_t03_case(t, sess, world_rel, cap_rel, test_doc["cases"], lir_doc, cap)
         seen[n] = [c["ticks"] for c in test_doc["cases"]]
-        sess.close()
+    sess.close()
     t.details["row_counts_checked_all_rows"] = seen
 
 
@@ -1133,16 +1166,73 @@ def t03(t: TestCtx):
     if not names:
         raise NotRun("no t03 cases present")
     checked = []
+    sess = t.session("T03 serve")
     for name in names:
         d = f"{base}/{name}"
         cap_rel, world_rel = f"{d}/capsule.json", f"{d}/world.json"
         cap, lir_doc, _ = t.load_system(cap_rel)
         test_doc = t.load(f"{d}/test.json")
-        sess = t.session(f"T03 serve {name}")
         _t02_or_t03_case(t, sess, world_rel, cap_rel, test_doc["cases"], lir_doc, cap)
-        sess.close()
         checked.append(name)
+    sess.close()
     t.details["cases_checked"] = checked
+
+
+def tx1(t: TestCtx):
+    """World close beyond the 4-world cap (extra check; not a TEST_SPEC id). One serve session creates
+    more worlds than a worker holds, closes them, reuses the slots and never reuses an id."""
+    world_rel = "examples/world.json"
+    cap_rel = "examples/movement.capsule.json"
+    cap, lir_doc, _ = t.load_system(cap_rel)
+    initial = t.load(world_rel)["columns"]
+    sess = t.session("TX1 serve")
+    seen_ids = []
+    expected_by_id = {}
+
+    def make(ticks):
+        wid, _rev = create_world(t, sess, world_rel, [cap_rel])
+        seen_ids.append(wid)
+        if ticks:
+            step(t, sess, wid, ticks)
+        expected = ref.run_ticks(lir_doc, cap, initial, ticks)
+        expected_by_id[wid] = (ticks, expected)
+        t.check_mismatches(f"TX1 {wid} after {ticks} ticks", verify_state(ticks, expected, inspect(t, sess, wid)))
+        return wid
+
+    def refused(method, params, code, label):
+        t.check_mismatches(label, classify_error(sess.request(method, params), code))
+
+    held = [make(k) for k in range(4)]
+    refused("world.create", {"fixture_path": world_rel, "capsule_path": cap_rel}, "SU_E_RESOURCE_LIMIT",
+            "TX1 fifth live world refused with SU_E_RESOURCE_LIMIT")
+
+    first = held[0]
+    refused("world.close", {"world_id": first, "expected_world_revision": f"{first}.r999"}, "SU_E_STALE_REVISION",
+            "TX1 stale close refused with SU_E_STALE_REVISION")
+    ticks0, exp0 = expected_by_id[first]
+    t.check_mismatches("TX1 stale close left the world untouched",
+                       verify_state(ticks0, exp0, inspect(t, sess, first)))
+
+    close_world(t, sess, first)
+    refused("world.inspect", {"world_id": first, "limit": 1}, "SU_E_INVALID_ARGUMENT",
+            "TX1 inspect of a closed world refused with SU_E_INVALID_ARGUMENT")
+    refused("world.step", {"world_id": first, "expected_world_revision": f"{first}.r1", "ticks": 1},
+            "SU_E_INVALID_ARGUMENT", "TX1 step of a closed world refused with SU_E_INVALID_ARGUMENT")
+    refused("world.close", {"world_id": first, "expected_world_revision": f"{first}.r1"}, "SU_E_INVALID_ARGUMENT",
+            "TX1 second close refused with SU_E_INVALID_ARGUMENT")
+
+    # The slot is free again: three live worlds plus one new world is four, and the id is new.
+    close_world(t, sess, make(2))
+    for k in range(8):
+        wid = make(k % 4)
+        close_world(t, sess, wid)
+    for wid in held[1:]:
+        close_world(t, sess, wid)
+    sess.close()
+
+    t.check("TX1 created more worlds than a worker holds", True, len(seen_ids) > 4)
+    t.check("TX1 world ids are never reused within one session", len(seen_ids), len(set(seen_ids)))
+    t.details["world_ids_issued"] = len(seen_ids)
 
 
 def _submit_expect_rejection(t, sess, cap_rel, source_rel, expected_code):
@@ -2339,8 +2429,8 @@ _EVAL = ("world.create", "world.step", "world.inspect", "capsule.submit", "candi
 TESTS = [
     ("T00", "Clean bootstrap", (), t00),
     ("T01", "Reference movement", ("world.create", "world.step", "world.inspect"), t01),
-    ("T02", "Empty and awkward counts", ("world.create", "world.step", "world.inspect"), t02),
-    ("T03", "Numeric edges", ("world.create", "world.step", "world.inspect"), t03),
+    ("T02", "Empty and awkward counts", ("world.create", "world.step", "world.inspect", "world.close"), t02),
+    ("T03", "Numeric edges", ("world.create", "world.step", "world.inspect", "world.close"), t03),
     ("T04", "Invalid input matrix", ("world.create", "world.inspect", "capsule.submit"), t04),
     ("T05", "Successful code-only swap", _EVAL, t05),
     ("T06", "Failed swap", _EVAL, t06),
@@ -2354,6 +2444,8 @@ TESTS = [
     ("T13", "Latency decomposition", _EVAL, t13),
     ("T14", "Deterministic fixture repeat", _EVAL, t14),
     ("T15", "Structured protocol", ("engine.info",), t15),
+    ("TX1", "World close beyond the 4-world cap (extra)", ("world.create", "world.step", "world.inspect",
+                                                          "world.close"), tx1),
 ]
 
 
@@ -2999,6 +3091,26 @@ def self_test() -> int:
        len(summ["build_tool_execs_in_window"]) == 1)
     ok("probe: the absolute-path control line is recognised by name",
        probe_mod.is_build_tool(os.path.join(os.sep, "usr", "bin", "cc")))
+
+    # ---- world.close: result check, method table, and the tests that depend on it
+    good_close = {"world_id": "world-1", "closed": True, "released": {"snapshots": 1, "systems": 1}}
+    ok("close: a correct reply has no mismatch", close_mismatches(good_close, "world-1", 1, 1) == [])
+    ok("close: closed=false is a mismatch", close_mismatches({**good_close, "closed": False}, "world-1", 1, 1) != [])
+    ok("close: a different world id is a mismatch", close_mismatches(good_close, "world-2", 1, 1) != [])
+    ok("close: a wrong systems count is a mismatch",
+       close_mismatches({**good_close, "released": {"snapshots": 1, "systems": 2}}, "world-1", 1, 1) != [])
+    ok("close: a wrong snapshots count is a mismatch",
+       close_mismatches({**good_close, "released": {"snapshots": 0, "systems": 1}}, "world-1", 1, 1) != [])
+    ok("close: a bool count is not an integer",
+       close_mismatches({**good_close, "released": {"snapshots": True, "systems": 1}}, "world-1", 1, 1) != [])
+    ok("close: a missing released object is a mismatch",
+       close_mismatches({"world_id": "world-1", "closed": True}, "world-1", 1, 1) != [])
+    ok("close: world.close is in the method table",
+       "world.close" in ENGINE_METHODS and "expected_world_revision" in ENGINE_METHODS["world.close"]["params"])
+    ok("close: TX1 requires world.close",
+       any(tid == "TX1" and "world.close" in req for tid, _n, req, _f in TESTS))
+    ok("close: T02 and T03 require world.close (they close each world)",
+       all("world.close" in req for tid, _n, req, _f in TESTS if tid in ("T02", "T03")))
 
     failed = [name for name, passed in checks if not passed]
     for name in failed:

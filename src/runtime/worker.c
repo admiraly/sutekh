@@ -1064,6 +1064,25 @@ static void ckpt_record(WorkerState *s, const WorkerWorld *ww, uint64_t id, cons
     }
 }
 
+/* Releases every checkpoint of world_id: the store frees the snapshot bytes and the
+ * record is cleared. Records whose store entry was already evicted are cleared without
+ * being counted. Returns the number of snapshots freed by this call. */
+static uint64_t ckpt_release_world(WorkerState *s, const char *world_id) {
+    uint64_t released = 0;
+    uint32_t i;
+    for (i = 0; i < SU_CHECKPOINT_DEFAULT_RETAIN; i++) {
+        CkptRec *r = &s->ckpts[i];
+        if (!r->used || strcmp(r->world_id, world_id) != 0) {
+            continue;
+        }
+        if (su_checkpoint_release(s->store, r->id) == SU_OK) {
+            released++;
+        }
+        memset(r, 0, sizeof *r);
+    }
+    return released;
+}
+
 /* world.snapshot {world_id, expected_world_revision}. Captures the committed root without
  * changing the world revision. */
 static uint32_t h_world_snapshot(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
@@ -1364,6 +1383,89 @@ out:
     return st;
 }
 
+/* world.close {world_id, expected_world_revision}. Checks come first and change nothing:
+ * an unknown id is SU_E_INVALID_ARGUMENT (the code world.inspect uses), a stale revision is
+ * SU_E_STALE_REVISION. Then the world's schedule and contexts, its instance, its checkpoints
+ * and its registry records are freed, and the slot is free for world.create. World ids
+ * come from the monotonic s->next_id, so a closed id is never issued again. */
+static uint32_t h_world_close(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    char id[WORKER_ID_CAP];
+    char rev[64];
+    uint64_t snapshots;
+    uint64_t systems;
+    uint32_t st = SU_OK;
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (expect == NULL) {
+        fail(f, SU_E_TYPE, "world.close needs expected_world_revision");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+
+    snprintf(id, sizeof id, "%s", ww->id);
+    systems = ww->sched.count;
+    snapshots = ckpt_release_world(s, id);
+    su_reg_release_world(&s->reg, id);
+    world_drop(ww);
+
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, id, strlen(id));
+    su_buf_str(res, ",\"closed\":true,\"released\":{\"snapshots\":");
+    su_buf_u64(res, snapshots);
+    su_buf_str(res, ",\"systems\":");
+    su_buf_u64(res, systems);
+    su_buf_str(res, "}}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* internal.stats {}: counts this worker holds, read from the structures themselves. The
+ * supervisor never forwards it (it is not advertised); the control tests use it to check
+ * that world.close releases worlds, checkpoints and registry records. */
+static uint32_t h_internal_stats(WorkerState *s, SuBuf *res) {
+    SuCheckpointStats cs;
+    uint32_t worlds = 0;
+    uint32_t in_use = 0;
+    uint32_t installed = 0;
+    uint64_t records = 0;
+    uint32_t i;
+
+    for (i = 0; i < WORKER_MAX_WORLDS; i++) {
+        worlds += s->worlds[i].used ? 1u : 0u;
+    }
+    for (i = 0; i < SU_CHECKPOINT_DEFAULT_RETAIN; i++) {
+        records += s->ckpts[i].used ? 1u : 0u;
+    }
+    su_reg_stats(&s->reg, &in_use, &installed);
+    if (su_checkpoint_stats(s->store, &cs) != SU_OK) {
+        return SU_E_INTERNAL;
+    }
+    su_buf_str(res, "{\"worlds\":");
+    su_buf_u64(res, worlds);
+    su_buf_str(res, ",\"checkpoints\":");
+    su_buf_u64(res, cs.retained_count);
+    su_buf_str(res, ",\"checkpoint_bytes\":");
+    su_buf_u64(res, cs.retained_bytes);
+    su_buf_str(res, ",\"checkpoint_records\":");
+    su_buf_u64(res, records);
+    su_buf_str(res, ",\"registry_in_use\":");
+    su_buf_u64(res, in_use);
+    su_buf_str(res, ",\"registry_installed\":");
+    su_buf_u64(res, installed);
+    su_buf_str(res, ",\"world_seq\":");
+    su_buf_u64(res, s->next_id);
+    su_buf_str(res, "}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
 /* ---------- dispatch and main loop ---------- */
 
 static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int overflow, SuBuf *out) {
@@ -1396,6 +1498,10 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
         st = h_world_snapshot(s, req.params, &res, &f);
     } else if (strcmp(req.method, "world.restore") == 0) {
         st = h_world_restore(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "world.close") == 0) {
+        st = h_world_close(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "internal.stats") == 0) {
+        st = h_internal_stats(s, &res);
     } else {
         st = SU_E_UNSUPPORTED_METHOD;
         fail(&f, st, "worker does not implement this method");

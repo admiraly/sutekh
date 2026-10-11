@@ -92,6 +92,11 @@ int su_reg_retire(SuRegistry *r, uint64_t txid);
 /* NULL when the txid is unknown or was evicted. */
 SuRevRecord *su_reg_find(SuRegistry *r, uint64_t txid);
 
+/* Frees every record bound to world_id (world.close). Freed txids no longer resolve,
+ * and the counter that issues txids is not reset, so a txid is never reused. Returns the
+ * number of records freed. */
+uint32_t su_reg_release_world(SuRegistry *r, const char *world_id);
+
 /* Counts records in use (any state) and the number of INSTALLED records. */
 void su_reg_stats(const SuRegistry *r, uint32_t *in_use, uint32_t *installed);
 

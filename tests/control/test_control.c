@@ -26,6 +26,7 @@
 
 #include "agent/su_agent.h"
 #include "agent/su_path.h"
+#include "agent/su_proc.h"
 #include "agent/su_proto.h"
 #include "ir/su_json.h"
 #include "sutekh/ir.h"
@@ -550,6 +551,410 @@ static void test_world_sequence(Session *s, const char *fault_file) {
     resp_free(&r);
 }
 
+/* ---------- world.close (M1 prerequisite: a worker holds at most 4 worlds) ---------- */
+
+static int str_is(const SuJsonValue *v, const char *want) {
+    return v != NULL && su_json_is_string(v) && strlen(want) == v->u.string.len &&
+           memcmp(v->u.string.data, want, v->u.string.len) == 0;
+}
+
+/* Copies a string member of res into out. Returns 1 when the member is a string that fits. */
+static int str_copy(const SuJsonValue *v, char *out, size_t cap) {
+    if (v == NULL || !su_json_is_string(v) || v->u.string.len + 1u > cap) {
+        return 0;
+    }
+    memcpy(out, v->u.string.data, v->u.string.len);
+    out[v->u.string.len] = '\0';
+    return 1;
+}
+
+static uint64_t uint_of(const SuJsonValue *res, const char *key) {
+    uint64_t v = UINT64_MAX;
+    if (res == NULL || !su_json_get_uint(su_json_member(res, key), &v)) {
+        return UINT64_MAX;
+    }
+    return v;
+}
+
+/* Supervisor path (agent): creation, the 4-world cap, stale and unknown closes, use after
+ * close, id monotonicity, slot reuse, and snapshots of a closed world. world-1 already
+ * exists (test_world_sequence). */
+static void test_world_close_supervisor(Session *s) {
+    Resp r;
+    char snap3[80];
+    char tmp[512];
+    const SuJsonValue *res;
+
+    /* Four worlds live (world-1 .. world-4); the fifth is refused. */
+    for (int k = 2; k <= 4; k++) {
+        snprintf(tmp, sizeof tmp,
+                 "{\"protocol\":\"0.1\",\"id\":\"wc%d\",\"method\":\"world.create\",\"params\":"
+                 "{\"fixture_path\":\"examples/world.json\",\"capsule_path\":\"examples/movement.capsule.json\"}}",
+                 k);
+        CHECK(call(s, tmp, &r) == 0);
+        CHECK_OK(r);
+        resp_free(&r);
+    }
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"wc5\",\"method\":\"world.create\",\"params\":{\"fixture_path\":\"examples/world.json\",\"capsule_path\":\"examples/movement.capsule.json\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_RESOURCE_LIMIT);
+    resp_free(&r);
+
+    /* A snapshot of world-3 for the closed-world restore check below. */
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"sn3\",\"method\":\"world.snapshot\",\"params\":{\"world_id\":\"world-3\",\"expected_world_revision\":\"world-3.r1\"}}", &r) == 0);
+    CHECK_OK(r);
+    res = resp_result(&r);
+    snap3[0] = '\0';
+    CHECK(str_copy(res != NULL ? su_json_member(res, "snapshot_id") : NULL, snap3, sizeof snap3));
+    resp_free(&r);
+
+    /* Stale revision: refused, and world-2 still works afterwards. */
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"cs-stale\",\"method\":\"world.close\",\"params\":{\"world_id\":\"world-2\",\"expected_world_revision\":\"world-2.r9\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_STALE_REVISION);
+    resp_free(&r);
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"i-w2\",\"method\":\"world.inspect\",\"params\":{\"world_id\":\"world-2\",\"fields\":[\"position_x\"],\"limit\":1}}", &r) == 0);
+    CHECK_OK(r);
+    resp_free(&r);
+
+    /* Close world-2: released counts; the id then fails as unknown everywhere. */
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"cl2\",\"method\":\"world.close\",\"params\":{\"world_id\":\"world-2\",\"expected_world_revision\":\"world-2.r1\"}}", &r) == 0);
+    CHECK_OK(r);
+    res = resp_result(&r);
+    CHECK(res != NULL && str_is(su_json_member(res, "world_id"), "world-2"));
+    {
+        const SuJsonValue *closed = res != NULL ? su_json_member(res, "closed") : NULL;
+        CHECK(closed != NULL && closed->type == SU_JSON_BOOL && closed->u.boolean == 1);
+        CHECK(uint_of(su_json_member(res, "released") , "systems") == 1u);
+        CHECK(uint_of(su_json_member(res, "released"), "snapshots") == 0u);
+    }
+    resp_free(&r);
+
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"i-closed\",\"method\":\"world.inspect\",\"params\":{\"world_id\":\"world-2\",\"fields\":[\"position_x\"],\"limit\":1}}", &r) == 0);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"s-closed\",\"method\":\"world.step\",\"params\":{\"world_id\":\"world-2\",\"expected_world_revision\":\"world-2.r1\",\"ticks\":1}}", &r) == 0);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"sn-closed\",\"method\":\"world.snapshot\",\"params\":{\"world_id\":\"world-2\",\"expected_world_revision\":\"world-2.r1\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"rs-closed\",\"method\":\"world.restore\",\"params\":{\"world_id\":\"world-2\",\"snapshot_id\":\"0000\",\"expected_world_revision\":\"world-2.r1\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"in-closed\",\"method\":\"candidate.install\",\"params\":{\"candidate_id\":\"candidate-1\",\"world_id\":\"world-2\",\"expected_world_revision\":\"world-2.r1\",\"allowed_effective_tick\":0}}", &r) == 0);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"cl2b\",\"method\":\"world.close\",\"params\":{\"world_id\":\"world-2\",\"expected_world_revision\":\"world-2.r1\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+
+    /* The slot is reusable, and the new id is not the closed one. */
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"wc-new\",\"method\":\"world.create\",\"params\":{\"fixture_path\":\"examples/world.json\",\"capsule_path\":\"examples/movement.capsule.json\"}}", &r) == 0);
+    CHECK_OK(r);
+    res = resp_result(&r);
+    CHECK(res != NULL && str_is(su_json_member(res, "world_id"), "world-5"));
+    resp_free(&r);
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"wc-full\",\"method\":\"world.create\",\"params\":{\"fixture_path\":\"examples/world.json\",\"capsule_path\":\"examples/movement.capsule.json\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_RESOURCE_LIMIT);
+    resp_free(&r);
+
+    /* world-3 closes with its one snapshot released. Restoring that snapshot into world-4 fails. */
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"cl3\",\"method\":\"world.close\",\"params\":{\"world_id\":\"world-3\",\"expected_world_revision\":\"world-3.r1\"}}", &r) == 0);
+    CHECK_OK(r);
+    res = resp_result(&r);
+    CHECK(uint_of(su_json_member(res, "released"), "snapshots") == 1u);
+    resp_free(&r);
+    snprintf(tmp, sizeof tmp,
+             "{\"protocol\":\"0.1\",\"id\":\"rs-cross\",\"method\":\"world.restore\",\"params\":{\"world_id\":\"world-4\",\"snapshot_id\":\"%s\",\"expected_world_revision\":\"world-4.r1\"}}",
+             snap3);
+    CHECK(call(s, tmp, &r) == 0);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+
+    /* The remaining worlds keep stepping. */
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"s-w5\",\"method\":\"world.step\",\"params\":{\"world_id\":\"world-5\",\"expected_world_revision\":\"world-5.r1\",\"ticks\":2}}", &r) == 0);
+    CHECK_OK(r);
+    resp_free(&r);
+
+    /* Capabilities advertise world.close. */
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"caps\",\"method\":\"engine.info\",\"params\":{}}", &r) == 0);
+    CHECK_OK(r);
+    {
+        const SuJsonValue *caps = su_json_member(resp_result(&r), "capabilities");
+        int found = 0;
+        size_t k;
+        if (caps != NULL && caps->type == SU_JSON_ARRAY) {
+            for (k = 0; k < caps->u.array.count; k++) {
+                found = found || str_is(caps->u.array.items[k], "world.close");
+            }
+        }
+        CHECK(found);
+    }
+    resp_free(&r);
+}
+
+/* Reads VmRSS (KiB) of a process from /proc. -1 when unavailable. */
+static long rss_kib_of(pid_t pid) {
+    char path[64];
+    char line[256];
+    long kib = -1;
+    FILE *f;
+    snprintf(path, sizeof path, "/proc/%ld/status", (long)pid);
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return -1;
+    }
+    while (fgets(line, sizeof line, f) != NULL) {
+        if (strncmp(line, "VmRSS:", 6) == 0) {
+            kib = strtol(line + 6, NULL, 10);
+            break;
+        }
+    }
+    fclose(f);
+    return kib;
+}
+
+/* Sends one line to a bare worker process and parses the reply into r. */
+static int wire_call(SuProc *p, const char *line, Resp *r) {
+    const uint8_t *out = NULL;
+    size_t len = 0;
+    SuJsonLimits lim;
+    SuJsonError jerr;
+    uint32_t st;
+
+    memset(r, 0, sizeof *r);
+    st = su_proc_request(p, (const uint8_t *)line, strlen(line), su_now_ms() + 60000, &out, &len);
+    if (st != SU_OK) {
+        return -1;
+    }
+    r->text = malloc(len + 1u);
+    if (r->text == NULL) {
+        return -1;
+    }
+    memcpy(r->text, out, len);
+    r->text[len] = '\0';
+    r->len = len;
+    lim.max_bytes = len;
+    lim.max_depth = 32;
+    st = su_json_parse(r->text, len, &lim, &r->doc, &jerr);
+    r->root = st == SU_OK && r->doc.root != NULL ? r->doc.root : NULL;
+    if (st != SU_OK) {
+        su_json_doc_free(&r->doc);
+    }
+    return 0;
+}
+
+/* internal.stats field, or UINT64_MAX when the call fails. */
+static uint64_t worker_stat(SuProc *p, const char *key) {
+    Resp r;
+    uint64_t v = UINT64_MAX;
+    if (wire_call(p, "{\"protocol\":\"0.1\",\"id\":\"st\",\"method\":\"internal.stats\",\"params\":{}}", &r) != 0) {
+        resp_free(&r);
+        return UINT64_MAX;
+    }
+    CHECK_OK(r);
+    if (resp_ok(&r)) {
+        v = uint_of(resp_result(&r), key);
+    }
+    resp_free(&r);
+    return v;
+}
+
+/* Creates a world on a bare worker from absolute paths. Copies its id and revision. */
+static int worker_create(SuProc *p, const char *id, const char *fixture, const char *capsule,
+                         const char *source, char *wid, size_t wcap, char *rev, size_t rcap) {
+    char line[2048];
+    Resp r;
+    int ok;
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"%s\",\"method\":\"world.create\",\"params\":"
+             "{\"fixture_path\":\"%s\",\"capsules\":[{\"capsule_path\":\"%s\",\"source_path\":\"%s\"}]}}",
+             id, fixture, capsule, source);
+    if (wire_call(p, line, &r) != 0) {
+        resp_free(&r);
+        return 0;
+    }
+    ok = resp_ok(&r) && str_copy(su_json_member(resp_result(&r), "world_id"), wid, wcap) &&
+         str_copy(su_json_member(resp_result(&r), "world_revision"), rev, rcap);
+    resp_free(&r);
+    return ok;
+}
+
+/* Worker path: the world table and the checkpoint store and registry are checked through
+ * internal.stats, so a close that skips a release fails here, not only in a reply. Ends with
+ * the worker's own exit status: a leak reported by LeakSanitizer exits nonzero. */
+static void test_world_close_worker(const char *helper, const char *root) {
+    SuProc p;
+    SuProcLimits lim;
+    const char *argv[2];
+    char fx[PATH_MAX_TEST + 32];
+    char cap[PATH_MAX_TEST + 32];
+    char src[PATH_MAX_TEST + 32];
+    char wid[32];
+    char rev[64];
+    char snap_a[80];
+    char snap_b[80];
+    char line[2048];
+    Resp r;
+    long rss_warm = -1;
+    long rss_end = -1;
+    int status = 0;
+    int i;
+
+    snprintf(fx, sizeof fx, "%s/examples/world.json", root);
+    snprintf(cap, sizeof cap, "%s/examples/movement.capsule.json", root);
+    snprintf(src, sizeof src, "%s/examples/movement.lir.json", root);
+    argv[0] = helper;
+    argv[1] = NULL;
+    memset(&lim, 0, sizeof lim);
+#if defined(TEST_UNDER_ASAN)
+    lim.address_space_bytes = 0;
+#else
+    lim.address_space_bytes = (uint64_t)4u * 1024u * 1024u * 1024u;
+#endif
+    memset(&p, 0, sizeof p);
+    if (su_proc_spawn(&p, argv, &lim) != SU_OK) {
+        CHECK(0);
+        return;
+    }
+
+    CHECK(worker_stat(&p, "worlds") == 0u);
+    CHECK(worker_create(&p, "k1", fx, cap, src, wid, sizeof wid, rev, sizeof rev));
+    CHECK(strcmp(wid, "world-1") == 0);
+    /* Four live worlds; the fifth is refused and consumes no id. */
+    for (i = 2; i <= 4; i++) {
+        char id[16];
+        snprintf(id, sizeof id, "k%d", i);
+        CHECK(worker_create(&p, id, fx, cap, src, wid, sizeof wid, rev, sizeof rev));
+    }
+    CHECK(worker_stat(&p, "worlds") == 4u);
+    CHECK(worker_stat(&p, "registry_in_use") == 4u);
+    CHECK(!worker_create(&p, "k5", fx, cap, src, wid, sizeof wid, rev, sizeof rev));
+    CHECK(worker_stat(&p, "world_seq") == 4u);
+
+    /* Snapshots of world-1 (at r1) and world-2 (after one tick). */
+    snprintf(line, sizeof line, "{\"protocol\":\"0.1\",\"id\":\"sa\",\"method\":\"world.snapshot\",\"params\":{\"world_id\":\"world-1\",\"expected_world_revision\":\"world-1.r1\"}}");
+    CHECK(wire_call(&p, line, &r) == 0);
+    CHECK_OK(r);
+    CHECK(str_copy(su_json_member(resp_result(&r), "snapshot_id"), snap_a, sizeof snap_a));
+    resp_free(&r);
+    snprintf(line, sizeof line, "{\"protocol\":\"0.1\",\"id\":\"st2\",\"method\":\"world.step\",\"params\":{\"world_id\":\"world-2\",\"expected_world_revision\":\"world-2.r1\",\"ticks\":1}}");
+    CHECK(wire_call(&p, line, &r) == 0);
+    CHECK_OK(r);
+    resp_free(&r);
+    snprintf(line, sizeof line, "{\"protocol\":\"0.1\",\"id\":\"sb\",\"method\":\"world.snapshot\",\"params\":{\"world_id\":\"world-2\",\"expected_world_revision\":\"world-2.r2\"}}");
+    CHECK(wire_call(&p, line, &r) == 0);
+    CHECK_OK(r);
+    CHECK(str_copy(su_json_member(resp_result(&r), "snapshot_id"), snap_b, sizeof snap_b));
+    resp_free(&r);
+    CHECK(worker_stat(&p, "checkpoints") == 2u);
+    CHECK(worker_stat(&p, "checkpoint_records") == 2u);
+
+    /* Stale close: refused, nothing released. */
+    CHECK(wire_call(&p, "{\"protocol\":\"0.1\",\"id\":\"cs\",\"method\":\"world.close\",\"params\":{\"world_id\":\"world-1\",\"expected_world_revision\":\"world-1.r7\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_STALE_REVISION);
+    resp_free(&r);
+    CHECK(worker_stat(&p, "worlds") == 4u);
+    CHECK(worker_stat(&p, "checkpoints") == 2u);
+
+    /* Close world-1: its snapshot, its schedule entry and its registry record are released. */
+    CHECK(wire_call(&p, "{\"protocol\":\"0.1\",\"id\":\"c1\",\"method\":\"world.close\",\"params\":{\"world_id\":\"world-1\",\"expected_world_revision\":\"world-1.r1\"}}", &r) == 0);
+    CHECK_OK(r);
+    CHECK(uint_of(su_json_member(resp_result(&r), "released"), "snapshots") == 1u);
+    CHECK(uint_of(su_json_member(resp_result(&r), "released"), "systems") == 1u);
+    resp_free(&r);
+    CHECK(worker_stat(&p, "worlds") == 3u);
+    CHECK(worker_stat(&p, "checkpoints") == 1u);
+    CHECK(worker_stat(&p, "checkpoint_records") == 1u);
+    CHECK(worker_stat(&p, "registry_in_use") == 3u);
+
+    /* A snapshot of the closed world cannot be restored into a live one. */
+    snprintf(line, sizeof line, "{\"protocol\":\"0.1\",\"id\":\"rx\",\"method\":\"world.restore\",\"params\":{\"world_id\":\"world-3\",\"snapshot_id\":\"%s\",\"expected_world_revision\":\"world-3.r1\"}}", snap_a);
+    CHECK(wire_call(&p, line, &r) == 0);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+    /* The closed world's id is unknown to every method. */
+    CHECK(wire_call(&p, "{\"protocol\":\"0.1\",\"id\":\"ri\",\"method\":\"world.inspect\",\"params\":{\"world_id\":\"world-1\",\"limit\":1}}", &r) == 0);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+    CHECK(wire_call(&p, "{\"protocol\":\"0.1\",\"id\":\"rc\",\"method\":\"world.close\",\"params\":{\"world_id\":\"world-1\",\"expected_world_revision\":\"world-1.r1\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+
+    /* Close world-2 with its snapshot; the new world takes the next id, never a closed one. */
+    CHECK(wire_call(&p, "{\"protocol\":\"0.1\",\"id\":\"c2\",\"method\":\"world.close\",\"params\":{\"world_id\":\"world-2\",\"expected_world_revision\":\"world-2.r2\"}}", &r) == 0);
+    CHECK_OK(r);
+    CHECK(uint_of(su_json_member(resp_result(&r), "released"), "snapshots") == 1u);
+    resp_free(&r);
+    CHECK(worker_stat(&p, "checkpoints") == 0u);
+    CHECK(worker_create(&p, "k6", fx, cap, src, wid, sizeof wid, rev, sizeof rev));
+    CHECK(strcmp(wid, "world-5") == 0);
+    CHECK(worker_stat(&p, "registry_in_use") == 3u);
+
+    /* 1,000 create, step, snapshot, close cycles. The worker's RSS must not grow with the
+     * number of cycles, and every counter returns to the same value. */
+    for (i = 0; i < 1000; i++) {
+        char id[32];
+        char w2[32];
+        char r2[64];
+        char snap[80];
+        snprintf(id, sizeof id, "cyc%d", i);
+        if (!worker_create(&p, id, fx, cap, src, w2, sizeof w2, r2, sizeof r2)) {
+            CHECK(0);
+            break;
+        }
+        snprintf(line, sizeof line, "{\"protocol\":\"0.1\",\"id\":\"cs%d\",\"method\":\"world.step\",\"params\":{\"world_id\":\"%s\",\"expected_world_revision\":\"%s\",\"ticks\":1}}", i, w2, r2);
+        CHECK(wire_call(&p, line, &r) == 0);
+        CHECK_OK(r);
+        if (resp_ok(&r)) {
+            if (!str_copy(su_json_member(resp_result(&r), "world_revision"), r2, sizeof r2)) {
+                CHECK(0);
+            }
+        }
+        resp_free(&r);
+        snprintf(line, sizeof line, "{\"protocol\":\"0.1\",\"id\":\"cn%d\",\"method\":\"world.snapshot\",\"params\":{\"world_id\":\"%s\",\"expected_world_revision\":\"%s\"}}", i, w2, r2);
+        CHECK(wire_call(&p, line, &r) == 0);
+        CHECK_OK(r);
+        if (!str_copy(su_json_member(resp_result(&r), "snapshot_id"), snap, sizeof snap)) {
+            CHECK(0);
+        }
+        resp_free(&r);
+        snprintf(line, sizeof line, "{\"protocol\":\"0.1\",\"id\":\"cc%d\",\"method\":\"world.close\",\"params\":{\"world_id\":\"%s\",\"expected_world_revision\":\"%s\"}}", i, w2, r2);
+        CHECK(wire_call(&p, line, &r) == 0);
+        CHECK_OK(r);
+        CHECK(uint_of(su_json_member(resp_result(&r), "released"), "snapshots") == 1u);
+        resp_free(&r);
+        if (i == 99) {
+            rss_warm = rss_kib_of(p.pid);
+        }
+    }
+    rss_end = rss_kib_of(p.pid);
+    CHECK(worker_stat(&p, "worlds") == 3u);
+    CHECK(worker_stat(&p, "checkpoints") == 0u);
+    CHECK(worker_stat(&p, "checkpoint_records") == 0u);
+    CHECK(worker_stat(&p, "registry_in_use") == 3u);
+    CHECK(worker_stat(&p, "world_seq") == 1005u); /* 5 creations, then 1,000 cycles: ids never repeat */
+    CHECK(worker_stat(&p, "world_seq") != UINT64_MAX);
+    if (rss_warm < 0 || rss_end < 0) {
+        fprintf(stderr, "test_control: RSS not observable (no /proc/<pid>/status); RSS check skipped\n");
+    } else {
+        long growth = rss_end - rss_warm;
+        fprintf(stderr, "test_control: worker RSS after 100 cycles %ld KiB, after 1000 cycles %ld KiB\n",
+                rss_warm, rss_end);
+        CHECK(growth <= 4096L);
+    }
+
+    /* Clean shutdown: EOF on stdin; the worker must exit 0 (LeakSanitizer exits nonzero). */
+    close(p.in_fd);
+    p.in_fd = -1;
+    CHECK(waitpid(p.pid, &status, 0) == p.pid);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    p.pid = 0;
+    close(p.out_fd);
+    p.out_fd = -1;
+    su_line_reader_free(&p.reader);
+    p.alive = 0;
+}
+
 int main(int argc, char **argv) {
     static const char *const fallback_root = ".";
     const char *helper;
@@ -569,6 +974,11 @@ int main(int argc, char **argv) {
         return 2;
     }
     helper = argv[1];
+#if defined(TEST_UNDER_ASAN)
+    /* The worker processes are ASan builds too. A 256 MB allocator quarantine would hide RSS
+     * behaviour, so the quarantine is capped for the children (set only when unset). */
+    setenv("ASAN_OPTIONS", "quarantine_size_mb=1", 0);
+#endif
     root = argc >= 3 ? argv[2] : fallback_root;
     if (argc < 3 && getcwd(cwd_buf, sizeof cwd_buf) != NULL) {
         root = cwd_buf;
@@ -609,8 +1019,10 @@ int main(int argc, char **argv) {
     test_protocol_errors(&s);
     test_path_policy(&s);
     test_world_sequence(&s, fault_file);
+    test_world_close_supervisor(&s);
     test_source_path(&s, &cfg, scratch_dir, root);
     session_stop(&s);
+    test_world_close_worker(helper, root);
 
     test_symlink_escape(&cfg, scratch_dir, root);
 

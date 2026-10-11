@@ -81,7 +81,7 @@ typedef struct AgentCall {
 static const char *const k_capabilities[] = {
     "engine.info",   "capsule.submit", "candidate.status", "candidate.evaluate",
     "candidate.install", "world.create", "world.inspect", "world.step",
-    "world.snapshot", "world.restore",
+    "world.snapshot", "world.restore", "world.close",
 };
 
 static uint32_t call_fail(AgentCall *c, uint32_t code, const char *msg) {
@@ -934,6 +934,38 @@ static uint32_t h_world_restore(SuAgent *a, const SuJsonValue *params, SuBuf *re
     return st;
 }
 
+/* world.close {world_id, expected_world_revision}. The worker checks the id and the revision
+ * before it frees anything; an unknown id (never created, or closed) is SU_E_INVALID_ARGUMENT. */
+static uint32_t h_world_close(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"world_id", "expected_world_revision"};
+    const char *world_id = NULL;
+    const char *expect = NULL;
+    SuBuf req;
+    uint32_t st;
+
+    if (check_keys(params, allowed, 2, c) != SU_OK ||
+        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    if (!a->worker.alive) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "no active worker holds worlds; call world.create");
+    }
+    req_begin(&req, c->id, "world.close");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, world_id, strlen(world_id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, expect, strlen(expect));
+    su_buf_str(&req, "}}");
+    if (req.failed) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "world.close request too large");
+    }
+    st = relay_world(a, &req, res, c);
+    su_buf_free(&req);
+    return st;
+}
+
 /* Records the worker's answer on the candidate. Only the worker's own response is read
  * here; the client never supplies these fields. */
 static void note_install(AgentCandidate *cd, const uint8_t *data, size_t len, uint64_t pid) {
@@ -1075,6 +1107,9 @@ static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c
     }
     if (strcmp(req->method, "world.restore") == 0) {
         return h_world_restore(a, p, res, c);
+    }
+    if (strcmp(req->method, "world.close") == 0) {
+        return h_world_close(a, p, res, c);
     }
     return call_fail(c, SU_E_UNSUPPORTED_METHOD, "method is unknown or not implemented in M0");
 }

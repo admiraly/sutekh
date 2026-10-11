@@ -146,6 +146,21 @@ int su_reg_retire(SuRegistry *r, uint64_t txid) {
     return 0;
 }
 
+uint32_t su_reg_release_world(SuRegistry *r, const char *world_id) {
+    uint32_t n = 0;
+    size_t i;
+    if (world_id == NULL) {
+        return 0;
+    }
+    for (i = 0; i < SU_REG_CAPACITY; i++) {
+        if (r->recs[i].used && strcmp(r->recs[i].world_id, world_id) == 0) {
+            memset(&r->recs[i], 0, sizeof r->recs[i]);
+            n++;
+        }
+    }
+    return n;
+}
+
 void su_reg_stats(const SuRegistry *r, uint32_t *in_use, uint32_t *installed) {
     uint32_t u = 0;
     uint32_t n = 0;

@@ -6,6 +6,7 @@
  *   world.create                {fixture_path, capsules:[{capsule_path, source_path}, ...]}
  *   world.inspect               {world_id, fields?, limit?, offset?}
  *   world.step                  {world_id, expected_world_revision, ticks}
+ *   world.close                 {world_id, expected_world_revision}
  *   internal.candidate.evaluate {capsule_path, source_path, test_path, world_path,
  *                                expected_source_hash, expected_capsule_hash}
  *   internal.candidate.install  {world_id, candidate_id, capsule_path, source_path,
