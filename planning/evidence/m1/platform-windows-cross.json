@@ -1,0 +1,396 @@
+{
+  "artifacts_sha256": {
+    "build-platform/sutekh-win64.exe": "347830f3cbd1e1573f6d73183ea2027f1445471f8b76966cafad196c3e73d02c",
+    "build-platform/win64-cross/libsu_asmjit.a": "95275a16efe4736cb863a4d318ed8a2d5adbcfaa5310b3db659997c2cc80b028",
+    "build-platform/win64-cross/libsu_ir.a": "2e7c284f816b39e811792d15bd6d85bcc9f23652368ff0a948fabb9e743a54ec",
+    "build-platform/win64-cross/libsu_native.a": "66e830bbd0934f17a1a041b8279669fb320b22f22780101fcc75bd020ee353d8",
+    "build-platform/win64-cross/probe/native_abi_probe.exe": "56b79c9a73174d20ac88b1f853dd944b035ccf1631edc7248f274e0d27ddd2cc",
+    "build-platform/win64-cross/test_ir.exe": "e1f815460f4840926feaff80991316338feb7b8d16fd662df286512995e99ee5",
+    "build-platform/win64-cross/test_snapshot.exe": "d7780d203e9cdf5169b422458921182194047e26e312d390514f7cd8f5a36679",
+    "build-platform/win64-cross/test_vm.exe": "6b5e6bb17e36043ff6505544f87d3e46a166146ac16f406b168a525b35017cc4",
+    "build-platform/win64-cross/test_world.exe": "6d9dc00cfb6250ded993e26f0ceddfca2ce5a26327838f1ac5275c805dcb3eff"
+  },
+  "checks": [
+    {
+      "id": "win64cross.configure",
+      "lane": "win64-cross",
+      "reason": "toolchain tests/platform/toolchains/mingw-w64-x86_64.cmake",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.build_core",
+      "lane": "win64-cross",
+      "reason": "platform layer, su_ir, su_world, su_vm, su_snapshot and the four M0 unit tests",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.unit.test_ir",
+      "lane": "win64-cross",
+      "reason": "run under wine, exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.unit.test_world",
+      "lane": "win64-cross",
+      "reason": "run under wine, exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.unit.test_vm",
+      "lane": "win64-cross",
+      "reason": "run under wine, exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.unit.test_snapshot",
+      "lane": "win64-cross",
+      "reason": "run under wine, exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.build_native",
+      "lane": "win64-cross",
+      "reason": "su_native (Win64 prologue, VirtualAlloc/VirtualProtect), su_asmjit, su_ir",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.native_abi_probe",
+      "lane": "win64-cross",
+      "reason": "run under wine: 597 checks, 0 failures, Win64 ABI, backends=2",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.sutekh_version",
+      "lane": "win64-cross",
+      "reason": "--version under wine exit 0",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.sutekh_serve_unsupported",
+      "lane": "win64-cross",
+      "reason": "serve returns SU_E_UNSUPPORTED_METHOD (exit 1) on Windows",
+      "status": "passed"
+    },
+    {
+      "failed_objects": [
+        "CMakeFiles/native_test_worker.dir/src/runtime/worker.c.obj",
+        "CMakeFiles/recovery_worker.dir/src/runtime/worker.c.obj",
+        "CMakeFiles/su_agent.dir/src/agent/su_agent.c.obj",
+        "CMakeFiles/su_agent.dir/src/agent/su_path.c.obj",
+        "CMakeFiles/su_agent.dir/src/agent/su_proc.c.obj",
+        "CMakeFiles/su_agent.dir/src/agent/su_proto.c.obj",
+        "CMakeFiles/su_agent.dir/src/agent/su_spool.c.obj",
+        "CMakeFiles/su_agent.dir/src/runtime/worker.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/agent/su_agent.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/agent/su_path.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/agent/su_proc.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/agent/su_proto.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/agent/su_spool.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/runtime/worker.c.obj",
+        "CMakeFiles/test_control.dir/tests/control/test_control.c.obj",
+        "CMakeFiles/test_native_avx2.dir/tests/native/avx2/test_native_avx2.c.obj",
+        "CMakeFiles/test_native_scalar.dir/tests/native/scalar/test_native_scalar.c.obj",
+        "CMakeFiles/test_recovery.dir/tests/recovery/test_recovery.c.obj",
+        "CMakeFiles/test_reload.dir/tests/reload/test_reload.c.obj",
+        "CMakeFiles/test_scheduler.dir/tests/scheduler/test_scheduler.c.obj",
+        "CMakeFiles/test_snapshot_cp.dir/tests/snapshot_cp/test_snapshot_cp.c.obj",
+        "CMakeFiles/worker_stub.dir/tests/control/worker_stub.c.obj"
+      ],
+      "id": "win64cross.full_graph",
+      "lane": "win64-cross",
+      "reason": "22 object(s) fail for Windows; POSIX-only sources (see details)",
+      "status": "failed"
+    }
+  ],
+  "commands": [
+    {
+      "argv": [
+        "/usr/bin/cmake",
+        "-S",
+        ".",
+        "-B",
+        "build-platform/win64-cross",
+        "-G",
+        "Ninja",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_TOOLCHAIN_FILE=/home/user/sutekh/.claude/worktrees/agent-a0b496d125408ea84/tests/platform/toolchains/mingw-w64-x86_64.cmake",
+        "-DSUTEKH_NATIVE=ON"
+      ],
+      "check": "win64cross.configure",
+      "cwd": ".",
+      "duration_s": 0.065,
+      "log": "build-platform/win64cross_configure.log",
+      "log_sha256": "3f4e13f6b23f377333323f40f5acc353687481273d68aba416ab0dc0ca76f95f",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/bin/cmake",
+        "--build",
+        "build-platform/win64-cross",
+        "--target",
+        "su_platform",
+        "su_ir",
+        "su_world",
+        "su_vm",
+        "su_snapshot",
+        "test_ir",
+        "test_world",
+        "test_vm",
+        "test_snapshot"
+      ],
+      "check": "win64cross.build_core",
+      "cwd": ".",
+      "duration_s": 0.033,
+      "log": "build-platform/win64cross_build_core.log",
+      "log_sha256": "c2ed93ffd93c840755c0e91392ae593b1b52de9b7aaf6c208123feaceb1dde2e",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/lib/wine/wine64",
+        "build-platform/win64-cross/test_ir.exe"
+      ],
+      "check": "win64cross.unit.test_ir",
+      "cwd": ".",
+      "duration_s": 0.517,
+      "log": "build-platform/win64cross_unit_test_ir.log",
+      "log_sha256": "94bf325b401c5b86796236459e8c91f6d95f1135459bac1a69ba620d5d518325",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/lib/wine/wine64",
+        "build-platform/win64-cross/test_world.exe"
+      ],
+      "check": "win64cross.unit.test_world",
+      "cwd": ".",
+      "duration_s": 0.116,
+      "log": "build-platform/win64cross_unit_test_world.log",
+      "log_sha256": "56438d2405eae12eae834570753e18337dc7a8951c89977a5a877a4047802d66",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/lib/wine/wine64",
+        "build-platform/win64-cross/test_vm.exe"
+      ],
+      "check": "win64cross.unit.test_vm",
+      "cwd": ".",
+      "duration_s": 0.065,
+      "log": "build-platform/win64cross_unit_test_vm.log",
+      "log_sha256": "5eb8dd420691e33d00255dbf453aff17d994e2b4fb4f1b8b66657ed489ea229b",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/lib/wine/wine64",
+        "build-platform/win64-cross/test_snapshot.exe"
+      ],
+      "check": "win64cross.unit.test_snapshot",
+      "cwd": ".",
+      "duration_s": 0.033,
+      "log": "build-platform/win64cross_unit_test_snapshot.log",
+      "log_sha256": "d04a64dfcb8ed1a589977c948718e169733321eb7c623bff99bf3e812aeb7437",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/bin/cmake",
+        "--build",
+        "build-platform/win64-cross",
+        "--target",
+        "su_native",
+        "su_asmjit",
+        "su_ir"
+      ],
+      "check": "win64cross.build_native",
+      "cwd": ".",
+      "duration_s": 0.033,
+      "log": "build-platform/win64cross_build_native.log",
+      "log_sha256": "c2ed93ffd93c840755c0e91392ae593b1b52de9b7aaf6c208123feaceb1dde2e",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/bin/x86_64-w64-mingw32-gcc",
+        "-std=c17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-pedantic",
+        "-O2",
+        "-I",
+        ".",
+        "-I",
+        "include",
+        "-I",
+        "src",
+        "-c",
+        "-o",
+        "build-platform/win64-cross/probe/native_abi_probe.o",
+        "tests/platform/native_abi_probe.c"
+      ],
+      "check": "win64cross.native_abi_probe.compile",
+      "cwd": ".",
+      "duration_s": 0.216,
+      "log": "build-platform/win64cross_native_abi_probe_compile.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/bin/x86_64-w64-mingw32-g++",
+        "-static",
+        "-o",
+        "build-platform/win64-cross/probe/native_abi_probe.exe",
+        "build-platform/win64-cross/probe/native_abi_probe.o",
+        "build-platform/win64-cross/libsu_native.a",
+        "build-platform/win64-cross/libsu_asmjit.a",
+        "build-platform/win64-cross/libsu_ir.a"
+      ],
+      "check": "win64cross.native_abi_probe.link",
+      "cwd": ".",
+      "duration_s": 0.065,
+      "log": "build-platform/win64cross_native_abi_probe_link.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/lib/wine/wine64",
+        "build-platform/win64-cross/probe/native_abi_probe.exe"
+      ],
+      "check": "win64cross.native_abi_probe",
+      "cwd": ".",
+      "duration_s": 0.066,
+      "log": "build-platform/win64cross_native_abi_probe.log",
+      "log_sha256": "9c223b50aeefbfbf72b34a64e6dfdbbbefe76320ed20731e8d7a87115597d0b5",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/bin/x86_64-w64-mingw32-gcc",
+        "-std=c17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-pedantic",
+        "-O2",
+        "-I",
+        ".",
+        "-I",
+        "include",
+        "-I",
+        "src",
+        "-I",
+        "src/platform",
+        "-include",
+        "build-platform/sutekh_defs.h",
+        "-o",
+        "build-platform/sutekh-win64.exe",
+        "src/platform/sutekh_main.c",
+        "src/platform/su_platform.c"
+      ],
+      "check": "win64cross.sutekh_platform_main",
+      "cwd": ".",
+      "duration_s": 0.517,
+      "log": "build-platform/win64cross_sutekh_platform_main.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/lib/wine/wine64",
+        "build-platform/sutekh-win64.exe",
+        "--version"
+      ],
+      "check": "win64cross.sutekh_version",
+      "cwd": ".",
+      "duration_s": 0.066,
+      "log": "build-platform/win64cross_sutekh_version.log",
+      "log_sha256": "d91fce7c4aeeea8d8906e41b9ba4dd0051200be3e9318554c23437b0e51061ec",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "/usr/lib/wine/wine64",
+        "build-platform/sutekh-win64.exe",
+        "serve"
+      ],
+      "check": "win64cross.sutekh_serve_unsupported",
+      "cwd": ".",
+      "duration_s": 0.065,
+      "log": "build-platform/win64cross_sutekh_serve_unsupported.log",
+      "log_sha256": "1ed34cff9b515c6272db3809ab11d4c44d0b733f2682617dbad867b03291ce44",
+      "returncode": 1
+    },
+    {
+      "argv": [
+        "/usr/bin/cmake",
+        "--build",
+        "build-platform/win64-cross",
+        "--",
+        "-k",
+        "0"
+      ],
+      "check": "win64cross.full_graph",
+      "cwd": ".",
+      "duration_s": 0.471,
+      "log": "build-platform/win64cross_full_graph.log",
+      "log_sha256": "545c4d9e4c47b7a4c610e0456358e63ced40bbf0f65cdf2629258c0ded1d74ed",
+      "returncode": 1
+    }
+  ],
+  "generated_utc": "2026-10-11T22:30:53Z",
+  "host": {
+    "generated_utc": "2026-10-11T22:30:50Z",
+    "machine": "x86_64",
+    "python": "3.13.16",
+    "release": "6.18.44-fc-v114",
+    "system": "Linux"
+  },
+  "inputs_sha256": {
+    "tests/platform/capabilities.py": "887e588f74b6922c75733d6dea790615c91c688b4c79e5092a0f67ade398bfdc",
+    "tests/platform/native_abi_probe.c": "a9613d5ccc750c75e84e6dc5f1272994746a4877a0c991d087f10909736f8bca",
+    "tests/platform/run_platform.py": "0d4ca87c7047842aa450e4879a770f834c13754cb7304ca8640eef9871aee218",
+    "tests/platform/toolchains/mingw-w64-x86_64.cmake": "8e3bc0e6e342e54a166d0bc5bd98cecd59328dae00bb258785edbbd842d70176"
+  },
+  "lane": "win64-cross",
+  "notes": {
+    "native_abi_probe": {
+      "backends": 2,
+      "checks": 597,
+      "failures": 0,
+      "host_abi": "win64",
+      "host_caps": 3
+    }
+  },
+  "schema": "sutekh.platform_run.v1",
+  "tools": {
+    "cmake": {
+      "path": "/usr/bin/cmake",
+      "version": "cmake version 3.28.3"
+    },
+    "ninja": {
+      "path": "/usr/bin/ninja",
+      "version": "1.11.1"
+    },
+    "wine": {
+      "path": "/usr/lib/wine/wine64",
+      "version": "wine-9.0 (Ubuntu 9.0~repack-4build3)"
+    },
+    "x86_64-w64-mingw32-g++": {
+      "path": "/usr/bin/x86_64-w64-mingw32-g++",
+      "version": "x86_64-w64-mingw32-g++ (GCC) 13-win32"
+    },
+    "x86_64-w64-mingw32-gcc": {
+      "path": "/usr/bin/x86_64-w64-mingw32-gcc",
+      "version": "x86_64-w64-mingw32-gcc (GCC) 13-win32"
+    }
+  }
+}

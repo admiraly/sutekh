@@ -233,3 +233,60 @@ Evidence files (`planning/evidence/`):
 - Live edit (M0-13 tree): `m0-latency-dev.json`, `m0-latency-dev-raw.json`, `m0-latency-dev-run.log`, `m0-latency-release.json`, `m0-latency-release-raw.json`, `m0-latency-release-run.log`, `m0-latency-dev-shared-serve-attempt.log`
 - Native build (M0-13 tree): `m0-native-build.json`, `m0-native-build-run.log`
 - Hashes: `m0-artifact-hashes.txt` (binary and script SHA-256, and the run-to-binary mapping)
+
+---
+
+## M1 platform status (M1-05 platform half, 2026-10-12)
+
+Scope of this section: what Windows and other platforms actually did in M1-05 on this host. Every
+row below is a recorded result, never an inference. Evidence: `planning/evidence/m1/`
+(`platform-linux.json`, `platform-windows-cross.json`, `platform-matrix.json`), produced by
+`python3 -I tests/platform/run_platform.py`. Handoff: `planning/handoffs/2026-10-12-m1-05a.md`.
+
+### Distinction table
+
+| Platform / lane | Status | What ran (this host: Ubuntu 24.04, x86-64, AVX2) | Not run / limits |
+|---|---|---|---|
+| Linux x86-64, native (SysV) | **run: passed** | `SUTEKH_NATIVE=ON` release configure; M0 unit tests `test_ir`, `test_world`, `test_vm`, `test_snapshot` (4/4 exit 0); native ABI probe 587 checks, 0 failures, scalar and AVX2 backends | Native differential suite `tests/native/*` is not rerun by this lane; default `ctest` 9/9 passes (unchanged) |
+| Windows x64 via wine (mingw-w64 cross build) | **run under wine: passed** (wine 9.0, not Windows) | Cross-built M0 core and 4 unit tests, all exit 0 under wine; `su_native` with the Win64 prologue and `VirtualAlloc`/`VirtualProtect` publication, probe 597 checks, 0 failures (Win64 ABI, rcx argument, callee-saved rbx/rbp/rsi/rdi/r12-r15 and xmm6-15 clobber checks, injected publication failures); `sutekh --version` exit 0; `sutekh serve` returns `SU_E_UNSUPPORTED_METHOD`, exit 1 | wine is a compatibility layer: these results are not Windows-native evidence. Full graph does not build for Windows (see below) |
+| Windows x64 via wine, full CMake graph | **failed** (expected: POSIX-only sources) | `cmake --build -- -k 0`: 22 objects fail (list below) | `su_agent`, `sutekh serve`/`worker`, process-isolated workers, POSIX test harnesses are not portable yet |
+| Windows native (MSVC or clang-cl on a real Windows host) | **not run** | Nothing. No Windows host in this environment. `tools/env-windows.ps1` and `planning/toolchain-windows.json` (their `native_engine: not_run`) are unchanged | Any statement about native Windows execution needs a run on a Windows host; wine and mingw results must not be cited as that |
+| macOS | **not supported** | Nothing. No Mach-O code-publication path; `su_native.c` POSIX branch is mmap/mprotect only | Not built, not tested |
+| ARM64 | **not supported** (no backend) | Nothing. AsmJit ARM support is compiled out (`ASMJIT_NO_AARCH64`); `su_native_caps.c` reports scalar only off GCC/Clang x86-64 | No ARM64 native backend exists |
+
+### Inventory of platform-conditional code
+
+Windows branches (`#if defined(_WIN32)` / `_WIN64`, or host-ABI selection):
+
+- `src/platform/su_platform.c`: QueryPerformanceCounter and GetCurrentProcessId on Windows. Compiled and run under wine (via `sutekh --version`).
+- `src/platform/sutekh_main.c`: Windows `serve`/`worker` return the structured `SU_E_UNSUPPORTED_METHOD` JSON. Run under wine.
+- `backends/native/su_native.c`: `VirtualAlloc`/`VirtualProtect`/`VirtualFree`/`FlushInstructionCache` publication and `SU_NATIVE_HOST_ABI_WIN64`. Run under wine (artifact host_abi = 2).
+- `backends/native/su_native_asmjit.cpp` and `backends/native/avx2/su_native_avx2.cpp`: argument register rcx on Win64, rdi on SysV. Both run under wine. The AVX2 kernel uses only ymm0-3, which are volatile on Win64, and pushes rbp, rbx, r12-r14.
+- `backends/native/avx2/su_native_caps.c`: CPUID/XGETBV only for GCC and Clang on x86-64. Elsewhere it reports scalar only (MSVC gets no AVX2 detection and is not built).
+- `tests/native/scalar/test_native_scalar.c` and `tests/native/avx2/test_native_avx2.c`: the SysV clobber trampoline is guarded `!_WIN32`. Win64 clobber and publication-fault coverage now lives in `tests/platform/native_abi_probe.c` (run under wine), not in these files.
+
+POSIX-only code (no Windows branch; fails to compile for Windows, not edited in M1-05):
+
+- `src/agent/su_proc.c` (fork, sys/wait, rlimit), `su_proto.c` (poll), `su_path.c` (realpath), `su_spool.c` (mkdtemp), `su_agent.c` (sigaction, SIGPIPE), and the supervisor and worker spawn path.
+- `src/runtime/worker.c` (sigaction, kill, pause, SIGPIPE): `su_worker_main` and the worker role. Used by `su_agent`, `recovery_worker`, `native_test_worker`.
+- Tests: `test_control`, `worker_stub`, `test_reload`, `test_recovery`, `test_snapshot_cp`, `test_scheduler` (sysconf), `test_native_scalar`, `test_native_avx2` (sys/mman, fork).
+- The `strace` probes (`tests/e2e/no_build_probe.py`, `native_spawn_probe.py`) need strace and ptrace, which exist only on Linux.
+
+Objects that fail for Windows in the full-graph inventory (22): `su_agent` (5 sources), `su_agent_test` (5), `worker.c` in `su_agent`, `su_agent_test`, `recovery_worker` and `native_test_worker`, and `test_control`, `worker_stub`, `test_reload`, `test_recovery`, `test_snapshot_cp`, `test_scheduler`, `test_native_scalar`, `test_native_avx2`.
+
+Compiles and runs for Windows without change: `su_ir` (SHA-256, JSON, LIR), `su_vm`, `su_world`, `su_snapshot` (`snapshot.c`, `checkpoint.c`), `su_jobs` (pthread through winpthreads), the four M0 unit tests, and the native backend and its probe.
+
+### Win64 unwind information (status, not claimed as complete)
+
+- The compiled C code in the Win64 binaries has `.pdata`/`.xdata` entries (from the compiler).
+- The inline-assembly trampoline in the probe has no `.seh_` directives, so it has no unwind entry.
+- Generated kernels (AsmJit) are JIT code with no `RtlAddFunctionTable` registration, so they have no unwind information. Win64 uses that table to unwind through frames, so an exception raised inside a kernel cannot be unwound in process. The consequence is that such a fault terminates the process, which is only acceptable because C07 requires worker isolation. The kernel makes no calls, so normal returns do not depend on unwind data.
+- Not run: any Windows-native exception test. Under wine, the kernel's normal return and the publication-failure path were exercised; a faulting kernel was not.
+
+### What is still missing for Windows
+
+1. A Windows worker spawn, supervision and checkpoint-recovery path (C07, M1-02 contract). Nothing equivalent exists.
+2. A port of the agent and worker sources listed above (or a Windows-specific branch) so `sutekh` can link as in CMake.
+3. Unwind registration for generated kernels, if in-process exception handling is ever required.
+4. A Windows-native build and test run on a real host (MSVC or clang-cl with `tools/env-windows.ps1`).
+5. A portable replacement for the native scalar and AVX2 test files (their POSIX parts).

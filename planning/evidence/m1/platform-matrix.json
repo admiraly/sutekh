@@ -1,0 +1,202 @@
+{
+  "checks": [
+    {
+      "id": "linux.configure",
+      "lane": "linux-native",
+      "reason": "native backend enabled",
+      "status": "passed"
+    },
+    {
+      "id": "linux.build",
+      "lane": "linux-native",
+      "reason": "built test_ir test_world test_vm test_snapshot su_native su_asmjit su_ir",
+      "status": "passed"
+    },
+    {
+      "id": "linux.unit.test_ir",
+      "lane": "linux-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "linux.unit.test_world",
+      "lane": "linux-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "linux.unit.test_vm",
+      "lane": "linux-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "linux.unit.test_snapshot",
+      "lane": "linux-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "linux.native_abi_probe",
+      "lane": "linux-native",
+      "reason": "587 checks, 0 failures, SysV, backends=2",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.configure",
+      "lane": "win64-cross",
+      "reason": "toolchain tests/platform/toolchains/mingw-w64-x86_64.cmake",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.build_core",
+      "lane": "win64-cross",
+      "reason": "platform layer, su_ir, su_world, su_vm, su_snapshot and the four M0 unit tests",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.unit.test_ir",
+      "lane": "win64-cross",
+      "reason": "run under wine, exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.unit.test_world",
+      "lane": "win64-cross",
+      "reason": "run under wine, exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.unit.test_vm",
+      "lane": "win64-cross",
+      "reason": "run under wine, exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.unit.test_snapshot",
+      "lane": "win64-cross",
+      "reason": "run under wine, exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.build_native",
+      "lane": "win64-cross",
+      "reason": "su_native (Win64 prologue, VirtualAlloc/VirtualProtect), su_asmjit, su_ir",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.native_abi_probe",
+      "lane": "win64-cross",
+      "reason": "run under wine: 597 checks, 0 failures, Win64 ABI, backends=2",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.sutekh_version",
+      "lane": "win64-cross",
+      "reason": "--version under wine exit 0",
+      "status": "passed"
+    },
+    {
+      "id": "win64cross.sutekh_serve_unsupported",
+      "lane": "win64-cross",
+      "reason": "serve returns SU_E_UNSUPPORTED_METHOD (exit 1) on Windows",
+      "status": "passed"
+    },
+    {
+      "failed_objects": [
+        "CMakeFiles/native_test_worker.dir/src/runtime/worker.c.obj",
+        "CMakeFiles/recovery_worker.dir/src/runtime/worker.c.obj",
+        "CMakeFiles/su_agent.dir/src/agent/su_agent.c.obj",
+        "CMakeFiles/su_agent.dir/src/agent/su_path.c.obj",
+        "CMakeFiles/su_agent.dir/src/agent/su_proc.c.obj",
+        "CMakeFiles/su_agent.dir/src/agent/su_proto.c.obj",
+        "CMakeFiles/su_agent.dir/src/agent/su_spool.c.obj",
+        "CMakeFiles/su_agent.dir/src/runtime/worker.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/agent/su_agent.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/agent/su_path.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/agent/su_proc.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/agent/su_proto.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/agent/su_spool.c.obj",
+        "CMakeFiles/su_agent_test.dir/src/runtime/worker.c.obj",
+        "CMakeFiles/test_control.dir/tests/control/test_control.c.obj",
+        "CMakeFiles/test_native_avx2.dir/tests/native/avx2/test_native_avx2.c.obj",
+        "CMakeFiles/test_native_scalar.dir/tests/native/scalar/test_native_scalar.c.obj",
+        "CMakeFiles/test_recovery.dir/tests/recovery/test_recovery.c.obj",
+        "CMakeFiles/test_reload.dir/tests/reload/test_reload.c.obj",
+        "CMakeFiles/test_scheduler.dir/tests/scheduler/test_scheduler.c.obj",
+        "CMakeFiles/test_snapshot_cp.dir/tests/snapshot_cp/test_snapshot_cp.c.obj",
+        "CMakeFiles/worker_stub.dir/tests/control/worker_stub.c.obj"
+      ],
+      "id": "win64cross.full_graph",
+      "lane": "win64-cross",
+      "reason": "22 object(s) fail for Windows; POSIX-only sources (see details)",
+      "status": "failed"
+    },
+    {
+      "id": "win64native.build",
+      "lane": "win64-native",
+      "reason": "no Windows host in this environment (host OS: Linux); Windows-native execution is not inferred from wine or the mingw cross build",
+      "status": "not_run"
+    },
+    {
+      "id": "win64native.unit_tests",
+      "lane": "win64-native",
+      "reason": "no Windows host in this environment (host OS: Linux); Windows-native execution is not inferred from wine or the mingw cross build",
+      "status": "not_run"
+    },
+    {
+      "id": "win64native.native_abi_probe",
+      "lane": "win64-native",
+      "reason": "no Windows host in this environment (host OS: Linux); Windows-native execution is not inferred from wine or the mingw cross build",
+      "status": "not_run"
+    },
+    {
+      "id": "win64native.sutekh_version",
+      "lane": "win64-native",
+      "reason": "no Windows host in this environment (host OS: Linux); Windows-native execution is not inferred from wine or the mingw cross build",
+      "status": "not_run"
+    },
+    {
+      "id": "macos.build",
+      "lane": "macos",
+      "reason": "macOS is not a supported platform: no Mach-O code-publication path, not built or tested",
+      "status": "unavailable"
+    },
+    {
+      "id": "arm64.native_backend",
+      "lane": "arm64",
+      "reason": "no ARM64 native backend; AsmJit ARM support is compiled out (ASMJIT_NO_AARCH64); this host is x86_64",
+      "status": "unavailable"
+    }
+  ],
+  "counts": {
+    "failed": 1,
+    "not_run": 4,
+    "passed": 17,
+    "unavailable": 2
+  },
+  "generated_utc": "2026-10-11T22:30:53Z",
+  "host": {
+    "generated_utc": "2026-10-11T22:30:50Z",
+    "machine": "x86_64",
+    "python": "3.13.16",
+    "release": "6.18.44-fc-v114",
+    "system": "Linux"
+  },
+  "lanes": [
+    "linux-native",
+    "win64-cross",
+    "win64-native",
+    "macos",
+    "arm64"
+  ],
+  "schema": "sutekh.platform_run.v1"
+}
