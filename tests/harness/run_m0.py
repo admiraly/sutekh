@@ -2274,7 +2274,7 @@ def _native_incremental(t, n):
            "reconfigured": [], "build_rc": [], "generator": "Ninja" if shutil.which("ninja") else "default"}
     try:
         src = os.path.join(root, "repo")
-        shutil.copytree(REPO, src, ignore=shutil.ignore_patterns(".git", "build", "planning"))
+        shutil.copytree(REPO, src, ignore=shutil.ignore_patterns(".git", ".claude", "build*", "planning", "third_party", "bench", "docs", "__pycache__"))
         bdir = os.path.join(root, "build")
         gen = ["-G", "Ninja"] if shutil.which("ninja") else []
         res["configure_rc"], _ = t.run_cmd(["cmake", "-S", src, "-B", bdir, f"-DCMAKE_BUILD_TYPE={build_type}"] + gen,
