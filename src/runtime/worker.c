@@ -735,6 +735,34 @@ static void test_kill_configure(WorkerState *s) {
     }
 }
 
+/* M1-02c-2: SU_TEST_FAULT_NATIVE_TICK=N (decimal) arms a SIGSEGV inside the installed kernel that
+ * computes tick N; SU_TEST_FAULT_NATIVE_BACKEND=avx2|scalar restricts it to one backend (default: any).
+ * Read only in this build; the production binary has no such string. */
+#ifdef SU_HAVE_NATIVE
+static void test_native_crash_configure(void) {
+    const char *v = getenv("SU_TEST_FAULT_NATIVE_TICK");
+    const char *b = getenv("SU_TEST_FAULT_NATIVE_BACKEND");
+    char *end = NULL;
+    unsigned long long n;
+    uint32_t backend = 0u;
+
+    if (v == NULL || v[0] < '1' || v[0] > '9') {
+        return;
+    }
+    n = strtoull(v, &end, 10);
+    if (end == NULL || *end != '\0') {
+        return;
+    }
+    if (b != NULL && strcmp(b, "avx2") == 0) {
+        backend = SU_NATIVE_BACKEND_ASMJIT_AVX2;
+    } else if (b != NULL && strcmp(b, "scalar") == 0) {
+        backend = SU_NATIVE_BACKEND_ASMJIT_SCALAR;
+    }
+    su_nv_test_arm_native_crash((uint64_t)n, backend);
+}
+
+#endif /* SU_HAVE_NATIVE */
+
 static void test_kill_check(WorkerState *s, unsigned idx) {
     WorkerWorld *ww = s->cur_ww;
     uint32_t i;
@@ -2598,6 +2626,9 @@ int su_worker_main_with_hooks(int in_fd, int out_fd, const SuWorkerHooks *hooks)
     }
 #ifdef SU_TEST_FAULT_HOOKS
     test_kill_configure(s);
+#ifdef SU_HAVE_NATIVE
+    test_native_crash_configure();
+#endif
 #endif
     memset(&ign, 0, sizeof ign);
     ign.sa_handler = SIG_IGN;

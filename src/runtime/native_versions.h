@@ -84,6 +84,11 @@ enum {
 };
 void su_nv_test_arm(uint32_t mode, uint32_t delay_ms);
 
+/* Test-only (M1-02c-2): the worker dies with SIGSEGV inside an installed kernel's run when the tick
+ * being computed is `tick` (0 = off) and the backend id matches `backend_id` (0 = any). No-op outside
+ * SU_TEST_FAULT_HOOKS builds. */
+void su_nv_test_arm_native_crash(uint64_t tick, uint32_t backend_id);
+
 /* Introspection (tests, engine.info). */
 uint32_t su_nv_state(uint64_t seq);
 uint32_t su_nv_live_count(void);

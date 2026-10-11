@@ -198,7 +198,52 @@ mismatches}, recompile_hash_equal}, world_revision, tick, worker_pid}`.
   `native_avx2`). `engine.info` reports `native.specialization` with the backends, tiers, host caps and
   the pinned AsmJit commit.
 - Kernels are not canonical state. Snapshot and restore return the system to the VM tier. Worker
-  recovery (`SU_E_WORKER_FAILED`) rebuilds the worlds on the VM tier. **Specialization is not replayed
-  yet (M1-02c).**
+  recovery (`SU_E_WORKER_FAILED`) rebuilds the worlds on the VM tier; section 10 says which kernels are
+  quarantined and which are respecialized.
 - Not yet implemented: the t03 numeric-edge programs in admission (the corpus and the own test cases are
-  used); a replayed specialization after recovery (M1-02c-2).
+  used).
+
+## 10. Native fault recovery, quarantine and respecialization (M1-02c-2; SUTEKH_NATIVE builds only)
+
+Native kernels are not canonical state. Nothing about them is logged or replayed, and the replacement
+worker always starts on the VM tier. Recovery correctness does not depend on respecialization: after any
+recovery the canonical digest, revision and tick equal an uninterrupted VM-only run, whether or not a
+respecialization succeeds.
+
+- Records. The supervisor keeps, per world, the native kernel installed for each system (artifact_hash,
+  requested backend, tier). A successful `world.specialize` records it; `candidate.install`, `world.restore`
+  and `world.close` clear the world's records (the worker drops the kernel at the same point).
+- Attribution. A worker death while a `world.step` runs on a world with installed kernels is attributed to
+  those kernels: every kernel installed on that world is quarantined. The crashed kernel is not identified
+  per tick, so this is conservative. A death at any other time (killed from outside, idle, another request)
+  quarantines nothing; its kernels are respecialized. Attributed deaths do not count toward the M1-02a
+  candidate quarantine (repeated-crash rule).
+- Quarantine. Keyed by `artifact_hash`. Each entry: world_id, system_id, backend, tier, reason,
+  `crash_count`, `replaced_pid`, `tick`. A table of 16 entries (`AGENT_MAX_QUARANTINE`) is never evicted.
+  If a crash cannot be recorded (table full), no entry is added and every native specialization is refused
+  with reason `quarantine_table_full`: no crash loop is possible.
+- Recovery object (the failing request, `SU_E_WORKER_FAILED`, top-level `recovery`). When a kernel was
+  attributed it adds `native: {artifact_hash, world_id, system_id, backend, tier, quarantined, crash_count,
+  replaced_pid}` for the first attributed kernel. `quarantined: false` means the table was full.
+- Refusal. `world.specialize` of a quarantined artifact runs admission (its hash is known only after
+  admission, in the disposable worker) and then answers `SU_E_CANDIDATE_FAILED` with
+  `error.detail = {phase: "quarantine", reason: "artifact_quarantined", artifact_hash, crash_count}`. A
+  different artifact (for example scalar after an avx2 crash) is admitted normally. The VM is the tier
+  until an admitted, non-quarantined kernel is installed.
+- Respecialization queue. Non-attributed kernels are queued (FIFO, `AGENT_MAX_RESPEC` = 16) and re-requested
+  through the normal pipeline (identity, disposable admission, install) against the current revision.
+  Queueing happens inside recovery; the admission never does. The serve loop services one queue entry after
+  the reply to a request that is not `world.step` and whose reply carries no `recovery` member. So a
+  `world.step` is never preceded by respecialization caused by recovery, and the answer that reports a
+  recovery shows the request pending. A `SU_E_WORKER_FAILED` outcome is retried once
+  (`AGENT_RESPEC_RETRIES` = 1); a refusal is final.
+- Outcome. Reported per world on `world.inspect`, as a top-level member `specialization`:
+  `{pending_respecialization, respecialization: "none" | "pending" | "respecialized" | "failed", reason,
+  quarantined: [...], quarantine_table_full}`. `respecialization` is the last outcome for the world.
+  `quarantined` lists the whole table.
+- Replay is not the mechanism. Respecialization uses the normal admission, so a respecialized kernel passed the
+  same corpus and own cases as a first-time one.
+- Test seams: `SU_TEST_FAULT_NATIVE_TICK=N` (and `SU_TEST_FAULT_NATIVE_BACKEND=avx2|scalar`, default any) make
+  the test worker die with SIGSEGV inside the installed kernel while computing tick N. They exist only in the
+  test worker (`tests/native/qualification/native_test_worker`); `check_release_seams.py` checks the production
+  binary for them.

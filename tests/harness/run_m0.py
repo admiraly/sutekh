@@ -194,8 +194,9 @@ def parse_envelope(raw: bytes, expected_id) -> dict:
             and not (ok is False and obj.get("id") is None):
         raise Failed(f"reply id {obj.get('id')!r} does not match request {expected_id!r}")
     # M1-02 additive top-level members: a recovery object (on the request that found a dead worker)
-    # and a worker_event (on the next reply). They are kept when present and absent otherwise.
-    extra = {k: obj[k] for k in ("recovery", "worker_event") if k in obj}
+    # and a worker_event (on the next reply); M1-02c-2 adds specialization (world.inspect). They are kept
+    # when present and absent otherwise.
+    extra = {k: obj[k] for k in ("recovery", "worker_event", "specialization") if k in obj}
     if ok:
         if not isinstance(obj.get("result"), dict):
             raise Failed("ok reply has no result object")
@@ -2608,6 +2609,45 @@ def tx3(t: TestCtx):
         step(t, sess, nat, 1)
         t.check_mismatches(f"TX3 swap: tick {tick} follows the new semantics",
                            verify_state(tick, expected[tick], inspect(t, sess, nat)))
+    close_world(t, sess, nat)
+    # M1-02c-2: the active worker is killed from outside while a scalar kernel is installed. Nothing is
+    # attributed to the kernel (no fault), so it is not quarantined: recovery returns the world to the VM
+    # tier with the kernel pending, a world.step is not preceded by respecialization, and the next non-tick
+    # answer after that shows the respecialized tier. Ticks equal the VM control world throughout.
+    ctrl, _ = create_world(t, sess, SPEC_WORLD, [SPEC_CAP])
+    nat, _ = create_world(t, sess, SPEC_WORLD, [SPEC_CAP])
+    for _ in range(2):
+        step(t, sess, ctrl, 1)
+        step(t, sess, nat, 1)
+    res = call(t, sess, "world.specialize", {"world_id": nat, "expected_world_revision": sess.revs[nat],
+                                             "system_id": SPEC_SYSTEM, "backend": "scalar"})
+    t.check("TX3 kill: scalar installed before the kill", "native_scalar", res.get("execution_tier"))
+    old_pid = call(t, sess, "engine.info", {})["active_worker"]["pid"]
+    os.kill(old_pid, signal.SIGKILL)
+    env = sess.request("world.inspect", {"world_id": nat})
+    t.check_mismatches("TX3 kill: first request after the death reports the recovery",
+                       recovery_mismatches(env, old_pid))
+    # A tick right after the recovery answer runs on the VM; the queue is not serviced for a world.step.
+    step(t, sess, nat, 1)
+    step(t, sess, ctrl, 1)
+    # The first non-tick answer after the recovery is sent before the request is serviced.
+    env = sess.request("world.inspect", {"world_id": nat})
+    spec = env.get("specialization") if isinstance(env.get("specialization"), dict) else {}
+    tier = env.get("result", {}).get("semantic_manifest", [{}])[0].get("execution_tier")
+    t.check("TX3 kill: tier vm after recovery, before the respecialization", "vm", tier)
+    t.check("TX3 kill: respecialization pending after recovery", True, spec.get("pending_respecialization"))
+    t.check("TX3 kill: the kernel was not quarantined (nothing attributed to it)", [], spec.get("quarantined"))
+    env = sess.request("world.inspect", {"world_id": nat})
+    tier = env.get("result", {}).get("semantic_manifest", [{}])[0].get("execution_tier")
+    t.check("TX3 kill: respecialized tier after the next non-tick answer", "native_scalar", tier)
+    t.check("TX3 kill: respecialization outcome", "respecialized",
+            env.get("specialization", {}).get("respecialization"))
+    for tick in range(4, 21):
+        step(t, sess, ctrl, 1)
+        step(t, sess, nat, 1)
+        t.check(f"TX3 kill: tick {tick} native == VM control", inspect(t, sess, ctrl).get("columns"),
+                inspect(t, sess, nat).get("columns"))
+    close_world(t, sess, ctrl)
     close_world(t, sess, nat)
     if "avx2" not in [b for b, _ in backends]:
         ctrl, _ = create_world(t, sess, SPEC_WORLD, [SPEC_CAP])

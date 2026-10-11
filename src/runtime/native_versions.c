@@ -78,6 +78,24 @@ void su_nv_test_arm(uint32_t mode, uint32_t delay_ms) {
 #define NV_FAULT_BEFORE() ((void)0)
 #endif
 
+#ifdef SU_TEST_FAULT_HOOKS
+/* M1-02c-2: crash of an INSTALLED kernel at a tick (test-only). The worker dies with SIGSEGV inside
+ * su_nv_run_system when the tick being computed is g_native_crash_tick and the artifact's backend
+ * matches g_native_crash_backend (0 = any backend). Compiled only into SU_TEST_FAULT_HOOKS workers. */
+static uint64_t g_native_crash_tick = 0u;
+static uint32_t g_native_crash_backend = 0u;
+
+void su_nv_test_arm_native_crash(uint64_t tick, uint32_t backend_id) {
+    g_native_crash_tick = tick;
+    g_native_crash_backend = backend_id;
+}
+#else
+void su_nv_test_arm_native_crash(uint64_t tick, uint32_t backend_id) {
+    (void)tick;
+    (void)backend_id;
+}
+#endif
+
 static void note_first(SuNvArtifact *a, uint32_t field_id, uint64_t row, uint32_t expected,
                        uint32_t actual) {
     if (a->first.valid) {
@@ -563,6 +581,13 @@ uint32_t su_nv_run_system(uint64_t seq, SuWorld *w) {
     if (a == NULL || w == NULL || a->state != SU_NV_STATE_INSTALLED) {
         return SU_E_INTERNAL;
     }
+#ifdef SU_TEST_FAULT_HOOKS
+    if (g_native_crash_tick != 0u && su_world_tick(w) + 1u == g_native_crash_tick &&
+        (g_native_crash_backend == 0u || g_native_crash_backend == a->backend_id)) {
+        signal(SIGSEGV, SIG_DFL);
+        raise(SIGSEGV);
+    }
+#endif
     a->inflight++;
     st = run_bound(a, w);
     a->inflight--;

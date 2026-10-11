@@ -53,6 +53,10 @@
 #define AGENT_DEFAULT_SPOOL (UINT64_C(32) << 20)
 #define AGENT_FIXTURE_MAX (UINT64_C(64) << 20)
 #define AGENT_RECOVERY_ATTEMPTS 3u
+/* M1-02c-2 limits (docs/AGENT_RPC.md section 10). */
+#define AGENT_MAX_QUARANTINE 16u /* quarantined artifacts; a full table refuses native specialization */
+#define AGENT_MAX_RESPEC 16u     /* pending respecialization requests */
+#define AGENT_RESPEC_RETRIES 1u  /* extra attempts after SU_E_WORKER_FAILED (refusals are not retried) */
 #define AGENT_INTERNAL_ID "internal"
 
 /* ---------- supervisor records (M1-02) ----------
@@ -103,6 +107,15 @@ typedef struct LogOp {
     uint64_t effective_tick;
 } LogOp;
 
+/* A native kernel installed in the active worker for one system (not canonical state). */
+typedef struct NatRec {
+    int used;
+    char system_id[SU_DIAG_SYSTEM_BYTES];
+    char backend[8];          /* requested: scalar | avx2 | auto */
+    char artifact_hash[65];
+    char tier[16];            /* native_scalar | native_avx2 */
+} NatRec;
+
 typedef struct AgentWorld {
     int used;
     int pending;           /* being created: not yet visible to recovery */
@@ -129,7 +142,33 @@ typedef struct AgentWorld {
     uint64_t ticks_since_ck;
     char crash_key[160];   /* the operation the last crashes were attributed to */
     uint32_t crash_repeat;
+    NatRec nat[AGENT_MAX_SYSTEMS];   /* native kernels installed in the active worker */
+    char respec_state[16];           /* last outcome: none | pending | respecialized | failed */
+    char respec_reason[AGENT_REASON_CAP];
 } AgentWorld;
+
+/* A quarantined native artifact, keyed by artifact_hash. */
+typedef struct QRec {
+    int used;
+    char artifact_hash[65];
+    char world_id[AGENT_WORLD_ID_CAP];
+    char system_id[SU_DIAG_SYSTEM_BYTES];
+    char backend[8];
+    char tier[16];
+    char reason[AGENT_REASON_CAP];
+    uint64_t crashes;      /* worker deaths attributed to this artifact */
+    uint64_t replaced_pid; /* pid of the last worker that died running it */
+    uint64_t tick;         /* tick being computed by the last attributed crash */
+} QRec;
+
+/* A pending respecialization (a non-quarantined kernel that died with its worker). */
+typedef struct RespecRec {
+    int used;
+    char world_id[AGENT_WORLD_ID_CAP];
+    char system_id[SU_DIAG_SYSTEM_BYTES];
+    char backend[8];
+    uint32_t attempts;
+} RespecRec;
 
 typedef struct AgentCandidate {
     int used;
@@ -180,6 +219,13 @@ typedef struct SuAgent {
     SuBuf rec;       /* recovery object of the request being answered */
     SuBuf event;     /* recovery object not yet reported on a response */
     int event_pending;
+    QRec quar[AGENT_MAX_QUARANTINE];
+    int quar_overflow;      /* a crash could not be recorded: native specialization is refused */
+    RespecRec respec[AGENT_MAX_RESPEC];
+    uint32_t respec_count;  /* FIFO: respec[0] is served first */
+    SuBuf nat_rec;          /* native member of the recovery object being built (nat_has = 1) */
+    int nat_has;
+    int service_respec;     /* serve loop: run the respecialization queue after this reply */
 } SuAgent;
 
 typedef struct AgentCall {
@@ -700,7 +746,10 @@ static uint32_t live_worlds(const SuAgent *a) {
     return n;
 }
 
+static void respec_drop_world(SuAgent *a, AgentWorld *w);
+
 static void world_release(SuAgent *a, AgentWorld *w) {
+    respec_drop_world(a, w);
     free(w->log);
     w->log = NULL;
     memset(w, 0, sizeof *w);
@@ -1391,6 +1440,160 @@ static void quarantine_apply(SuAgent *a, const InFlight *op, SuBuf *q, int *nq) 
     w->crash_key[0] = '\0';
 }
 
+/* ---- M1-02c-2: native kernels, quarantine and respecialization (docs/AGENT_RPC.md section 10) ----
+ * Native kernels are not canonical state: nothing about them is logged or replayed, and a replacement
+ * worker always starts on the VM tier. The supervisor records which artifact is installed per system
+ * (NatRec). A worker death during a world.step of a world that has installed kernels is attributed to
+ * those kernels: each is quarantined by artifact_hash (QRec) and refused from then on. Kernels in the
+ * same worker that were not attributed are re-requested after recovery (RespecRec), serviced between
+ * requests, never during recovery and never by world.step. */
+static void nat_clear(AgentWorld *w) {
+    memset(w->nat, 0, sizeof w->nat);
+}
+
+static QRec *quar_find(SuAgent *a, const char *hash) {
+    uint32_t i;
+    for (i = 0; i < AGENT_MAX_QUARANTINE; i++) {
+        if (a->quar[i].used && strcmp(a->quar[i].artifact_hash, hash) == 0) {
+            return &a->quar[i];
+        }
+    }
+    return NULL;
+}
+
+/* Records one attributed crash of n's artifact. 0 when the table is full: then the artifact cannot be
+ * recorded, and quar_overflow refuses every native specialization (no crash loop is possible). */
+static int quar_note(SuAgent *a, const AgentWorld *w, const NatRec *n, uint64_t old_pid, uint64_t tick,
+                     const char *reason) {
+    QRec *q = quar_find(a, n->artifact_hash);
+    uint32_t i;
+    if (q == NULL) {
+        for (i = 0; i < AGENT_MAX_QUARANTINE && q == NULL; i++) {
+            if (!a->quar[i].used) {
+                q = &a->quar[i];
+            }
+        }
+        if (q == NULL) {
+            a->quar_overflow = 1;
+            return 0;
+        }
+        memset(q, 0, sizeof *q);
+        q->used = 1;
+        snprintf(q->artifact_hash, sizeof q->artifact_hash, "%s", n->artifact_hash);
+        snprintf(q->world_id, sizeof q->world_id, "%s", w->id);
+        snprintf(q->system_id, sizeof q->system_id, "%s", n->system_id);
+        snprintf(q->backend, sizeof q->backend, "%s", n->backend);
+        snprintf(q->tier, sizeof q->tier, "%s", n->tier);
+    }
+    q->crashes++;
+    q->replaced_pid = old_pid;
+    q->tick = tick;
+    snprintf(q->reason, sizeof q->reason, "%s", reason);
+    return 1;
+}
+
+static void respec_enqueue(SuAgent *a, AgentWorld *w, const char *system_id, const char *backend) {
+    RespecRec *r;
+    if (a->respec_count >= AGENT_MAX_RESPEC) {
+        snprintf(w->respec_state, sizeof w->respec_state, "failed");
+        snprintf(w->respec_reason, sizeof w->respec_reason, "respecialization queue is full");
+        return;
+    }
+    r = &a->respec[a->respec_count++];
+    memset(r, 0, sizeof *r);
+    r->used = 1;
+    snprintf(r->world_id, sizeof r->world_id, "%s", w->id);
+    snprintf(r->system_id, sizeof r->system_id, "%s", system_id);
+    snprintf(r->backend, sizeof r->backend, "%s", backend);
+    snprintf(w->respec_state, sizeof w->respec_state, "pending");
+    w->respec_reason[0] = '\0';
+}
+
+static void respec_drop_world(SuAgent *a, AgentWorld *w) {
+    uint32_t i;
+    uint32_t k = 0;
+    for (i = 0; i < a->respec_count; i++) {
+        if (strcmp(a->respec[i].world_id, w->id) != 0) {
+            a->respec[k++] = a->respec[i];
+        }
+    }
+    if (k < a->respec_count) {
+        memset(&a->respec[k], 0, sizeof a->respec[0] * (a->respec_count - k));
+    }
+    a->respec_count = k;
+    w->respec_state[0] = '\0';
+    w->respec_reason[0] = '\0';
+}
+
+/* The native object of the recovery answer: the artifact and whether it is quarantined. */
+static void nat_object(SuAgent *a, const AgentWorld *w, const NatRec *n, int quarantined, uint64_t old_pid,
+                       const QRec *q) {
+    su_buf_free(&a->nat_rec);
+    su_buf_init(&a->nat_rec);
+    su_buf_str(&a->nat_rec, "{\"artifact_hash\":");
+    su_buf_quoted(&a->nat_rec, n->artifact_hash, strlen(n->artifact_hash));
+    su_buf_str(&a->nat_rec, ",\"world_id\":");
+    su_buf_quoted(&a->nat_rec, w->id, strlen(w->id));
+    su_buf_str(&a->nat_rec, ",\"system_id\":");
+    su_buf_quoted(&a->nat_rec, n->system_id, strlen(n->system_id));
+    su_buf_str(&a->nat_rec, ",\"backend\":");
+    su_buf_quoted(&a->nat_rec, n->backend, strlen(n->backend));
+    su_buf_str(&a->nat_rec, ",\"tier\":");
+    su_buf_quoted(&a->nat_rec, n->tier, strlen(n->tier));
+    su_buf_str(&a->nat_rec, ",\"quarantined\":");
+    su_buf_str(&a->nat_rec, quarantined ? "true" : "false");
+    if (q != NULL) {
+        su_buf_str(&a->nat_rec, ",\"crash_count\":");
+        su_buf_u64(&a->nat_rec, q->crashes);
+        su_buf_str(&a->nat_rec, ",\"replaced_pid\":");
+        su_buf_u64(&a->nat_rec, old_pid);
+    }
+    su_buf_str(&a->nat_rec, "}");
+    a->nat_has = 1;
+}
+
+/* Runs first in recovery, before the old worker is killed. Kernels of a world.step that died are
+ * quarantined (every kernel of that world: the crashed one is not identified per tick). The others
+ * are queued for respecialization. Every record is dropped: the replacement worker has no native
+ * kernel. */
+static void native_on_death(SuAgent *a, const InFlight *op, uint64_t old_pid) {
+    uint32_t i;
+    uint32_t s;
+    for (i = 0; i < AGENT_MAX_WORLDS; i++) {
+        AgentWorld *w = &a->world[i];
+        int attributed;
+        if (!w->used || w->pending) {
+            continue;
+        }
+        attributed = op != NULL && op->kind == OPK_STEP && op->w == w;
+        for (s = 0; s < AGENT_MAX_SYSTEMS; s++) {
+            NatRec *n = &w->nat[s];
+            int noted;
+            if (!n->used) {
+                continue;
+            }
+            if (attributed) {
+                noted = quar_note(a, w, n, old_pid, op->tick, "worker died while running this native kernel");
+                if (!a->nat_has) {
+                    /* the recovery answer names the first attributed kernel */
+                    nat_object(a, w, n, noted, old_pid, noted ? quar_find(a, n->artifact_hash) : NULL);
+                }
+                if (!noted) {
+                    snprintf(w->respec_state, sizeof w->respec_state, "failed");
+                    snprintf(w->respec_reason, sizeof w->respec_reason, "quarantine table is full");
+                }
+                /* The death is attributed to the kernel, not to a candidate revision: the M1-02a
+                 * repeated-crash rule (candidate quarantine) must not count these deaths. */
+                w->crash_repeat = 0;
+                w->crash_key[0] = '\0';
+            } else {
+                respec_enqueue(a, w, n->system_id, n->backend);
+            }
+            n->used = 0;
+        }
+    }
+}
+
 /* Replaces the active worker and rebuilds every live world. The recovery object is kept in a->rec
  * (for the response being answered) and in a->event (reported once on the next response). */
 static uint32_t count_unrecoverable(const SuAgent *a) {
@@ -1419,6 +1622,7 @@ static void recover(SuAgent *a, AgentCall *c, const InFlight *op) {
 
     su_buf_init(&q);
     su_buf_init(&unrec);
+    native_on_death(a, op, old_pid);
     su_proc_kill(&a->worker);
     memset(&st, 0, sizeof st);
     for (attempt = 0; attempt < AGENT_RECOVERY_ATTEMPTS && !ok; attempt++) {
@@ -1502,7 +1706,13 @@ static void recover(SuAgent *a, AgentCall *c, const InFlight *op) {
     su_buf_put(&a->rec, unrec.data, unrec.len);
     su_buf_str(&a->rec, "],\"quarantined\":[");
     su_buf_put(&a->rec, q.data, q.len);
-    su_buf_str(&a->rec, "]}");
+    su_buf_str(&a->rec, "]");
+    if (a->nat_has) {
+        su_buf_str(&a->rec, ",\"native\":");
+        su_buf_put(&a->rec, a->nat_rec.data, a->nat_rec.len);
+        a->nat_has = 0;
+    }
+    su_buf_str(&a->rec, "}");
     su_buf_free(&q);
     su_buf_free(&unrec);
 
@@ -2385,6 +2595,65 @@ fail_early:
     return st != SU_OK ? st : SU_E_INTERNAL;
 }
 
+static void attach_member(SuBuf *out, const char *key, const SuBuf *val);
+
+/* Adds "specialization" to a world.inspect answer: whether respecialization is pending for the world,
+ * its last outcome, and the quarantine table (M1-02c-2). */
+static void attach_spec_status(SuAgent *a, const AgentWorld *w, SuBuf *res) {
+    SuBuf v;
+    uint32_t i;
+    int pending = 0;
+    int n = 0;
+    for (i = 0; i < a->respec_count; i++) {
+        if (strcmp(a->respec[i].world_id, w->id) == 0) {
+            pending = 1;
+        }
+    }
+    su_buf_init(&v);
+    su_buf_str(&v, "{\"pending_respecialization\":");
+    su_buf_str(&v, pending ? "true" : "false");
+    su_buf_str(&v, ",\"respecialization\":");
+    su_buf_quoted(&v, w->respec_state[0] != '\0' ? w->respec_state : "none",
+                  w->respec_state[0] != '\0' ? strlen(w->respec_state) : 4u);
+    su_buf_str(&v, ",\"reason\":");
+    su_buf_quoted(&v, w->respec_reason, strlen(w->respec_reason));
+    su_buf_str(&v, ",\"quarantined\":[");
+    for (i = 0; i < AGENT_MAX_QUARANTINE; i++) {
+        const QRec *q = &a->quar[i];
+        if (!q->used) {
+            continue;
+        }
+        if (n > 0) {
+            su_buf_str(&v, ",");
+        }
+        su_buf_str(&v, "{\"artifact_hash\":");
+        su_buf_quoted(&v, q->artifact_hash, strlen(q->artifact_hash));
+        su_buf_str(&v, ",\"world_id\":");
+        su_buf_quoted(&v, q->world_id, strlen(q->world_id));
+        su_buf_str(&v, ",\"system_id\":");
+        su_buf_quoted(&v, q->system_id, strlen(q->system_id));
+        su_buf_str(&v, ",\"backend\":");
+        su_buf_quoted(&v, q->backend, strlen(q->backend));
+        su_buf_str(&v, ",\"tier\":");
+        su_buf_quoted(&v, q->tier, strlen(q->tier));
+        su_buf_str(&v, ",\"state\":\"quarantined\",\"reason\":");
+        su_buf_quoted(&v, q->reason, strlen(q->reason));
+        su_buf_str(&v, ",\"crash_count\":");
+        su_buf_u64(&v, q->crashes);
+        su_buf_str(&v, ",\"replaced_pid\":");
+        su_buf_u64(&v, q->replaced_pid);
+        su_buf_str(&v, ",\"tick\":");
+        su_buf_u64(&v, q->tick);
+        su_buf_str(&v, "}");
+        n++;
+    }
+    su_buf_str(&v, "],\"quarantine_table_full\":");
+    su_buf_str(&v, a->quar_overflow ? "true" : "false");
+    su_buf_str(&v, "}");
+    attach_member(res, "specialization", &v);
+    su_buf_free(&v);
+}
+
 static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"world_id", "fields", "limit", "offset"};
     const char *world_id = NULL;
@@ -2453,6 +2722,7 @@ static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *re
     }
     relay(res, &resp, c);
     su_buf_free(&resp);
+    attach_spec_status(a, w, res);
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
@@ -2776,6 +3046,8 @@ static uint32_t h_world_close(SuAgent *a, const SuJsonValue *params, SuBuf *res,
         return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
     }
     reply_free(&r);
+    nat_clear(w);
+    respec_drop_world(a, w);
     relay(res, &resp, c);
     su_buf_free(&resp);
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
@@ -2886,6 +3158,8 @@ static uint32_t h_candidate_install(SuAgent *a, const SuJsonValue *params, SuBuf
         return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
     }
     snprintf(cd->install_state, sizeof cd->install_state, "installed");
+    nat_clear(w);
+    respec_drop_world(a, w);
     cd->install_code = 0;
     ju64(r.result, "txid", &cd->install_txid);
     ju64(r.result, "effective_tick", &cd->install_tick);
@@ -3041,6 +3315,59 @@ static uint32_t call_detail(AgentCall *c, uint32_t code, const char *msg, const 
  *  3. install: only after an admitted result, the active worker recompiles (compilation only), requires
  *     the admitted artifact_hash, rechecks the revision and semantic hash, and publishes. A worker death
  *     here recovers the world as before; the kernel is not canonical state, so nothing is logged. */
+/* Refusal of a native specialization by the quarantine table (M1-02c-2). reason is
+ * artifact_quarantined (hash != NULL) or quarantine_table_full. */
+static uint32_t quar_refuse(AgentCall *c, const char *reason, const char *hash, uint64_t crashes) {
+    SuBuf d;
+    uint32_t st;
+    su_buf_init(&d);
+    su_buf_str(&d, "{\"phase\":\"quarantine\",\"reason\":");
+    su_buf_quoted(&d, reason, strlen(reason));
+    if (hash != NULL) {
+        su_buf_str(&d, ",\"artifact_hash\":");
+        su_buf_quoted(&d, hash, strlen(hash));
+        su_buf_str(&d, ",\"crash_count\":");
+        su_buf_u64(&d, crashes);
+    }
+    su_buf_str(&d, "}");
+    st = call_detail(c, SU_E_CANDIDATE_FAILED,
+                     hash != NULL ? "artifact is quarantined: a worker died while running it"
+                                  : "quarantine table is full: native specialization is refused",
+                     &d);
+    su_buf_free(&d);
+    return st;
+}
+
+/* Records an installed native kernel of w for system_id (replaces an earlier record for it). */
+static void nat_note_install(AgentWorld *w, const char *system_id, const char *backend, const char *hash,
+                             const char *tier) {
+    uint32_t s;
+    NatRec *n = NULL;
+    for (s = 0; s < AGENT_MAX_SYSTEMS && n == NULL; s++) {
+        if (w->nat[s].used && strcmp(w->nat[s].system_id, system_id) == 0) {
+            n = &w->nat[s];
+        }
+    }
+    for (s = 0; s < AGENT_MAX_SYSTEMS && n == NULL; s++) {
+        if (!w->nat[s].used) {
+            n = &w->nat[s];
+        }
+    }
+    if (n == NULL) {
+        return;
+    }
+    memset(n, 0, sizeof *n);
+    n->used = 1;
+    snprintf(n->system_id, sizeof n->system_id, "%s", system_id);
+    snprintf(n->backend, sizeof n->backend, "%s", backend);
+    snprintf(n->artifact_hash, sizeof n->artifact_hash, "%s", hash);
+    snprintf(n->tier, sizeof n->tier, "%s", tier);
+}
+
+static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char *expect,
+                                    const char *system_id, const char *backend, const char *sem, SuBuf *res,
+                                    AgentCall *c);
+
 static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"world_id", "expected_world_revision", "system_id", "backend",
                                           "expected_semantic_hash"};
@@ -3049,6 +3376,24 @@ static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf 
     const char *system_id = NULL;
     const char *backend = NULL;
     const char *sem = NULL;
+
+    if (check_keys(params, allowed, 5, c) != SU_OK ||
+        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK ||
+        param_str(params, "system_id", 1, &system_id, c) != SU_OK ||
+        param_str(params, "backend", 1, &backend, c) != SU_OK ||
+        param_str(params, "expected_semantic_hash", 0, &sem, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    if (strcmp(backend, "scalar") != 0 && strcmp(backend, "avx2") != 0 && strcmp(backend, "auto") != 0) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "backend must be scalar, avx2 or auto");
+    }
+    return specialize_pipeline(a, world_id, expect, system_id, backend, sem, res, c);
+}
+
+static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char *expect,
+                                       const char *system_id, const char *backend, const char *sem,
+                                       SuBuf *res, AgentCall *c) {
     AgentWorld *w = NULL;
     SuBuf req;
     SuBuf resp;
@@ -3074,17 +3419,7 @@ static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf 
     uint32_t i;
     uint32_t st;
 
-    if (check_keys(params, allowed, 5, c) != SU_OK ||
-        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
-        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK ||
-        param_str(params, "system_id", 1, &system_id, c) != SU_OK ||
-        param_str(params, "backend", 1, &backend, c) != SU_OK ||
-        param_str(params, "expected_semantic_hash", 0, &sem, c) != SU_OK) {
-        return SU_E_TYPE;
-    }
-    if (strcmp(backend, "scalar") != 0 && strcmp(backend, "avx2") != 0 && strcmp(backend, "auto") != 0) {
-        return call_fail(c, SU_E_INVALID_ARGUMENT, "backend must be scalar, avx2 or auto");
-    }
+
     w = find_world(a, world_id);
     if (w == NULL) {
         return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown world_id");
@@ -3092,6 +3427,9 @@ static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf 
     st = preflight(a, c);
     if (st != SU_OK) {
         return st;
+    }
+    if (a->quar_overflow) {
+        return quar_refuse(c, "quarantine_table_full", NULL, 0);
     }
 
     /* 1. identity (active worker, read-only). */
@@ -3273,6 +3611,13 @@ static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf 
     su_buf_free(&adm);
     su_buf_free(&det);
 
+    {
+        QRec *q = quar_find(a, hash);
+        if (q != NULL) {
+            return quar_refuse(c, "artifact_quarantined", hash, q->crashes);
+        }
+    }
+
     /* 3. install: the active worker recompiles and requires this artifact_hash. */
     req_begin(&req, c->id, "internal.specialize.install");
     su_buf_str(&req, "\"world_id\":");
@@ -3303,9 +3648,71 @@ static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf 
         su_buf_free(&resp);
         return worker_died(a, c, NULL);
     }
+    {
+        Reply ir;
+        char tier[16];
+        reply_parse(&ir, resp.data, resp.len);
+        if (ir.ok && jstr(ir.result, "execution_tier", tier, sizeof tier)) {
+            nat_note_install(w, system_id, backend, hash, tier);
+        }
+        reply_free(&ir);
+    }
     relay(res, &resp, c);
     su_buf_free(&resp);
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+
+/* Serves one pending respecialization. Called by the serve loop after the reply to a request other
+ * than world.step, so no tick ever waits for it. A refusal is final; SU_E_WORKER_FAILED is retried up
+ * to AGENT_RESPEC_RETRIES times. The outcome is kept per world (respec_state, respec_reason). */
+static void respec_service(SuAgent *a) {
+    RespecRec rr;
+    AgentWorld *w;
+    AgentCall c;
+    SuBuf res;
+    char rev[AGENT_REV_CAP];
+    uint32_t st;
+
+    if (a->respec_count == 0) {
+        return;
+    }
+    rr = a->respec[0];
+    memmove(&a->respec[0], &a->respec[1], sizeof a->respec[0] * (a->respec_count - 1));
+    a->respec_count--;
+    memset(&a->respec[a->respec_count], 0, sizeof a->respec[0]);
+    w = find_world(a, rr.world_id);
+    if (w == NULL || w->unrecoverable) {
+        return;
+    }
+    if (a->quar_overflow) {
+        snprintf(w->respec_state, sizeof w->respec_state, "failed");
+        snprintf(w->respec_reason, sizeof w->respec_reason, "quarantine table is full");
+        return;
+    }
+    memset(&c, 0, sizeof c);
+    c.id = "respec";
+    su_buf_init(&res);
+    wrev(w, w->rev, rev, sizeof rev);
+    st = specialize_pipeline(a, w->id, rev, rr.system_id, rr.backend, NULL, &res, &c);
+    su_buf_free(&res);
+    if (st == SU_OK) {
+        snprintf(w->respec_state, sizeof w->respec_state, "respecialized");
+        w->respec_reason[0] = '\0';
+        return;
+    }
+    if (st == SU_E_WORKER_FAILED && rr.attempts < AGENT_RESPEC_RETRIES && a->respec_count < AGENT_MAX_RESPEC) {
+        rr.attempts++;
+        a->respec[a->respec_count++] = rr;
+        return;
+    }
+    snprintf(w->respec_state, sizeof w->respec_state, "failed");
+    snprintf(w->respec_reason, sizeof w->respec_reason, "%.*s", (int)(sizeof w->respec_reason - 1u),
+             c.msg[0] != '\0' ? c.msg : "respecialization was refused");
+}
+#else
+static void respec_service(SuAgent *a) {
+    (void)a;
 }
 #endif /* SU_HAVE_NATIVE */
 
@@ -3391,6 +3798,9 @@ static void agent_handle(SuAgent *a, const uint8_t *line, size_t len, int overfl
     memset(&c, 0, sizeof c);
     c.id = req.id;
     st = route(a, &req, &res, &c);
+    /* M1-02c-2: deferred respecialization runs after a reply to a non-tick request that reports no
+     * recovery, so the answer that reports a recovery shows the VM tier with the request pending. */
+    a->service_respec = strcmp(req.method, "world.step") != 0 && !c.has_rec;
     if (st != SU_OK) {
         su_proto_error_detail(out, req.has_id, req.id, st, c.msg[0] != '\0' ? c.msg : su_status_name(st),
                               c.detail[0] != '\0' ? c.detail : NULL);
@@ -3467,6 +3877,7 @@ int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
     a->worker.out_fd = -1;
     su_buf_init(&a->rec);
     su_buf_init(&a->event);
+    su_buf_init(&a->nat_rec);
 
     memset(&ign, 0, sizeof ign);
     ign.sa_handler = SIG_IGN;
@@ -3496,6 +3907,10 @@ int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
             break;
         }
         su_buf_free(&out);
+        if (a->service_respec) {
+            a->service_respec = 0;
+            respec_service(a);
+        }
     }
     su_proc_finish(&a->worker, 1000);
     su_line_reader_free(&r);
@@ -3503,6 +3918,7 @@ int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
     su_spool_close(a->spool);
     su_buf_free(&a->rec);
     su_buf_free(&a->event);
+    su_buf_free(&a->nat_rec);
     free(a);
     sigaction(SIGPIPE, &old, NULL);
     return ret;

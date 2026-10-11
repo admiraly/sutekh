@@ -9,6 +9,8 @@ import sys
 
 SEAM_STRINGS = [
     b"SU_TEST_FAULT",          # environment selectors (also matches SU_TEST_FAULT_MS)
+    b"SU_TEST_FAULT_NATIVE_TICK",     # M1-02c-2: installed-kernel crash seam (tick)
+    b"SU_TEST_FAULT_NATIVE_BACKEND",  # M1-02c-2: installed-kernel crash seam (backend)
     b"perturb_recompile",      # active-worker install seam
     b"wrong_kernel",           # disposable admission seam
     b"wrong_world",            # disposable own-case seam

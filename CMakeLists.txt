@@ -216,6 +216,14 @@ if(SUTEKH_NATIVE)
              "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/specialize_admission_scratch"
              WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     # The production engine binary must carry none of the fault seams.
+    # M1-02c-2: native kernel crash, quarantine and respecialization (test worker only).
+    add_executable(test_native_fault tests/native/qualification/test_native_fault.c)
+    target_link_libraries(test_native_fault PRIVATE su_agent su_native su_ir)
+    sutekh_apply_warnings(test_native_fault)
+    add_dependencies(test_native_fault native_test_worker)
+    add_test(NAME native_fault COMMAND test_native_fault $<TARGET_FILE:native_test_worker>
+             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/native_fault_scratch"
+             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME release_seams COMMAND python3
              "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/qualification/check_release_seams.py"
              $<TARGET_FILE:sutekh>)
