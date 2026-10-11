@@ -3,13 +3,22 @@
 Headers: `include/sutekh/{status,ir,abi}.h`. Consumers implement against these; any change needs a new generation and revalidation of dependents (owner: contract owner / integrator).
 
 ## 0. Revision log
+- r3: closes r2-review blockers (error ordering stages, header cross-references, LIVE_IR section 5 note, `SU_LIMIT_ROWS` is a default).
 - r1: initial draft (43dba6d). r2: resolves blocking findings 1-9 of `planning/handoffs/2026-10-11-m0-00-review.md`; adds `SU_E_MISSING_STORE` (20). Headers are the layout authority; this document is the semantic authority.
 
 ## 1. Numeric and effect contract
 - Profile `u32_mod_v1`: add/sub/mul modulo 2^32, unsigned `lt`, exact `eq` (both operands u32, result bool), `select` on bool; bool never coerces to u32. Unsigned C arithmetic only.
 - Registers: per-row, single assignment, numbered from 0 in definition order.
 - Loads read system-entry values. **Every declared-writable field must be stored exactly once** (unchanged values are copied with load+store; "no needless copy" in the spec means no extra registers beyond that). A second store of one field -> `SU_E_UNDECLARED_WRITE`; a writable field never stored -> `SU_E_MISSING_STORE`; store/load of a field without the permission -> `SU_E_UNDECLARED_WRITE` / `SU_E_UNDECLARED_READ`.
-- Verifier reports the **first** error only, in this fixed order: input size/depth limits (`SU_E_RESOURCE_LIMIT`), JSON syntax/UTF-8 (`SU_E_PARSE`), duplicate keys (`SU_E_DUPLICATE_KEY`), key/shape/type errors (`SU_E_TYPE`), then instructions in ascending order, then end-of-body checks (`SU_E_MISSING_STORE`). Multi-fault fixtures therefore expect the earliest category.
+- Verifier reports the **first** error only, by this fixed stage order (capsule and IR are both checked; capsule first within a stage):
+  1. size/depth limits -> `SU_E_RESOURCE_LIMIT`
+  2. JSON syntax / UTF-8 -> `SU_E_PARSE`
+  3. duplicate object keys -> `SU_E_DUPLICATE_KEY`
+  4. top-level document shape (missing/unknown top-level keys, wrong JSON types of top-level values, `ir_version`/profile unsupported) -> `SU_E_TYPE`
+  5. capsule/schema semantics: duplicate field id or name, `system_id`/`query`/`numeric_profile` mismatch between IR and capsule -> `SU_E_SCHEMA_MISMATCH`
+  6. instructions in ascending index; within one instruction in this order: `op` unknown -> `SU_E_UNKNOWN_OPCODE`; instruction object keys missing/unknown/wrong JSON type, constant not an integer in 0..2^32-1 -> `SU_E_TYPE`; undefined register -> `SU_E_UNDEFINED_REGISTER`; duplicate dst -> `SU_E_DUPLICATE_REGISTER`; operand register type mismatch (e.g. bool where u32 expected) -> `SU_E_TYPE`; load of unknown or unreadable field -> `SU_E_UNDECLARED_READ`; store to unknown, unwritable or already-stored field -> `SU_E_UNDECLARED_WRITE`
+  7. end of body: a declared-writable field never stored -> `SU_E_MISSING_STORE`
+  Multi-fault fixtures therefore expect the earliest stage/position. The IR file's instruction-count cap (4096) is stage 1.
 - Execution: row loop owned by runtime, ascending order, zero rows run nothing, whole table per call.
 
 ## 2. Schema and field identity

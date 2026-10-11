@@ -17,7 +17,7 @@
 #define SU_LIMIT_INSTRUCTIONS       4096u
 #define SU_LIMIT_REGISTERS          4096u
 #define SU_LIMIT_FIELDS             256u
-#define SU_LIMIT_ROWS               UINT64_C(1000000)
+#define SU_LIMIT_ROWS               UINT64_C(1000000) /* default; runtime may configure it lower or higher */
 #define SU_LIMIT_PROTOCOL_MESSAGE   (1024u * 1024u)
 
 /* Opcode numbers are part of the semantic-hash encoding: frozen. */

@@ -76,7 +76,7 @@ typedef struct SuExecContext SuExecContext;
  * Preconditions are CHECKED by the wrapper: struct sizes, abi_version,
  * generations, lengths equal to row_count, no aliasing between staging and
  * inputs, and row_count within SU_LIMIT_ROWS. Violations return
- * the status in M0_CONTRACT.md section 4 without touching any column.
+ * the status in M0_CONTRACT.md section 3 without touching any column.
  * row_count == 0 returns SU_OK and executes no instruction.
  * Rows run in ascending index order; at most one store per field per row. */
 typedef uint32_t (*SuInvokeV1Fn)(SuExecContext *ctx, const SuInvocation *input,
