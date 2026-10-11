@@ -1127,24 +1127,25 @@ def t09(t: TestCtx):
     t.check_mismatches("multi-system admission refuses a failing second system",
                        classify_error(env, bad_item["expected_code"]))
     t.check("session answers after refused multi-system create", True, sess.request("engine.info", {})["ok"])
-    # Runtime: the two-system world the manifest describes must run; observe what the binary does.
-    wid, _rev = create_world(t, sess, world_rel, systems)
+    # Runtime: system A succeeds into staging, system B exceeds its own limits.max_rows. The step must
+    # fail, and the published (committed) root must be exactly what it was before the step.
+    wid, rev = create_world(t, sess, world_rel, systems)
     before = inspect(t, sess, wid)
-    step(t, sess, wid, 1)
+    t.check("T09 starts at tick 0", 0, before["tick"])
+    env = sess.request("world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": 1})
+    if env["ok"] is False and env["error"].get("code") == UNSUPPORTED:
+        raise Unavailable("world.step answered SU_E_UNSUPPORTED_METHOD")
+    t.check("failing second system makes world.step fail", True, env["ok"] is False)
+    t.check_mismatches("step failure code", classify_error(env, manifest["expected_failure_code"]))
     after = inspect(t, sess, wid)
-    t.details["observed_runtime"] = {
-        "systems": manifest["systems_in_order"],
-        "b_limits_max_rows": 2, "world_row_count": after["row_count"],
-        "step_result": "ok", "tick_after": after["tick"], "columns_after": after["columns"],
-        "columns_before": before["columns"],
-    }
-    raise Unavailable("the real binary cannot produce a runtime failure in the second system after the first "
-                      "succeeded: capsule limits.max_rows is not enforced at runtime (schedule.c never calls "
-                      "su_vm_context_set_row_limit, so the VM uses SU_LIMIT_ROWS = 1000000). Observed: "
-                      "demo.movement_b with max_rows 2 over a 4-row world was accepted and a step published "
-                      "tick 1. The row count is shared by every system in a world, so a size limit cannot "
-                      "fail only the second system. No other runtime fault path was found in src/vm. "
-                      "Admission refusal of a failing second system was checked and passes.")
+    t.check("tick not published", manifest["expected_tick_after_failed_step"], after["tick"])
+    t.check("committed position_x unchanged by A's staged write",
+            manifest["expected_columns_after_failed_step"]["position_x"], after["columns"]["position_x"])
+    t.check("committed velocity_x unchanged",
+            manifest["expected_columns_after_failed_step"]["velocity_x"], after["columns"]["velocity_x"])
+    t.check("columns identical to pre-step inspection", before["columns"], after["columns"])
+    t.check("world_revision unchanged", before.get("world_revision"), after.get("world_revision"))
+    t.check("session still answers", True, sess.request("engine.info", {})["ok"])
 
 
 def _children_fast(pid) -> set:
