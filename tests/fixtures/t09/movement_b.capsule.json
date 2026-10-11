@@ -37,5 +37,7 @@
     "max_rows": 2,
     "allocation": "forbidden"
   },
-  "tests": []
+  "tests": [
+    "movement_b.test.json"
+  ]
 }

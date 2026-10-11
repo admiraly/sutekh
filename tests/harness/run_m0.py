@@ -35,6 +35,8 @@ import collections
 import datetime
 import hashlib
 import json
+import math
+import platform
 import os
 import queue
 import re
@@ -392,11 +394,11 @@ MAX_RECORDED_CHECKS = 300
 
 
 class RunCtx:
-    def __init__(self, binary, no_build, t11_cycles, t11_bound_kib):
+    def __init__(self, binary, no_build, reload_iterations, latency_samples):
         self.binary = binary
         self.no_build = no_build
-        self.t11_cycles = t11_cycles
-        self.t11_bound_kib = t11_bound_kib
+        self.reload_iterations = reload_iterations
+        self.latency_samples = latency_samples
         self.env = dict(os.environ)
         self.probe = None
 
@@ -503,53 +505,175 @@ ENGINE_METHODS = {
         "source": "src/agent/su_agent.c h_engine_info",
     },
     "capsule.submit": {
-        "params": "{capsule_path}  (any other key -> SU_E_TYPE; creation-only, no expected revision)",
+        "params": "{capsule_path}  (creation-only; each accepted submit takes one of 16 candidate slots)",
         "result": "candidate_id, status, system_id, source_hash, capsule_hash, semantic_hash, artifact_format",
         "source": "src/agent/su_agent.c h_capsule_submit",
     },
     "candidate.status": {
         "params": "{candidate_id}",
         "result": "candidate_id, status, system_id, source_hash, capsule_hash, semantic_hash, "
-                  "evaluation{status, cases_total, cases_passed}  (no worker_pid)",
+                  "evaluation{status, cases_total, cases_passed}, worker_pid, install{state, txid, "
+                  "effective_tick, error_status}",
         "source": "src/agent/su_agent.c h_candidate_status",
     },
     "candidate.evaluate": {
         "params": "{candidate_id, test_path, timeout_ms?}  (synchronous; no job id)",
-        "result": "candidate evaluation: status, cases_total, cases_passed, failures[]",
+        "result": "candidate_id, evaluation_id, status (passed|failed|worker_failed), cases_total, "
+                  "cases_passed, failures[]",
         "source": "src/agent/su_agent.c h_candidate_evaluate",
     },
+    "candidate.install": {
+        "params": "{candidate_id, world_id, expected_world_revision, allowed_effective_tick}",
+        "result": "world_id, candidate_id, txid, state, system_id, system_revision, effective_tick, "
+                  "previous_txid, previous_semantic_hash, semantic_hash, world_revision, tick, worker_pid",
+        "source": "src/agent/su_agent.c h_candidate_install, src/runtime/reload.c",
+    },
     "world.create": {
-        "params": "{fixture_path, capsule_path}  (one capsule; capsule_paths -> SU_E_TYPE)",
-        "result": "world_id, world_revision, tick, row_count, schema_id, system_id, source_hash, "
-                  "capsule_hash, semantic_hash",
+        "params": "{fixture_path, capsule_path} or {fixture_path, capsule_paths: [1..8]}",
+        "result": "world_id, world_revision, worker_pid, tick, row_count, schema_id, system_id, source_hash, "
+                  "capsule_hash, semantic_hash, semantic_manifest[]",
         "source": "src/agent/su_agent.c h_world_create, src/runtime/worker.c worker_create",
     },
     "world.inspect": {
-        "params": "{world_id, fields?: [names] (<=64), limit?: 1..256, default 16}",
-        "result": "world_id, world_revision, tick, row_count, returned_rows, entity_ids[], columns{name: [u32]}",
+        "params": "{world_id, fields?: [names] (<=64), limit?: 1..256 (default 16), offset?: 0..}",
+        "result": "world_id, world_revision, worker_pid, tick, row_count, offset, returned_rows, entity_ids[], "
+                  "columns{name: [u32]}, semantic_manifest[], registry{}",
         "source": "src/agent/su_agent.c h_world_inspect, src/runtime/worker.c worker_inspect",
     },
     "world.step": {
         "params": "{world_id, expected_world_revision (required), ticks (0..100000)}",
-        "result": "world_id, world_revision, ticks_completed, tick",
+        "result": "world_id, world_revision, ticks_completed, tick, worker_pid",
         "source": "src/agent/su_agent.c h_world_step, src/runtime/worker.c worker_step",
     },
 }
 # Not implemented by the M0 engine: routed to SU_E_UNSUPPORTED_METHOD, not advertised.
-ENGINE_MISSING = ("candidate.install", "world.snapshot", "world.restore")
+ENGINE_MISSING = ("world.snapshot", "world.restore")
 
-INSPECT_LIMIT = 256  # engine maximum; there is no paging, so larger worlds cannot be compared in full
+INSPECT_PAGE = 256            # engine maximum for world.inspect limit
+INSPECT_FIELDS = ("position_x", "velocity_x")
+# Harness-chosen bound, NOT an engine requirement: growth of VmRSS after warm-up, per process.
+HARNESS_RSS_GROWTH_BOUND_KIB = 8192
+EDIT_V1_TEST = "tests/fixtures/edit/movement.test.json"
+EDIT_V2_TEST = "tests/fixtures/edit/movement_v2.test.json"
+EDIT_V2_WRONG_TEST = "tests/fixtures/edit/movement_v2_wrong.test.json"
 
 
 def call(tctx, sess, method, params, timeout=60.0) -> dict:
     return ok_result(tctx, method, sess.request(method, params, timeout))
 
 
+def manifest_identity(manifest) -> list:
+    """Content identity of each system: install-history fields (txid, system_revision,
+    installed_tick) are excluded because every install legitimately changes them."""
+    if not isinstance(manifest, list):
+        return None
+    return [{k: m.get(k) for k in ("system_id", "semantic_hash", "source_hash", "capsule_hash")}
+            for m in manifest if isinstance(m, dict)]
+
+
+def supervisor_pid(tctx, sess) -> int:
+    """Supervisor pid as engine.info reports it (result.process.pid), checked against the OS pid."""
+    proc = call(tctx, sess, "engine.info", {}).get("process")
+    pid = proc.get("pid") if isinstance(proc, dict) else None
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        raise Failed("engine.info lacks process.pid")
+    tctx.check("engine.info pid is the serve process", sess.proc.pid, pid)
+    return pid
+
+
+def merge_pages(pages: list, fields, label="world.inspect") -> dict:
+    """Merge world.inspect pages read with offset paging. Any inconsistency raises Failed."""
+    if not pages:
+        raise Failed(f"{label}: no pages read")
+    first = pages[0]
+    row_count = first.get("row_count")
+    if not isinstance(row_count, int) or isinstance(row_count, bool) or row_count < 0:
+        raise Failed(f"{label}: row_count is not a non-negative integer")
+    columns = {f: [] for f in fields}
+    entity_ids: list = []
+    offset = 0
+    for page in pages:
+        for key in ("world_revision", "tick", "row_count"):
+            if page.get(key) != first.get(key):
+                raise Failed(f"{label}: page at offset {offset} changed {key}: "
+                             f"{_short(first.get(key))} -> {_short(page.get(key))}")
+        if page.get("offset") != offset:
+            raise Failed(f"{label}: page reports offset {page.get('offset')}, expected {offset}")
+        n = page.get("returned_rows")
+        if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+            raise Failed(f"{label}: returned_rows is not a non-negative integer")
+        ids = page.get("entity_ids")
+        if not isinstance(ids, list) or len(ids) != n:
+            raise Failed(f"{label}: entity_ids length does not equal returned_rows at offset {offset}")
+        cols = page.get("columns")
+        if not isinstance(cols, dict):
+            raise Failed(f"{label}: columns missing at offset {offset}")
+        for f in fields:
+            vals = cols.get(f)
+            if not isinstance(vals, list) or len(vals) != n:
+                raise Failed(f"{label}: column {f} has wrong length at offset {offset}")
+            columns[f].extend(vals)
+        entity_ids.extend(ids)
+        offset += n
+    if offset != row_count:
+        raise Failed(f"{label}: paged {offset} rows, row_count is {row_count}")
+    merged = {k: first.get(k) for k in ("world_id", "world_revision", "tick", "row_count", "schema_id",
+                                        "semantic_manifest", "worker_pid")}
+    merged["columns"] = columns
+    merged["entity_ids"] = entity_ids
+    merged["returned_rows"] = offset
+    merged["pages"] = len(pages)
+    return merged
+
+
+def canonical_state_bytes(state: dict) -> bytes:
+    """Canonical serialisation of the observable state, for byte-for-byte comparison."""
+    doc = {"tick": state.get("tick"), "row_count": state.get("row_count"),
+           "entity_ids": state.get("entity_ids"), "columns": state.get("columns"),
+           "semantic_manifest": state.get("semantic_manifest")}
+    return json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def rss_verdict(name, baseline_kib, end_kib, bound_kib) -> list:
+    if baseline_kib is None or end_kib is None:
+        return [f"{name}: RSS not observable"]
+    growth = end_kib - baseline_kib
+    if growth > bound_kib:
+        return [f"{name}: VmRSS grew {growth} KiB after warm-up (harness bound {bound_kib} KiB)"]
+    return []
+
+
+def latency_stats(seconds: list) -> dict:
+    """Nearest-rank statistics in milliseconds. Reports only; no target is compared here."""
+    if not seconds:
+        return {"n": 0, "units": "ms"}
+    s = sorted(seconds)
+    n = len(s)
+
+    def pick(p):
+        return s[max(0, math.ceil(p * n) - 1)]
+
+    return {"n": n, "units": "ms", "min": round(s[0] * 1000, 3), "median": round(pick(0.5) * 1000, 3),
+            "p95": round(pick(0.95) * 1000, 3), "max": round(s[-1] * 1000, 3)}
+
+
+def machine_info() -> dict:
+    info = {"platform": platform.platform(), "machine": platform.machine(), "cpu_count": os.cpu_count(),
+            "python": sys.version.split()[0], "clock": "time.monotonic (host)"}
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8") as fh:
+            info["cpu_model"] = next((ln.split(":", 1)[1].strip() for ln in fh if ln.startswith("model name")), None)
+    except OSError:
+        info["cpu_model"] = None
+    return info
+
+
 def create_world(tctx, sess, world_rel, cap_rels):
-    if len(cap_rels) != 1:
-        raise Unavailable(f"multi-system worlds are not implemented: world.create takes one capsule_path, "
-                          f"harness asked for {len(cap_rels)}")
-    res = call(tctx, sess, "world.create", {"fixture_path": world_rel, "capsule_path": cap_rels[0]})
+    if len(cap_rels) == 1:
+        params = {"fixture_path": world_rel, "capsule_path": cap_rels[0]}
+    else:
+        params = {"fixture_path": world_rel, "capsule_paths": list(cap_rels)}
+    res = call(tctx, sess, "world.create", params)
     wid, rev = res.get("world_id"), res.get("world_revision")
     if not isinstance(wid, str) or not isinstance(rev, str):
         raise Failed("world.create result lacks world_id/world_revision strings")
@@ -558,15 +682,21 @@ def create_world(tctx, sess, world_rel, cap_rels):
 
 
 def inspect(tctx, sess, wid) -> dict:
-    res = call(tctx, sess, "world.inspect",
-               {"world_id": wid, "fields": ["position_x", "velocity_x"], "limit": INSPECT_LIMIT})
-    if not isinstance(res.get("world_revision"), str):
-        raise Failed("world.inspect result lacks world_revision")
-    if res.get("returned_rows") != res.get("row_count"):
-        raise Unavailable(f"world.inspect returned {res.get('returned_rows')} of {res.get('row_count')} rows; "
-                          f"the engine caps limit at {INSPECT_LIMIT} and has no paging, so the full state "
-                          f"cannot be compared")
-    return res
+    """Read every row through world.inspect offset paging (limit 256) and merge the pages."""
+    pages, offset = [], 0
+    while True:
+        res = call(tctx, sess, "world.inspect",
+                   {"world_id": wid, "fields": list(INSPECT_FIELDS), "limit": INSPECT_PAGE, "offset": offset})
+        pages.append(res)
+        n = res.get("returned_rows")
+        if not isinstance(n, int) or isinstance(n, bool):
+            raise Failed("world.inspect result lacks returned_rows")
+        offset += n
+        if n == 0 or offset >= res.get("row_count", 0):
+            break
+        if len(pages) > 1 + 10_000_000 // INSPECT_PAGE:
+            raise Failed("world.inspect paging did not terminate")
+    return merge_pages(pages, INSPECT_FIELDS)
 
 
 def step(tctx, sess, wid, ticks: int, expect=None) -> dict:
@@ -607,12 +737,38 @@ def submit(tctx, sess, cap_rel, source_rel) -> str:
     return cid
 
 
+def evaluate(tctx, sess, cid, test_rel) -> dict:
+    return call(tctx, sess, "candidate.evaluate", {"candidate_id": cid, "test_path": test_rel})
+
+
+def prepare(tctx, sess, cap_rel, source_rel, test_rel) -> str:
+    """Submit a candidate and evaluate it. The evaluation must pass or the test fails."""
+    cid = submit(tctx, sess, cap_rel, source_rel)
+    ev = evaluate(tctx, sess, cid, test_rel)
+    tctx.check(f"evaluation of {cid} passed", "passed", ev.get("status"))
+    tctx.check(f"evaluation of {cid} ran every case", ev.get("cases_total"), ev.get("cases_passed"))
+    return cid
+
+
 def install(tctx, sess, wid, cid, rev, tick) -> dict:
-    # candidate.install is not implemented by the M0 engine; tests that call this are gated on the
-    # capability and never reach it. Kept so the intended shape is written down in one place.
-    return call(tctx, sess, "candidate.install",
-                {"world_id": wid, "candidate_id": cid, "expected_world_revision": rev,
-                 "allowed_effective_tick": tick})
+    """candidate.install that must succeed; the world revision it returns is tracked for later steps."""
+    res = call(tctx, sess, "candidate.install",
+               {"world_id": wid, "candidate_id": cid, "expected_world_revision": rev,
+                "allowed_effective_tick": tick})
+    if isinstance(res.get("world_revision"), str):
+        sess.revs[wid] = res["world_revision"]
+    tctx.check("install state is installed", "installed", res.get("state"))
+    return res
+
+
+def install_expect(tctx, sess, wid, cid, rev, tick, code) -> None:
+    """candidate.install that must be refused with `code`; the raw envelope is checked."""
+    env = sess.request("candidate.install", {"world_id": wid, "candidate_id": cid,
+                                             "expected_world_revision": rev,
+                                             "allowed_effective_tick": tick})
+    if env["ok"] is False and env["error"].get("code") == UNSUPPORTED:
+        raise Unavailable("candidate.install answered SU_E_UNSUPPORTED_METHOD")
+    tctx.check_mismatches(f"install refused with {code}", classify_error(env, code))
 
 
 def drive(tctx, sess, world_rel, cap_rels, checkpoints, label):
@@ -694,18 +850,18 @@ def t02(t: TestCtx):
     cap_rel = "tests/fixtures/t02/movement.capsule.json"
     cap, lir_doc, _ = t.load_system(cap_rel)
     counts = [0, 1, 7, 8, 9, 1024]
-    seen = []
+    seen = {}
     for n in counts:
-        # A worker holds at most 4 worlds (worker.c), so each world gets its own serve process.
+        # A worker holds at most 4 worlds (worker.c), so each world size gets its own serve process.
         sess = t.session(f"T02 serve world_{n}")
         world_rel = f"tests/fixtures/t02/world_{n}.json"
         test_doc = t.load(f"tests/fixtures/t02/movement_{n}.test.json")
         if len(t.load(world_rel)["columns"]["position_x"]) != n:
             raise Failed(f"fixture world_{n} row count is not {n}")
         _t02_or_t03_case(t, sess, world_rel, cap_rel, test_doc["cases"], lir_doc, cap)
+        seen[n] = [c["ticks"] for c in test_doc["cases"]]
         sess.close()
-        seen.append(n)
-    t.details["row_counts_checked"] = seen
+    t.details["row_counts_checked_all_rows"] = seen
 
 
 def t03(t: TestCtx):
@@ -826,85 +982,96 @@ def _swap_expected(t):
 
 
 def t05(t: TestCtx):
+    """Capsule-only swap: submit -> evaluate (pass) -> install at tick 2; behaviour changes at tick 2."""
     sess = t.session("T05 serve")
     sched, expected = _swap_expected(t)
     swap_tick = sched["swap"]["effective_tick"]
-    pid0 = call(t, sess, "engine.info", {}).get("pid")
-    wid, rev0 = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
+    v1_lir, v1_cap = t.load(V1_SRC), t.load(EDIT_V1)
+    v2_lir, v2_cap = t.load(V2_SRC), t.load(EDIT_V2)
+    pid0 = supervisor_pid(t, sess)
+    wid, _rev0 = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
     t.check_mismatches("T05 tick 0", verify_state(0, expected[0], inspect(t, sess, wid)))
-    step(t, sess, wid, 2)
+    step(t, sess, wid, swap_tick)
     pre = inspect(t, sess, wid)
-    t.check_mismatches("T05 v1 at swap tick", verify_state(swap_tick, expected[swap_tick], pre))
-    t.check("worker pid reported before swap", True, isinstance(pre.get("worker_pid"), int))
-    manifest_v1 = pre.get("semantic_manifest")
-    cand = submit(t, sess, EDIT_V2, V2_SRC)
-    install(t, sess, wid, cand, pre["world_revision"], swap_tick)
+    t.check_mismatches(f"T05 v1 at effective tick {swap_tick}", verify_state(swap_tick, expected[swap_tick], pre))
+    worker_pid = pre.get("worker_pid")
+    t.check("worker pid reported before install", True, isinstance(worker_pid, int))
+    cid = prepare(t, sess, EDIT_V2, V2_SRC, EDIT_V2_TEST)
+    install(t, sess, wid, cid, pre["world_revision"], swap_tick)
     mid = inspect(t, sess, wid)
-    t.check_mismatches("T05 install does not step the world", verify_state(swap_tick, expected[swap_tick], mid))
-    t.check("semantic manifest changes at install", True, mid.get("semantic_manifest") != manifest_v1)
-    step(t, sess, wid, 1)
-    t.check_mismatches("T05 first v2 tick", verify_state(3, expected[3], inspect(t, sess, wid)))
-    step(t, sess, wid, 1)
+    t.check_mismatches("T05 install does not step or change the world",
+                       verify_state(swap_tick, expected[swap_tick], mid))
+    t.check("T05 install leaves every column unchanged", pre["columns"], mid["columns"])
+    t.check("T05 semantic manifest changes at install", True, mid.get("semantic_manifest") != pre.get("semantic_manifest"))
+    t.check("T05 worker pid unchanged by install", worker_pid, mid.get("worker_pid"))
+    # The swap must be observable: v1 would give different values at the first post-swap tick.
+    v1_next = ref.run_tick(v1_lir, v1_cap, expected[swap_tick])
+    t.check("T05 v1 and v2 differ at the first post-swap tick", True, v1_next != expected[swap_tick + 1])
+    for tick in range(swap_tick + 1, sched["total_ticks"] + 1):
+        step(t, sess, wid, 1)
+        st = inspect(t, sess, wid)
+        t.check_mismatches(f"T05 tick {tick} (v2 from effective tick {swap_tick})",
+                           verify_state(tick, expected[tick], st))
+    # Re-derive the post-swap tick from the reference evaluator as a cross-check on the fixture.
+    t.check_mismatches("T05 fixture tick 3 equals v2 applied to tick 2",
+                       compare_columns(ref.run_tick(v2_lir, v2_cap, expected[swap_tick]), expected[swap_tick + 1]))
     post = inspect(t, sess, wid)
-    t.check_mismatches("T05 second v2 tick", verify_state(4, expected[4], post))
-    t.check("supervisor pid preserved", pid0, call(t, sess, "engine.info", {}).get("pid"))
-    t.check("worker pid preserved", pre.get("worker_pid"), post.get("worker_pid"))
+    t.check("T05 supervisor pid preserved", pid0, supervisor_pid(t, sess))
+    t.check("T05 worker pid preserved", worker_pid, post.get("worker_pid"))
 
 
 def t06(t: TestCtx):
+    """Invalid and failing candidates are refused; committed state and active semantic hash are unchanged."""
     sess = t.session("T06 serve")
     sched, expected = _swap_expected(t)
+    swap_tick = sched["swap"]["effective_tick"]
+    v1_lir, v1_cap = t.load(V1_SRC), t.load(EDIT_V1)
     wid, _rev = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
-    step(t, sess, wid, 2)
+    step(t, sess, wid, swap_tick)
     pre = inspect(t, sess, wid)
+    # (a) capsule rejected at submission: it never becomes a candidate, so it cannot be installed.
     item, cap_rel, src_rel = _find_candidate(t, EDIT_CANDS, "wrong_permission")
-    rejected, env = _submit_expect_rejection(t, sess, cap_rel, src_rel,
-                                             item["expected_code"])
+    rejected, _env = _submit_expect_rejection(t, sess, cap_rel, src_rel, item["expected_code"])
     if not rejected:
-        cid = env["result"].get("candidate_id") if env["ok"] else None
-        if not isinstance(cid, str):
-            raise Failed("accepted submission has no candidate_id")
-        env2 = sess.request("candidate.install", {"world_id": wid, "candidate_id": cid,
-                                                  "expected_world_revision": pre["world_revision"],
-                                                  "allowed_effective_tick": sched["swap"]["effective_tick"]})
-        if env2["ok"] is False and env2["error"].get("code") == UNSUPPORTED:
-            raise Unavailable("candidate.install answered SU_E_UNSUPPORTED_METHOD")
-        t.check_mismatches(f"install rejection {item['expected_code']}", classify_error(env2, item["expected_code"]))
+        raise Failed("wrong_permission candidate was accepted by capsule.submit")
+    # (b) valid capsule whose evaluation fails: install must refuse it.
+    cid = submit(t, sess, EDIT_V2, V2_SRC)
+    ev = evaluate(t, sess, cid, EDIT_V2_WRONG_TEST)
+    t.check("evaluation with a wrong expectation reports failed", "failed", ev.get("status"))
+    install_expect(t, sess, wid, cid, pre["world_revision"], swap_tick, "SU_E_CANDIDATE_FAILED")
+    st = call(t, sess, "candidate.status", {"candidate_id": cid})
+    t.check("failed candidate is not installed", True, st.get("install", {}).get("state") != "installed")
     post = inspect(t, sess, wid)
     t.check_mismatches("failed swap leaves committed state unchanged",
                        verify_rejections_leave_state(pre, post))
     t.check("active semantic manifest unchanged", pre.get("semantic_manifest"), post.get("semantic_manifest"))
-    v1_next = ref.run_tick(t.load("tests/fixtures/edit/movement.lir.json"),
-                           t.load(EDIT_V1), expected[2])
+    v1_next = ref.run_tick(v1_lir, v1_cap, expected[swap_tick])
     step(t, sess, wid, 1)
     t.check_mismatches("active code is still v1 after failed swap",
-                       verify_state(3, v1_next, inspect(t, sess, wid)))
+                       verify_state(swap_tick + 1, v1_next, inspect(t, sess, wid)))
 
 
 def t07(t: TestCtx):
+    """Stale candidate: a valid candidate installed against a revision captured before a mutation."""
     sess = t.session("T07 serve")
-    _sched, _expected = _swap_expected(t)
     item, cap_rel, src_rel = _find_candidate(t, EDIT_CANDS, "stale_revision")
     wid, rev0 = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
     step(t, sess, wid, 1)
     pre = inspect(t, sess, wid)
     if pre["world_revision"] == rev0:
         raise NotRun("engine did not change world_revision on a tick; a stale expectation cannot be constructed")
-    stale = rev0 if item["expected_world_revision"] == "@captured_before_mutation" else item["expected_world_revision"]
-    rejected, env = _submit_expect_rejection(t, sess, cap_rel, src_rel, item["expected_code"])
-    if not rejected:
-        cid = env["result"]["candidate_id"]
-        env2 = sess.request("candidate.install", {"world_id": wid, "candidate_id": cid,
-                                                  "expected_world_revision": stale,
-                                                  "allowed_effective_tick": pre["tick"]})
-        if env2["ok"] is False and env2["error"].get("code") == UNSUPPORTED:
-            raise Unavailable("candidate.install answered SU_E_UNSUPPORTED_METHOD")
-        t.check_mismatches("stale install rejection", classify_error(env2, item["expected_code"]))
+    if item["expected_world_revision"] != "@captured_before_mutation":
+        raise Failed("manifest stale case does not name the captured-revision placeholder")
+    cid = prepare(t, sess, cap_rel, src_rel, EDIT_V2_TEST)
+    install_expect(t, sess, wid, cid, rev0, pre["tick"], item["expected_code"])
     post = inspect(t, sess, wid)
     t.check_mismatches("stale rejection leaves state unchanged", verify_rejections_leave_state(pre, post))
-    # Control: the same candidate with the current revision installs.
-    cid = submit(t, sess, cap_rel, src_rel)
+    t.check("stale rejection leaves semantic manifest unchanged",
+            pre.get("semantic_manifest"), post.get("semantic_manifest"))
+    # Control: the same candidate with the current revision installs at the current tick.
     install(t, sess, wid, cid, pre["world_revision"], pre["tick"])
+    t.check("control install at current revision leaves tick unchanged", pre["tick"],
+            inspect(t, sess, wid)["tick"])
 
 
 def t08(t: TestCtx):
@@ -939,24 +1106,146 @@ def t08(t: TestCtx):
 
 
 def t09(t: TestCtx):
+    """Multi-system world with a failing second system.
+
+    Admission part (real binary): a second system that fails verification must refuse world.create.
+    Runtime part: the real binary cannot produce a runtime failure in the second system after the
+    first succeeded (see the reason below), so the test is reported unavailable.
+    """
     manifest = t.load("tests/fixtures/t09/manifest.json")
-    for s in manifest["systems_in_order"]:
-        t.need_file("tests/fixtures/t09/" + s)
-    raise Unavailable("multi-system worlds are not implemented: world.create takes one capsule_path "
-                      "(capsule_paths is rejected with SU_E_TYPE), so the second-system working-root "
-                      "failure cannot be constructed")
+    systems = [f"tests/fixtures/t09/{s}" for s in manifest["systems_in_order"]]
+    for s in systems:
+        t.need_file(s)
+    world_rel = "tests/fixtures/t09/world.json"
+    t.need_file(world_rel)
+    sess = t.session("T09 serve")
+    # Admission: system B is replaced by a capsule that fails verification.
+    bad_item, bad_cap, _bad_src = _find_candidate(t, EDIT_CANDS, "wrong_permission")
+    env = sess.request("world.create", {"fixture_path": world_rel, "capsule_paths": [systems[0], bad_cap]})
+    if env["ok"] is False and env["error"].get("code") == UNSUPPORTED:
+        raise Unavailable("world.create answered SU_E_UNSUPPORTED_METHOD")
+    t.check_mismatches("multi-system admission refuses a failing second system",
+                       classify_error(env, bad_item["expected_code"]))
+    t.check("session answers after refused multi-system create", True, sess.request("engine.info", {})["ok"])
+    # Runtime: the two-system world the manifest describes must run; observe what the binary does.
+    wid, _rev = create_world(t, sess, world_rel, systems)
+    before = inspect(t, sess, wid)
+    step(t, sess, wid, 1)
+    after = inspect(t, sess, wid)
+    t.details["observed_runtime"] = {
+        "systems": manifest["systems_in_order"],
+        "b_limits_max_rows": 2, "world_row_count": after["row_count"],
+        "step_result": "ok", "tick_after": after["tick"], "columns_after": after["columns"],
+        "columns_before": before["columns"],
+    }
+    raise Unavailable("the real binary cannot produce a runtime failure in the second system after the first "
+                      "succeeded: capsule limits.max_rows is not enforced at runtime (schedule.c never calls "
+                      "su_vm_context_set_row_limit, so the VM uses SU_LIMIT_ROWS = 1000000). Observed: "
+                      "demo.movement_b with max_rows 2 over a 4-row world was accepted and a step published "
+                      "tick 1. The row count is shared by every system in a world, so a size limit cannot "
+                      "fail only the second system. No other runtime fault path was found in src/vm. "
+                      "Admission refusal of a failing second system was checked and passes.")
+
+
+def _children_fast(pid) -> set:
+    """Child pids of a process, from /proc/<pid>/task/<tid>/children (one small read per thread)."""
+    kids: set = set()
+    try:
+        tids = os.listdir(f"/proc/{pid}/task")
+    except OSError:
+        return kids
+    for tid in tids:
+        try:
+            with open(f"/proc/{pid}/task/{tid}/children", encoding="utf-8") as fh:
+                kids.update(int(x) for x in fh.read().split())
+        except (OSError, ValueError):
+            continue
+    return kids
+
+
+T10_ATTEMPTS = 12
+
+
+def _comm(pid):
+    try:
+        with open(f"/proc/{pid}/comm", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
 
 
 def t10(t: TestCtx):
-    sess = t.session("T10 serve")
-    wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
+    """Kill the disposable evaluation worker while candidate.evaluate is in flight.
+
+    candidate.evaluate is synchronous, so the kill is issued from a harness thread that watches the
+    supervisor's children while the request is outstanding. The evaluation is only a few milliseconds
+    long, so an attempt can lose the race (the reply is already written). Such attempts are recorded
+    and retried in a fresh serve process, up to T10_ATTEMPTS. A success requires a kill that landed
+    while the evaluation was in flight (reply is an error).
+    """
+    if not os.path.isdir("/proc/self"):
+        raise NotRun("no /proc: child processes cannot be observed or signalled")
+    attempts = []
+    found = None
+    for attempt in range(T10_ATTEMPTS):
+        sess = t.session(f"T10 serve attempt {attempt}")
+        sup = supervisor_pid(t, sess)
+        wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
+        step(t, sess, wid, 1)
+        pre = inspect(t, sess, wid)
+        active = pre.get("worker_pid")
+        if not isinstance(active, int):
+            raise Failed("world.inspect lacks worker_pid")
+        cid = submit(t, sess, EDIT_V2, V2_SRC)
+        killed: list = []
+        stop = threading.Event()
+
+        def killer(sup=sup, active=active, killed=killed, stop=stop):
+            while not stop.is_set():
+                for pid in _children_fast(sup):
+                    if pid != active and pid not in killed:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                            killed.append(pid)
+                        except OSError:
+                            pass
+                time.sleep(0.00005)
+
+        th = threading.Thread(target=killer, daemon=True)
+        th.start()
+        try:
+            env = sess.request("candidate.evaluate", {"candidate_id": cid, "test_path": EDIT_V2_TEST})
+        finally:
+            stop.set()
+            th.join(2)
+        attempts.append({"attempt": attempt, "killed": list(killed), "reply_ok": env["ok"],
+                         "reply_code": None if env["ok"] else env["error"].get("code")})
+        if killed and not env["ok"]:
+            found = (sess, sup, wid, pre, active, cid, env, list(killed))
+            break
+        sess.close()
+    t.details["attempts"] = attempts
+    if found is None:
+        raise NotRun(f"in {len(attempts)} attempts no kill landed while candidate.evaluate was in flight "
+                     "(each attempt either saw no child or killed the worker after its reply); no isolation "
+                     "result is claimed")
+    sess, sup, wid, pre, active, cid, env, killed = found
+    t.details["kill_observation"] = {"supervisor_pid": sup, "active_worker_pid": active, "killed": killed}
+    t.check_mismatches("evaluation after worker kill is SU_E_WORKER_FAILED",
+                       classify_error(env, "SU_E_WORKER_FAILED"))
+    st = call(t, sess, "candidate.status", {"candidate_id": cid})
+    t.check("killed pid is the evaluation worker reported by candidate.status", True,
+            st.get("worker_pid") in killed)
+    t.check("evaluation state after kill is worker_failed", "worker_failed", st.get("evaluation", {}).get("status"))
+    t.check("supervisor answers after kill", sup, supervisor_pid(t, sess))
+    post = inspect(t, sess, wid)
+    t.check_mismatches("active world state unchanged by evaluation kill", verify_rejections_leave_state(pre, post))
+    t.check("active worker pid unchanged by evaluation kill", active, post.get("worker_pid"))
+    t.check("active semantic manifest unchanged", pre.get("semantic_manifest"), post.get("semantic_manifest"))
+    v1_lir, v1_cap = t.load(V1_SRC), t.load(EDIT_V1)
     step(t, sess, wid, 1)
-    cid = submit(t, sess, EDIT_V2, V2_SRC)
-    status = call(t, sess, "candidate.status", {"candidate_id": cid})
-    if not isinstance(status.get("worker_pid"), int):
-        raise Unavailable("candidate.status exposes no worker_pid and candidate.evaluate is synchronous "
-                          "(no job id), so the candidate worker cannot be SIGKILLed mid-evaluation "
-                          "from the control plane")
+    t.check_mismatches("world still steps with v1 after the kill",
+                       verify_state(2, ref.run_tick(v1_lir, v1_cap, pre["columns"]), inspect(t, sess, wid)))
 
 
 def _rss_kib(pid):
@@ -968,69 +1257,75 @@ def _rss_kib(pid):
 
 
 def t11(t: TestCtx):
-    """Each cycle: install v2 (fresh candidate), tick, reject a bad candidate, install v1, tick.
-
-    Every tick is compared with the reference evaluator and every manifest with the one
-    captured for that version, so a stale reference would surface as a mismatch.
-    """
+    """Repeated reload: each iteration installs v1 or v2 (alternating), ticks, submits an invalid
+    candidate, and attempts a stale install. RSS of supervisor and active worker is sampled."""
     sess = t.session("T11 serve")
-    cycles = t.run.t11_cycles
-    pid = call(t, sess, "engine.info", {}).get("pid")
-    if _rss_kib(pid) is None:
-        raise NotRun("process RSS not observable (no /proc)")
-    v1_cap, v1_src, v2_cap, v2_src = EDIT_V1, V1_SRC, EDIT_V2, V2_SRC
-    v1_doc, v1_lir = t.load_system(v1_cap)[0], t.load(V1_SRC)
-    v2_doc, v2_lir = t.load_system(v2_cap)[0], t.load(V2_SRC)
-    item, bad_cap, bad_src = _find_candidate(t, EDIT_CANDS, "wrong_permission")
-    wid, _ = create_world(t, sess, EDIT_WORLD, [v1_cap])
-    cols = t.load(EDIT_WORLD)["columns"]
+    iters = t.run.reload_iterations
+    sup = supervisor_pid(t, sess)
+    wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
     st = inspect(t, sess, wid)
-    m_v1 = st.get("semantic_manifest")
-    m_v2 = None
-    samples = []
-    rejected_total = 0
-    for i in range(cycles):
-        st = inspect(t, sess, wid)
-        cid = submit(t, sess, v2_cap, v2_src)
-        install(t, sess, wid, cid, st["world_revision"], st["tick"])
+    worker0 = st.get("worker_pid")
+    if _rss_kib(sup) is None or _rss_kib(worker0) is None:
+        raise NotRun("process RSS not observable (no /proc/<pid>/status)")
+    v1_cid = prepare(t, sess, EDIT_V1, V1_SRC, EDIT_V1_TEST)
+    v2_cid = prepare(t, sess, EDIT_V2, V2_SRC, EDIT_V2_TEST)
+    bad_item, bad_cap, bad_src = _find_candidate(t, EDIT_CANDS, "wrong_permission")
+    targets = {"v1": (v1_cid, t.load(V1_SRC), t.load(EDIT_V1)), "v2": (v2_cid, t.load(V2_SRC), t.load(EDIT_V2))}
+    cols = t.load(EDIT_WORLD)["columns"]
+    manifests: dict = {}
+    warm = min(10, max(0, iters - 1))
+    rss = {"start": {"supervisor": _rss_kib(sup), "worker": _rss_kib(worker0)}}
+    counts = {"valid_install": 0, "invalid_rejected": 0, "stale_rejected": 0}
+    for i in range(iters):
+        name = "v2" if i % 2 == 0 else "v1"
+        cid, prog, capd = targets[name]
+        before = inspect(t, sess, wid)
+        install(t, sess, wid, cid, before["world_revision"], before["tick"])
+        counts["valid_install"] += 1
         step(t, sess, wid, 1)
-        cols = ref.run_tick(v2_lir, v2_doc, cols)
-        st = inspect(t, sess, wid)
-        t.check_mismatches(f"cycle {i} v2 columns", compare_columns(cols, st["columns"]))
-        if m_v2 is None:
-            m_v2 = st.get("semantic_manifest")
-            t.check("v2 manifest differs from v1", True, m_v2 != m_v1)
-        t.check_mismatches(f"cycle {i} v2 manifest", compare_manifest(m_v2, st.get("semantic_manifest")))
-
-        before_bad = inspect(t, sess, wid)
-        rejected, _env = _submit_expect_rejection(t, sess, bad_cap, bad_src, item["expected_code"])
+        cols = ref.run_tick(prog, capd, cols)
+        after = inspect(t, sess, wid)
+        t.check_mismatches(f"iteration {i} {name} columns", compare_columns(cols, after["columns"]))
+        manifests.setdefault(name, manifest_identity(after.get("semantic_manifest")))
+        t.check_mismatches(f"iteration {i} {name} manifest",
+                           compare_manifest(manifests[name], manifest_identity(after.get("semantic_manifest"))))
+        # invalid candidate: rejected at submission, state unchanged
+        rejected, _env = _submit_expect_rejection(t, sess, bad_cap, bad_src, bad_item["expected_code"])
         if not rejected:
-            raise Failed(f"cycle {i}: invalid candidate was accepted")
-        rejected_total += 1
-        after_bad = inspect(t, sess, wid)
-        t.check_mismatches(f"cycle {i} rejected candidate left state unchanged",
-                           verify_rejections_leave_state(before_bad, after_bad))
-
-        st = inspect(t, sess, wid)
-        cid = submit(t, sess, v1_cap, v1_src)
-        install(t, sess, wid, cid, st["world_revision"], st["tick"])
-        step(t, sess, wid, 1)
-        cols = ref.run_tick(v1_lir, v1_doc, cols)
-        st = inspect(t, sess, wid)
-        t.check_mismatches(f"cycle {i} v1 columns", compare_columns(cols, st["columns"]))
-        t.check_mismatches(f"cycle {i} v1 manifest", compare_manifest(m_v1, st.get("semantic_manifest")))
-        if i % 100 == 0 or i == cycles - 1:
-            samples.append({"cycle": i, "rss_kib": _rss_kib(pid)})
-    t.details["cycles"] = cycles
-    t.details["rejected_candidates"] = rejected_total
-    t.details["rss_samples_kib"] = samples
-    if t.run.t11_bound_kib is None:
-        raise NotRun("no retained-memory bound is declared in TEST_SPEC; RSS samples recorded and "
-                     "every reload check passed; rerun with --t11-max-growth-kib to judge growth")
-    growth = samples[-1]["rss_kib"] - samples[0]["rss_kib"]
-    t.details["rss_growth_kib"] = growth
-    t.check_mismatches("retained memory growth within declared bound",
-                       [] if growth <= t.run.t11_bound_kib else [f"growth {growth} KiB > {t.run.t11_bound_kib}"])
+            raise Failed(f"iteration {i}: invalid candidate was accepted")
+        counts["invalid_rejected"] += 1
+        t.check_mismatches(f"iteration {i} invalid rejection leaves state unchanged",
+                           verify_rejections_leave_state(after, inspect(t, sess, wid)))
+        # stale install: a revision captured before the valid install and step
+        env = sess.request("candidate.install", {"world_id": wid, "candidate_id": cid,
+                                                 "expected_world_revision": before["world_revision"],
+                                                 "allowed_effective_tick": after["tick"]})
+        if env["ok"] is False and env["error"].get("code") == UNSUPPORTED:
+            raise Unavailable("candidate.install answered SU_E_UNSUPPORTED_METHOD")
+        t.check_mismatches(f"iteration {i} stale install", classify_error(env, "SU_E_STALE_REVISION"))
+        counts["stale_rejected"] += 1
+        stale_after = inspect(t, sess, wid)
+        t.check_mismatches(f"iteration {i} stale rejection leaves state unchanged",
+                           verify_rejections_leave_state(after, stale_after))
+        t.check_mismatches(f"iteration {i} stale rejection leaves manifest unchanged",
+                           compare_manifest(manifests[name], manifest_identity(stale_after.get("semantic_manifest"))))
+        if i == warm:
+            rss["baseline"] = {"supervisor": _rss_kib(sup), "worker": _rss_kib(worker0)}
+    end_worker = inspect(t, sess, wid).get("worker_pid")
+    rss["end"] = {"supervisor": _rss_kib(sup), "worker": _rss_kib(worker0)}
+    t.check("worker pid preserved across all reloads", worker0, end_worker)
+    t.details["iterations"] = iters
+    t.details["counts"] = counts
+    t.details["rss_kib"] = rss
+    t.details["rss_bound_kib_harness_chosen"] = HARNESS_RSS_GROWTH_BOUND_KIB
+    t.details["rss_measured_after_warm_up_iteration"] = warm
+    if "baseline" not in rss:
+        raise NotRun("too few iterations for a warm-up baseline")
+    t.check_mismatches("supervisor and active worker RSS growth after warm-up within harness bound",
+                       rss_verdict("supervisor", rss["baseline"]["supervisor"], rss["end"]["supervisor"],
+                                   HARNESS_RSS_GROWTH_BOUND_KIB)
+                       + rss_verdict("worker", rss["baseline"]["worker"], rss["end"]["worker"],
+                                     HARNESS_RSS_GROWTH_BOUND_KIB))
 
 
 def t12(t: TestCtx):
@@ -1064,38 +1359,25 @@ def t12(t: TestCtx):
     else:
         raise NotRun("no C compiler on PATH to instrument")
     sess = t.session("T12 serve (instrumented PATH)", env=env)
-    samples = []
     stop = threading.Event()
     hits = []
+    sample_count = [0]
 
     def sampler():
         while not stop.is_set():
             now = time.time()
-            ppid, comm = {}, {}
-            for entry in os.listdir("/proc"):
-                if not entry.isdigit():
-                    continue
-                try:
-                    with open(f"/proc/{entry}/stat", encoding="utf-8") as fh:
-                        data = fh.read()
-                except OSError:
-                    continue
-                name = data[data.index("(") + 1:data.rindex(")")]
-                fields = data[data.rindex(")") + 2:].split()
-                ppid[int(entry)] = int(fields[1])
-                comm[int(entry)] = name
-            desc = {sess.proc.pid}
-            changed = True
-            while changed:
-                changed = False
-                for pid, parent in ppid.items():
-                    if parent in desc and pid not in desc:
-                        desc.add(pid)
-                        changed = True
+            sample_count[0] += 1
+            desc, frontier = set(), [sess.proc.pid]
+            while frontier:
+                for kid in _children_fast(frontier.pop()):
+                    if kid not in desc:
+                        desc.add(kid)
+                        frontier.append(kid)
             for pid in desc:
-                if comm.get(pid) in BUILD_COMMS:
-                    hits.append((now, comm[pid], pid))
-            time.sleep(0.005)
+                name = _comm(pid)
+                if name in BUILD_COMMS:
+                    hits.append((now, name, pid))
+            time.sleep(0.0005)
 
     wid, rev0 = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
     step(t, sess, wid, 2)
@@ -1104,7 +1386,7 @@ def t12(t: TestCtx):
     window_start = time.time()
     try:
         pre = inspect(t, sess, wid)
-        cid = submit(t, sess, EDIT_V2, V2_SRC)
+        cid = prepare(t, sess, EDIT_V2, V2_SRC, EDIT_V2_TEST)
         install(t, sess, wid, cid, pre["world_revision"], sched["swap"]["effective_tick"])
         step(t, sess, wid, 2)
         final = inspect(t, sess, wid)
@@ -1117,75 +1399,78 @@ def t12(t: TestCtx):
     with open(log, encoding="utf-8") as fh:
         lines = [ln.split(" ", 2) for ln in fh.read().splitlines() if ln.strip()]
     in_window = [ln for ln in lines if window_start <= float(ln[0]) <= window_end]
+    sampled = [h for h in hits if window_start <= h[0] <= window_end]
     t.details["shim_invocations_total"] = len(lines)
     t.details["shim_invocations_in_swap_window"] = in_window
-    t.details["sampled_build_processes_in_swap_window"] = [
-        {"comm": c, "pid": p} for ts, c, p in hits if window_start <= ts <= window_end]
+    t.details["sampled_build_processes_in_swap_window"] = [{"comm": c, "pid": p} for _ts, c, p in sampled]
+    t.details["sampling"] = {"method": "PATH shims for named tools plus /proc/<pid>/task/*/children tree polling (about every 0.5 ms)",
+                             "samples": sample_count[0],
+                             "limitation": "polling can miss processes shorter than the interval; shims see only "
+                                           "invocations by bare name through PATH, not absolute-path execs"}
     t.check("no compiler, assembler, linker or build tool invoked during capsule-only swap",
-            0, len(in_window) + len([h for h in hits if window_start <= h[0] <= window_end]))
+            0, len(in_window) + len(sampled))
     shutil.rmtree(shim_root, ignore_errors=True)
 
 
 def t13(t: TestCtx):
+    """Latency measurement. Each sample is a fresh serve process (a worker's candidate table holds 16
+    entries and is never evicted), so every sample runs prepare -> install -> boundary step once."""
     sched, expected = _swap_expected(t)
-    sess = t.session("T13 serve")
-    reps = 20
-    prepare, install_d, boundary = [], [], []
-    wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
+    swap_tick = sched["swap"]["effective_tick"]
+    reps = t.run.latency_samples
+    prepare_s, queue_s, boundary_s = [], [], []
     for i in range(reps):
-        rev = inspect(t, sess, wid)["world_revision"]
+        sess = t.session(f"T13 serve sample {i}")
+        wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
+        step(t, sess, wid, swap_tick)
+        pre = inspect(t, sess, wid)
         t0 = time.monotonic()
         cid = submit(t, sess, EDIT_V2, V2_SRC)
+        ev = evaluate(t, sess, cid, EDIT_V2_TEST)
         t1 = time.monotonic()
-        tick = inspect(t, sess, wid)["tick"]
-        install(t, sess, wid, cid, rev, tick)
+        t.check(f"T13 sample {i} evaluation passed", "passed", ev.get("status"))
+        install(t, sess, wid, cid, pre["world_revision"], swap_tick)
         t2 = time.monotonic()
         step(t, sess, wid, 1)
         t3 = time.monotonic()
-        prepare.append(t1 - t0)
-        install_d.append(t2 - t1)
-        boundary.append(t3 - t2)
-        # swap back to v1 so the next repetition starts from a v1 install
-        rev = inspect(t, sess, wid)["world_revision"]
-        cid1 = submit(t, sess, EDIT_V1, V1_SRC)
-        install(t, sess, wid, cid1, rev, inspect(t, sess, wid)["tick"])
-        step(t, sess, wid, 1)
-
-    def pct(values, p):
-        s = sorted(values)
-        return round(s[min(len(s) - 1, int(round(p * (len(s) - 1))))] * 1000, 3)
-
-    t.details["measurements_ms"] = {
-        "prepare_submit": {"p50": pct(prepare, 0.5), "p95": pct(prepare, 0.95), "n": reps},
-        "queue_install": {"p50": pct(install_d, 0.5), "p95": pct(install_d, 0.95), "n": reps},
-        "boundary_and_step": {"p50": pct(boundary, 0.5), "p95": pct(boundary, 0.95), "n": reps},
+        prepare_s.append(t1 - t0)
+        queue_s.append(t2 - t1)
+        boundary_s.append(t3 - t2)
+        sess.close()
+    t.details["latency_ms"] = {
+        "prepare_submit_and_evaluate": latency_stats(prepare_s),
+        "install_call_round_trip": latency_stats(queue_s),
+        "first_step_after_install": latency_stats(boundary_s),
     }
-    t.details["host_monotonic_only"] = True
-    raise NotRun("TEST_SPEC section 8: timing tests compare against declared targets; none is declared "
-                 "yet, so measurements are recorded but no pass or fail is claimed")
+    t.details["decomposition_limits"] = ("candidate.install is synchronous: queue, boundary and publish happen "
+                                         "inside one RPC, so they cannot be separated from the host clock. The "
+                                         "install figure includes queue, boundary and publish; the step figure "
+                                         "is the first tick that runs the new code.")
+    t.details["machine"] = machine_info()
+    t.details["status_meaning"] = ("passed = measurement collected. No latency target is declared in TEST_SPEC; "
+                                   "comparison with targets is a separate step and is not claimed here.")
+
+
+def _canonical_run(t, label, sched, expected):
+    sess = t.session(f"T14 {label}")
+    wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
+    step(t, sess, wid, sched["swap"]["effective_tick"])
+    pre = inspect(t, sess, wid)
+    cid = prepare(t, sess, EDIT_V2, V2_SRC, EDIT_V2_TEST)
+    install(t, sess, wid, cid, pre["world_revision"], sched["swap"]["effective_tick"])
+    step(t, sess, wid, 2)
+    post = inspect(t, sess, wid)
+    sess.close()
+    return canonical_state_bytes(post), post
 
 
 def t14(t: TestCtx):
     sched, expected = _swap_expected(t)
-
-    def run_once(label):
-        sess = t.session(f"T14 {label}")
-        wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
-        step(t, sess, wid, 2)
-        pre = inspect(t, sess, wid)
-        cid = submit(t, sess, EDIT_V2, V2_SRC)
-        install(t, sess, wid, cid, pre["world_revision"], sched["swap"]["effective_tick"])
-        step(t, sess, wid, 2)
-        post = inspect(t, sess, wid)
-        sess.close()
-        return {"tick": post["tick"], "columns": post["columns"],
-                "semantic_manifest": post.get("semantic_manifest")}
-
-    first = run_once("run A")
-    second = run_once("run B")
-    t.check_mismatches("T14 run B state equals run A", compare_columns(first["columns"], second["columns"]))
-    t.check("T14 manifest identical across runs", first["semantic_manifest"], second["semantic_manifest"])
-    t.check_mismatches("T14 final state equals reference", verify_state(4, expected[4], first))
+    bytes_a, post_a = _canonical_run(t, "run A", sched, expected)
+    bytes_b, _post_b = _canonical_run(t, "run B", sched, expected)
+    t.check("T14 canonical state byte-identical across fresh sessions", True, bytes_a == bytes_b)
+    t.details["canonical_state_sha256"] = {"run_A": sha256_bytes(bytes_a), "run_B": sha256_bytes(bytes_b)}
+    t.check_mismatches("T14 final state equals reference", verify_state(4, expected[4], post_a))
 
 
 def t15(t: TestCtx):
@@ -1213,33 +1498,28 @@ def t15(t: TestCtx):
     t.details["cases"] = results
 
 
+_EVAL = ("world.create", "world.step", "world.inspect", "capsule.submit", "candidate.evaluate", "candidate.install")
+
 TESTS = [
     ("T00", "Clean bootstrap", (), t00),
     ("T01", "Reference movement", ("world.create", "world.step", "world.inspect"), t01),
     ("T02", "Empty and awkward counts", ("world.create", "world.step", "world.inspect"), t02),
     ("T03", "Numeric edges", ("world.create", "world.step", "world.inspect"), t03),
     ("T04", "Invalid input matrix", ("world.create", "world.inspect", "capsule.submit"), t04),
-    ("T05", "Successful code-only swap", ("world.create", "world.step", "world.inspect", "capsule.submit",
-                                          "candidate.install"), t05),
-    ("T06", "Failed swap", ("world.create", "world.step", "world.inspect", "capsule.submit",
-                            "candidate.install"), t06),
-    ("T07", "Stale candidate", ("world.create", "world.step", "world.inspect", "capsule.submit",
-                                "candidate.install"), t07),
+    ("T05", "Successful code-only swap", _EVAL, t05),
+    ("T06", "Failed swap", _EVAL, t06),
+    ("T07", "Stale candidate", _EVAL, t07),
     ("T08", "Snapshot round trip", ("world.create", "world.step", "world.inspect", "world.snapshot",
                                     "world.restore"), t08),
     ("T09", "Working-root failure", ("world.create", "world.step", "world.inspect"), t09),
-    ("T10", "Candidate isolation", ("world.create", "world.step", "world.inspect", "capsule.submit",
-                                    "candidate.evaluate", "candidate.status"), t10),
-    ("T11", "Repeated reload", ("world.create", "world.step", "world.inspect", "capsule.submit",
-                                "candidate.install"), t11),
-    ("T12", "No native gameplay build", ("world.create", "world.step", "world.inspect", "capsule.submit",
-                                         "candidate.install"), t12),
-    ("T13", "Latency decomposition", ("world.create", "world.step", "world.inspect", "capsule.submit",
-                                      "candidate.install"), t13),
-    ("T14", "Deterministic fixture repeat", ("world.create", "world.step", "world.inspect", "capsule.submit",
-                                             "candidate.install"), t14),
+    ("T10", "Candidate isolation", _EVAL + ("candidate.status",), t10),
+    ("T11", "Repeated reload", _EVAL, t11),
+    ("T12", "No native gameplay build", _EVAL, t12),
+    ("T13", "Latency decomposition", _EVAL, t13),
+    ("T14", "Deterministic fixture repeat", _EVAL, t14),
     ("T15", "Structured protocol", ("engine.info",), t15),
 ]
+
 
 
 def run_test(run: RunCtx, test_id, name, requires, fn) -> dict:
@@ -1347,14 +1627,18 @@ def main(argv=None) -> int:
     parser.add_argument("--report-dir", default=os.path.join(REPO, "build", "m0_harness"))
     parser.add_argument("--no-build", action="store_true", help="skip the T00 build command")
     parser.add_argument("--only", default="", help="comma-separated test ids, e.g. T00,T15")
-    parser.add_argument("--t11-cycles", type=int, default=1000)
-    parser.add_argument("--t11-max-growth-kib", type=int, default=None)
+    parser.add_argument("--reload-iterations", type=int, default=200,
+                        help="T11 install/reject/stale cycles (default 200; 1000 for a longer run)")
+    parser.add_argument("--latency-samples", type=int, default=30, help="T13 fresh-session samples")
     parser.add_argument("--self-test", action="store_true", help="unit-test the harness logic and exit")
     args = parser.parse_args(argv)
     if args.self_test:
         return self_test()
     binary = os.path.abspath(args.binary)
-    run = RunCtx(binary, args.no_build, args.t11_cycles, args.t11_max_growth_kib)
+    if args.reload_iterations < 2 or args.latency_samples < 1:
+        print("--reload-iterations must be >= 2 and --latency-samples >= 1", file=sys.stderr)
+        return 2
+    run = RunCtx(binary, args.no_build, args.reload_iterations, args.latency_samples)
     wanted = {x.strip() for x in args.only.split(",") if x.strip()}
     bad = wanted - {tid for tid, *_ in TESTS}
     if bad:
@@ -1493,8 +1777,8 @@ def self_test() -> int:
         env = {}
         codes = {}
         no_build = True
-        t11_cycles = 1
-        t11_bound_kib = None
+        reload_iterations = 2
+        latency_samples = 1
         probe = {"state": "absent", "reason": "synthetic absent", "capabilities": None}
 
     fake = FakeRun()
@@ -1562,6 +1846,62 @@ def self_test() -> int:
             cols = {"position_x": [p for p, _ in case["rows"]], "velocity_x": [v for _, v in case["rows"]]}
             mine = ref.run_tick(prog, cap, cols)["position_x"]
             ok(f"cross-check T03 {case['name']} equals known answer", mine == case["expected"])
+
+    # Paging: merge_pages must reassemble pages and reject every inconsistency.
+    def page(offset, rows, rc=5, rev="w.r1", tick=0):
+        return {"world_revision": rev, "tick": tick, "row_count": rc, "offset": offset,
+                "returned_rows": len(rows), "entity_ids": list(range(offset + 1, offset + 1 + len(rows))),
+                "columns": {"position_x": [r for r in rows], "velocity_x": [0] * len(rows)},
+                "semantic_manifest": [], "worker_pid": 9}
+
+    def raises(fn):
+        try:
+            fn()
+            return False
+        except Failed:
+            return True
+
+    pages = [page(0, [1, 2]), page(2, [3, 4]), page(4, [5])]
+    merged = merge_pages(pages, INSPECT_FIELDS)
+    ok("paging: three pages reassemble in order", merged["columns"]["position_x"] == [1, 2, 3, 4, 5])
+    ok("paging: entity ids reassemble", merged["entity_ids"] == [1, 2, 3, 4, 5])
+    ok("paging: zero-row world merges to zero rows",
+       merge_pages([page(0, [], rc=0)], INSPECT_FIELDS)["returned_rows"] == 0)
+    ok("paging: a missing page is rejected", raises(lambda: merge_pages([pages[0], pages[2]], INSPECT_FIELDS)))
+    ok("paging: a page at the wrong offset is rejected",
+       raises(lambda: merge_pages([page(0, [1, 2]), page(3, [3, 4]), page(4, [5])], INSPECT_FIELDS)))
+    ok("paging: a revision change between pages is rejected",
+       raises(lambda: merge_pages([pages[0], page(2, [3, 4], rev="w.r2"), pages[2]], INSPECT_FIELDS)))
+    ok("paging: a tick change between pages is rejected",
+       raises(lambda: merge_pages([pages[0], page(2, [3, 4], tick=1), pages[2]], INSPECT_FIELDS)))
+    ok("paging: a short column is rejected",
+       raises(lambda: merge_pages([{**pages[0], "columns": {"position_x": [1], "velocity_x": [0, 0]}}],
+                                  INSPECT_FIELDS)))
+    ok("paging: returned_rows not matching row_count is rejected",
+       raises(lambda: merge_pages([page(0, [1, 2], rc=3)], INSPECT_FIELDS)))
+    ok("paging: a bool row count is rejected", raises(lambda: merge_pages([page(0, [], rc=True)], INSPECT_FIELDS)))
+
+    # Canonical state: identical states give identical bytes; any difference changes them.
+    s1 = {"tick": 2, "row_count": 1, "entity_ids": [1], "columns": {"a": [5]}, "semantic_manifest": [{"x": 1}]}
+    ok("canonical: equal states give equal bytes", canonical_state_bytes(dict(s1)) == canonical_state_bytes(dict(s1)))
+    ok("canonical: a changed column changes bytes",
+       canonical_state_bytes(s1) != canonical_state_bytes({**s1, "columns": {"a": [6]}}))
+    ok("canonical: key order does not matter",
+       canonical_state_bytes({"columns": {"a": [5]}, "tick": 2, "row_count": 1, "entity_ids": [1],
+                              "semantic_manifest": [{"x": 1}]}) == canonical_state_bytes(s1))
+
+    # RSS verdict: harness-chosen bound, both directions.
+    ok("rss: growth within bound passes", rss_verdict("p", 1000, 1500, 600) == [])
+    ok("rss: growth over bound fails", rss_verdict("p", 1000, 1700, 600) != [])
+    ok("rss: shrinkage passes", rss_verdict("p", 1000, 900, 600) == [])
+    ok("rss: unobservable is a failure", rss_verdict("p", None, 900, 600) != [])
+
+    # Latency statistics: nearest rank, milliseconds.
+    st = latency_stats([0.001, 0.002, 0.003, 0.004, 0.100])
+    ok("latency: count", st["n"] == 5)
+    ok("latency: min/median/max", (st["min"], st["median"], st["max"]) == (1.0, 3.0, 100.0))
+    ok("latency: p95 nearest rank", st["p95"] == 100.0)
+    ok("latency: empty input reports zero samples", latency_stats([]) == {"n": 0, "units": "ms"})
 
     failed = [name for name, passed in checks if not passed]
     for name in failed:

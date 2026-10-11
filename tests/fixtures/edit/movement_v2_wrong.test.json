@@ -1,0 +1,81 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.movement",
+  "capsule": "movement_v2.capsule.json",
+  "world": "world.json",
+  "cases": [
+    {
+      "name": "deliberately_wrong_expectation_ticks1",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [
+          3,
+          5,
+          1,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "name": "v2_from_initial_ticks2",
+      "ticks": 2,
+      "expected_columns": {
+        "position_x": [
+          4,
+          9,
+          3,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "name": "v2_from_initial_ticks3",
+      "ticks": 3,
+      "expected_columns": {
+        "position_x": [
+          6,
+          13,
+          5,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "name": "v2_from_initial_ticks4",
+      "ticks": 4,
+      "expected_columns": {
+        "position_x": [
+          8,
+          17,
+          7,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      }
+    }
+  ],
+  "note": "one expected value is changed by +1 on purpose; candidate.evaluate must report failed and install must refuse the candidate (SU_E_CANDIDATE_FAILED)"
+}

@@ -1,0 +1,7 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.movement",
+  "capsule": "movement_a.capsule.json",
+  "world": "world.json",
+  "cases": []
+}
