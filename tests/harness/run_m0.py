@@ -193,14 +193,17 @@ def parse_envelope(raw: bytes, expected_id) -> dict:
     if expected_id is not None and obj.get("id") != expected_id \
             and not (ok is False and obj.get("id") is None):
         raise Failed(f"reply id {obj.get('id')!r} does not match request {expected_id!r}")
+    # M1-02 additive top-level members: a recovery object (on the request that found a dead worker)
+    # and a worker_event (on the next reply). They are kept when present and absent otherwise.
+    extra = {k: obj[k] for k in ("recovery", "worker_event") if k in obj}
     if ok:
         if not isinstance(obj.get("result"), dict):
             raise Failed("ok reply has no result object")
-        return {"ok": True, "result": obj["result"], "id": obj.get("id")}
+        return {"ok": True, "result": obj["result"], "id": obj.get("id"), **extra}
     err = obj.get("error")
     if not isinstance(err, dict) or not isinstance(err.get("code"), str):
         raise Failed("error reply has no error.code")
-    return {"ok": False, "error": err, "id": obj.get("id")}
+    return {"ok": False, "error": err, "id": obj.get("id"), **extra}
 
 
 def classify_engine_info(raw, probe_id: str) -> dict:
@@ -699,7 +702,8 @@ ENGINE_METHODS = {
     "engine.info": {
         "params": "{}",
         "result": "engine_version, protocol, ir_version, abi_version, numeric_profile, runtime_mode, "
-                  "transport, pid, capabilities[], active_worker, process",
+                  "transport, pid, capabilities[], active_worker, process, worker_generation, recoveries, "
+                  "recovery{limits, spool_bytes, committed_bytes, worlds[]}",
         "source": "src/agent/su_agent.c h_engine_info",
     },
     "capsule.submit": {
@@ -925,6 +929,39 @@ def close_mismatches(res: dict, world_id: str, systems: int, snapshots: int) -> 
         got = rel.get(key)
         if type(got) is not int or got != want:
             out.append(f"released.{key}: expected {want} actual {got!r}")
+    return out
+
+
+def recovery_mismatches(env, old_pid) -> list:
+    """Checks the request that found its worker dead (M1-02): SU_E_WORKER_FAILED with a recovery object
+    that reports a successful recovery, the old pid, and a different replacement pid. Pure; used by TX2
+    and the self-test."""
+    out = []
+    if not isinstance(env, dict) or env.get("ok") is not False:
+        return ["the request on the dead worker did not fail"]
+    err = env.get("error") if isinstance(env.get("error"), dict) else {}
+    if err.get("code") != "SU_E_WORKER_FAILED":
+        out.append(f"error code: expected SU_E_WORKER_FAILED actual {err.get('code')!r}")
+    rec = env.get("recovery")
+    if not isinstance(rec, dict):
+        return out + ["recovery object missing from the failed request"]
+    if rec.get("recovered") is not True:
+        out.append(f"recovered: expected true actual {rec.get('recovered')!r}")
+    old = rec.get("replaced_pid_old")
+    if type(old) is not int or old != old_pid:
+        out.append(f"replaced_pid_old: expected {old_pid} actual {old!r}")
+    new = rec.get("replaced_pid_new")
+    if type(new) is not int or new <= 0 or new == old_pid:
+        out.append(f"replaced_pid_new: expected a new positive pid actual {new!r}")
+    for key in ("worlds_recovered", "ops_replayed", "duration_ms", "worker_generation"):
+        v = rec.get(key)
+        if type(v) is not int or v < 0:
+            out.append(f"{key}: expected a non-negative integer actual {v!r}")
+    if rec.get("unrecoverable") != [] or rec.get("quarantined") != []:
+        out.append("unrecoverable and quarantined must be empty after a successful recovery")
+    tick = rec.get("from_checkpoint_tick")
+    if tick is not None and (type(tick) is not int or tick < 0):
+        out.append(f"from_checkpoint_tick: expected a non-negative integer or null actual {tick!r}")
     return out
 
 
@@ -1233,6 +1270,60 @@ def tx1(t: TestCtx):
     t.check("TX1 created more worlds than a worker holds", True, len(seen_ids) > 4)
     t.check("TX1 world ids are never reused within one session", len(seen_ids), len(set(seen_ids)))
     t.details["world_ids_issued"] = len(seen_ids)
+
+
+def tx2(t: TestCtx):
+    """Worker crash recovery through the real binary (extra check; not a TEST_SPEC id). The active worker of a
+    `serve` session is killed from outside, after accepted steps and after an accepted install. The request that
+    finds the dead worker reports SU_E_WORKER_FAILED with a recovery object; the replacement is a live child of the
+    supervisor (OS facts); and every tick afterwards matches the independent reference evaluator."""
+    sess = t.session("TX2 serve")
+    sched, expected = _swap_expected(t)
+    swap_tick = sched["swap"]["effective_tick"]
+    total = sched["total_ticks"]
+    sup_pid = supervisor_pid(t, sess)
+    wid, _rev0 = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
+    t.check_mismatches("TX2 tick 0", verify_state(0, expected[0], inspect(t, sess, wid)))
+
+    def kill_active_worker(label):
+        pid = call(t, sess, "engine.info", {}).get("active_worker", {}).get("pid")
+        if type(pid) is not int or pid <= 0:
+            raise Failed("engine.info does not report the active worker pid")
+        t.check(f"TX2 {label}: worker pid is a live child of the supervisor (OS ppid)", True,
+                (identity_key(os_identity(pid)) or (0, 0, 0))[2] == sup_pid)
+        os.kill(pid, signal.SIGKILL)
+        env = sess.request("world.step", {"world_id": wid, "expected_world_revision": sess.revs[wid], "ticks": 1})
+        t.check_mismatches(f"TX2 {label}: request that found the dead worker", recovery_mismatches(env, pid))
+        new = env.get("recovery", {}).get("replaced_pid_new")
+        t.check(f"TX2 {label}: the killed worker is gone (OS)", None, identity_key(os_identity(pid)))
+        t.check(f"TX2 {label}: the replacement is a live child of the supervisor (OS ppid)", True,
+                (identity_key(os_identity(new)) or (0, 0, 0))[2] == sup_pid)
+        return pid, new
+
+    step(t, sess, wid, 1)
+    t.check_mismatches("TX2 tick 1", verify_state(1, expected[1], inspect(t, sess, wid)))
+    old1, new1 = kill_active_worker("after steps")
+    t.check("TX2 replacement differs from the killed worker", True, new1 != old1)
+    t.check_mismatches("TX2 tick 1 after recovery", verify_state(1, expected[1], inspect(t, sess, wid)))
+    step(t, sess, wid, 1)
+    t.check_mismatches(f"TX2 tick 2 (retry after recovery)", verify_state(2, expected[2], inspect(t, sess, wid)))
+
+    cid = prepare(t, sess, EDIT_V2, V2_SRC, EDIT_V2_TEST)
+    install(t, sess, wid, cid, sess.revs[wid], swap_tick)
+    t.check_mismatches(f"TX2 install at tick {swap_tick} changes no column",
+                       verify_state(swap_tick, expected[swap_tick], inspect(t, sess, wid)))
+    old2, _new2 = kill_active_worker("after install")
+    for tick in range(swap_tick + 1, total + 1):
+        step(t, sess, wid, 1)
+        t.check_mismatches(f"TX2 tick {tick} (v2 from effective tick {swap_tick}, after recovery)",
+                           verify_state(tick, expected[tick], inspect(t, sess, wid)))
+    info = call(t, sess, "engine.info", {})
+    t.check("TX2 engine.info counts two recoveries", 2, info.get("recoveries"))
+    t.check("TX2 worker generation is one spawn per worker process", True,
+            isinstance(info.get("worker_generation"), int) and info["worker_generation"] >= 3)
+    t.check("TX2 the last killed pid is not the active worker", True,
+            (info.get("active_worker") or {}).get("pid") not in (old1, old2))
+    close_world(t, sess, wid)
 
 
 def _submit_expect_rejection(t, sess, cap_rel, source_rel, expected_code):
@@ -2446,6 +2537,7 @@ TESTS = [
     ("T15", "Structured protocol", ("engine.info",), t15),
     ("TX1", "World close beyond the 4-world cap (extra)", ("world.create", "world.step", "world.inspect",
                                                           "world.close"), tx1),
+    ("TX2", "Worker crash recovery (extra)", _EVAL + ("engine.info", "world.close"), tx2),
 ]
 
 
@@ -3105,6 +3197,31 @@ def self_test() -> int:
        close_mismatches({**good_close, "released": {"snapshots": True, "systems": 1}}, "world-1", 1, 1) != [])
     ok("close: a missing released object is a mismatch",
        close_mismatches({"world_id": "world-1", "closed": True}, "world-1", 1, 1) != [])
+    good_rec = {"protocol": "0.1", "id": "x", "ok": False,
+                "error": {"code": "SU_E_WORKER_FAILED", "status": 15, "message": "m", "retry": True},
+                "recovery": {"recovered": True, "replaced_pid_old": 100, "replaced_pid_new": 101,
+                             "worlds_recovered": 1, "ops_replayed": 0, "duration_ms": 2,
+                             "from_checkpoint_tick": 3, "worker_generation": 2, "unrecoverable": [],
+                             "quarantined": []}}
+    ok("recovery: a successful recovery object passes", recovery_mismatches(good_rec, 100) == [])
+    ok("recovery: the replacement pid equal to the old one is a mismatch",
+       recovery_mismatches({**good_rec, "recovery": {**good_rec["recovery"], "replaced_pid_new": 100}}, 100) != [])
+    ok("recovery: recovered=false is a mismatch",
+       recovery_mismatches({**good_rec, "recovery": {**good_rec["recovery"], "recovered": False}}, 100) != [])
+    ok("recovery: a non-empty unrecoverable list is a mismatch",
+       recovery_mismatches({**good_rec, "recovery": {**good_rec["recovery"], "unrecoverable": [{}]}}, 100) != [])
+    ok("recovery: a missing recovery object is a mismatch",
+       recovery_mismatches({k: v for k, v in good_rec.items() if k != "recovery"}, 100) != [])
+    ok("recovery: a request that succeeded is a mismatch", recovery_mismatches({"ok": True}, 100) != [])
+    ok("recovery: a wrong error code is a mismatch",
+       recovery_mismatches({**good_rec, "error": {"code": "SU_E_INTERNAL", "status": 19}}, 100) != [])
+    ok("recovery: a null from_checkpoint_tick is accepted",
+       recovery_mismatches({**good_rec, "recovery": {**good_rec["recovery"], "from_checkpoint_tick": None}}, 100) == [])
+    ok("recovery: TX2 is registered and requires engine.info",
+       any(tid == "TX2" and "engine.info" in req for tid, _n, req, _f in TESTS))
+    ok("recovery: engine.info documents worker_generation and recoveries",
+       "worker_generation" in ENGINE_METHODS["engine.info"]["result"]
+       and "recoveries" in ENGINE_METHODS["engine.info"]["result"])
     ok("close: world.close is in the method table",
        "world.close" in ENGINE_METHODS and "expected_world_revision" in ENGINE_METHODS["world.close"]["params"])
     ok("close: TX1 requires world.close",

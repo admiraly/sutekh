@@ -29,6 +29,29 @@ static void reap(pid_t pid) {
     }
 }
 
+/* Non-blocking check for a child that has exited (killed, crashed or returned). An exited child
+ * is reaped and its pipes are closed, as su_proc_kill does. Returns 1 when the child is gone. */
+int su_proc_exited(SuProc *p) {
+    int status;
+    pid_t r;
+    if (!p->alive || p->pid <= 0) {
+        return 1;
+    }
+    do {
+        r = waitpid(p->pid, &status, WNOHANG);
+    } while (r < 0 && errno == EINTR);
+    if (r == 0) {
+        return 0;
+    }
+    /* Already reaped by waitpid: close the pipes only, never signal a pid that may be reused. */
+    close_fd(&p->in_fd);
+    close_fd(&p->out_fd);
+    su_line_reader_free(&p->reader);
+    p->pid = 0;
+    p->alive = 0;
+    return 1;
+}
+
 void su_proc_kill(SuProc *p) {
     if (p->pid > 0) {
         kill(p->pid, SIGKILL);

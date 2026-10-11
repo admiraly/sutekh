@@ -12,8 +12,10 @@
 #include "agent/su_path.h"
 #include "agent/su_proc.h"
 #include "agent/su_proto.h"
+#include "agent/su_spool.h"
 #include "ir/su_json.h"
 #include "ir/su_lir.h"
+#include "ir/su_sha256.h"
 #include "sutekh/abi.h"
 #include "sutekh/ir.h"
 #include "sutekh/status.h"
@@ -34,6 +36,96 @@
 #define AGENT_MAX_FIELD_ARGS 64u
 #define AGENT_MAX_SYSTEMS 8u
 #define AGENT_MAX_OFFSET (UINT64_C(1) << 40)
+#define AGENT_MAX_WORLDS 4u
+#define AGENT_WORLD_ID_CAP 16u
+#define AGENT_REV_CAP 48u
+#define AGENT_REASON_CAP 200u
+#define AGENT_DEFAULT_INTERVAL 64u
+#define AGENT_DEFAULT_RETAIN 4u
+#define AGENT_MAX_RETAIN 8u
+#define AGENT_DEFAULT_LOG 256u
+#define AGENT_MAX_LOG 1024u
+#define AGENT_DEFAULT_QUARANTINE 2u
+#define AGENT_DEFAULT_SPOOL (UINT64_C(32) << 20)
+#define AGENT_FIXTURE_MAX (UINT64_C(64) << 20)
+#define AGENT_RECOVERY_ATTEMPTS 3u
+#define AGENT_INTERNAL_ID "internal"
+
+/* ---------- supervisor records (M1-02) ----------
+ *
+ * Everything recovery needs is held here, never in the worker: the creation parameters of a
+ * world, the revision of each system (by content hash), canonical checkpoints (their bytes live in
+ * the spool, keyed by sha256), and the ordered log of accepted operations since the newest
+ * checkpoint. Revisions are the worker's world revisions; they are replayed exactly. */
+
+/* Project paths of one capsule and its source (candidate and creation revisions). */
+typedef struct PathPair {
+    char capsule[SU_PATH_BUF];
+    char source[SU_PATH_BUF];
+} PathPair;
+
+/* One system's installed revision. Hashes name spooled bytes. */
+typedef struct SysRef {
+    char system_id[SU_DIAG_SYSTEM_BYTES];
+    char capsule_sha[65];
+    char source_sha[65];
+    char semantic_hash[65];
+    uint64_t system_rev;
+} SysRef;
+
+/* A canonical checkpoint: the world's state at (rev, tick), its digest, and the schedule it was
+ * captured with. The snapshot bytes are the spool entry <sha>.snap. */
+typedef struct Ckpt {
+    uint64_t rev;
+    uint64_t tick;
+    char sha[65];
+    uint64_t bytes;
+    uint32_t count;
+    int client;            /* taken by world.snapshot (counted by world.close as a snapshot) */
+    SysRef sys[AGENT_MAX_SYSTEMS];
+} Ckpt;
+
+enum { LOG_NONE = 0, LOG_STEP = 1, LOG_INSTALL = 2 };
+
+/* One accepted mutating operation. hash_after is the canonical digest after it. */
+typedef struct LogOp {
+    int kind;
+    uint64_t ticks;        /* step: ticks the operation committed (partial steps included) */
+    uint64_t rev_after;
+    uint64_t tick_after;
+    char hash_after[65];
+    char cand_id[32];      /* install */
+    SysRef sys;            /* install: the revision it made live */
+    uint64_t effective_tick;
+} LogOp;
+
+typedef struct AgentWorld {
+    int used;
+    int pending;           /* being created: not yet visible to recovery */
+    int unrecoverable;
+    char reason[AGENT_REASON_CAP];
+    char id[AGENT_WORLD_ID_CAP];
+    uint64_t seq;          /* N of world-N */
+    uint64_t rev;          /* acknowledged worker revision */
+    uint64_t tick;         /* acknowledged tick */
+    char hash[65];         /* acknowledged canonical digest */
+    char fixture_path[SU_PATH_BUF];
+    char fixture_sha[65];
+    uint32_t creation_count;
+    SysRef creation[AGENT_MAX_SYSTEMS];
+    PathPair creation_paths[AGENT_MAX_SYSTEMS];
+    uint32_t count;
+    SysRef sys[AGENT_MAX_SYSTEMS];
+    uint32_t ck_count;
+    Ckpt ck[AGENT_MAX_RETAIN]; /* ck[0] oldest, ck[ck_count-1] newest */
+    uint64_t reserved;     /* spool bytes reserved for this world's checkpoints */
+    LogOp *log;
+    uint32_t log_count;
+    uint32_t log_cap;
+    uint64_t ticks_since_ck;
+    char crash_key[160];   /* the operation the last crashes were attributed to */
+    uint32_t crash_repeat;
+} AgentWorld;
 
 typedef struct AgentCandidate {
     int used;
@@ -48,10 +140,11 @@ typedef struct AgentCandidate {
     uint64_t eval_total;
     uint64_t eval_passed;
     uint64_t worker_pid;      /* pid of the last worker that evaluated or installed it; 0 = none */
-    char install_state[16];   /* not_attempted | installed | rejected */
+    char install_state[16];   /* not_attempted | installed | rejected | quarantined */
     uint64_t install_txid;
     uint64_t install_tick;    /* effective tick of the last installation */
     uint64_t install_code;    /* SU_E_* status of the last rejection */
+    char quarantine_reason[AGENT_REASON_CAP];
     uint64_t seq;             /* creation order; the oldest record is evicted when the table is full */
 } AgentCandidate;
 
@@ -64,17 +157,42 @@ typedef struct SuAgent {
     SuAgentConfig cfg;
     char root[SU_PATH_BUF];
     uint32_t timeout_ms;
-    SuProc worker; /* the long-lived active worker; holds the worlds */
+    SuProc worker; /* the active worker; holds the worlds */
+    uint64_t last_pid;      /* pid of the most recent active worker, for recovery reports */
     uint64_t next_candidate;
     uint64_t next_eval;
     AgentCandidate cand[AGENT_MAX_CANDIDATES];
+    AgentWorld world[AGENT_MAX_WORLDS];
+    uint64_t next_world_seq; /* highest world number ever issued: seeds replacement workers */
+    uint64_t generation;     /* worker_generation: active worker processes started */
+    uint64_t recoveries;     /* completed worker replacements */
+    SuSpool *spool;
+    uint64_t spool_max;
+    uint32_t interval;
+    uint32_t retain;
+    uint32_t log_cap;
+    uint32_t quarantine_after;
+    int install_ck;
+    SuBuf rec;       /* recovery object of the request being answered */
+    SuBuf event;     /* recovery object not yet reported on a response */
+    int event_pending;
 } SuAgent;
 
 typedef struct AgentCall {
     const char *id; /* the client request id; always set before routing */
     char msg[AGENT_MSG_CAP];
     int relay; /* res holds one complete worker response line, to be sent as-is */
+    int has_rec; /* the response reports a recovery (top-level "recovery" member) */
 } AgentCall;
+
+/* What the worker was doing when it died, for crash bookkeeping and quarantine. */
+enum { OPK_READ = 0, OPK_STEP, OPK_INSTALL, OPK_CREATE, OPK_RESTORE, OPK_CLOSE };
+typedef struct InFlight {
+    int kind;
+    AgentWorld *w;     /* NULL for reads and creation */
+    uint64_t tick;     /* acknowledged tick when the operation started */
+    char cand[32];     /* install: candidate id */
+} InFlight;
 
 /* Exactly the methods routed below. The other AGENT_RPC methods are not implemented and
  * must not be advertised. */
@@ -141,72 +259,1305 @@ static uint32_t param_uint(const SuJsonValue *p, const char *key, int required, 
     return SU_OK;
 }
 
-/* ---------- worker round trip ---------- */
+/* ---------- reply helpers (worker responses) ---------- */
 
-static uint32_t ensure_worker(SuAgent *a, AgentCall *c) {
+typedef struct Reply {
+    SuJsonDoc doc;
+    int parsed;
+    int has_ok;
+    int ok;
+    const SuJsonValue *result;
+    uint64_t code;
+    char msg[AGENT_MSG_CAP];
+} Reply;
+
+static const SuJsonValue *jf(const SuJsonValue *o, const char *k) {
+    return o != NULL && o->type == SU_JSON_OBJECT ? su_json_member(o, k) : NULL;
+}
+
+static int jstr(const SuJsonValue *o, const char *k, char *dst, size_t cap) {
+    const SuJsonValue *v = jf(o, k);
+    if (v == NULL || su_json_copy_string(v, dst, cap) != 0) {
+        if (cap > 0) {
+            dst[0] = '\0';
+        }
+        return 0;
+    }
+    return 1;
+}
+
+static int ju64(const SuJsonValue *o, const char *k, uint64_t *out) {
+    const SuJsonValue *v = jf(o, k);
+    return v != NULL && su_json_get_uint(v, out);
+}
+
+static void reply_parse(Reply *r, const uint8_t *data, size_t len) {
+    SuJsonLimits lim;
+    SuJsonError err;
+    const SuJsonValue *okv;
+    uint32_t st;
+
+    memset(r, 0, sizeof *r);
+    lim.max_bytes = len;
+    lim.max_depth = SU_PROTO_MAX_DEPTH + 4u;
+    st = su_json_parse(data, len, &lim, &r->doc, &err);
+    if (st != SU_OK || r->doc.root == NULL || r->doc.root->type != SU_JSON_OBJECT) {
+        return;
+    }
+    r->parsed = 1;
+    okv = su_json_member(r->doc.root, "ok");
+    r->has_ok = okv != NULL && okv->type == SU_JSON_BOOL;
+    r->ok = r->has_ok && okv->u.boolean;
+    if (r->ok) {
+        r->result = su_json_member(r->doc.root, "result");
+    } else {
+        const SuJsonValue *e = jf(r->doc.root, "error");
+        r->code = SU_E_INTERNAL;
+        ju64(e, "status", &r->code);
+        if (!jstr(e, "message", r->msg, sizeof r->msg)) {
+            snprintf(r->msg, sizeof r->msg, "worker reported an error");
+        }
+    }
+}
+
+static void reply_free(Reply *r) {
+    su_json_doc_free(&r->doc);
+    memset(r, 0, sizeof *r);
+}
+
+/* ---------- revisions ---------- */
+
+/* Revision number of "<world-id>.r<N>", 0 when malformed. */
+static uint64_t rev_num(const char *rev) {
+    const char *p = rev != NULL ? strrchr(rev, 'r') : NULL;
+    uint64_t v = 0;
+    if (p == NULL || p == rev || p[-1] != '.' || p[1] == '\0') {
+        return 0;
+    }
+    for (p++; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9') {
+            return 0;
+        }
+        v = v * 10u + (uint64_t)(*p - '0');
+    }
+    return v;
+}
+
+static void wrev(const AgentWorld *w, uint64_t rev, char *out, size_t cap) {
+    snprintf(out, cap, "%s.r%llu", w->id, (unsigned long long)rev);
+}
+
+/* Parses "world-N" into N; 0 if malformed. */
+static uint64_t wid_num(const char *id) {
+    uint64_t v = 0;
+    size_t i;
+    if (strncmp(id, "world-", 6) != 0 || id[6] == '\0' || id[6] == '0' || strlen(id + 6) > 9) {
+        return 0;
+    }
+    for (i = 6; id[i] != '\0'; i++) {
+        if (id[i] < '0' || id[i] > '9') {
+            return 0;
+        }
+        v = v * 10u + (uint64_t)(id[i] - '0');
+    }
+    return v;
+}
+
+/* ---------- worker process and round trips ---------- */
+
+static uint32_t ensure_worker(SuAgent *a) {
     SuProcLimits lim;
     if (a->worker.alive) {
         return SU_OK;
     }
     if (a->cfg.worker_argv == NULL) {
-        return call_fail(c, SU_E_WORKER_FAILED, "no worker executable is configured");
+        return SU_E_WORKER_FAILED;
     }
     memset(&lim, 0, sizeof lim);
     lim.address_space_bytes = a->cfg.worker_address_space_bytes;
     if (su_proc_spawn(&a->worker, a->cfg.worker_argv, &lim) != SU_OK) {
-        return call_fail(c, SU_E_WORKER_FAILED, "active worker could not be started");
+        return SU_E_WORKER_FAILED;
     }
+    a->last_pid = (uint64_t)a->worker.pid;
+    a->generation++;
     return SU_OK;
 }
 
-/* Sends one request line to the active worker and copies back its response.
- * The response must be one object with protocol "0.1", the same id, and a
- * boolean ok. Any other outcome kills the worker. */
-static uint32_t active_roundtrip(SuAgent *a, const char *id, const SuBuf *req, SuBuf *resp,
-                                 AgentCall *c) {
+/* One request to the active worker. The response must be an envelope with the same id and a
+ * boolean ok. Any transport failure, timeout or malformed response kills the worker and returns
+ * SU_E_WORKER_FAILED (or SU_E_RESOURCE_LIMIT for an oversized response); the caller then recovers. */
+static uint32_t roundtrip(SuAgent *a, const char *id, const SuBuf *req, SuBuf *resp) {
     const uint8_t *line = NULL;
     size_t len = 0;
-    SuJsonLimits lim;
-    SuJsonDoc doc;
-    SuJsonError err;
-    const SuJsonValue *v;
-    uint32_t st;
     int64_t deadline;
+    uint32_t st;
+    Reply r;
+    int idok;
 
-    st = ensure_worker(a, c);
+    st = ensure_worker(a);
     if (st != SU_OK) {
         return st;
     }
     deadline = su_now_ms() + (int64_t)a->timeout_ms;
     st = su_proc_request(&a->worker, req->data, req->len, deadline, &line, &len);
     if (st != SU_OK) {
-        return call_fail(c, st == SU_E_RESOURCE_LIMIT ? st : SU_E_WORKER_FAILED,
-                         st == SU_E_RESOURCE_LIMIT
-                             ? "worker response exceeded 1 MiB; worker killed"
-                             : "active worker died or timed out; it was killed and its worlds are lost");
+        return st == SU_E_RESOURCE_LIMIT ? st : SU_E_WORKER_FAILED;
     }
     su_buf_put(resp, line, len);
     if (resp->failed) {
         su_proc_kill(&a->worker);
-        return call_fail(c, SU_E_WORKER_FAILED, "worker response was malformed; worker killed");
+        return SU_E_WORKER_FAILED;
+    }
+    reply_parse(&r, resp->data, resp->len);
+    idok = r.parsed && su_json_is_string(jf(r.doc.root, "id")) &&
+           jf(r.doc.root, "id")->u.string.len == strlen(id) &&
+           memcmp(jf(r.doc.root, "id")->u.string.data, id, strlen(id)) == 0;
+    if (!idok || !r.has_ok) {
+        reply_free(&r);
+        su_proc_kill(&a->worker);
+        return SU_E_WORKER_FAILED;
+    }
+    reply_free(&r);
+    return SU_OK;
+}
+
+static void req_begin(SuBuf *req, const char *id, const char *method) {
+    su_buf_init(req);
+    su_buf_str(req, "{\"protocol\":\"" SU_PROTOCOL_VERSION "\",\"id\":");
+    su_buf_quoted(req, id, strlen(id));
+    su_buf_str(req, ",\"method\":\"");
+    su_buf_str(req, method);
+    su_buf_str(req, "\",\"params\":{");
+}
+
+static void req_end(SuBuf *req) {
+    su_buf_str(req, "}}");
+}
+
+static void buf_hash_field(SuBuf *b, const char *key, const char *hex) {
+    su_buf_str(b, ",\"");
+    su_buf_str(b, key);
+    su_buf_str(b, "\":");
+    su_buf_quoted(b, hex, strlen(hex));
+}
+
+static AgentCandidate *candidate_by_capsule(SuAgent *a, const char *sha);
+
+/* ---------- spool: admission, references, reclamation ---------- */
+
+static int spool_referenced(const SuAgent *a, const char *sha, const char *ext) {
+    uint32_t i;
+    uint32_t k;
+    uint32_t j;
+    int is_snap = strcmp(ext, "snap") == 0;
+    int is_cap = strcmp(ext, "capsule") == 0;
+
+    for (i = 0; i < AGENT_MAX_WORLDS; i++) {
+        const AgentWorld *w = &a->world[i];
+        if (!w->used) {
+            continue;
+        }
+        for (k = 0; k < w->ck_count; k++) {
+            if (is_snap) {
+                if (strcmp(w->ck[k].sha, sha) == 0) {
+                    return 1;
+                }
+                continue;
+            }
+            for (j = 0; j < w->ck[k].count; j++) {
+                if (strcmp(is_cap ? w->ck[k].sys[j].capsule_sha : w->ck[k].sys[j].source_sha, sha) == 0) {
+                    return 1;
+                }
+            }
+        }
+        if (is_snap) {
+            continue;
+        }
+        for (k = 0; k < w->creation_count; k++) {
+            if (strcmp(is_cap ? w->creation[k].capsule_sha : w->creation[k].source_sha, sha) == 0) {
+                return 1;
+            }
+        }
+        for (k = 0; k < w->count; k++) {
+            if (strcmp(is_cap ? w->sys[k].capsule_sha : w->sys[k].source_sha, sha) == 0) {
+                return 1;
+            }
+        }
+        for (k = 0; k < w->log_count; k++) {
+            if (w->log[k].kind == LOG_INSTALL &&
+                strcmp(is_cap ? w->log[k].sys.capsule_sha : w->log[k].sys.source_sha, sha) == 0) {
+                return 1;
+            }
+        }
+    }
+    if (!is_snap) {
+        for (i = 0; i < AGENT_MAX_CANDIDATES; i++) {
+            const AgentCandidate *c = &a->cand[i];
+            if (c->used && strcmp(is_cap ? c->capsule_hash : c->source_hash, sha) == 0) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Drops every spool entry that no record references. */
+static void gc_spool(SuAgent *a) {
+    int again = 1;
+    while (again) {
+        uint32_t i;
+        uint32_t n = su_spool_count(a->spool);
+        again = 0;
+        for (i = 0; i < n; i++) {
+            const char *ext = NULL;
+            uint64_t bytes = 0;
+            const char *sha = su_spool_entry(a->spool, i, &ext, &bytes);
+            char s[65];
+            char e[SU_SPOOL_EXT_MAX + 1u];
+            if (sha == NULL) {
+                continue;
+            }
+            snprintf(s, sizeof s, "%s", sha);
+            snprintf(e, sizeof e, "%s", ext);
+            if (!spool_referenced(a, s, e)) {
+                su_spool_drop(a->spool, s, e);
+                again = 1;
+                break;
+            }
+        }
+    }
+}
+
+static uint64_t checkpoint_bytes(const AgentWorld *w) {
+    uint64_t t = 0;
+    uint32_t k;
+    for (k = 0; k < w->ck_count; k++) {
+        t += w->ck[k].bytes;
+    }
+    return t;
+}
+
+/* Bytes the spool is committed to: what it holds, plus checkpoint reservations not yet used. */
+static uint64_t committed_bytes(const SuAgent *a) {
+    uint64_t total = su_spool_bytes(a->spool);
+    uint32_t i;
+    for (i = 0; i < AGENT_MAX_WORLDS; i++) {
+        const AgentWorld *w = &a->world[i];
+        if (w->used && w->reserved > checkpoint_bytes(w)) {
+            total += w->reserved - checkpoint_bytes(w);
+        }
+    }
+    return total;
+}
+
+static int budget_admits(const SuAgent *a, uint64_t add) {
+    uint64_t c = committed_bytes(a);
+    return c <= a->spool_max && add <= a->spool_max - c;
+}
+
+/* Stores bytes in the spool, reclaiming unreferenced entries first when the budget is tight. */
+static uint32_t spool_put_admit(SuAgent *a, const char *ext, const uint8_t *data, size_t len, char sha[65]) {
+    if (!budget_admits(a, (uint64_t)len)) {
+        gc_spool(a);
+        if (!budget_admits(a, (uint64_t)len)) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+    }
+    return su_spool_put(a->spool, ext, data, len, sha);
+}
+
+/* Spool path of a referenced entry, or SU_E_INTERNAL when the record names bytes not present. */
+static uint32_t spool_file(const SuAgent *a, const char *sha, const char *ext, char *out, size_t cap) {
+    return su_spool_path(a->spool, sha, ext, out, cap) == SU_OK ? SU_OK : SU_E_INTERNAL;
+}
+
+/* Writes a JSON array of {system_id, capsule_path, source_path, capsule_sha256, source_sha256,
+ * semantic_hash} objects whose paths are spool files. */
+static uint32_t write_capsules(const SuAgent *a, SuBuf *req, const char *key, const SysRef *sys, uint32_t n) {
+    uint32_t i;
+    char cap[SU_PATH_BUF];
+    char src[SU_PATH_BUF];
+    su_buf_str(req, ",\"");
+    su_buf_str(req, key);
+    su_buf_str(req, "\":[");
+    for (i = 0; i < n; i++) {
+        if (spool_file(a, sys[i].capsule_sha, "capsule", cap, sizeof cap) != SU_OK ||
+            spool_file(a, sys[i].source_sha, "source", src, sizeof src) != SU_OK) {
+            return SU_E_INTERNAL;
+        }
+        if (i > 0) {
+            su_buf_str(req, ",");
+        }
+        su_buf_str(req, "{\"system_id\":");
+        su_buf_quoted(req, sys[i].system_id, strlen(sys[i].system_id));
+        su_buf_str(req, ",\"capsule_path\":");
+        su_buf_quoted(req, cap, strlen(cap));
+        su_buf_str(req, ",\"source_path\":");
+        su_buf_quoted(req, src, strlen(src));
+        buf_hash_field(req, "capsule_sha256", sys[i].capsule_sha);
+        buf_hash_field(req, "source_sha256", sys[i].source_sha);
+        buf_hash_field(req, "semantic_hash", sys[i].semantic_hash);
+        su_buf_str(req, "}");
+    }
+    su_buf_str(req, "]");
+    return req->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* Like write_capsules, but a revision whose project files are still known to the supervisor is
+ * named by those paths, so the worker re-checks the files against the recorded hashes (an explicit
+ * world.restore or candidate.install of changed bytes is refused, as in M0). Other revisions use the
+ * spool. Recovery never uses this function. */
+static uint32_t write_capsules_disk(SuAgent *a, const AgentWorld *w, SuBuf *req, const char *key,
+                                    const SysRef *sys, uint32_t n) {
+    uint32_t i;
+    uint32_t k;
+    su_buf_str(req, ",\"");
+    su_buf_str(req, key);
+    su_buf_str(req, "\":[");
+    for (i = 0; i < n; i++) {
+        const char *cap = NULL;
+        const char *src = NULL;
+        char cap_sp[SU_PATH_BUF];
+        char src_sp[SU_PATH_BUF];
+        AgentCandidate *cd;
+        for (k = 0; k < w->creation_count && cap == NULL; k++) {
+            if (strcmp(w->creation[k].capsule_sha, sys[i].capsule_sha) == 0 &&
+                strcmp(w->creation[k].source_sha, sys[i].source_sha) == 0) {
+                cap = w->creation_paths[k].capsule;
+                src = w->creation_paths[k].source;
+            }
+        }
+        cd = cap == NULL ? candidate_by_capsule(a, sys[i].capsule_sha) : NULL;
+        if (cd != NULL && strcmp(cd->source_hash, sys[i].source_sha) == 0) {
+            cap = cd->capsule_real;
+            src = cd->source_real;
+        }
+        if (cap == NULL) {
+            if (spool_file(a, sys[i].capsule_sha, "capsule", cap_sp, sizeof cap_sp) != SU_OK ||
+                spool_file(a, sys[i].source_sha, "source", src_sp, sizeof src_sp) != SU_OK) {
+                return SU_E_INTERNAL;
+            }
+            cap = cap_sp;
+            src = src_sp;
+        }
+        if (i > 0) {
+            su_buf_str(req, ",");
+        }
+        su_buf_str(req, "{\"system_id\":");
+        su_buf_quoted(req, sys[i].system_id, strlen(sys[i].system_id));
+        su_buf_str(req, ",\"capsule_path\":");
+        su_buf_quoted(req, cap, strlen(cap));
+        su_buf_str(req, ",\"source_path\":");
+        su_buf_quoted(req, src, strlen(src));
+        buf_hash_field(req, "capsule_sha256", sys[i].capsule_sha);
+        buf_hash_field(req, "source_sha256", sys[i].source_sha);
+        buf_hash_field(req, "semantic_hash", sys[i].semantic_hash);
+        su_buf_str(req, "}");
+    }
+    su_buf_str(req, "]");
+    return req->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* ---------- world records ---------- */
+
+static AgentWorld *find_world(SuAgent *a, const char *id) {
+    uint32_t i;
+    for (i = 0; i < AGENT_MAX_WORLDS; i++) {
+        AgentWorld *w = &a->world[i];
+        if (w->used && !w->pending && strcmp(w->id, id) == 0) {
+            return w;
+        }
+    }
+    return NULL;
+}
+
+static AgentWorld *free_world_slot(SuAgent *a) {
+    uint32_t i;
+    for (i = 0; i < AGENT_MAX_WORLDS; i++) {
+        if (!a->world[i].used) {
+            return &a->world[i];
+        }
+    }
+    return NULL;
+}
+
+static uint32_t live_worlds(const SuAgent *a) {
+    uint32_t i;
+    uint32_t n = 0;
+    for (i = 0; i < AGENT_MAX_WORLDS; i++) {
+        if (a->world[i].used && !a->world[i].pending) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static void world_release(SuAgent *a, AgentWorld *w) {
+    free(w->log);
+    w->log = NULL;
+    memset(w, 0, sizeof *w);
+    gc_spool(a);
+}
+
+static void mark_unrecoverable(AgentWorld *w, const char *why) {
+    if (!w->unrecoverable) {
+        w->unrecoverable = 1;
+        snprintf(w->reason, sizeof w->reason, "%s", why);
+    }
+}
+
+/* Snapshot size bound from the schema shape: 11 bytes per u32 value and per entity id, plus
+ * fixed overhead for the header, field names and the manifest. */
+static uint64_t snapshot_bound(uint64_t rows, uint64_t fields) {
+    uint64_t per_row = (fields + 1u) * 11u;
+    uint64_t lim = UINT64_MAX / 4u;
+    if (per_row != 0 && rows > (lim - 16384u - fields * 512u - AGENT_MAX_SYSTEMS * 512u) / per_row) {
+        return lim;
+    }
+    return 16384u + fields * 512u + AGENT_MAX_SYSTEMS * 512u + rows * per_row;
+}
+
+static void ck_drop_oldest(SuAgent *a, AgentWorld *w) {
+    char sha[65];
+    snprintf(sha, sizeof sha, "%s", w->ck[0].sha);
+    memmove(&w->ck[0], &w->ck[1], (w->ck_count - 1u) * sizeof w->ck[0]);
+    w->ck_count--;
+    if (!spool_referenced(a, sha, "snap")) {
+        su_spool_drop(a->spool, sha, "snap");
+    }
+}
+
+/* Records a checkpoint at the acknowledged state and clears the log it supersedes. */
+static void ck_push(SuAgent *a, AgentWorld *w, uint64_t rev, uint64_t tick, const char *sha, uint64_t bytes) {
+    Ckpt *c;
+    while (w->ck_count >= a->retain) {
+        ck_drop_oldest(a, w);
+    }
+    c = &w->ck[w->ck_count];
+    memset(c, 0, sizeof *c);
+    c->rev = rev;
+    c->tick = tick;
+    snprintf(c->sha, sizeof c->sha, "%s", sha);
+    c->bytes = bytes;
+    c->count = w->count;
+    memcpy(c->sys, w->sys, sizeof c->sys);
+    w->ck_count++;
+    w->log_count = 0;
+    w->ticks_since_ck = 0;
+}
+
+/* Result codes of the checkpoint and sync helpers. */
+enum { CK_OK = 0, CK_DIED = 1, CK_NOROOM = 2, CK_BAD = 3 };
+
+/* Captures the canonical state of w into the spool and records it as a checkpoint. initial is
+ * the creation capture: it sets the acknowledged revision, tick and digest and reserves the
+ * world's checkpoint bytes. Otherwise the capture must match the acknowledged state. */
+static int checkpoint_world(SuAgent *a, AgentWorld *w, int initial) {
+    char scratch[SU_PATH_BUF + 64];
+    char rev[AGENT_REV_CAP];
+    char sha[65];
+    char rev_got[AGENT_REV_CAP];
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    uint64_t tick = 0;
+    uint64_t bytes = 0;
+    uint64_t rows = 0;
+    uint64_t fields = 0;
+    uint64_t rv;
+    uint32_t st;
+    int rc = CK_OK;
+
+    if (su_spool_scratch_path(a->spool, w->id, scratch, sizeof scratch) != SU_OK) {
+        return CK_NOROOM;
+    }
+    unlink(scratch);
+    wrev(w, w->rev, rev, sizeof rev);
+    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.capture");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, rev, strlen(rev));
+    su_buf_str(&req, ",\"spool_path\":");
+    su_buf_quoted(&req, scratch, strlen(scratch));
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        unlink(scratch);
+        return CK_DIED;
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok || !jstr(r.result, "world_revision", rev_got, sizeof rev_got) || !ju64(r.result, "tick", &tick) ||
+        !ju64(r.result, "bytes", &bytes) || !ju64(r.result, "row_count", &rows) ||
+        !ju64(r.result, "field_count", &fields) || !jstr(r.result, "sha256", sha, sizeof sha)) {
+        reply_free(&r);
+        su_buf_free(&resp);
+        unlink(scratch);
+        mark_unrecoverable(w, "checkpoint capture was rejected by the worker");
+        return CK_BAD;
+    }
+    reply_free(&r);
+    su_buf_free(&resp);
+    rv = rev_num(rev_got);
+    if (initial) {
+        uint64_t est = snapshot_bound(rows, fields);
+        if (est > UINT64_MAX / (a->retain + 1u)) {
+            unlink(scratch);
+            return CK_NOROOM;
+        }
+        est *= a->retain + 1u;
+        if (!budget_admits(a, est)) {
+            unlink(scratch);
+            return CK_NOROOM;
+        }
+        w->reserved = est;
+        w->rev = rv;
+        w->tick = tick;
+        snprintf(w->hash, sizeof w->hash, "%s", sha);
+    } else if (rv != w->rev || tick != w->tick || strcmp(sha, w->hash) != 0) {
+        unlink(scratch);
+        mark_unrecoverable(w, "checkpoint capture disagrees with the acknowledged state");
+        return CK_BAD;
+    }
+    if (su_spool_adopt(a->spool, "snap", scratch, sha, bytes) != SU_OK) {
+        unlink(scratch);
+        return CK_NOROOM;
+    }
+    ck_push(a, w, rv, tick, sha, bytes);
+    return rc;
+}
+
+/* Reads the worker's canonical digest of w: its revision, tick and sha256. Returns 0, 1 when
+ * the worker died, 2 when the answer is rejected or malformed. */
+static int read_digest(SuAgent *a, const AgentWorld *w, char rev_out[AGENT_REV_CAP], uint64_t *tick,
+                       char sha_out[65]) {
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    uint32_t st;
+    int rc = 0;
+
+    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.digest");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return 1;
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok || !jstr(r.result, "world_revision", rev_out, AGENT_REV_CAP) || !ju64(r.result, "tick", tick) ||
+        !jstr(r.result, "sha256", sha_out, 65)) {
+        rc = 2;
+    }
+    reply_free(&r);
+    su_buf_free(&resp);
+    return rc;
+}
+
+/* Digest of w compared with the expected revision, tick and sha256 (sha NULL: not compared).
+ * Returns 0 when they match, 1 when the worker died, 2 on any mismatch or rejection. */
+static int digest_matches(SuAgent *a, const AgentWorld *w, uint64_t rev, uint64_t tick, const char *sha,
+                          char *got_sha, size_t got_cap, uint64_t *got_rev, uint64_t *got_tick) {
+    char rev_got[AGENT_REV_CAP];
+    char got[65];
+    char want[AGENT_REV_CAP];
+    uint64_t t = 0;
+    int rc;
+
+    rc = read_digest(a, w, rev_got, &t, got);
+    if (rc != 0) {
+        return rc == 1 ? 1 : 2;
+    }
+    if (got_sha != NULL) {
+        snprintf(got_sha, got_cap, "%s", got);
+    }
+    if (got_rev != NULL) {
+        *got_rev = rev_num(rev_got);
+    }
+    if (got_tick != NULL) {
+        *got_tick = t;
+    }
+    wrev(w, rev, want, sizeof want);
+    return strcmp(rev_got, want) == 0 && t == tick && (sha == NULL || strcmp(got, sha) == 0) ? 0 : 2;
+}
+
+/* After an operation the worker acknowledged, or partially applied: digests the committed state
+ * and records the change. log_kind LOG_STEP or LOG_INSTALL appends tmpl (its rev/tick/digest are
+ * filled in here); force_ck takes a checkpoint now (restore). Checkpoints follow the interval, the
+ * install policy and the forced case. ok_flag clears the crash bookkeeping of the world. */
+static int sync_after(SuAgent *a, AgentWorld *w, int log_kind, const LogOp *tmpl, int force_ck, int ok_flag) {
+    char got[65];
+    char rv[AGENT_REV_CAP];
+    uint64_t rev_new = 0;
+    uint64_t tick_new = 0;
+    uint64_t delta = 0;
+    int rc;
+    LogOp e;
+
+    rc = read_digest(a, w, rv, &tick_new, got);
+    if (rc == 1) {
+        return CK_DIED;
+    }
+    if (rc == 2) {
+        mark_unrecoverable(w, "digest was rejected by the worker after an accepted operation");
+        return CK_BAD;
+    }
+    rev_new = rev_num(rv);
+    if (rev_new == w->rev && tick_new == w->tick && strcmp(got, w->hash) == 0 && !force_ck) {
+        if (ok_flag) {
+            w->crash_repeat = 0;
+            w->crash_key[0] = '\0';
+        }
+        return CK_OK;
+    }
+    if (log_kind != LOG_NONE) {
+        if (log_kind == LOG_STEP) {
+            if (tick_new < w->tick || rev_new < w->rev || rev_new - w->rev != tick_new - w->tick) {
+                mark_unrecoverable(w, "step changed revision and tick inconsistently");
+                return CK_BAD;
+            }
+            delta = tick_new - w->tick;
+        }
+        if (w->log_count >= w->log_cap) {
+            mark_unrecoverable(w, "replay log is full at an acknowledged operation");
+            return CK_BAD;
+        }
+        e = *tmpl;
+        e.kind = log_kind;
+        e.ticks = delta;
+        e.rev_after = rev_new;
+        e.tick_after = tick_new;
+        snprintf(e.hash_after, sizeof e.hash_after, "%s", got);
+        w->log[w->log_count++] = e;
+    }
+    w->rev = rev_new;
+    w->tick = tick_new;
+    snprintf(w->hash, sizeof w->hash, "%s", got);
+    w->ticks_since_ck += delta;
+    if (ok_flag) {
+        w->crash_repeat = 0;
+        w->crash_key[0] = '\0';
+    }
+    if (force_ck || w->ticks_since_ck >= a->interval || (log_kind == LOG_INSTALL && a->install_ck)) {
+        rc = checkpoint_world(a, w, 0);
+        if (rc == CK_NOROOM) {
+            /* The operation is applied and logged; the log keeps it until a later checkpoint. */
+            rc = CK_OK;
+        }
+        return rc;
+    }
+    return CK_OK;
+}
+
+/* ---------- recovery (M1-02) ----------
+ *
+ * A replacement worker is started. Each live world is rebuilt from its creation parameters, then
+ * its newest checkpoint is restored at the recorded revision (the spool bytes are checked against
+ * their sha256 by the worker), then the log is replayed. After every replayed operation the digest
+ * must equal the digest recorded when it was acknowledged. Any mismatch marks the world
+ * unrecoverable; it is never continued silently. */
+
+typedef struct RecStats {
+    uint64_t worlds;
+    uint64_t ops;
+    int have_base;
+    uint64_t min_base_tick;
+} RecStats;
+
+static uint32_t seed_worker(SuAgent *a) {
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    uint32_t st;
+
+    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.seed");
+    su_buf_str(&req, "\"next_id\":");
+    su_buf_u64(&req, a->next_world_seq);
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st == SU_OK) {
+        reply_parse(&r, resp.data, resp.len);
+        if (!r.ok) {
+            st = SU_E_WORKER_FAILED;
+        }
+        reply_free(&r);
+    }
+    su_buf_free(&resp);
+    return st;
+}
+
+/* Returns 0 when w is rebuilt and verified, 1 when the replacement worker died meanwhile, 2 when
+ * w is now unrecoverable (its world is marked and never retried by recovery). */
+static int rebuild_world(SuAgent *a, AgentWorld *w, RecStats *s) {
+    char cur[AGENT_REV_CAP];
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    const Ckpt *base;
+    char snap[SU_PATH_BUF];
+    char got[65];
+    char rv[AGENT_REV_CAP];
+    uint32_t i;
+    uint32_t k;
+    uint32_t st;
+    int d;
+    uint64_t last_rev;
+    uint64_t last_tick;
+    char last_sha[65];
+
+    /* 1: recreate from the creation parameters (fixture hash and capsule hashes are checked). */
+    req_begin(&req, AGENT_INTERNAL_ID, "world.create");
+    su_buf_str(&req, "\"fixture_path\":");
+    su_buf_quoted(&req, w->fixture_path, strlen(w->fixture_path));
+    su_buf_str(&req, ",\"fixture_sha256\":");
+    su_buf_quoted(&req, w->fixture_sha, strlen(w->fixture_sha));
+    su_buf_str(&req, ",\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    st = write_capsules(a, &req, "capsules", w->creation, w->creation_count);
+    if (st != SU_OK) {
+        su_buf_free(&req);
+        mark_unrecoverable(w, "a creation capsule is missing from the spool");
+        return 2;
+    }
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return 1;
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok || !jstr(r.result, "world_id", rv, sizeof rv) || strcmp(rv, w->id) != 0) {
+        mark_unrecoverable(w, "recreation from the creation parameters was rejected");
+        reply_free(&r);
+        su_buf_free(&resp);
+        return 2;
+    }
+    reply_free(&r);
+    su_buf_free(&resp);
+
+    /* 2: newest checkpoint, at its recorded revision. */
+    if (w->ck_count == 0) {
+        mark_unrecoverable(w, "no checkpoint to recover from");
+        return 2;
+    }
+    base = &w->ck[w->ck_count - 1];
+    if (spool_file(a, base->sha, "snap", snap, sizeof snap) != SU_OK) {
+        mark_unrecoverable(w, "the newest checkpoint is missing from the spool");
+        return 2;
+    }
+    wrev(w, 1, cur, sizeof cur);
+    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.restore_bytes");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, cur, strlen(cur));
+    su_buf_str(&req, ",\"snapshot_path\":");
+    su_buf_quoted(&req, snap, strlen(snap));
+    su_buf_str(&req, ",\"snapshot_sha256\":");
+    su_buf_quoted(&req, base->sha, strlen(base->sha));
+    su_buf_str(&req, ",\"mode\":\"exact\",\"world_revision\":");
+    su_buf_u64(&req, base->rev);
+    st = write_capsules(a, &req, "capsules", base->sys, base->count);
+    if (st != SU_OK) {
+        su_buf_free(&req);
+        mark_unrecoverable(w, "a checkpointed capsule is missing from the spool");
+        return 2;
+    }
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return 1;
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        mark_unrecoverable(w, "newest checkpoint was rejected on restore (corrupt or missing)");
+        reply_free(&r);
+        su_buf_free(&resp);
+        return 2;
+    }
+    reply_free(&r);
+    su_buf_free(&resp);
+    wrev(w, base->rev, cur, sizeof cur);
+    memcpy(w->sys, base->sys, sizeof w->sys);
+    w->count = base->count;
+    d = digest_matches(a, w, base->rev, base->tick, base->sha, got, sizeof got, NULL, NULL);
+    if (d == 1) {
+        return 1;
+    }
+    if (d == 2) {
+        mark_unrecoverable(w, "restored checkpoint does not match its recorded digest");
+        return 2;
+    }
+    if (!s->have_base || base->tick < s->min_base_tick) {
+        s->min_base_tick = base->tick;
+        s->have_base = 1;
     }
 
-    memset(&doc, 0, sizeof doc);
-    lim.max_bytes = resp->len;
-    lim.max_depth = SU_PROTO_MAX_DEPTH + 4u;
-    st = su_json_parse(resp->data, resp->len, &lim, &doc, &err);
-    v = st == SU_OK && doc.root != NULL && doc.root->type == SU_JSON_OBJECT
-            ? su_json_member(doc.root, "id")
-            : NULL;
-    if (st != SU_OK || v == NULL || !su_json_is_string(v) || v->u.string.len != strlen(id) ||
-        memcmp(v->u.string.data, id, strlen(id)) != 0 ||
-        su_json_member(doc.root, "ok") == NULL || su_json_member(doc.root, "ok")->type != SU_JSON_BOOL) {
-        su_json_doc_free(&doc);
-        su_proc_kill(&a->worker);
-        return call_fail(c, SU_E_WORKER_FAILED, "worker response was malformed; worker killed");
+    /* 3: replay the log, verifying the digest after every operation. */
+    for (k = 0; k < w->log_count; k++) {
+        const LogOp *op = &w->log[k];
+        if (op->kind == LOG_STEP) {
+            req_begin(&req, AGENT_INTERNAL_ID, "world.step");
+            su_buf_str(&req, "\"world_id\":");
+            su_buf_quoted(&req, w->id, strlen(w->id));
+            su_buf_str(&req, ",\"expected_world_revision\":");
+            su_buf_quoted(&req, cur, strlen(cur));
+            su_buf_str(&req, ",\"ticks\":");
+            su_buf_u64(&req, op->ticks);
+            req_end(&req);
+        } else {
+            char cap[SU_PATH_BUF];
+            char src[SU_PATH_BUF];
+            if (spool_file(a, op->sys.capsule_sha, "capsule", cap, sizeof cap) != SU_OK ||
+                spool_file(a, op->sys.source_sha, "source", src, sizeof src) != SU_OK) {
+                mark_unrecoverable(w, "an installed capsule is missing from the spool");
+                return 2;
+            }
+            req_begin(&req, AGENT_INTERNAL_ID, "internal.candidate.install");
+            su_buf_str(&req, "\"world_id\":");
+            su_buf_quoted(&req, w->id, strlen(w->id));
+            su_buf_str(&req, ",\"candidate_id\":");
+            su_buf_quoted(&req, op->cand_id, strlen(op->cand_id));
+            su_buf_str(&req, ",\"capsule_path\":");
+            su_buf_quoted(&req, cap, strlen(cap));
+            su_buf_str(&req, ",\"source_path\":");
+            su_buf_quoted(&req, src, strlen(src));
+            buf_hash_field(&req, "expected_source_hash", op->sys.source_sha);
+            buf_hash_field(&req, "expected_capsule_hash", op->sys.capsule_sha);
+            su_buf_str(&req, ",\"evidence\":\"passed\",\"expected_world_revision\":");
+            su_buf_quoted(&req, cur, strlen(cur));
+            su_buf_str(&req, ",\"allowed_effective_tick\":");
+            su_buf_u64(&req, op->effective_tick);
+            req_end(&req);
+        }
+        su_buf_init(&resp);
+        st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+        su_buf_free(&req);
+        if (st != SU_OK) {
+            su_buf_free(&resp);
+            return 1;
+        }
+        reply_parse(&r, resp.data, resp.len);
+        if (!r.ok) {
+            char why[AGENT_REASON_CAP];
+            snprintf(why, sizeof why, "replay of logged operation %u was rejected: %.120s", (unsigned)k, r.msg);
+            reply_free(&r);
+            su_buf_free(&resp);
+            mark_unrecoverable(w, why);
+            return 2;
+        }
+        if (op->kind == LOG_INSTALL) {
+            for (i = 0; i < w->count; i++) {
+                if (strcmp(w->sys[i].system_id, op->sys.system_id) == 0) {
+                    w->sys[i] = op->sys;
+                }
+            }
+        }
+        reply_free(&r);
+        su_buf_free(&resp);
+        wrev(w, op->rev_after, cur, sizeof cur);
+        d = digest_matches(a, w, op->rev_after, op->tick_after, op->hash_after, got, sizeof got, NULL, NULL);
+        if (d == 1) {
+            return 1;
+        }
+        if (d == 2) {
+            char why[AGENT_REASON_CAP];
+            snprintf(why, sizeof why, "replay of logged operation %u produced a state that differs from the acknowledged one",
+                     (unsigned)k);
+            mark_unrecoverable(w, why);
+            return 2;
+        }
+        s->ops++;
     }
-    su_json_doc_free(&doc);
-    return SU_OK;
+
+    /* 4: the recovered state must be the last acknowledged state. */
+    if (w->log_count > 0) {
+        last_rev = w->log[w->log_count - 1].rev_after;
+        last_tick = w->log[w->log_count - 1].tick_after;
+        snprintf(last_sha, sizeof last_sha, "%s", w->log[w->log_count - 1].hash_after);
+    } else {
+        last_rev = base->rev;
+        last_tick = base->tick;
+        snprintf(last_sha, sizeof last_sha, "%s", base->sha);
+    }
+    if (last_rev != w->rev || last_tick != w->tick || strcmp(last_sha, w->hash) != 0) {
+        mark_unrecoverable(w, "recovered state does not match the last acknowledged state");
+        return 2;
+    }
+    s->worlds++;
+    return 0;
+}
+
+/* Appends one quarantine entry to the recovery object's list. */
+static void quarantine_note(SuBuf *q, int *nq, const char *cand_id, const char *world_id, const char *reason,
+                            int rolled_back, uint64_t to_tick, uint64_t discarded) {
+    if (*nq > 0) {
+        su_buf_str(q, ",");
+    }
+    su_buf_str(q, "{\"candidate_id\":");
+    su_buf_quoted(q, cand_id, strlen(cand_id));
+    su_buf_str(q, ",\"world_id\":");
+    su_buf_quoted(q, world_id, strlen(world_id));
+    su_buf_str(q, ",\"state\":\"quarantined\",\"reason\":");
+    su_buf_quoted(q, reason, strlen(reason));
+    if (rolled_back) {
+        su_buf_str(q, ",\"rolled_back_to_tick\":");
+        su_buf_u64(q, to_tick);
+        su_buf_str(q, ",\"discarded_ticks\":");
+        su_buf_u64(q, discarded);
+    }
+    su_buf_str(q, "}");
+    (*nq)++;
+}
+
+static AgentCandidate *find_candidate(SuAgent *a, const char *id);
+
+static AgentCandidate *candidate_by_capsule(SuAgent *a, const char *sha) {
+    uint32_t i;
+    for (i = 0; i < AGENT_MAX_CANDIDATES; i++) {
+        if (a->cand[i].used && strcmp(a->cand[i].capsule_hash, sha) == 0) {
+            return &a->cand[i];
+        }
+    }
+    return NULL;
+}
+
+static void candidate_quarantine(AgentCandidate *cd, const char *reason) {
+    snprintf(cd->install_state, sizeof cd->install_state, "quarantined");
+    snprintf(cd->quarantine_reason, sizeof cd->quarantine_reason, "%s", reason);
+}
+
+/* Quarantines the revision a world keeps crashing on (ISSUE: repeated identical failures).
+ * An install that crashes the worker is refused from then on, and the world stays on its previous
+ * revision. Any other operation crashing on a world's installed revision reverts the world to the
+ * newest checkpoint that predates that revision, recorded as a new transaction (its revision
+ * advances); operations accepted after that checkpoint are discarded and reported. The worker must
+ * be alive. */
+static void quarantine_apply(SuAgent *a, const InFlight *op, SuBuf *q, int *nq) {
+    AgentWorld *w = op->w;
+    char reason[AGENT_REASON_CAP];
+    char cand_id[32] = "";
+    AgentCandidate *cd;
+    uint32_t i;
+    int idx = -1;
+    uint64_t best = 0;
+    char rev[AGENT_REV_CAP];
+    uint32_t k;
+    int found = -1;
+
+    if (op->kind == OPK_INSTALL) {
+        cd = find_candidate(a, op->cand);
+        snprintf(reason, sizeof reason, "worker died on %u consecutive recoveries while installing this revision at tick %llu",
+                 (unsigned)w->crash_repeat, (unsigned long long)op->tick);
+        if (cd != NULL) {
+            candidate_quarantine(cd, reason);
+            snprintf(cand_id, sizeof cand_id, "%s", cd->id);
+        }
+        quarantine_note(q, nq, cd != NULL ? cand_id : op->cand, w->id, reason, 0, 0, 0);
+        w->crash_repeat = 0;
+        w->crash_key[0] = '\0';
+        return;
+    }
+    for (i = 0; i < w->count; i++) {
+        int creation = 0;
+        uint32_t c;
+        for (c = 0; c < w->creation_count; c++) {
+            if (strcmp(w->creation[c].capsule_sha, w->sys[i].capsule_sha) == 0) {
+                creation = 1;
+            }
+        }
+        if (!creation && (idx < 0 || w->sys[i].system_rev >= best)) {
+            idx = (int)i;
+            best = w->sys[i].system_rev;
+        }
+    }
+    if (idx < 0) {
+        mark_unrecoverable(w, "repeated worker failure with no installed revision to quarantine");
+        return;
+    }
+    cd = candidate_by_capsule(a, w->sys[idx].capsule_sha);
+    for (k = w->ck_count; k > 0 && found < 0; k--) {
+        uint32_t j;
+        int has = 0;
+        for (j = 0; j < w->ck[k - 1].count; j++) {
+            if (strcmp(w->ck[k - 1].sys[j].capsule_sha, w->sys[idx].capsule_sha) == 0) {
+                has = 1;
+            }
+        }
+        if (!has) {
+            found = (int)(k - 1);
+        }
+    }
+    if (found < 0) {
+        mark_unrecoverable(w, "repeated worker failure and no checkpoint predates the installed revision");
+        return;
+    }
+    {
+        const Ckpt *target = &w->ck[found];
+        SuBuf req;
+        SuBuf resp;
+        Reply r;
+        uint32_t st;
+        uint64_t discarded;
+        char got[65];
+        char rv[AGENT_REV_CAP];
+        uint64_t tick_now = w->tick;
+
+        snprintf(reason, sizeof reason, "worker died on %u consecutive recoveries running this revision (tick %llu)",
+                 (unsigned)w->crash_repeat, (unsigned long long)op->tick);
+        wrev(w, w->rev, rev, sizeof rev);
+        {
+            char snap[SU_PATH_BUF];
+            if (spool_file(a, target->sha, "snap", snap, sizeof snap) != SU_OK) {
+                mark_unrecoverable(w, "quarantine rollback checkpoint is missing from the spool");
+                return;
+            }
+            req_begin(&req, AGENT_INTERNAL_ID, "internal.world.restore_bytes");
+            su_buf_str(&req, "\"world_id\":");
+            su_buf_quoted(&req, w->id, strlen(w->id));
+            su_buf_str(&req, ",\"expected_world_revision\":");
+            su_buf_quoted(&req, rev, strlen(rev));
+            su_buf_str(&req, ",\"snapshot_path\":");
+            su_buf_quoted(&req, snap, strlen(snap));
+            su_buf_str(&req, ",\"snapshot_sha256\":");
+            su_buf_quoted(&req, target->sha, strlen(target->sha));
+            su_buf_str(&req, ",\"mode\":\"advance\"");
+            if (write_capsules(a, &req, "capsules", target->sys, target->count) != SU_OK) {
+                su_buf_free(&req);
+                mark_unrecoverable(w, "quarantine rollback capsule is missing from the spool");
+                return;
+            }
+            req_end(&req);
+        }
+        su_buf_init(&resp);
+        st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+        su_buf_free(&req);
+        if (st != SU_OK) {
+            su_buf_free(&resp);
+            return; /* the worker died again: the next request recovers and repeats this decision */
+        }
+        reply_parse(&r, resp.data, resp.len);
+        if (!r.ok || !jstr(r.result, "world_revision", rv, sizeof rv)) {
+            reply_free(&r);
+            su_buf_free(&resp);
+            mark_unrecoverable(w, "quarantine rollback was rejected by the worker");
+            return;
+        }
+        reply_free(&r);
+        su_buf_free(&resp);
+        discarded = tick_now >= target->tick ? tick_now - target->tick : 0;
+        w->rev = rev_num(rv);
+        w->count = target->count;
+        memcpy(w->sys, target->sys, sizeof w->sys);
+        if (digest_matches(a, w, w->rev, target->tick, NULL, got, sizeof got, NULL, NULL) == 1) {
+            return;
+        }
+        w->tick = target->tick;
+        snprintf(w->hash, sizeof w->hash, "%s", got);
+        if (checkpoint_world(a, w, 0) == CK_DIED) {
+            return;
+        }
+        if (cd != NULL) {
+            candidate_quarantine(cd, reason);
+            snprintf(cand_id, sizeof cand_id, "%s", cd->id);
+        } else {
+            snprintf(cand_id, sizeof cand_id, "unknown");
+        }
+        quarantine_note(q, nq, cand_id, w->id, reason, 1, target->tick, discarded);
+    }
+    w->crash_repeat = 0;
+    w->crash_key[0] = '\0';
+}
+
+/* Replaces the active worker and rebuilds every live world. The recovery object is kept in a->rec
+ * (for the response being answered) and in a->event (reported once on the next response). */
+static uint32_t count_unrecoverable(const SuAgent *a) {
+    uint32_t i;
+    uint32_t n = 0;
+    for (i = 0; i < AGENT_MAX_WORLDS; i++) {
+        if (a->world[i].used && a->world[i].unrecoverable) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static void recover(SuAgent *a, AgentCall *c, const InFlight *op) {
+    int64_t t0 = su_now_ms();
+    uint64_t old_pid = a->worker.alive ? (uint64_t)a->worker.pid : a->last_pid;
+    uint32_t unrec_before = count_unrecoverable(a);
+    RecStats st;
+    int ok = 0;
+    uint32_t attempt;
+    uint32_t i;
+    SuBuf q;
+    int nq = 0;
+    SuBuf unrec;
+    int nu = 0;
+
+    su_buf_init(&q);
+    su_buf_init(&unrec);
+    su_proc_kill(&a->worker);
+    memset(&st, 0, sizeof st);
+    for (attempt = 0; attempt < AGENT_RECOVERY_ATTEMPTS && !ok; attempt++) {
+        RecStats s;
+        int died = 0;
+        memset(&s, 0, sizeof s);
+        if (ensure_worker(a) != SU_OK) {
+            continue;
+        }
+        if (seed_worker(a) != SU_OK) {
+            su_proc_kill(&a->worker);
+            continue;
+        }
+        for (i = 0; i < AGENT_MAX_WORLDS && !died; i++) {
+            AgentWorld *w = &a->world[i];
+            int r;
+            if (!w->used || w->pending || w->unrecoverable) {
+                continue;
+            }
+            r = rebuild_world(a, w, &s);
+            if (r == 1) {
+                died = 1;
+                if (attempt + 1 == AGENT_RECOVERY_ATTEMPTS) {
+                    mark_unrecoverable(w, "replacement workers kept dying while replaying accepted operations");
+                }
+            }
+        }
+        if (!died) {
+            ok = 1;
+            st = s;
+        } else {
+            su_proc_kill(&a->worker);
+        }
+    }
+    if (ok) {
+        a->recoveries++;
+        if (op != NULL && op->w != NULL && op->w->used && op->kind != OPK_READ && op->w->crash_repeat > 0 &&
+            op->w->crash_repeat >= a->quarantine_after && strcmp(op->w->crash_key, "") != 0) {
+            quarantine_apply(a, op, &q, &nq);
+        }
+    }
+    for (i = 0; i < AGENT_MAX_WORLDS; i++) {
+        const AgentWorld *w = &a->world[i];
+        if (w->used && w->unrecoverable) {
+            if (nu > 0) {
+                su_buf_str(&unrec, ",");
+            }
+            su_buf_str(&unrec, "{\"world_id\":");
+            su_buf_quoted(&unrec, w->id, strlen(w->id));
+            su_buf_str(&unrec, ",\"reason\":");
+            su_buf_quoted(&unrec, w->reason, strlen(w->reason));
+            su_buf_str(&unrec, "}");
+            nu++;
+        }
+    }
+    su_buf_free(&a->rec);
+    su_buf_init(&a->rec);
+    /* recovered is true only when every live world was rebuilt and verified in this recovery. */
+    ok = ok && count_unrecoverable(a) == unrec_before;
+    su_buf_str(&a->rec, "{\"recovered\":");
+    su_buf_str(&a->rec, ok ? "true" : "false");
+    su_buf_str(&a->rec, ",\"replaced_pid_old\":");
+    su_buf_u64(&a->rec, old_pid);
+    su_buf_str(&a->rec, ",\"replaced_pid_new\":");
+    su_buf_u64(&a->rec, a->worker.alive ? (uint64_t)a->worker.pid : 0u);
+    su_buf_str(&a->rec, ",\"worlds_recovered\":");
+    su_buf_u64(&a->rec, st.worlds);
+    su_buf_str(&a->rec, ",\"ops_replayed\":");
+    su_buf_u64(&a->rec, st.ops);
+    su_buf_str(&a->rec, ",\"duration_ms\":");
+    su_buf_u64(&a->rec, (uint64_t)(su_now_ms() - t0));
+    su_buf_str(&a->rec, ",\"from_checkpoint_tick\":");
+    if (st.have_base) {
+        su_buf_u64(&a->rec, st.min_base_tick);
+    } else {
+        su_buf_str(&a->rec, "null");
+    }
+    su_buf_str(&a->rec, ",\"worker_generation\":");
+    su_buf_u64(&a->rec, a->generation);
+    su_buf_str(&a->rec, ",\"unrecoverable\":[");
+    su_buf_put(&a->rec, unrec.data, unrec.len);
+    su_buf_str(&a->rec, "],\"quarantined\":[");
+    su_buf_put(&a->rec, q.data, q.len);
+    su_buf_str(&a->rec, "]}");
+    su_buf_free(&q);
+    su_buf_free(&unrec);
+
+    su_buf_free(&a->event);
+    su_buf_init(&a->event);
+    su_buf_put(&a->event, a->rec.data, a->rec.len);
+    a->event_pending = 1;
+    c->has_rec = 1;
+}
+
+/* Crash bookkeeping: identical failures of one operation in a row, across recoveries. */
+static void note_crash(const InFlight *op) {
+    AgentWorld *w = op->w;
+    char key[160];
+    if (op->kind == OPK_READ || w == NULL) {
+        return;
+    }
+    snprintf(key, sizeof key, "%d|%s|%llu|%s", op->kind, w->id, (unsigned long long)op->tick, op->cand);
+    if (strcmp(key, w->crash_key) == 0) {
+        w->crash_repeat++;
+    } else {
+        snprintf(w->crash_key, sizeof w->crash_key, "%s", key);
+        w->crash_repeat = 1;
+    }
+}
+
+static const char *const k_recovery_msg =
+    "active worker died or timed out; a replacement worker was started and live worlds were rebuilt from supervisor records; retry the request";
+
+/* The worker died while answering op. Records the crash, recovers, and returns the failure for the
+ * request. op may be NULL (no world involved). */
+static uint32_t worker_died(SuAgent *a, AgentCall *c, const InFlight *op) {
+    InFlight none;
+    if (op == NULL) {
+        memset(&none, 0, sizeof none);
+        none.kind = OPK_READ;
+        op = &none;
+    } else {
+        note_crash(op);
+    }
+    recover(a, c, op);
+    call_fail(c, SU_E_WORKER_FAILED, k_recovery_msg);
+    return SU_E_WORKER_FAILED;
+}
+
+/* Before a request is sent: a worker that exited while idle is recovered first. The request is
+ * then answered with SU_E_WORKER_FAILED and not executed. */
+static uint32_t preflight(SuAgent *a, AgentCall *c) {
+    int need = 0;
+    InFlight none;
+    if (a->worker.alive && su_proc_exited(&a->worker)) {
+        need = 1;
+    }
+    if (!a->worker.alive && live_worlds(a) > 0) {
+        need = 1;
+    }
+    if (!need) {
+        return SU_OK;
+    }
+    memset(&none, 0, sizeof none);
+    recover(a, c, &none);
+    call_fail(c, SU_E_WORKER_FAILED, "active worker had exited; a replacement worker was started and live worlds were rebuilt; retry the request");
+    return SU_E_WORKER_FAILED;
 }
 
 /* ---------- capsule location ---------- */
@@ -246,17 +1597,11 @@ static uint32_t locate_capsule(SuAgent *a, const char *rel, char *cap_real, char
     return SU_OK;
 }
 
-static void buf_hash_field(SuBuf *b, const char *key, const char *hex) {
-    su_buf_str(b, ",\"");
-    su_buf_str(b, key);
-    su_buf_str(b, "\":");
-    su_buf_quoted(b, hex, strlen(hex));
-}
-
 /* ---------- handlers ---------- */
 
 static uint32_t h_engine_info(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     size_t i;
+    uint32_t j;
     if (check_keys(params, NULL, 0, c) != SU_OK) {
         return SU_E_TYPE;
     }
@@ -271,7 +1616,54 @@ static uint32_t h_engine_info(SuAgent *a, const SuJsonValue *params, SuBuf *res,
     su_buf_u64(res, (uint64_t)getpid());
     su_buf_str(res, "},\"active_worker\":{\"pid\":");
     su_buf_u64(res, a->worker.alive ? (uint64_t)a->worker.pid : 0u);
-    su_buf_str(res, "},\"capabilities\":[");
+    su_buf_str(res, "},\"worker_generation\":");
+    su_buf_u64(res, a->generation);
+    su_buf_str(res, ",\"recoveries\":");
+    su_buf_u64(res, a->recoveries);
+    su_buf_str(res, ",\"recovery\":{\"limits\":{\"checkpoint_interval_ticks\":");
+    su_buf_u64(res, a->interval);
+    su_buf_str(res, ",\"checkpoint_retain\":");
+    su_buf_u64(res, a->retain);
+    su_buf_str(res, ",\"log_max_entries\":");
+    su_buf_u64(res, a->log_cap);
+    su_buf_str(res, ",\"quarantine_after\":");
+    su_buf_u64(res, a->quarantine_after);
+    su_buf_str(res, ",\"spool_bytes_max\":");
+    su_buf_u64(res, a->spool_max);
+    su_buf_str(res, "},\"spool_bytes\":");
+    su_buf_u64(res, su_spool_bytes(a->spool));
+    su_buf_str(res, ",\"committed_bytes\":");
+    su_buf_u64(res, committed_bytes(a));
+    su_buf_str(res, ",\"worlds\":[");
+    for (j = 0, i = 0; j < AGENT_MAX_WORLDS; j++) {
+        const AgentWorld *w = &a->world[j];
+        if (!w->used || w->pending) {
+            continue;
+        }
+        if (i > 0) {
+            su_buf_str(res, ",");
+        }
+        i++;
+        su_buf_str(res, "{\"world_id\":");
+        su_buf_quoted(res, w->id, strlen(w->id));
+        su_buf_str(res, ",\"tick\":");
+        su_buf_u64(res, w->tick);
+        su_buf_str(res, ",\"revision\":");
+        su_buf_u64(res, w->rev);
+        su_buf_str(res, ",\"log_entries\":");
+        su_buf_u64(res, w->log_count);
+        su_buf_str(res, ",\"checkpoints\":");
+        su_buf_u64(res, w->ck_count);
+        su_buf_str(res, ",\"checkpoint_bytes\":");
+        su_buf_u64(res, checkpoint_bytes(w));
+        su_buf_str(res, ",\"reserved_bytes\":");
+        su_buf_u64(res, w->reserved);
+        su_buf_str(res, ",\"unrecoverable\":");
+        su_buf_str(res, w->unrecoverable ? "true" : "false");
+        su_buf_str(res, "}");
+    }
+    su_buf_str(res, "]}");
+    su_buf_str(res, ",\"capabilities\":[");
     for (i = 0; i < sizeof k_capabilities / sizeof k_capabilities[0]; i++) {
         if (i > 0) {
             su_buf_str(res, ",");
@@ -295,6 +1687,8 @@ static uint32_t h_capsule_submit(SuAgent *a, const SuJsonValue *params, SuBuf *r
     SuDiag diag;
     SuLirModule mod;
     AgentCandidate *slot = NULL;
+    char cap_sha[65];
+    char src_sha[65];
     size_t i;
     uint32_t st;
 
@@ -334,8 +1728,23 @@ static uint32_t h_capsule_submit(SuAgent *a, const SuJsonValue *params, SuBuf *r
         free(lir);
         return call_fail(c, st, msg);
     }
+    /* The verified bytes are the candidate: keep them in the spool so that installs and replays
+     * never depend on the files on disk again. */
+    st = spool_put_admit(a, "capsule", cap, cap_len, cap_sha);
+    if (st == SU_OK) {
+        st = spool_put_admit(a, "source", lir, lir_len, src_sha);
+    }
     free(cap);
     free(lir);
+    if (st != SU_OK) {
+        su_lir_module_free(&mod);
+        return call_fail(c, st, st == SU_E_RESOURCE_LIMIT ? "spool budget exhausted; capsule not accepted"
+                                                          : "candidate bytes could not be spooled");
+    }
+    if (strcmp(cap_sha, mod.capsule_hash_hex) != 0 || strcmp(src_sha, mod.source_hash_hex) != 0) {
+        su_lir_module_free(&mod);
+        return call_fail(c, SU_E_INTERNAL, "spooled bytes disagree with the verified hashes");
+    }
 
     for (i = 0; i < AGENT_MAX_CANDIDATES; i++) {
         if (!a->cand[i].used) {
@@ -360,8 +1769,8 @@ static uint32_t h_capsule_submit(SuAgent *a, const SuJsonValue *params, SuBuf *r
     snprintf(slot->system_id, sizeof slot->system_id, "%s", mod.system_id);
     snprintf(slot->capsule_real, sizeof slot->capsule_real, "%s", cap_real);
     snprintf(slot->source_real, sizeof slot->source_real, "%s", src_real);
-    snprintf(slot->source_hash, sizeof slot->source_hash, "%s", mod.source_hash_hex);
-    snprintf(slot->capsule_hash, sizeof slot->capsule_hash, "%s", mod.capsule_hash_hex);
+    snprintf(slot->source_hash, sizeof slot->source_hash, "%s", src_sha);
+    snprintf(slot->capsule_hash, sizeof slot->capsule_hash, "%s", cap_sha);
     snprintf(slot->semantic_hash, sizeof slot->semantic_hash, "%s", mod.semantic_hash_hex);
     snprintf(slot->eval_status, sizeof slot->eval_status, "not_run");
     snprintf(slot->install_state, sizeof slot->install_state, "not_attempted");
@@ -426,6 +1835,12 @@ static uint32_t h_candidate_status(SuAgent *a, const SuJsonValue *params, SuBuf 
     su_buf_u64(res, cd->install_tick);
     su_buf_str(res, ",\"error_status\":");
     su_buf_u64(res, cd->install_code);
+    su_buf_str(res, ",\"reason\":");
+    if (cd->quarantine_reason[0] != '\0') {
+        su_buf_quoted(res, cd->quarantine_reason, strlen(cd->quarantine_reason));
+    } else {
+        su_buf_str(res, "null");
+    }
     su_buf_str(res, "}}");
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
@@ -662,46 +2077,71 @@ static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBu
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
-/* Forwards a validated world request to the active worker with the client's id
- * and relays the worker's response line unchanged. */
-static uint32_t relay_world(SuAgent *a, const SuBuf *req, SuBuf *res, AgentCall *c) {
-    SuBuf resp;
-    uint32_t st;
-
-    su_buf_init(&resp);
-    st = active_roundtrip(a, c->id, req, &resp, c);
-    if (st != SU_OK) {
-        su_buf_free(&resp);
-        return st;
-    }
-    su_buf_put(res, resp.data, resp.len);
-    su_buf_free(&resp);
+/* Relays a worker response line unchanged. */
+static void relay(SuBuf *res, const SuBuf *resp, AgentCall *c) {
+    su_buf_put(res, resp->data, resp->len);
     c->relay = 1;
-    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
-static void req_begin(SuBuf *req, const char *id, const char *method) {
-    su_buf_init(req);
-    su_buf_str(req, "{\"protocol\":\"" SU_PROTOCOL_VERSION "\",\"id\":");
-    su_buf_quoted(req, id, strlen(id));
-    su_buf_str(req, ",\"method\":\"");
-    su_buf_str(req, method);
-    su_buf_str(req, "\",\"params\":{");
+/* A call that must find its world: unknown ids and unrecoverable worlds are answered here. */
+static uint32_t world_for_call(SuAgent *a, const char *id, AgentWorld **out, AgentCall *c) {
+    AgentWorld *w = find_world(a, id);
+    if (w == NULL) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown world_id");
+    }
+    if (w->unrecoverable) {
+        char msg[AGENT_MSG_CAP];
+        snprintf(msg, sizeof msg, "world is unrecoverable: %.300s", w->reason);
+        return call_fail(c, SU_E_INTERNAL, msg);
+    }
+    *out = w;
+    return SU_OK;
 }
 
-/* world.create takes exactly one of capsule_path (one system, as before) or
- * capsule_paths (an ordered array of 1..8 systems, run in that order every tick). */
+/* Forced checkpoint before an operation that would overflow the log. */
+static uint32_t log_room(SuAgent *a, AgentCall *c, AgentWorld *w) {
+    InFlight none;
+    int rc;
+    if (w->log_count < w->log_cap) {
+        return SU_OK;
+    }
+    rc = checkpoint_world(a, w, 0);
+    if (rc == CK_DIED) {
+        memset(&none, 0, sizeof none);
+        return worker_died(a, c, &none);
+    }
+    if (rc == CK_NOROOM) {
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "checkpoint budget exhausted; the replay log is full");
+    }
+    if (rc == CK_BAD) {
+        return call_fail(c, SU_E_INTERNAL, "checkpoint disagreed with the acknowledged state; world is unrecoverable");
+    }
+    return SU_OK;
+}
+
+/* world.create takes exactly one of capsule_path (one system) or capsule_paths (an ordered array of
+ * 1..8 systems, run in that order every tick). */
 static uint32_t h_world_create(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"fixture_path", "capsule_path", "capsule_paths"};
     const char *fixture = NULL;
     const char *one = NULL;
     const SuJsonValue *many = su_json_member(params, "capsule_paths");
     char fx_real[SU_PATH_BUF];
+    char fx_sha[65];
     AgentSystemPaths *sys = NULL;
+    SysRef *refs = NULL;
+    uint8_t *fx = NULL;
+    size_t fx_len = 0;
     size_t n = 0;
     size_t i;
     SuBuf req;
+    SuBuf resp;
+    AgentWorld *slot;
+    Reply r;
     uint32_t st;
+    int rc;
+    char rv[AGENT_REV_CAP];
+    char wid[AGENT_WORLD_ID_CAP];
 
     if (check_keys(params, allowed, 3, c) != SU_OK ||
         param_str(params, "fixture_path", 1, &fixture, c) != SU_OK ||
@@ -719,25 +2159,51 @@ static uint32_t h_world_create(SuAgent *a, const SuJsonValue *params, SuBuf *res
     } else {
         n = 1;
     }
+    slot = free_world_slot(a);
+    if (slot == NULL) {
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "worker already holds the maximum number of worlds");
+    }
     sys = calloc(n, sizeof *sys);
-    if (sys == NULL) {
+    refs = calloc(n, sizeof *refs);
+    if (sys == NULL || refs == NULL) {
+        free(sys);
+        free(refs);
         return call_fail(c, SU_E_RESOURCE_LIMIT, "allocation failed");
     }
     st = su_path_resolve(a->root, fixture, fx_real, sizeof fx_real);
     if (st != SU_OK) {
         free(sys);
+        free(refs);
         return call_fail(c, st, "fixture path rejected by the project path policy");
     }
+    st = su_path_read_file(fx_real, AGENT_FIXTURE_MAX, &fx, &fx_len);
+    if (st != SU_OK) {
+        free(sys);
+        free(refs);
+        return call_fail(c, st, "world fixture could not be read");
+    }
+    {
+        SuSha256 ctx;
+        uint8_t dig[32];
+        su_sha256_init(&ctx);
+        su_sha256_update(&ctx, fx, fx_len);
+        su_sha256_final(&ctx, dig);
+        su_sha256_hex(dig, fx_sha);
+    }
+    free(fx);
     for (i = 0; i < n; i++) {
         char rel_buf[AGENT_MAX_PARAM_STRING + 1];
         const char *rel = one;
         uint8_t *cap = NULL;
         size_t cap_len = 0;
+        uint8_t *src = NULL;
+        size_t src_len = 0;
         if (many != NULL) {
             const SuJsonValue *item = many->u.array.items[i];
             if (!su_json_is_string(item) || item->u.string.len == 0 || item->u.string.len > AGENT_MAX_PARAM_STRING) {
-                free(sys);
-                return call_fail(c, SU_E_TYPE, "capsule_paths entries must be 1..255 byte strings");
+                st = SU_E_TYPE;
+                call_fail(c, st, "capsule_paths entries must be 1..255 byte strings");
+                goto fail_early;
             }
             memcpy(rel_buf, item->u.string.data, item->u.string.len);
             rel_buf[item->u.string.len] = '\0';
@@ -745,37 +2211,162 @@ static uint32_t h_world_create(SuAgent *a, const SuJsonValue *params, SuBuf *res
         }
         st = locate_capsule(a, rel, sys[i].capsule, sys[i].source, &cap, &cap_len, c);
         if (st != SU_OK) {
-            free(sys);
-            return st;
+            goto fail_early;
+        }
+        st = su_path_read_file(sys[i].source, SU_LIMIT_IR_SOURCE_BYTES, &src, &src_len);
+        if (st != SU_OK) {
+            free(cap);
+            call_fail(c, st, "source module could not be read");
+            goto fail_early;
+        }
+        st = spool_put_admit(a, "capsule", cap, cap_len, refs[i].capsule_sha);
+        if (st == SU_OK) {
+            st = spool_put_admit(a, "source", src, src_len, refs[i].source_sha);
         }
         free(cap);
+        free(src);
+        if (st != SU_OK) {
+            call_fail(c, st, "spool budget exhausted; world not created");
+            goto fail_early;
+        }
+    }
+
+    /* The record is pending until the worker has confirmed it. Recovery skips pending records. */
+    memset(slot, 0, sizeof *slot);
+    slot->used = 1;
+    slot->pending = 1;
+    snprintf(slot->fixture_path, sizeof slot->fixture_path, "%s", fx_real);
+    snprintf(slot->fixture_sha, sizeof slot->fixture_sha, "%s", fx_sha);
+    slot->creation_count = (uint32_t)n;
+    memcpy(slot->creation, refs, n * sizeof refs[0]);
+    for (i = 0; i < n; i++) {
+        snprintf(slot->creation_paths[i].capsule, sizeof slot->creation_paths[i].capsule, "%s", sys[i].capsule);
+        snprintf(slot->creation_paths[i].source, sizeof slot->creation_paths[i].source, "%s", sys[i].source);
+    }
+    slot->log_cap = a->log_cap;
+    slot->log = calloc(a->log_cap, sizeof *slot->log);
+    if (slot->log == NULL) {
+        memset(slot, 0, sizeof *slot);
+        call_fail(c, SU_E_RESOURCE_LIMIT, "allocation failed");
+        goto fail_early;
     }
 
     su_buf_init(&req);
-    su_buf_str(&req, "{\"protocol\":\"" SU_PROTOCOL_VERSION "\",\"id\":");
-    su_buf_quoted(&req, c->id, strlen(c->id));
-    su_buf_str(&req, ",\"method\":\"world.create\",\"params\":{\"fixture_path\":");
+    req_begin(&req, c->id, "world.create");
+    su_buf_str(&req, "\"fixture_path\":");
     su_buf_quoted(&req, fx_real, strlen(fx_real));
-    su_buf_str(&req, ",\"capsules\":[");
-    for (i = 0; i < n; i++) {
-        if (i > 0) {
-            su_buf_str(&req, ",");
-        }
-        su_buf_str(&req, "{\"capsule_path\":");
-        su_buf_quoted(&req, sys[i].capsule, strlen(sys[i].capsule));
-        su_buf_str(&req, ",\"source_path\":");
-        su_buf_quoted(&req, sys[i].source, strlen(sys[i].source));
-        su_buf_str(&req, "}");
-    }
-    su_buf_str(&req, "]}}");
-    free(sys);
-    if (req.failed) {
+    su_buf_str(&req, ",\"fixture_sha256\":");
+    su_buf_quoted(&req, fx_sha, strlen(fx_sha));
+    st = write_capsules(a, &req, "capsules", refs, (uint32_t)n);
+    req_end(&req);
+    if (st != SU_OK || req.failed) {
         su_buf_free(&req);
-        return call_fail(c, SU_E_RESOURCE_LIMIT, "world.create request too large");
+        world_release(a, slot);
+        free(sys);
+        free(refs);
+        return call_fail(c, st != SU_OK ? st : SU_E_RESOURCE_LIMIT, "world.create request too large");
     }
-    st = relay_world(a, &req, res, c);
+    su_buf_init(&resp);
+    st = roundtrip(a, c->id, &req, &resp);
     su_buf_free(&req);
-    return st;
+    free(sys);
+    free(refs);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        world_release(a, slot);
+        return worker_died(a, c, NULL);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        /* The worker's own refusal (for example a capsule that does not fit the schema) is relayed. */
+        reply_free(&r);
+        world_release(a, slot);
+        relay(res, &resp, c);
+        su_buf_free(&resp);
+        return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+    }
+    if (!jstr(r.result, "world_id", wid, sizeof wid) || !jstr(r.result, "world_revision", rv, sizeof rv) ||
+        wid_num(wid) == 0) {
+        reply_free(&r);
+        su_buf_free(&resp);
+        world_release(a, slot);
+        return call_fail(c, SU_E_INTERNAL, "worker returned an unusable world identity");
+    }
+    {
+        const SuJsonValue *man = jf(r.result, "semantic_manifest");
+        uint32_t m;
+        if (man == NULL || man->type != SU_JSON_ARRAY || man->u.array.count != n) {
+            reply_free(&r);
+            su_buf_free(&resp);
+            world_release(a, slot);
+            return call_fail(c, SU_E_INTERNAL, "worker manifest does not list the requested systems");
+        }
+        snprintf(slot->id, sizeof slot->id, "%s", wid);
+        slot->seq = wid_num(wid);
+        slot->rev = rev_num(rv);
+        slot->tick = 0;
+        slot->count = (uint32_t)n;
+        for (m = 0; m < n; m++) {
+            const SuJsonValue *it = man->u.array.items[m];
+            SysRef *s = &slot->sys[m];
+            if (!jstr(it, "system_id", s->system_id, sizeof s->system_id) ||
+                !jstr(it, "semantic_hash", s->semantic_hash, sizeof s->semantic_hash) ||
+                !jstr(it, "source_hash", s->source_sha, sizeof s->source_sha) ||
+                !jstr(it, "capsule_hash", s->capsule_sha, sizeof s->capsule_sha) ||
+                !ju64(it, "system_revision", &s->system_rev) ||
+                strcmp(s->source_sha, slot->creation[m].source_sha) != 0 ||
+                strcmp(s->capsule_sha, slot->creation[m].capsule_sha) != 0) {
+                reply_free(&r);
+                su_buf_free(&resp);
+                world_release(a, slot);
+                return call_fail(c, SU_E_INTERNAL, "worker manifest disagrees with the creation parameters");
+            }
+            snprintf(slot->creation[m].system_id, sizeof slot->creation[m].system_id, "%s", s->system_id);
+        }
+    }
+    reply_free(&r);
+
+    /* The creation state is the first checkpoint. The worker world is closed again if the
+     * supervisor cannot record it. */
+    rc = checkpoint_world(a, slot, 1);
+    if (rc != CK_OK) {
+        su_buf_free(&resp);
+        if (rc != CK_DIED) {
+            SuBuf cl;
+            SuBuf cresp;
+            su_buf_init(&cl);
+            req_begin(&cl, c->id, "world.close");
+            su_buf_str(&cl, "\"world_id\":");
+            su_buf_quoted(&cl, slot->id, strlen(slot->id));
+            su_buf_str(&cl, ",\"expected_world_revision\":");
+            wrev(slot, slot->rev, rv, sizeof rv);
+            su_buf_quoted(&cl, rv, strlen(rv));
+            req_end(&cl);
+            su_buf_init(&cresp);
+            (void)roundtrip(a, c->id, &cl, &cresp);
+            su_buf_free(&cl);
+            su_buf_free(&cresp);
+        }
+        world_release(a, slot);
+        if (rc == CK_DIED) {
+            return worker_died(a, c, NULL);
+        }
+        return call_fail(c, rc == CK_NOROOM ? SU_E_RESOURCE_LIMIT : SU_E_INTERNAL,
+                         rc == CK_NOROOM ? "spool budget exhausted; world not created"
+                                         : "creation checkpoint disagreed with the worker");
+    }
+    slot->pending = 0;
+    if (slot->seq > a->next_world_seq) {
+        a->next_world_seq = slot->seq;
+    }
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+
+fail_early:
+    free(sys);
+    free(refs);
+    return st != SU_OK ? st : SU_E_INTERNAL;
 }
 
 static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
@@ -785,6 +2376,9 @@ static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *re
     uint64_t offset = 0;
     const SuJsonValue *fields = su_json_member(params, "fields");
     SuBuf req;
+    SuBuf resp;
+    AgentWorld *w = NULL;
+    InFlight op;
     size_t i;
     uint32_t st;
 
@@ -797,8 +2391,13 @@ static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *re
     if (fields != NULL && (fields->type != SU_JSON_ARRAY || fields->u.array.count > AGENT_MAX_FIELD_ARGS)) {
         return call_fail(c, SU_E_TYPE, "fields must be an array of at most 64 names");
     }
-    if (!a->worker.alive) {
-        return call_fail(c, SU_E_INVALID_ARGUMENT, "no active worker holds worlds; call world.create");
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
     }
     req_begin(&req, c->id, "world.inspect");
     su_buf_str(&req, "\"world_id\":");
@@ -822,23 +2421,41 @@ static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *re
         }
         su_buf_str(&req, "]");
     }
-    su_buf_str(&req, "}}");
+    req_end(&req);
     if (req.failed) {
         su_buf_free(&req);
         return call_fail(c, SU_E_RESOURCE_LIMIT, "world.inspect request too large");
     }
-    st = relay_world(a, &req, res, c);
+    su_buf_init(&resp);
+    memset(&op, 0, sizeof op);
+    op.kind = OPK_READ;
+    st = roundtrip(a, c->id, &req, &resp);
     su_buf_free(&req);
-    return st;
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
+/* world.step {world_id, expected_world_revision, ticks}. The worker's answer is relayed unchanged,
+ * including an error. Whatever the worker committed (a failed step may have committed some ticks)
+ * is digested and logged before the answer is sent. */
 static uint32_t h_world_step(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"world_id", "expected_world_revision", "ticks"};
     const char *world_id = NULL;
     const char *expect = NULL;
     uint64_t ticks = 0;
+    AgentWorld *w = NULL;
+    InFlight op;
     SuBuf req;
+    SuBuf resp;
+    Reply r;
+    LogOp none;
     uint32_t st;
+    int rc;
 
     if (check_keys(params, allowed, 3, c) != SU_OK ||
         param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
@@ -846,8 +2463,21 @@ static uint32_t h_world_step(SuAgent *a, const SuJsonValue *params, SuBuf *res, 
         param_uint(params, "ticks", 1, 0, AGENT_MAX_TICKS, 0, &ticks, c) != SU_OK) {
         return SU_E_TYPE;
     }
-    if (!a->worker.alive) {
-        return call_fail(c, SU_E_INVALID_ARGUMENT, "no active worker holds worlds; call world.create");
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    memset(&op, 0, sizeof op);
+    op.kind = OPK_STEP;
+    op.w = w;
+    op.tick = w->tick;
+    st = log_room(a, c, w);
+    if (st != SU_OK) {
+        return st;
     }
     req_begin(&req, c->id, "world.step");
     su_buf_str(&req, "\"world_id\":");
@@ -856,57 +2486,114 @@ static uint32_t h_world_step(SuAgent *a, const SuJsonValue *params, SuBuf *res, 
     su_buf_quoted(&req, expect, strlen(expect));
     su_buf_str(&req, ",\"ticks\":");
     su_buf_u64(&req, ticks);
-    su_buf_str(&req, "}}");
+    req_end(&req);
     if (req.failed) {
         su_buf_free(&req);
         return call_fail(c, SU_E_RESOURCE_LIMIT, "world.step request too large");
     }
-    st = relay_world(a, &req, res, c);
+    su_buf_init(&resp);
+    st = roundtrip(a, c->id, &req, &resp);
     su_buf_free(&req);
-    return st;
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    memset(&none, 0, sizeof none);
+    rc = sync_after(a, w, LOG_STEP, &none, 0, r.ok);
+    reply_free(&r);
+    if (rc == CK_DIED) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    if (rc == CK_BAD) {
+        su_buf_free(&resp);
+        return call_fail(c, SU_E_INTERNAL, "world state diverged from the worker; world is unrecoverable");
+    }
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
-/* world.snapshot {world_id, expected_world_revision}. The checkpoint lives in the active
- * worker; the worker answers the snapshot metadata and the response is relayed unchanged. */
+/* world.snapshot {world_id, expected_world_revision}. The canonical state becomes a checkpoint:
+ * the snapshot id is its sha256, and the replay log is cleared because the checkpoint supersedes it. */
 static uint32_t h_world_snapshot(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"world_id", "expected_world_revision"};
     const char *world_id = NULL;
     const char *expect = NULL;
-    SuBuf req;
+    AgentWorld *w = NULL;
+    InFlight op;
+    char rev[AGENT_REV_CAP];
     uint32_t st;
+    int rc;
 
     if (check_keys(params, allowed, 2, c) != SU_OK ||
         param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
         param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
         return SU_E_TYPE;
     }
-    if (!a->worker.alive) {
-        return call_fail(c, SU_E_INVALID_ARGUMENT, "no active worker holds worlds; call world.create");
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        return st;
     }
-    req_begin(&req, c->id, "world.snapshot");
-    su_buf_str(&req, "\"world_id\":");
-    su_buf_quoted(&req, world_id, strlen(world_id));
-    su_buf_str(&req, ",\"expected_world_revision\":");
-    su_buf_quoted(&req, expect, strlen(expect));
-    su_buf_str(&req, "}}");
-    if (req.failed) {
-        su_buf_free(&req);
-        return call_fail(c, SU_E_RESOURCE_LIMIT, "world.snapshot request too large");
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
     }
-    st = relay_world(a, &req, res, c);
-    su_buf_free(&req);
-    return st;
+    wrev(w, w->rev, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        return call_fail(c, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+    }
+    rc = checkpoint_world(a, w, 0);
+    if (rc == CK_DIED) {
+        memset(&op, 0, sizeof op);
+        op.kind = OPK_READ;
+        return worker_died(a, c, &op);
+    }
+    if (rc != CK_OK) {
+        return call_fail(c, rc == CK_NOROOM ? SU_E_RESOURCE_LIMIT : SU_E_INTERNAL,
+                         rc == CK_NOROOM ? "snapshot does not fit the spool budget" : "snapshot disagreed with the acknowledged state");
+    }
+    w->ck[w->ck_count - 1].client = 1;
+    {
+        const Ckpt *ck = &w->ck[w->ck_count - 1];
+        su_buf_str(res, "{\"snapshot_id\":");
+        su_buf_quoted(res, ck->sha, strlen(ck->sha));
+        su_buf_str(res, ",\"world_revision\":");
+        wrev(w, ck->rev, rev, sizeof rev);
+        su_buf_quoted(res, rev, strlen(rev));
+        su_buf_str(res, ",\"tick\":");
+        su_buf_u64(res, ck->tick);
+        su_buf_str(res, ",\"bytes\":");
+        su_buf_u64(res, ck->bytes);
+        su_buf_str(res, ",\"sha256\":");
+        su_buf_quoted(res, ck->sha, strlen(ck->sha));
+        su_buf_str(res, ",\"capture_ns\":null}");
+    }
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
-/* world.restore {world_id, snapshot_id, expected_world_revision}. An unknown or evicted
- * snapshot_id is SU_E_INVALID_ARGUMENT; the worker decides everything else. */
+/* world.restore {world_id, snapshot_id, expected_world_revision}. Only checkpoints the supervisor
+ * retains can be restored (an older or evicted snapshot id is SU_E_INVALID_ARGUMENT). The restored
+ * state is checkpointed at once, so the log restarts from it; the worker advances the revision as
+ * before. */
 static uint32_t h_world_restore(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"world_id", "snapshot_id", "expected_world_revision"};
     const char *world_id = NULL;
     const char *snap = NULL;
     const char *expect = NULL;
+    AgentWorld *w = NULL;
+    const Ckpt *ck = NULL;
+    uint32_t k;
+    InFlight op;
+    char snap_path[SU_PATH_BUF];
     SuBuf req;
+    SuBuf resp;
+    Reply r;
+    LogOp none;
     uint32_t st;
+    int rc;
+    char rv[AGENT_REV_CAP];
 
     if (check_keys(params, allowed, 3, c) != SU_OK ||
         param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
@@ -914,33 +2601,107 @@ static uint32_t h_world_restore(SuAgent *a, const SuJsonValue *params, SuBuf *re
         param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
         return SU_E_TYPE;
     }
-    if (!a->worker.alive) {
-        return call_fail(c, SU_E_INVALID_ARGUMENT, "no active worker holds worlds; call world.create");
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        return st;
     }
-    req_begin(&req, c->id, "world.restore");
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    wrev(w, w->rev, rv, sizeof rv);
+    if (strcmp(expect, rv) != 0) {
+        return call_fail(c, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+    }
+    for (k = w->ck_count; k > 0 && ck == NULL; k--) {
+        if (strcmp(w->ck[k - 1].sha, snap) == 0) {
+            ck = &w->ck[k - 1];
+        }
+    }
+    if (ck == NULL) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown or evicted snapshot_id for this world");
+    }
+    if (spool_file(a, ck->sha, "snap", snap_path, sizeof snap_path) != SU_OK) {
+        return call_fail(c, SU_E_INTERNAL, "snapshot bytes are missing from the spool");
+    }
+    req_begin(&req, c->id, "internal.world.restore_bytes");
     su_buf_str(&req, "\"world_id\":");
     su_buf_quoted(&req, world_id, strlen(world_id));
-    su_buf_str(&req, ",\"snapshot_id\":");
-    su_buf_quoted(&req, snap, strlen(snap));
     su_buf_str(&req, ",\"expected_world_revision\":");
     su_buf_quoted(&req, expect, strlen(expect));
-    su_buf_str(&req, "}}");
+    su_buf_str(&req, ",\"snapshot_path\":");
+    su_buf_quoted(&req, snap_path, strlen(snap_path));
+    su_buf_str(&req, ",\"snapshot_sha256\":");
+    su_buf_quoted(&req, ck->sha, strlen(ck->sha));
+    su_buf_str(&req, ",\"mode\":\"advance\"");
+    if (write_capsules_disk(a, w, &req, "capsules", ck->sys, ck->count) != SU_OK) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_INTERNAL, "snapshot capsules are missing from the spool");
+    }
+    req_end(&req);
     if (req.failed) {
         su_buf_free(&req);
         return call_fail(c, SU_E_RESOURCE_LIMIT, "world.restore request too large");
     }
-    st = relay_world(a, &req, res, c);
+    su_buf_init(&resp);
+    st = roundtrip(a, c->id, &req, &resp);
     su_buf_free(&req);
-    return st;
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        memset(&op, 0, sizeof op);
+        op.kind = OPK_RESTORE;
+        op.w = w;
+        op.tick = w->tick;
+        return worker_died(a, c, &op);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        reply_free(&r);
+        relay(res, &resp, c);
+        su_buf_free(&resp);
+        return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+    }
+    /* The restored schedule is the snapshot's; the revision is the worker's. */
+    if (!jstr(r.result, "world_revision", rv, sizeof rv)) {
+        reply_free(&r);
+        su_buf_free(&resp);
+        mark_unrecoverable(w, "restore answer carried no revision");
+        return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: restore answer carried no revision");
+    }
+    reply_free(&r);
+    w->rev = rev_num(rv);
+    w->count = ck->count;
+    memcpy(w->sys, ck->sys, sizeof w->sys);
+    memset(&none, 0, sizeof none);
+    rc = sync_after(a, w, LOG_NONE, &none, 1, 1);
+    if (rc == CK_DIED) {
+        su_buf_free(&resp);
+        memset(&op, 0, sizeof op);
+        op.kind = OPK_RESTORE;
+        op.w = w;
+        op.tick = w->tick;
+        return worker_died(a, c, &op);
+    }
+    if (rc == CK_BAD) {
+        su_buf_free(&resp);
+        return call_fail(c, SU_E_INTERNAL, "restored state diverged from the snapshot; world is unrecoverable");
+    }
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
-/* world.close {world_id, expected_world_revision}. The worker checks the id and the revision
- * before it frees anything; an unknown id (never created, or closed) is SU_E_INVALID_ARGUMENT. */
+/* world.close {world_id, expected_world_revision}. The worker checks first; on success the world's
+ * records are released and the slot is free. */
 static uint32_t h_world_close(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"world_id", "expected_world_revision"};
     const char *world_id = NULL;
     const char *expect = NULL;
+    AgentWorld *w = NULL;
+    InFlight op;
     SuBuf req;
+    SuBuf resp;
+    Reply r;
     uint32_t st;
 
     if (check_keys(params, allowed, 2, c) != SU_OK ||
@@ -948,66 +2709,66 @@ static uint32_t h_world_close(SuAgent *a, const SuJsonValue *params, SuBuf *res,
         param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
         return SU_E_TYPE;
     }
-    if (!a->worker.alive) {
-        return call_fail(c, SU_E_INVALID_ARGUMENT, "no active worker holds worlds; call world.create");
+    w = find_world(a, world_id);
+    if (w == NULL) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown world_id");
+    }
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
     }
     req_begin(&req, c->id, "world.close");
     su_buf_str(&req, "\"world_id\":");
     su_buf_quoted(&req, world_id, strlen(world_id));
     su_buf_str(&req, ",\"expected_world_revision\":");
     su_buf_quoted(&req, expect, strlen(expect));
-    su_buf_str(&req, "}}");
+    req_end(&req);
     if (req.failed) {
         su_buf_free(&req);
         return call_fail(c, SU_E_RESOURCE_LIMIT, "world.close request too large");
     }
-    st = relay_world(a, &req, res, c);
+    su_buf_init(&resp);
+    st = roundtrip(a, c->id, &req, &resp);
     su_buf_free(&req);
-    return st;
-}
-
-/* Records the worker's answer on the candidate. Only the worker's own response is read
- * here; the client never supplies these fields. */
-static void note_install(AgentCandidate *cd, const uint8_t *data, size_t len, uint64_t pid) {
-    SuJsonLimits lim;
-    SuJsonDoc doc;
-    SuJsonError err;
-    const SuJsonValue *root;
-    const SuJsonValue *ok_v;
-    uint32_t st;
-
-    cd->worker_pid = pid;
-    memset(&doc, 0, sizeof doc);
-    lim.max_bytes = len;
-    lim.max_depth = SU_PROTO_MAX_DEPTH + 4u;
-    st = su_json_parse(data, len, &lim, &doc, &err);
-    root = st == SU_OK && doc.root != NULL && doc.root->type == SU_JSON_OBJECT ? doc.root : NULL;
-    ok_v = root != NULL ? su_json_member(root, "ok") : NULL;
-    if (ok_v != NULL && ok_v->type == SU_JSON_BOOL && ok_v->u.boolean) {
-        const SuJsonValue *r = su_json_member(root, "result");
-        const SuJsonValue *state = r != NULL ? su_json_member(r, "state") : NULL;
-        snprintf(cd->install_state, sizeof cd->install_state, "%s",
-                 su_json_is_string(state) ? "installed" : "rejected");
-        cd->install_txid = 0;
-        su_json_get_uint(su_json_member(r, "txid"), &cd->install_txid);
-        cd->install_tick = 0;
-        su_json_get_uint(su_json_member(r, "effective_tick"), &cd->install_tick);
-        cd->install_code = 0;
-    } else {
-        const SuJsonValue *e = root != NULL ? su_json_member(root, "error") : NULL;
-        snprintf(cd->install_state, sizeof cd->install_state, "rejected");
-        cd->install_txid = 0;
-        cd->install_tick = 0;
-        cd->install_code = 0;
-        su_json_get_uint(e != NULL ? su_json_member(e, "status") : NULL, &cd->install_code);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        memset(&op, 0, sizeof op);
+        op.kind = OPK_CLOSE;
+        op.w = w;
+        op.tick = w->tick;
+        return worker_died(a, c, &op);
     }
-    su_json_doc_free(&doc);
+    reply_parse(&r, resp.data, resp.len);
+    if (r.ok) {
+        uint64_t systems = 0;
+        uint32_t snapshots = 0;
+        uint32_t q;
+        for (q = 0; q < w->ck_count; q++) {
+            snapshots += w->ck[q].client ? 1u : 0u;
+        }
+        ju64(jf(r.result, "released"), "systems", &systems);
+        world_release(a, w);
+        su_buf_str(res, "{\"world_id\":");
+        su_buf_quoted(res, world_id, strlen(world_id));
+        su_buf_str(res, ",\"closed\":true,\"released\":{\"snapshots\":");
+        su_buf_u64(res, snapshots);
+        su_buf_str(res, ",\"systems\":");
+        su_buf_u64(res, systems);
+        su_buf_str(res, "}}");
+        reply_free(&r);
+        su_buf_free(&resp);
+        return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+    }
+    reply_free(&r);
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
 /* candidate.install {candidate_id, world_id, expected_world_revision, allowed_effective_tick}.
- * The evidence the worker gates on is the supervisor's evaluation record of this
- * candidate (eval_status), never a client-supplied value. The worker answers with an
- * installed result or a structured rejection, and that answer is relayed unchanged. */
+ * The evidence the worker gates on is the supervisor's evaluation record of this candidate
+ * (eval_status), never a client-supplied value. The worker's answer is relayed unchanged. The
+ * installed revision is logged, and the world is checkpointed after it (see install_ck). */
 static uint32_t h_candidate_install(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"candidate_id", "world_id", "expected_world_revision",
                                           "allowed_effective_tick"};
@@ -1016,9 +2777,19 @@ static uint32_t h_candidate_install(SuAgent *a, const SuJsonValue *params, SuBuf
     const char *expect = NULL;
     uint64_t tick = 0;
     AgentCandidate *cd;
+    AgentWorld *w = NULL;
+    InFlight op;
+    LogOp lop;
     SuBuf req;
     SuBuf resp;
+    Reply r;
+    char cap[SU_PATH_BUF];
+    char src[SU_PATH_BUF];
+    char txt[65];
+    char sysid[SU_DIAG_SYSTEM_BYTES];
+    uint32_t i;
     uint32_t st;
+    int rc;
 
     if (check_keys(params, allowed, 4, c) != SU_OK ||
         param_str(params, "candidate_id", 1, &id, c) != SU_OK ||
@@ -1031,46 +2802,114 @@ static uint32_t h_candidate_install(SuAgent *a, const SuJsonValue *params, SuBuf
     if (cd == NULL) {
         return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown candidate_id");
     }
-    if (!a->worker.alive) {
-        return call_fail(c, SU_E_INVALID_ARGUMENT, "no active worker holds worlds; call world.create");
+    if (strcmp(cd->install_state, "quarantined") == 0) {
+        char msg[AGENT_MSG_CAP];
+        snprintf(msg, sizeof msg, "candidate is quarantined: %.300s", cd->quarantine_reason);
+        return call_fail(c, SU_E_CANDIDATE_FAILED, msg);
     }
-    su_buf_init(&req);
-    su_buf_str(&req, "{\"protocol\":\"" SU_PROTOCOL_VERSION "\",\"id\":");
-    su_buf_quoted(&req, c->id, strlen(c->id));
-    su_buf_str(&req, ",\"method\":\"internal.candidate.install\",\"params\":{\"world_id\":");
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = log_room(a, c, w);
+    if (st != SU_OK) {
+        return st;
+    }
+    snprintf(cap, sizeof cap, "%s", cd->capsule_real);
+    snprintf(src, sizeof src, "%s", cd->source_real);
+    memset(&op, 0, sizeof op);
+    op.kind = OPK_INSTALL;
+    op.w = w;
+    op.tick = w->tick;
+    snprintf(op.cand, sizeof op.cand, "%s", cd->id);
+
+    req_begin(&req, c->id, "internal.candidate.install");
+    su_buf_str(&req, "\"world_id\":");
     su_buf_quoted(&req, world_id, strlen(world_id));
     su_buf_str(&req, ",\"candidate_id\":");
     su_buf_quoted(&req, cd->id, strlen(cd->id));
     su_buf_str(&req, ",\"capsule_path\":");
-    su_buf_quoted(&req, cd->capsule_real, strlen(cd->capsule_real));
+    su_buf_quoted(&req, cap, strlen(cap));
     su_buf_str(&req, ",\"source_path\":");
-    su_buf_quoted(&req, cd->source_real, strlen(cd->source_real));
-    su_buf_str(&req, ",\"expected_source_hash\":");
-    su_buf_quoted(&req, cd->source_hash, strlen(cd->source_hash));
-    su_buf_str(&req, ",\"expected_capsule_hash\":");
-    su_buf_quoted(&req, cd->capsule_hash, strlen(cd->capsule_hash));
+    su_buf_quoted(&req, src, strlen(src));
+    buf_hash_field(&req, "expected_source_hash", cd->source_hash);
+    buf_hash_field(&req, "expected_capsule_hash", cd->capsule_hash);
     su_buf_str(&req, ",\"evidence\":");
     su_buf_quoted(&req, cd->eval_status, strlen(cd->eval_status));
     su_buf_str(&req, ",\"expected_world_revision\":");
     su_buf_quoted(&req, expect, strlen(expect));
     su_buf_str(&req, ",\"allowed_effective_tick\":");
     su_buf_u64(&req, tick);
-    su_buf_str(&req, "}}");
+    req_end(&req);
     if (req.failed) {
         su_buf_free(&req);
         return call_fail(c, SU_E_RESOURCE_LIMIT, "candidate.install request too large");
     }
     su_buf_init(&resp);
-    st = active_roundtrip(a, c->id, &req, &resp, c);
+    st = roundtrip(a, c->id, &req, &resp);
     su_buf_free(&req);
     if (st != SU_OK) {
         su_buf_free(&resp);
-        return st;
+        return worker_died(a, c, &op);
     }
-    note_install(cd, resp.data, resp.len, (uint64_t)a->worker.pid);
-    su_buf_put(res, resp.data, resp.len);
+    reply_parse(&r, resp.data, resp.len);
+    cd->worker_pid = (uint64_t)a->worker.pid;
+    if (!r.ok) {
+        uint64_t code = r.code;
+        snprintf(cd->install_state, sizeof cd->install_state, "rejected");
+        cd->install_txid = 0;
+        cd->install_tick = 0;
+        cd->install_code = code;
+        reply_free(&r);
+        relay(res, &resp, c);
+        su_buf_free(&resp);
+        return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+    }
+    snprintf(cd->install_state, sizeof cd->install_state, "installed");
+    cd->install_code = 0;
+    ju64(r.result, "txid", &cd->install_txid);
+    ju64(r.result, "effective_tick", &cd->install_tick);
+    memset(&lop, 0, sizeof lop);
+    lop.effective_tick = cd->install_tick;
+    snprintf(lop.cand_id, sizeof lop.cand_id, "%s", cd->id);
+    if (!jstr(r.result, "system_id", sysid, sizeof sysid) || !jstr(r.result, "semantic_hash", txt, sizeof txt) ||
+        !jstr(r.result, "semantic_hash", lop.sys.semantic_hash, sizeof lop.sys.semantic_hash) ||
+        !jstr(r.result, "source_hash", lop.sys.source_sha, sizeof lop.sys.source_sha) ||
+        !jstr(r.result, "capsule_hash", lop.sys.capsule_sha, sizeof lop.sys.capsule_sha) ||
+        !ju64(r.result, "system_revision", &lop.sys.system_rev)) {
+        reply_free(&r);
+        su_buf_free(&resp);
+        mark_unrecoverable(w, "install answer was incomplete");
+        return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: install answer was incomplete");
+    }
+    snprintf(lop.sys.system_id, sizeof lop.sys.system_id, "%s", sysid);
+    reply_free(&r);
+    for (i = 0; i < w->count; i++) {
+        if (strcmp(w->sys[i].system_id, sysid) == 0) {
+            w->sys[i] = lop.sys;
+            break;
+        }
+    }
+    if (i == w->count) {
+        mark_unrecoverable(w, "installed system is not in the world schedule");
+        su_buf_free(&resp);
+        return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: installed system is not in the schedule");
+    }
+    rc = sync_after(a, w, LOG_INSTALL, &lop, 0, 1);
+    if (rc == CK_DIED) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    if (rc == CK_BAD) {
+        su_buf_free(&resp);
+        return call_fail(c, SU_E_INTERNAL, "installed state diverged from the worker; world is unrecoverable");
+    }
+    relay(res, &resp, c);
     su_buf_free(&resp);
-    c->relay = 1;
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
@@ -1114,6 +2953,27 @@ static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c
     return call_fail(c, SU_E_UNSUPPORTED_METHOD, "method is unknown or not implemented in M0");
 }
 
+/* Adds one top-level member to a complete response line (an object) before its closing brace. */
+static void attach_member(SuBuf *out, const char *key, const SuBuf *val) {
+    SuBuf tmp;
+    if (out->failed || out->len == 0 || out->data[out->len - 1] != '}') {
+        return;
+    }
+    su_buf_init(&tmp);
+    su_buf_put(&tmp, out->data, out->len - 1);
+    su_buf_str(&tmp, ",\"");
+    su_buf_str(&tmp, key);
+    su_buf_str(&tmp, "\":");
+    su_buf_put(&tmp, val->data, val->len);
+    su_buf_str(&tmp, "}");
+    if (tmp.failed) {
+        su_buf_free(&tmp);
+        return;
+    }
+    su_buf_free(out);
+    *out = tmp;
+}
+
 static void agent_handle(SuAgent *a, const uint8_t *line, size_t len, int overflow, SuBuf *out) {
     SuJsonDoc doc;
     SuRequest req;
@@ -1145,8 +3005,37 @@ static void agent_handle(SuAgent *a, const uint8_t *line, size_t len, int overfl
         su_proto_error(out, req.has_id, req.id, SU_E_RESOURCE_LIMIT,
                        "response exceeds the 1 MiB message limit");
     }
+    if (c.has_rec) {
+        attach_member(out, "recovery", &a->rec);
+    } else if (a->event_pending) {
+        attach_member(out, "worker_event", &a->event);
+        a->event_pending = 0;
+        su_buf_free(&a->event);
+        su_buf_init(&a->event);
+    }
     su_buf_free(&res);
     su_json_doc_free(&doc);
+}
+
+static int config_limits(SuAgent *a, const SuAgentConfig *cfg) {
+    a->interval = cfg->checkpoint_interval_ticks == 0 ? AGENT_DEFAULT_INTERVAL : cfg->checkpoint_interval_ticks;
+    a->retain = cfg->checkpoint_retain == 0 ? AGENT_DEFAULT_RETAIN : cfg->checkpoint_retain;
+    a->log_cap = cfg->log_max_entries == 0 ? AGENT_DEFAULT_LOG : cfg->log_max_entries;
+    a->quarantine_after = cfg->quarantine_after == 0 ? AGENT_DEFAULT_QUARANTINE : cfg->quarantine_after;
+    a->spool_max = cfg->spool_bytes_max == 0 ? AGENT_DEFAULT_SPOOL : cfg->spool_bytes_max;
+    if (a->retain > AGENT_MAX_RETAIN || a->log_cap > AGENT_MAX_LOG) {
+        return -1;
+    }
+    a->install_ck = !cfg->no_install_checkpoint;
+    return 0;
+}
+
+static void free_all_worlds(SuAgent *a) {
+    uint32_t i;
+    for (i = 0; i < AGENT_MAX_WORLDS; i++) {
+        free(a->world[i].log);
+        a->world[i].log = NULL;
+    }
 }
 
 int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
@@ -1165,7 +3054,10 @@ int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
     }
     a->cfg = *cfg;
     a->timeout_ms = cfg->request_timeout_ms == 0 ? AGENT_DEFAULT_TIMEOUT_MS : cfg->request_timeout_ms;
-    if (su_path_canonical_root(cfg->project_root, a->root, sizeof a->root) != SU_OK) {
+    if (config_limits(a, cfg) != 0 ||
+        su_path_canonical_root(cfg->project_root, a->root, sizeof a->root) != SU_OK ||
+        su_spool_open(cfg->spool_dir, a->spool_max, &a->spool) != SU_OK) {
+        su_spool_close(a->spool);
         free(a);
         return -1;
     }
@@ -1173,6 +3065,8 @@ int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
     a->worker.alive = 0;
     a->worker.in_fd = -1;
     a->worker.out_fd = -1;
+    su_buf_init(&a->rec);
+    su_buf_init(&a->event);
 
     memset(&ign, 0, sizeof ign);
     ign.sa_handler = SIG_IGN;
@@ -1205,6 +3099,10 @@ int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
     }
     su_proc_finish(&a->worker, 1000);
     su_line_reader_free(&r);
+    free_all_worlds(a);
+    su_spool_close(a->spool);
+    su_buf_free(&a->rec);
+    su_buf_free(&a->event);
     free(a);
     sigaction(SIGPIPE, &old, NULL);
     return ret;

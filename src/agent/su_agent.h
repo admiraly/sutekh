@@ -1,4 +1,4 @@
-/* Supervisor side of the local control plane (docs/AGENT_RPC.md, M0 subset).
+/* Supervisor side of the local control plane (docs/AGENT_RPC.md, M0 subset plus M1-02 recovery).
  * POSIX only; Windows is not implemented.
  *
  * su_agent_serve reads JSON-lines requests from in_fd and writes exactly one
@@ -6,8 +6,14 @@
  * any fd pair the caller provides is the whole transport.
  *
  * Implemented methods: engine.info, capsule.submit, candidate.status,
- * candidate.evaluate, world.create, world.inspect, world.step. Every other method
- * returns SU_E_UNSUPPORTED_METHOD. */
+ * candidate.evaluate, candidate.install, world.create, world.inspect, world.step,
+ * world.snapshot, world.restore, world.close. Every other method returns
+ * SU_E_UNSUPPORTED_METHOD.
+ *
+ * Recovery (M1-02): the supervisor holds, per world, its creation parameters, canonical
+ * checkpoints and an ordered log of accepted mutating operations. When the active worker dies,
+ * it starts a replacement and rebuilds every live world from those records; the request that
+ * found the death fails with SU_E_WORKER_FAILED and a "recovery" object. */
 #ifndef SU_AGENT_H
 #define SU_AGENT_H
 
@@ -24,6 +30,19 @@ typedef struct SuAgentConfig {
     uint32_t request_timeout_ms;
     /* RLIMIT_AS for worker children. 0 leaves it unchanged. Set 0 under ASan. */
     uint64_t worker_address_space_bytes;
+
+    /* Recovery limits (M1-02). 0 selects the default shown. */
+    uint32_t checkpoint_interval_ticks; /* 64: a checkpoint once this many ticks were accepted */
+    uint32_t checkpoint_retain;         /* 4 per world (max 8) */
+    uint32_t log_max_entries;           /* 256 per world (max 1024); reaching it forces a checkpoint */
+    uint32_t quarantine_after;          /* 2: identical crashes in a row before the revision is quarantined */
+    uint64_t spool_bytes_max;           /* 32 MiB: capsule, source and checkpoint bytes held by the supervisor */
+    /* Directory for the content-addressed spool. NULL: a private directory is created under
+     * $TMPDIR (or /tmp) and removed at exit. A given directory must exist. */
+    const char *spool_dir;
+    /* 1 disables the checkpoint that is otherwise taken after every accepted install. Tests only:
+     * it leaves installs in the replay log. */
+    int no_install_checkpoint;
 } SuAgentConfig;
 
 /* Returns 0 on EOF, -1 on configuration or I/O failure before serving. */

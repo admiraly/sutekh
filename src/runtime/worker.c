@@ -2,6 +2,8 @@
 
 #include "runtime/worker.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +15,7 @@
 #include "agent/su_proto.h"
 #include "ir/su_json.h"
 #include "ir/su_lir.h"
+#include "ir/su_sha256.h"
 #include "runtime/checkpoint.h"
 #include "runtime/registry.h"
 #include "runtime/reload.h"
@@ -102,6 +105,15 @@ typedef struct WorkerState {
     SuWorkerHooks hooks;
     SuCheckpointStore *store; /* bounded snapshot store; retain SU_CHECKPOINT_DEFAULT_RETAIN */
     CkptRec ckpts[SU_CHECKPOINT_DEFAULT_RETAIN];
+    WorkerWorld *cur_ww;  /* world of the step in progress (fault seam only) */
+#ifdef SU_TEST_FAULT_HOOKS
+    /* Test-only crash seam, compiled only into test workers. See test_kill_check. */
+    int test_kill_set;
+    uint64_t test_kill_tick;
+    int test_kill_abort;
+    char test_kill_src[65];   /* when set, only a world with a system of this source hash dies */
+    char test_kill_token[SU_PATH_BUF]; /* when set, the seam fires once: the file is unlinked first */
+#endif
 } WorkerState;
 
 typedef struct WorkerFail {
@@ -151,8 +163,8 @@ static void inst_free(WorldInst *in) {
 
 /* Opens a fresh world (tick 0, columns by name) for the schedule's schema and union
  * field table. The fixture must carry every field of the table. */
-static uint32_t world_open(const SuSchedule *s, const char *fixture_path, WorldInst *in,
-                           WorkerFail *f) {
+static uint32_t world_open(const SuSchedule *s, const char *fixture_path, const char *fixture_sha,
+                           WorldInst *in, WorkerFail *f) {
     uint8_t *data = NULL;
     size_t len = 0;
     SuJsonLimits limits;
@@ -174,6 +186,21 @@ static uint32_t world_open(const SuSchedule *s, const char *fixture_path, WorldI
     if (st != SU_OK) {
         fail(f, st, "cannot read world fixture");
         return st;
+    }
+    if (fixture_sha != NULL) {
+        SuSha256 ctx;
+        uint8_t dig[32];
+        char hex[65];
+        su_sha256_init(&ctx);
+        su_sha256_update(&ctx, data, len);
+        su_sha256_final(&ctx, dig);
+        su_sha256_hex(dig, hex);
+        if (strcmp(hex, fixture_sha) != 0) {
+            free(data);
+            st = SU_E_SCHEMA_MISMATCH;
+            fail(f, st, "world fixture bytes do not match the recorded sha256");
+            return st;
+        }
     }
     limits.max_bytes = len;
     limits.max_depth = SU_PROTO_MAX_DEPTH + 4u;
@@ -346,6 +373,7 @@ static void write_manifest(SuBuf *res, const SuSchedule *s) {
  * (the caller frees it). */
 static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPaths *paths,
                               WorkerFail *f) {
+    /* Optional capsule_sha256 / source_sha256 pin the bytes the file must still have. */
     size_t i;
     uint32_t st;
 
@@ -367,7 +395,8 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPat
             fail(f, SU_E_TYPE, "each capsules entry needs capsule_path and source_path");
             return SU_E_TYPE;
         }
-        st = su_reload_load(cap, src, NULL, NULL, &mod, &sv, &gen, msg, sizeof msg);
+        st = su_reload_load(cap, src, str_of(item, "source_sha256"), str_of(item, "capsule_sha256"), &mod,
+                            &sv, &gen, msg, sizeof msg);
         if (st != SU_OK) {
             fail(f, st, msg);
             return st;
@@ -391,13 +420,37 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPat
 
 /* ---------- handlers ---------- */
 
+/* Parses "world-N" (N = 1..999999999, no leading zero). */
+static int parse_world_id(const char *id, uint64_t *n) {
+    uint64_t v = 0;
+    size_t i;
+    size_t digits;
+    if (strncmp(id, "world-", 6) != 0) {
+        return 0;
+    }
+    digits = strlen(id + 6);
+    if (digits == 0 || digits > 9 || (id[6] == '0')) {
+        return 0;
+    }
+    for (i = 0; i < digits; i++) {
+        if (id[6 + i] < '0' || id[6 + i] > '9') {
+            return 0;
+        }
+        v = v * 10u + (uint64_t)(id[6 + i] - '0');
+    }
+    *n = v;
+    return 1;
+}
+
 static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
     const char *fixture = str_of(params, "fixture_path");
+    const char *want = str_of(params, "world_id");
     const SuJsonValue *caps = su_json_member(params, "capsules");
     WorkerWorld *ww = NULL;
     WorldInst inst;
     SuSchedule sched;
     char id[WORKER_ID_CAP];
+    uint64_t want_n = 0;
     uint32_t i;
     uint32_t st;
     uint64_t txid;
@@ -405,6 +458,10 @@ static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf 
     if (fixture == NULL) {
         fail(f, SU_E_TYPE, "world.create needs fixture_path and capsules");
         return SU_E_TYPE;
+    }
+    if (want != NULL && (!parse_world_id(want, &want_n) || find_world(s, want) != NULL)) {
+        fail(f, SU_E_INVALID_ARGUMENT, "world_id is malformed or already in use");
+        return SU_E_INVALID_ARGUMENT;
     }
     for (i = 0; i < WORKER_MAX_WORLDS; i++) {
         if (!s->worlds[i].used) {
@@ -423,12 +480,20 @@ static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf 
         su_sched_free(&sched);
         return st;
     }
-    st = world_open(&sched, fixture, &inst, f);
+    st = world_open(&sched, fixture, str_of(params, "fixture_sha256"), &inst, f);
     if (st != SU_OK) {
         su_sched_free(&sched);
         return st;
     }
-    snprintf(id, sizeof id, "world-%llu", (unsigned long long)(s->next_id + 1u));
+    if (want != NULL) {
+        /* Supervisor recovery: the world keeps the id it had before the worker died. */
+        snprintf(id, sizeof id, "%s", want);
+        if (want_n > s->next_id) {
+            s->next_id = want_n;
+        }
+    } else {
+        snprintf(id, sizeof id, "world-%llu", (unsigned long long)(s->next_id + 1u));
+    }
 
     /* Each initial system is a revision: register it as INSTALLED at tick 0. */
     for (i = 0; i < sched.count; i++) {
@@ -450,7 +515,9 @@ static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf 
         e->txid = txid;
     }
 
-    s->next_id++;
+    if (want == NULL) {
+        s->next_id++;
+    }
     snprintf(ww->id, sizeof ww->id, "%s", id);
     ww->revision = 1;
     ww->inst = inst;
@@ -615,9 +682,86 @@ static uint32_t h_world_inspect(WorkerState *s, const SuJsonValue *params, SuBuf
     return SU_OK;
 }
 
+#ifdef SU_TEST_FAULT_HOOKS
+/* Test-only crash seam (compiled only into workers built with -DSU_TEST_FAULT_HOOKS; the
+ * production binary contains none of these strings). Before system 0 of the tick that would
+ * compute tick N, the worker dies by SIGKILL (or abort) when:
+ *   SUTEKH_TEST_KILL_AT_TICK=N            (required, decimal)
+ *   SUTEKH_TEST_KILL_SOURCE_SHA=<hex>     (optional) the world has a system with this source hash
+ *   SUTEKH_TEST_KILL_TOKEN=<path>         (optional) the seam fires once: the file must exist and
+ *                                         is unlinked first; replacements inherit the environment
+ *   SUTEKH_TEST_KILL_MODE=abort           (optional) abort() instead of SIGKILL */
+static void test_kill_configure(WorkerState *s) {
+    const char *v = getenv("SUTEKH_TEST_KILL_AT_TICK");
+    const char *src = getenv("SUTEKH_TEST_KILL_SOURCE_SHA");
+    const char *tok = getenv("SUTEKH_TEST_KILL_TOKEN");
+    const char *mode = getenv("SUTEKH_TEST_KILL_MODE");
+    char *end = NULL;
+    unsigned long long n;
+
+    if (v == NULL || v[0] < '1' || v[0] > '9') {
+        return;
+    }
+    n = strtoull(v, &end, 10);
+    if (end == NULL || *end != '\0' || n == 0) {
+        return;
+    }
+    s->test_kill_set = 1;
+    s->test_kill_tick = (uint64_t)n;
+    s->test_kill_abort = mode != NULL && strcmp(mode, "abort") == 0;
+    if (src != NULL && strlen(src) == 64) {
+        snprintf(s->test_kill_src, sizeof s->test_kill_src, "%s", src);
+    }
+    if (tok != NULL && tok[0] != '\0') {
+        snprintf(s->test_kill_token, sizeof s->test_kill_token, "%s", tok);
+    }
+}
+
+static void test_kill_check(WorkerState *s, unsigned idx) {
+    WorkerWorld *ww = s->cur_ww;
+    uint32_t i;
+    int gate = s->test_kill_src[0] == '\0';
+
+    if (idx != 0 || !s->test_kill_set || ww == NULL || su_world_tick(ww->inst.w) + 1u != s->test_kill_tick) {
+        return;
+    }
+    for (i = 0; !gate && i < ww->sched.count; i++) {
+        if (strcmp(ww->sched.sys[i].source_hash, s->test_kill_src) == 0) {
+            gate = 1;
+        }
+    }
+    if (!gate) {
+        return;
+    }
+    if (s->test_kill_token[0] != '\0' && unlink(s->test_kill_token) != 0) {
+        return;
+    }
+    if (s->test_kill_abort) {
+        abort();
+    }
+    kill(getpid(), SIGKILL);
+    for (;;) {
+        pause();
+    }
+}
+#endif
+
 static int fault_thunk(unsigned idx, void *ctx) {
     WorkerState *s = ctx;
+#ifdef SU_TEST_FAULT_HOOKS
+    test_kill_check(s, idx);
+#endif
     return s->hooks.fail_system != NULL && s->hooks.fail_system(idx) != 0;
+}
+
+/* The fault seam runs before every system of every tick when a hook or a test crash is set. */
+static int fault_seam_wanted(const WorkerState *s) {
+#ifdef SU_TEST_FAULT_HOOKS
+    if (s->test_kill_set) {
+        return 1;
+    }
+#endif
+    return s->hooks.fail_system != NULL;
 }
 
 static uint32_t h_world_step(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
@@ -643,8 +787,10 @@ static uint32_t h_world_step(WorkerState *s, const SuJsonValue *params, SuBuf *r
         fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
         return SU_E_STALE_REVISION;
     }
-    st = su_sched_run_ticks(ww->inst.w, &ww->sched, ticks, s->hooks.fail_system != NULL ? fault_thunk : NULL,
+    s->cur_ww = ww;
+    st = su_sched_run_ticks(ww->inst.w, &ww->sched, ticks, fault_seam_wanted(s) ? fault_thunk : NULL,
                             s, &done, &failed_index);
+    s->cur_ww = NULL;
     ww->revision += done;
     if (st != SU_OK) {
         char more[WORKER_MSG_CAP];
@@ -930,7 +1076,7 @@ static uint32_t h_candidate_evaluate(WorkerState *s, const SuJsonValue *params, 
             goto out;
         }
         total++;
-        st = world_open(&sched, world_path, &in, f);
+        st = world_open(&sched, world_path, NULL, &in, f);
         if (st != SU_OK) {
             goto out;
         }
@@ -1202,12 +1348,14 @@ static uint32_t rebuild_schedule(const CkptRec *rec, const SuSnapshotData *data,
  * (su_snapshot_restore); registry transactions for changed revisions; then the instance
  * swap, which cannot fail. Any failure before the swap leaves the world, its schedule and
  * the registry's installed records unchanged (begun transactions are finished REJECTED). */
-static uint32_t h_world_restore(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
-    WorkerWorld *ww;
-    const char *snap_id = str_of(params, "snapshot_id");
-    const char *expect = str_of(params, "expected_world_revision");
-    CkptRec *rec;
-    const SuSnapshot *snap = NULL;
+/* Restores snapshot bytes into ww. rec supplies the revision identities (capsule and source
+ * paths with their hashes, system ids, semantic hashes) that the schedule is rebuilt from.
+ * exact == 0 advances the world revision by one (client world.restore); exact == 1 sets it
+ * to exact_rev (supervisor recovery and quarantine). Checks, registry and the swap are as
+ * described for world.restore above. */
+static uint32_t restore_core(WorkerState *s, WorkerWorld *ww, const CkptRec *rec, const uint8_t *snap_bytes,
+                             size_t snap_len, int exact, uint64_t exact_rev, const char *restored_from,
+                             SuBuf *res, WorkerFail *f) {
     SuWorldDesc desc;
     SuWorldFieldDesc *descs = NULL;
     SuWorldDesc desc2;
@@ -1223,25 +1371,6 @@ static uint32_t h_world_restore(WorkerState *s, const SuJsonValue *params, SuBuf
     uint32_t i;
     uint32_t st = SU_OK;
 
-    ww = world_param(s, params, f, &st);
-    if (st != SU_OK) {
-        return st;
-    }
-    if (snap_id == NULL || expect == NULL) {
-        fail(f, SU_E_TYPE, "world.restore needs snapshot_id and expected_world_revision");
-        return SU_E_TYPE;
-    }
-    rev_string(ww, rev, sizeof rev);
-    if (strcmp(expect, rev) != 0) {
-        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
-        return SU_E_STALE_REVISION;
-    }
-    rec = ckpt_find(s, ww->id, snap_id);
-    if (rec == NULL || su_checkpoint_get(s->store, rec->id, &snap) != SU_OK) {
-        fail(f, SU_E_INVALID_ARGUMENT, "unknown or evicted snapshot_id for this world");
-        return SU_E_INVALID_ARGUMENT;
-    }
-
     memset(&data, 0, sizeof data);
     memset(&nsched, 0, sizeof nsched);
     st = sched_desc(&ww->sched, ww->inst.ids, ww->inst.rows, &desc, &descs);
@@ -1249,7 +1378,7 @@ static uint32_t h_world_restore(WorkerState *s, const SuJsonValue *params, SuBuf
         fail(f, st, "allocation failed");
         goto out;
     }
-    st = su_snapshot_parse(snap->bytes, snap->len, &desc, &data, &perr);
+    st = su_snapshot_parse(snap_bytes, snap_len, &desc, &data, &perr);
     if (st != SU_OK) {
         fail(f, st, perr.message);
         goto out;
@@ -1352,7 +1481,7 @@ static uint32_t h_world_restore(WorkerState *s, const SuJsonValue *params, SuBuf
     for (i = 0; i < ww->sched.count; i++) {
         ww->paths[i] = rec->sys[i].paths;
     }
-    ww->revision++;
+    ww->revision = exact ? exact_rev : ww->revision + 1u;
     st = SU_OK;
 
     rev_string(ww, rev, sizeof rev);
@@ -1363,7 +1492,7 @@ static uint32_t h_world_restore(WorkerState *s, const SuJsonValue *params, SuBuf
     su_buf_str(res, ",\"tick\":");
     su_buf_u64(res, su_world_tick(ww->inst.w));
     su_buf_str(res, ",\"restored_from\":");
-    su_buf_quoted(res, rec->snapshot_id, strlen(rec->snapshot_id));
+    su_buf_quoted(res, restored_from, strlen(restored_from));
     su_buf_str(res, ",\"worker_pid\":");
     su_buf_u64(res, (uint64_t)getpid());
     su_buf_str(res, ",\"semantic_manifest\":");
@@ -1380,6 +1509,323 @@ out:
     }
     free(descs2);
     free(descs);
+    return st;
+}
+
+
+static uint32_t h_world_restore(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *snap_id = str_of(params, "snapshot_id");
+    const char *expect = str_of(params, "expected_world_revision");
+    CkptRec *rec;
+    const SuSnapshot *snap = NULL;
+    char rev[64];
+    uint32_t st = SU_OK;
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (snap_id == NULL || expect == NULL) {
+        fail(f, SU_E_TYPE, "world.restore needs snapshot_id and expected_world_revision");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+    rec = ckpt_find(s, ww->id, snap_id);
+    if (rec == NULL || su_checkpoint_get(s->store, rec->id, &snap) != SU_OK) {
+        fail(f, SU_E_INVALID_ARGUMENT, "unknown or evicted snapshot_id for this world");
+        return SU_E_INVALID_ARGUMENT;
+    }
+
+    return restore_core(s, ww, rec, snap->bytes, snap->len, 0, 0, rec->snapshot_id, res, f);
+}
+
+/* ---------- supervisor recovery support (internal methods, M1-02) ----------
+ *
+ * These are reached only from the supervisor's recovery path. The supervisor passes paths
+ * it owns (its spool directory) with the sha256 of the bytes they must hold; the worker
+ * checks the bytes before using them. */
+
+/* Writes data to a new file (O_EXCL, mode 0600). */
+static uint32_t write_new_file(const char *path, const uint8_t *data, size_t len, WorkerFail *f) {
+    size_t off = 0;
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) {
+        fail(f, SU_E_IO, "spool file could not be created");
+        return SU_E_IO;
+    }
+    while (off < len) {
+        ssize_t n = write(fd, data + off, len - off);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            close(fd);
+            unlink(path);
+            fail(f, SU_E_IO, "spool file could not be written");
+            return SU_E_IO;
+        }
+        off += (size_t)n;
+    }
+    if (close(fd) != 0) {
+        unlink(path);
+        fail(f, SU_E_IO, "spool file could not be closed");
+        return SU_E_IO;
+    }
+    return SU_OK;
+}
+
+/* Canonical snapshot of ww's committed root. The caller destroys snap. */
+static uint32_t world_capture(const WorkerWorld *ww, SuSnapshot *snap, WorkerFail *f) {
+    SuSnapshotManifestEntry man[SU_SCHED_MAX_SYSTEMS];
+    SuWorldDesc desc;
+    SuWorldFieldDesc *descs = NULL;
+    char rev[64];
+    uint32_t st;
+
+    rev_string(ww, rev, sizeof rev);
+    sched_manifest(&ww->sched, man);
+    st = sched_desc(&ww->sched, ww->inst.ids, ww->inst.rows, &desc, &descs);
+    if (st != SU_OK) {
+        fail(f, st, "allocation failed");
+        return st;
+    }
+    st = su_snapshot_capture(ww->inst.w, &desc, rev, man, ww->sched.count, snap);
+    free(descs);
+    if (st != SU_OK) {
+        fail(f, st, "canonical state could not be captured");
+    }
+    return st;
+}
+
+/* internal.world.seed {next_id}: raises the id counter so a replacement worker never issues
+ * an id the supervisor has already handed out. */
+static uint32_t h_internal_world_seed(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    uint64_t n = 0;
+    if (!su_json_get_uint(su_json_member(params, "next_id"), &n) || n > 999999999u) {
+        fail(f, SU_E_TYPE, "next_id must be an integer 0..999999999");
+        return SU_E_TYPE;
+    }
+    if (n > s->next_id) {
+        s->next_id = n;
+    }
+    su_buf_str(res, "{\"next_id\":");
+    su_buf_u64(res, s->next_id);
+    su_buf_str(res, "}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* internal.world.digest {world_id}: canonical state digest; nothing is stored. */
+static uint32_t h_internal_world_digest(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    SuSnapshot snap;
+    char rev[64];
+    uint32_t st = SU_OK;
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    memset(&snap, 0, sizeof snap);
+    st = world_capture(ww, &snap, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    rev_string(ww, rev, sizeof rev);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"tick\":");
+    su_buf_u64(res, snap.tick);
+    su_buf_str(res, ",\"row_count\":");
+    su_buf_u64(res, ww->inst.rows);
+    su_buf_str(res, ",\"sha256\":");
+    su_buf_quoted(res, snap.id, strlen(snap.id));
+    su_buf_str(res, "}");
+    su_snapshot_destroy(&snap);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* internal.world.capture {world_id, expected_world_revision, spool_path}: the canonical bytes
+ * are written to a new file the supervisor owns. Unlike world.snapshot, nothing is retained in
+ * the worker's own store. */
+static uint32_t h_internal_world_capture(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const char *path = str_of(params, "spool_path");
+    SuSnapshot snap;
+    char rev[64];
+    uint32_t st = SU_OK;
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (expect == NULL || path == NULL) {
+        fail(f, SU_E_TYPE, "capture needs expected_world_revision and spool_path");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+    memset(&snap, 0, sizeof snap);
+    st = world_capture(ww, &snap, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = write_new_file(path, snap.bytes, snap.len, f);
+    if (st != SU_OK) {
+        su_snapshot_destroy(&snap);
+        return st;
+    }
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"tick\":");
+    su_buf_u64(res, snap.tick);
+    su_buf_str(res, ",\"bytes\":");
+    su_buf_u64(res, (uint64_t)snap.len);
+    su_buf_str(res, ",\"row_count\":");
+    su_buf_u64(res, ww->inst.rows);
+    su_buf_str(res, ",\"field_count\":");
+    su_buf_u64(res, ww->sched.field_count);
+    su_buf_str(res, ",\"sha256\":");
+    su_buf_quoted(res, snap.id, strlen(snap.id));
+    su_buf_str(res, ",\"semantic_manifest\":");
+    write_manifest(res, &ww->sched);
+    su_buf_str(res, "}");
+    su_snapshot_destroy(&snap);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* Copies one capsules entry of internal.world.restore_bytes into c. Returns 0 if a field is
+ * missing or does not fit its buffer. */
+static int restore_entry_fill(CkptSys *c, const SuJsonValue *item) {
+    static const char *const keys[6] = {"system_id", "capsule_path", "source_path", "capsule_sha256",
+                                        "source_sha256", "semantic_hash"};
+    const size_t caps_max[6] = {SU_DIAG_SYSTEM_BYTES, SU_PATH_BUF, SU_PATH_BUF, 65, 65, 65};
+    const char *vals[6];
+    size_t k;
+
+    for (k = 0; k < 6; k++) {
+        vals[k] = str_of(item, keys[k]);
+        if (vals[k] == NULL || strlen(vals[k]) >= caps_max[k]) {
+            return 0;
+        }
+    }
+    snprintf(c->system_id, sizeof c->system_id, "%s", vals[0]);
+    snprintf(c->paths.capsule, sizeof c->paths.capsule, "%s", vals[1]);
+    snprintf(c->paths.source, sizeof c->paths.source, "%s", vals[2]);
+    snprintf(c->capsule_hash, sizeof c->capsule_hash, "%s", vals[3]);
+    snprintf(c->source_hash, sizeof c->source_hash, "%s", vals[4]);
+    snprintf(c->semantic_hash, sizeof c->semantic_hash, "%s", vals[5]);
+    return 1;
+}
+
+/* internal.world.restore_bytes {world_id, expected_world_revision, snapshot_path, snapshot_sha256,
+ * mode: "advance" | "exact", world_revision (exact only), capsules: [{system_id, capsule_path,
+ * source_path, capsule_sha256, source_sha256, semantic_hash}, ...]}. The capsules list is the
+ * schedule the snapshot was captured with, in schedule order. The file must hash to
+ * snapshot_sha256 (SU_E_INTERNAL otherwise). */
+static uint32_t h_internal_world_restore_bytes(WorkerState *s, const SuJsonValue *params, SuBuf *res,
+                                               WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const char *path = str_of(params, "snapshot_path");
+    const char *sha = str_of(params, "snapshot_sha256");
+    const char *mode = str_of(params, "mode");
+    const SuJsonValue *caps = su_json_member(params, "capsules");
+    uint64_t exact_rev = 0;
+    int exact;
+    uint8_t *data = NULL;
+    size_t len = 0;
+    CkptRec *rec = NULL;
+    char rev[64];
+    size_t i;
+    uint32_t st = SU_OK;
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (expect == NULL || path == NULL || sha == NULL || mode == NULL || caps == NULL ||
+        caps->type != SU_JSON_ARRAY || caps->u.array.count == 0 || caps->u.array.count > SU_SCHED_MAX_SYSTEMS) {
+        fail(f, SU_E_TYPE, "restore_bytes needs expected_world_revision, snapshot_path, snapshot_sha256, mode and 1..8 capsules");
+        return SU_E_TYPE;
+    }
+    if (strcmp(mode, "exact") == 0) {
+        exact = 1;
+        if (!su_json_get_uint(su_json_member(params, "world_revision"), &exact_rev)) {
+            fail(f, SU_E_TYPE, "exact mode needs an integer world_revision");
+            return SU_E_TYPE;
+        }
+    } else if (strcmp(mode, "advance") == 0) {
+        exact = 0;
+    } else {
+        fail(f, SU_E_TYPE, "mode must be advance or exact");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+    st = su_path_read_file(path, SU_SNAPSHOT_MAX_BYTES, &data, &len);
+    if (st != SU_OK) {
+        fail(f, st, "snapshot file could not be read");
+        return st;
+    }
+    {
+        SuSha256 ctx;
+        uint8_t dig[32];
+        char hex[65];
+        su_sha256_init(&ctx);
+        su_sha256_update(&ctx, data, len);
+        su_sha256_final(&ctx, dig);
+        su_sha256_hex(dig, hex);
+        if (strcmp(hex, sha) != 0) {
+            free(data);
+            fail(f, SU_E_INTERNAL, "snapshot file does not match its recorded sha256");
+            return SU_E_INTERNAL;
+        }
+    }
+    rec = calloc(1, sizeof *rec);
+    if (rec == NULL) {
+        free(data);
+        fail(f, SU_E_RESOURCE_LIMIT, "allocation failed");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    rec->used = 1;
+    snprintf(rec->snapshot_id, sizeof rec->snapshot_id, "%s", sha);
+    rec->count = (uint32_t)caps->u.array.count;
+    for (i = 0; i < caps->u.array.count; i++) {
+        if (!restore_entry_fill(&rec->sys[i], caps->u.array.items[i])) {
+            free(rec);
+            free(data);
+            fail(f, SU_E_TYPE, "each capsules entry needs system_id, capsule_path, source_path, capsule_sha256, source_sha256 and semantic_hash");
+            return SU_E_TYPE;
+        }
+    }
+    st = restore_core(s, ww, rec, data, len, exact, exact_rev, sha, res, f);
+#ifdef SU_TEST_FAULT_HOOKS
+    if (st == SU_OK && exact && getenv("SUTEKH_TEST_SKEW_EXACT") != NULL) {
+        /* Test-only: one extra committed tick the snapshot does not describe. The supervisor's
+         * digest of the rebuilt world must then differ from the recorded one. */
+        uint64_t done = 0;
+        uint32_t fi = 0;
+        (void)su_sched_run_ticks(ww->inst.w, &ww->sched, 1, NULL, NULL, &done, &fi);
+    }
+#endif
+    free(rec);
+    free(data);
     return st;
 }
 
@@ -1502,6 +1948,14 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
         st = h_world_close(s, req.params, &res, &f);
     } else if (strcmp(req.method, "internal.stats") == 0) {
         st = h_internal_stats(s, &res);
+    } else if (strcmp(req.method, "internal.world.seed") == 0) {
+        st = h_internal_world_seed(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "internal.world.capture") == 0) {
+        st = h_internal_world_capture(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "internal.world.digest") == 0) {
+        st = h_internal_world_digest(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "internal.world.restore_bytes") == 0) {
+        st = h_internal_world_restore_bytes(s, req.params, &res, &f);
     } else {
         st = SU_E_UNSUPPORTED_METHOD;
         fail(&f, st, "worker does not implement this method");
@@ -1548,6 +2002,9 @@ int su_worker_main_with_hooks(int in_fd, int out_fd, const SuWorkerHooks *hooks)
     if (hooks != NULL) {
         s->hooks = *hooks;
     }
+#ifdef SU_TEST_FAULT_HOOKS
+    test_kill_configure(s);
+#endif
     memset(&ign, 0, sizeof ign);
     ign.sa_handler = SIG_IGN;
     sigemptyset(&ign.sa_mask);

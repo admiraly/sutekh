@@ -40,6 +40,9 @@ uint32_t su_proc_request(SuProc *p, const uint8_t *req, size_t req_len, int64_t 
  * grace_ms for it, then kills and reaps it. */
 void su_proc_finish(SuProc *p, int64_t grace_ms);
 
+/* 1 when the child has exited (it is then reaped and p->alive is 0); 0 while it runs. */
+int su_proc_exited(SuProc *p);
+
 /* SIGKILL, close pipes, reap. Idempotent. */
 void su_proc_kill(SuProc *p);
 
