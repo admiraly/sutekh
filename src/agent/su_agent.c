@@ -75,11 +75,12 @@ typedef struct AgentCall {
     int relay; /* res holds one complete worker response line, to be sent as-is */
 } AgentCall;
 
-/* Exactly the methods routed below. world.snapshot, world.restore and the other
- * AGENT_RPC methods are not implemented and must not be advertised. */
+/* Exactly the methods routed below. The other AGENT_RPC methods are not implemented and
+ * must not be advertised. */
 static const char *const k_capabilities[] = {
     "engine.info",   "capsule.submit", "candidate.status", "candidate.evaluate",
     "candidate.install", "world.create", "world.inspect", "world.step",
+    "world.snapshot", "world.restore",
 };
 
 static uint32_t call_fail(AgentCall *c, uint32_t code, const char *msg) {
@@ -841,6 +842,74 @@ static uint32_t h_world_step(SuAgent *a, const SuJsonValue *params, SuBuf *res, 
     return st;
 }
 
+/* world.snapshot {world_id, expected_world_revision}. The checkpoint lives in the active
+ * worker; the worker answers the snapshot metadata and the response is relayed unchanged. */
+static uint32_t h_world_snapshot(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"world_id", "expected_world_revision"};
+    const char *world_id = NULL;
+    const char *expect = NULL;
+    SuBuf req;
+    uint32_t st;
+
+    if (check_keys(params, allowed, 2, c) != SU_OK ||
+        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    if (!a->worker.alive) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "no active worker holds worlds; call world.create");
+    }
+    req_begin(&req, c->id, "world.snapshot");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, world_id, strlen(world_id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, expect, strlen(expect));
+    su_buf_str(&req, "}}");
+    if (req.failed) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "world.snapshot request too large");
+    }
+    st = relay_world(a, &req, res, c);
+    su_buf_free(&req);
+    return st;
+}
+
+/* world.restore {world_id, snapshot_id, expected_world_revision}. An unknown or evicted
+ * snapshot_id is SU_E_INVALID_ARGUMENT; the worker decides everything else. */
+static uint32_t h_world_restore(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"world_id", "snapshot_id", "expected_world_revision"};
+    const char *world_id = NULL;
+    const char *snap = NULL;
+    const char *expect = NULL;
+    SuBuf req;
+    uint32_t st;
+
+    if (check_keys(params, allowed, 3, c) != SU_OK ||
+        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "snapshot_id", 1, &snap, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    if (!a->worker.alive) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "no active worker holds worlds; call world.create");
+    }
+    req_begin(&req, c->id, "world.restore");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, world_id, strlen(world_id));
+    su_buf_str(&req, ",\"snapshot_id\":");
+    su_buf_quoted(&req, snap, strlen(snap));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, expect, strlen(expect));
+    su_buf_str(&req, "}}");
+    if (req.failed) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "world.restore request too large");
+    }
+    st = relay_world(a, &req, res, c);
+    su_buf_free(&req);
+    return st;
+}
+
 /* Records the worker's answer on the candidate. Only the worker's own response is read
  * here; the client never supplies these fields. */
 static void note_install(AgentCandidate *cd, const uint8_t *data, size_t len, uint64_t pid) {
@@ -976,6 +1045,12 @@ static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c
     }
     if (strcmp(req->method, "candidate.install") == 0) {
         return h_candidate_install(a, p, res, c);
+    }
+    if (strcmp(req->method, "world.snapshot") == 0) {
+        return h_world_snapshot(a, p, res, c);
+    }
+    if (strcmp(req->method, "world.restore") == 0) {
+        return h_world_restore(a, p, res, c);
     }
     return call_fail(c, SU_E_UNSUPPORTED_METHOD, "method is unknown or not implemented in M0");
 }

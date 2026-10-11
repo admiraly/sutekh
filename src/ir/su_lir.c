@@ -85,6 +85,7 @@ typedef struct CapInfo {
     Str profile;
     const SuJsonValue *fields;
     uint64_t max_instructions;
+    uint64_t max_rows;
 } CapInfo;
 
 typedef struct IrInfo {
@@ -382,6 +383,7 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
     }
     ci->max_instructions = u;
     su_json_get_uint(su_json_member(v, "max_rows"), &u);
+    ci->max_rows = u;
     if (u > SU_LIMIT_ROWS) {
         return set_diag(d, SU_E_TYPE, "/limits/max_rows", "max_rows exceeds the M0 default limit");
     }
@@ -878,6 +880,7 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     m.fields = calloc(nf ? nf : 1u, sizeof *m.fields);
     m.register_count = b.nregs;
     m.insn_count = (uint32_t)ninsn;
+    m.max_rows = ci.max_rows;
     m.insns = calloc(ninsn + 1u, sizeof *m.insns);
     if (m.system_id == NULL || m.query == NULL || m.numeric_profile == NULL ||
         m.fields == NULL || m.insns == NULL) {

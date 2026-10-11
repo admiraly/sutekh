@@ -656,11 +656,11 @@ static void test_engine_info(Session *s) {
         }
     }
     CHECK(has_install);
-    CHECK(!has_snapshot);
+    CHECK(has_snapshot); /* world.snapshot is implemented since M0-08b */
     CHECK(jnum(su_json_member(resp_result(&r), "active_worker"), "pid") == 0);
     resp_free(&r);
 
-    rpc(s, "{\"protocol\":\"0.1\",\"id\":\"sn\",\"method\":\"world.snapshot\",\"params\":{}}", &r);
+    rpc(s, "{\"protocol\":\"0.1\",\"id\":\"sn\",\"method\":\"world.teleport\",\"params\":{}}", &r);
     CHECK_CODE(r, SU_E_UNSUPPORTED_METHOD);
     resp_free(&r);
 }

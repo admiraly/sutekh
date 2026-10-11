@@ -314,6 +314,7 @@ static void test_valid_fixtures(void) {
         CHECK(m.fields[1].access == SU_ACCESS_READ);
         CHECK_STR(m.fields[0].name, "position_x");
         CHECK(m.insn_count == 4u);
+        CHECK(m.max_rows == 1000000u);
         CHECK(m.register_count == 3u);
         CHECK(m.insns[0].op == SU_OP_LOAD_U32 && m.insns[0].a == 0u && m.insns[0].dst == 0u);
         CHECK(m.insns[1].op == SU_OP_LOAD_U32 && m.insns[1].a == 1u && m.insns[1].dst == 1u);

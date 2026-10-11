@@ -190,7 +190,7 @@ uint32_t su_vm_context_create(const SuLirModule *m, uint32_t layout_generation,
     }
     c->module = m;
     c->layout_generation = layout_generation;
-    c->row_limit = SU_LIMIT_ROWS;
+    c->row_limit = (m->max_rows != 0 && m->max_rows < SU_LIMIT_ROWS) ? m->max_rows : SU_LIMIT_ROWS;
     c->last_failed_insn = SU_VM_NO_FAILED_INSN;
 
     c->reg_val = su_vm_calloc(m->register_count, sizeof *c->reg_val);

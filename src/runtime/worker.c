@@ -13,12 +13,14 @@
 #include "agent/su_proto.h"
 #include "ir/su_json.h"
 #include "ir/su_lir.h"
+#include "runtime/checkpoint.h"
 #include "runtime/registry.h"
 #include "runtime/reload.h"
 #include "runtime/schedule.h"
 #include "sutekh/ir.h"
 #include "sutekh/status.h"
 #include "vm/su_vm.h"
+#include "world/snapshot.h"
 #include "world/su_world.h"
 
 #define WORKER_MAX_WORLDS 4u
@@ -40,20 +42,51 @@ typedef struct WorldInst {
     uint64_t rows;
 } WorldInst;
 
-/* One world: its schedule (ordered verified systems) and committed state. */
+/* Supervisor-resolved paths of the revision installed in one schedule slot. Restore
+ * reloads a checkpointed revision from these paths and verifies its hashes again. */
+typedef struct RevPaths {
+    char capsule[SU_PATH_BUF];
+    char source[SU_PATH_BUF];
+} RevPaths;
+
+/* One world: its schedule (ordered verified systems) and committed state. paths[i]
+ * belongs to sched.sys[i]. */
 typedef struct WorkerWorld {
     int used;
     char id[WORKER_ID_CAP];
     uint64_t revision;
     WorldInst inst;
     SuSchedule sched;
+    RevPaths paths[SU_SCHED_MAX_SYSTEMS];
 } WorkerWorld;
+
+/* What a checkpoint needs beyond the snapshot bytes: the world it belongs to and the
+ * installed revision of each system at capture (M0-08). Records are kept for the same
+ * ids as the checkpoint store; a record whose id the store no longer holds is inert. */
+typedef struct CkptSys {
+    char system_id[SU_DIAG_SYSTEM_BYTES];
+    char semantic_hash[65];
+    char source_hash[65];
+    char capsule_hash[65];
+    RevPaths paths;
+} CkptSys;
+
+typedef struct CkptRec {
+    int used;
+    uint64_t id;                 /* checkpoint store id */
+    char world_id[WORKER_ID_CAP];
+    char snapshot_id[65];
+    uint32_t count;
+    CkptSys sys[SU_SCHED_MAX_SYSTEMS];
+} CkptRec;
 
 typedef struct WorkerState {
     WorkerWorld worlds[WORKER_MAX_WORLDS];
     uint64_t next_id;
     SuRegistry reg;       /* version registry: every revision this worker has seen */
     SuWorkerHooks hooks;
+    SuCheckpointStore *store; /* bounded snapshot store; retain SU_CHECKPOINT_DEFAULT_RETAIN */
+    CkptRec ckpts[SU_CHECKPOINT_DEFAULT_RETAIN];
 } WorkerState;
 
 typedef struct WorkerFail {
@@ -296,7 +329,8 @@ static void write_manifest(SuBuf *res, const SuSchedule *s) {
 /* Parses the capsules array of world.create and builds a finalized schedule. Systems
  * are added in array order; the first failure leaves sched holding only what was added
  * (the caller frees it). */
-static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, WorkerFail *f) {
+static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPaths *paths,
+                              WorkerFail *f) {
     size_t i;
     uint32_t st;
 
@@ -329,6 +363,9 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, Worker
             fail(f, st, "system cannot join this world's schedule (schema or duplicate system_id)");
             return st;
         }
+        /* su_sched_add appended at index i, so paths[i] describes sched->sys[i]. */
+        snprintf(paths[i].capsule, sizeof paths[i].capsule, "%s", cap);
+        snprintf(paths[i].source, sizeof paths[i].source, "%s", src);
     }
     st = su_sched_finalize(sched);
     if (st != SU_OK) {
@@ -365,7 +402,8 @@ static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf 
         return SU_E_RESOURCE_LIMIT;
     }
     su_sched_init(&sched);
-    st = load_schedule(caps, &sched, f);
+    memset(ww->paths, 0, sizeof ww->paths);
+    st = load_schedule(caps, &sched, ww->paths, f);
     if (st != SU_OK) {
         su_sched_free(&sched);
         return st;
@@ -667,6 +705,14 @@ static uint32_t h_candidate_install(WorkerState *s, const SuJsonValue *params, S
         fail(f, st, out.msg);
         return st;
     }
+    {
+        /* The installed slot now runs this candidate's files (checkpoint restore needs them). */
+        int j = su_sched_find(&ww->sched, out.system_id);
+        if (j >= 0) {
+            snprintf(ww->paths[j].capsule, sizeof ww->paths[j].capsule, "%s", capsule);
+            snprintf(ww->paths[j].source, sizeof ww->paths[j].source, "%s", source);
+        }
+    }
     ww->revision++;
     rev_string(ww, rev, sizeof rev);
     su_buf_str(res, "{\"world_id\":");
@@ -895,6 +941,398 @@ out:
     return st;
 }
 
+/* ---------- checkpoints: world.snapshot / world.restore (M0-08) ---------- */
+
+/* Builds a su_world descriptor for the schedule's schema over the given rows. The
+ * field table is borrowed from the schedule; *descs (malloc) must be freed by the caller. */
+static uint32_t sched_desc(const SuSchedule *s, const uint32_t *ids, uint64_t rows, SuWorldDesc *desc,
+                           SuWorldFieldDesc **descs) {
+    SuWorldFieldDesc *d;
+    uint32_t i;
+
+    *descs = NULL;
+    d = malloc((s->field_count > 0 ? s->field_count : 1u) * sizeof *d);
+    if (d == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (i = 0; i < s->field_count; i++) {
+        d[i].id = s->fields[i].id;
+        d[i].type = s->fields[i].type;
+        d[i].access = s->fields[i].access;
+        d[i].name = s->fields[i].name;
+    }
+    memset(desc, 0, sizeof *desc);
+    desc->schema_id = s->schema_id;
+    desc->schema_version = s->schema_version;
+    desc->layout_generation = s->layout_generation;
+    desc->row_count = rows;
+    desc->entity_ids = ids;
+    desc->fields = d;
+    desc->field_count = s->field_count;
+    *descs = d;
+    return SU_OK;
+}
+
+static void sched_manifest(const SuSchedule *s, SuSnapshotManifestEntry *m) {
+    uint32_t i;
+    for (i = 0; i < s->count; i++) {
+        m[i].system_id = s->sys[i].system_id;
+        snprintf(m[i].semantic_hash, sizeof m[i].semantic_hash, "%s", s->sys[i].semantic_hash);
+    }
+}
+
+/* The newest record for this world and snapshot id (identical states captured twice
+ * share an id; the newest is the one whose revisions are most recent). */
+static CkptRec *ckpt_find(WorkerState *s, const char *world_id, const char *snapshot_id) {
+    CkptRec *best = NULL;
+    uint32_t i;
+    for (i = 0; i < SU_CHECKPOINT_DEFAULT_RETAIN; i++) {
+        CkptRec *r = &s->ckpts[i];
+        if (r->used && strcmp(r->world_id, world_id) == 0 && strcmp(r->snapshot_id, snapshot_id) == 0 &&
+            (best == NULL || r->id > best->id)) {
+            best = r;
+        }
+    }
+    return best;
+}
+
+/* Stores the record of checkpoint id. The table has as many slots as the store has
+ * retained entries, and ids grow monotonically, so the slot with the smallest id is the
+ * one the store has evicted (or is about to) when no slot is free. */
+static void ckpt_record(WorkerState *s, const WorkerWorld *ww, uint64_t id, const char *snapshot_id) {
+    CkptRec *slot = NULL;
+    uint32_t i;
+
+    for (i = 0; i < SU_CHECKPOINT_DEFAULT_RETAIN; i++) {
+        if (!s->ckpts[i].used) {
+            slot = &s->ckpts[i];
+            break;
+        }
+    }
+    if (slot == NULL) {
+        slot = &s->ckpts[0];
+        for (i = 1; i < SU_CHECKPOINT_DEFAULT_RETAIN; i++) {
+            if (s->ckpts[i].id < slot->id) {
+                slot = &s->ckpts[i];
+            }
+        }
+    }
+    memset(slot, 0, sizeof *slot);
+    slot->used = 1;
+    slot->id = id;
+    snprintf(slot->world_id, sizeof slot->world_id, "%s", ww->id);
+    snprintf(slot->snapshot_id, sizeof slot->snapshot_id, "%s", snapshot_id);
+    slot->count = ww->sched.count;
+    for (i = 0; i < ww->sched.count; i++) {
+        CkptSys *c = &slot->sys[i];
+        snprintf(c->system_id, sizeof c->system_id, "%s", ww->sched.sys[i].system_id);
+        snprintf(c->semantic_hash, sizeof c->semantic_hash, "%s", ww->sched.sys[i].semantic_hash);
+        snprintf(c->source_hash, sizeof c->source_hash, "%s", ww->sched.sys[i].source_hash);
+        snprintf(c->capsule_hash, sizeof c->capsule_hash, "%s", ww->sched.sys[i].capsule_hash);
+        c->paths = ww->paths[i];
+    }
+}
+
+/* world.snapshot {world_id, expected_world_revision}. Captures the committed root without
+ * changing the world revision. */
+static uint32_t h_world_snapshot(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    SuSnapshotManifestEntry man[SU_SCHED_MAX_SYSTEMS];
+    SuWorldDesc desc;
+    SuWorldFieldDesc *descs = NULL;
+    SuCheckpointInfo info;
+    char rev[64];
+    uint64_t id = 0;
+    uint32_t st = SU_OK;
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (expect == NULL) {
+        fail(f, SU_E_TYPE, "world.snapshot needs expected_world_revision");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+    sched_manifest(&ww->sched, man);
+    st = sched_desc(&ww->sched, ww->inst.ids, ww->inst.rows, &desc, &descs);
+    if (st != SU_OK) {
+        fail(f, st, "allocation failed");
+        return st;
+    }
+    st = su_checkpoint_create(s->store, ww->inst.w, &desc, rev, man, ww->sched.count, &id);
+    free(descs);
+    if (st != SU_OK) {
+        fail(f, st, "snapshot could not be captured; nothing was stored");
+        return st;
+    }
+    if (su_checkpoint_info(s->store, id, &info) != SU_OK) {
+        fail(f, SU_E_INTERNAL, "new checkpoint is not in the store");
+        return SU_E_INTERNAL;
+    }
+    ckpt_record(s, ww, id, info.snapshot_id);
+
+    su_buf_str(res, "{\"snapshot_id\":");
+    su_buf_quoted(res, info.snapshot_id, strlen(info.snapshot_id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"tick\":");
+    su_buf_u64(res, info.tick);
+    su_buf_str(res, ",\"bytes\":");
+    su_buf_u64(res, info.bytes);
+    su_buf_str(res, ",\"sha256\":");
+    su_buf_quoted(res, info.snapshot_id, strlen(info.snapshot_id));
+    su_buf_str(res, ",\"capture_ns\":");
+    if (info.capture_ns_known) {
+        su_buf_u64(res, info.capture_ns);
+    } else {
+        su_buf_str(res, "null");
+    }
+    su_buf_str(res, "}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* Rebuilds the snapshot's schedule from the recorded revisions. Every file is reloaded
+ * with the hashes recorded at capture, so changed bytes are refused. On SU_OK *nsched
+ * owns the new entries (and must be freed by the caller). */
+static uint32_t rebuild_schedule(const CkptRec *rec, const SuSnapshotData *data, SuSchedule *nsched,
+                                 WorkerFail *f) {
+    uint32_t i;
+    uint32_t st;
+    char why[WORKER_MSG_CAP];
+
+    su_sched_init(nsched);
+    if (data->manifest_count != rec->count) {
+        fail(f, SU_E_SCHEMA_MISMATCH, "snapshot manifest does not list this world's systems");
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    for (i = 0; i < rec->count; i++) {
+        const CkptSys *c = &rec->sys[i];
+        SuLirModule *mod = NULL;
+        uint32_t sv = 0;
+        uint32_t gen = 0;
+
+        if (strcmp(data->manifest[i].system_id, c->system_id) != 0 ||
+            strcmp(data->manifest[i].semantic_hash, c->semantic_hash) != 0) {
+            fail(f, SU_E_SCHEMA_MISMATCH, "snapshot manifest does not match the recorded revisions");
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        st = su_reload_load(c->paths.capsule, c->paths.source, c->source_hash, c->capsule_hash, &mod,
+                            &sv, &gen, why, sizeof why);
+        if (st != SU_OK) {
+            snprintf(f->msg, sizeof f->msg, "snapshot revision cannot be reloaded: %.300s", why);
+            f->code = SU_E_SCHEMA_MISMATCH;
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        st = su_sched_add(nsched, mod, sv, gen, 0, 1, 0);
+        if (st != SU_OK) {
+            su_reload_module_free(mod);
+            fail(f, SU_E_SCHEMA_MISMATCH, "snapshot revision cannot join this world's schedule");
+            return SU_E_SCHEMA_MISMATCH;
+        }
+    }
+    if (su_sched_finalize(nsched) != SU_OK) {
+        fail(f, SU_E_SCHEMA_MISMATCH, "snapshot revisions disagree on a field's ID, name or type");
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    return SU_OK;
+}
+
+/* world.restore {world_id, snapshot_id, expected_world_revision}.
+ *
+ * Order: stale revision (before any work); lookup of the snapshot for this world (unknown
+ * or evicted -> SU_E_INVALID_ARGUMENT); strict parse against the current schema (M0
+ * snapshot rules); rebuild of the schedule from the checkpointed revisions with hash
+ * checks (SU_E_SCHEMA_MISMATCH); field-table check; a NEW world built from the snapshot
+ * (su_snapshot_restore); registry transactions for changed revisions; then the instance
+ * swap, which cannot fail. Any failure before the swap leaves the world, its schedule and
+ * the registry's installed records unchanged (begun transactions are finished REJECTED). */
+static uint32_t h_world_restore(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *snap_id = str_of(params, "snapshot_id");
+    const char *expect = str_of(params, "expected_world_revision");
+    CkptRec *rec;
+    const SuSnapshot *snap = NULL;
+    SuWorldDesc desc;
+    SuWorldFieldDesc *descs = NULL;
+    SuWorldDesc desc2;
+    SuWorldFieldDesc *descs2 = NULL;
+    SuSnapshotData data;
+    SuSnapshotError perr;
+    SuSchedule nsched;
+    SuWorld *neww = NULL;
+    uint64_t txids[SU_SCHED_MAX_SYSTEMS];
+    uint32_t nbegun = 0;
+    int parsed = 0;
+    char rev[64];
+    uint32_t i;
+    uint32_t st = SU_OK;
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (snap_id == NULL || expect == NULL) {
+        fail(f, SU_E_TYPE, "world.restore needs snapshot_id and expected_world_revision");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+    rec = ckpt_find(s, ww->id, snap_id);
+    if (rec == NULL || su_checkpoint_get(s->store, rec->id, &snap) != SU_OK) {
+        fail(f, SU_E_INVALID_ARGUMENT, "unknown or evicted snapshot_id for this world");
+        return SU_E_INVALID_ARGUMENT;
+    }
+
+    memset(&data, 0, sizeof data);
+    memset(&nsched, 0, sizeof nsched);
+    st = sched_desc(&ww->sched, ww->inst.ids, ww->inst.rows, &desc, &descs);
+    if (st != SU_OK) {
+        fail(f, st, "allocation failed");
+        goto out;
+    }
+    st = su_snapshot_parse(snap->bytes, snap->len, &desc, &data, &perr);
+    if (st != SU_OK) {
+        fail(f, st, perr.message);
+        goto out;
+    }
+    parsed = 1;
+    st = rebuild_schedule(rec, &data, &nsched, f);
+    if (st != SU_OK) {
+        goto out;
+    }
+    /* The restored schedule must expose the same field table the snapshot was taken with. */
+    if (nsched.field_count != ww->sched.field_count) {
+        st = SU_E_SCHEMA_MISMATCH;
+        fail(f, st, "restored revisions bind a different field table");
+        goto out;
+    }
+    for (i = 0; i < nsched.field_count; i++) {
+        if (nsched.fields[i].id != ww->sched.fields[i].id || nsched.fields[i].type != ww->sched.fields[i].type ||
+            strcmp(nsched.fields[i].name, ww->sched.fields[i].name) != 0) {
+            st = SU_E_SCHEMA_MISMATCH;
+            fail(f, st, "restored revisions bind a different field table");
+            goto out;
+        }
+    }
+    for (i = 0; i < nsched.count; i++) {
+        if (strcmp(nsched.sys[i].semantic_hash, data.manifest[i].semantic_hash) != 0) {
+            st = SU_E_SCHEMA_MISMATCH;
+            fail(f, st, "restored semantic hash differs from the snapshot manifest");
+            goto out;
+        }
+    }
+
+    st = sched_desc(&nsched, ww->inst.ids, ww->inst.rows, &desc2, &descs2);
+    if (st != SU_OK) {
+        fail(f, st, "allocation failed");
+        goto out;
+    }
+    st = su_snapshot_restore(&desc2, &data, &neww, NULL, NULL);
+    if (st != SU_OK) {
+        fail(f, st, "snapshot does not restore into this world; world unchanged");
+        goto out;
+    }
+
+    /* Registry: a system whose semantic hash changed gets a new INSTALLED revision at the
+     * snapshot tick; unchanged systems keep their transaction. */
+    for (i = 0; i < nsched.count; i++) {
+        SuSysEntry *n = &nsched.sys[i];
+        SuSysEntry *c = &ww->sched.sys[i];
+        uint64_t txid;
+        if (strcmp(n->semantic_hash, c->semantic_hash) == 0) {
+            n->txid = c->txid;
+            n->system_rev = c->system_rev;
+            n->installed_tick = c->installed_tick;
+            continue;
+        }
+        txid = su_reg_begin(&s->reg, ww->id, "restore", n->source_hash, n->capsule_hash);
+        if (txid == 0) {
+            uint32_t k;
+            for (k = 0; k < nbegun; k++) {
+                su_reg_finish(&s->reg, txids[k], SU_REV_REJECTED, SU_E_RESOURCE_LIMIT, "restore aborted");
+            }
+            st = SU_E_RESOURCE_LIMIT;
+            fail(f, st, "version registry is full");
+            goto out;
+        }
+        txids[nbegun++] = txid;
+        su_reg_set_system(&s->reg, txid, n->system_id);
+        (void)su_reg_advance(&s->reg, txid, SU_REV_SOURCE_VALIDATED);
+        (void)su_reg_advance(&s->reg, txid, SU_REV_EFFECTS_VERIFIED);
+        (void)su_reg_advance(&s->reg, txid, SU_REV_PREPARED);
+        (void)su_reg_advance(&s->reg, txid, SU_REV_ADMITTED);
+        (void)su_reg_advance(&s->reg, txid, SU_REV_PENDING_BOUNDARY);
+        n->txid = txid;
+    }
+    for (i = 0; i < nsched.count; i++) {
+        SuSysEntry *n = &nsched.sys[i];
+        SuSysEntry *c = &ww->sched.sys[i];
+        if (strcmp(n->semantic_hash, c->semantic_hash) == 0) {
+            continue;
+        }
+        (void)su_reg_install(&s->reg, n->txid, c->system_rev + 1, su_world_tick(neww), n->semantic_hash);
+        if (c->txid != 0) {
+            (void)su_reg_retire(&s->reg, c->txid);
+        }
+        n->system_rev = c->system_rev + 1;
+        n->installed_tick = su_world_tick(neww);
+    }
+
+    /* Swap. Nothing below can fail. The old world and schedule are destroyed only after the
+     * new ones are in place; no pointer into them is kept (su_sched_run_ticks takes the world
+     * per call, and contexts borrow modules owned by the schedule being replaced). */
+    {
+        SuWorld *old = ww->inst.w;
+        ww->inst.w = neww;
+        neww = NULL;
+        su_world_destroy(old);
+    }
+    su_sched_free(&ww->sched);
+    ww->sched = nsched;
+    memset(&nsched, 0, sizeof nsched);
+    for (i = 0; i < ww->sched.count; i++) {
+        ww->paths[i] = rec->sys[i].paths;
+    }
+    ww->revision++;
+    st = SU_OK;
+
+    rev_string(ww, rev, sizeof rev);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"tick\":");
+    su_buf_u64(res, su_world_tick(ww->inst.w));
+    su_buf_str(res, ",\"restored_from\":");
+    su_buf_quoted(res, rec->snapshot_id, strlen(rec->snapshot_id));
+    su_buf_str(res, ",\"worker_pid\":");
+    su_buf_u64(res, (uint64_t)getpid());
+    su_buf_str(res, ",\"semantic_manifest\":");
+    write_manifest(res, &ww->sched);
+    su_buf_str(res, "}");
+
+out:
+    if (neww != NULL) {
+        su_world_destroy(neww);
+    }
+    su_sched_free(&nsched);
+    if (parsed) {
+        su_snapshot_data_free(&data);
+    }
+    free(descs2);
+    free(descs);
+    return st;
+}
+
 /* ---------- dispatch and main loop ---------- */
 
 static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int overflow, SuBuf *out) {
@@ -923,6 +1361,10 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
         st = h_candidate_evaluate(s, req.params, &res, &f);
     } else if (strcmp(req.method, "internal.candidate.install") == 0) {
         st = h_candidate_install(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "world.snapshot") == 0) {
+        st = h_world_snapshot(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "world.restore") == 0) {
+        st = h_world_restore(s, req.params, &res, &f);
     } else {
         st = SU_E_UNSUPPORTED_METHOD;
         fail(&f, st, "worker does not implement this method");
@@ -961,6 +1403,10 @@ int su_worker_main_with_hooks(int in_fd, int out_fd, const SuWorkerHooks *hooks)
     if (s == NULL) {
         return 1;
     }
+    if (su_checkpoint_store_create(0, &s->store) != SU_OK) {
+        free(s);
+        return 1;
+    }
     su_reg_init(&s->reg);
     if (hooks != NULL) {
         s->hooks = *hooks;
@@ -996,6 +1442,7 @@ int su_worker_main_with_hooks(int in_fd, int out_fd, const SuWorkerHooks *hooks)
     }
     su_line_reader_free(&r);
     free_worlds(s);
+    su_checkpoint_store_destroy(s->store);
     free(s);
     sigaction(SIGPIPE, &old, NULL);
     return ret;

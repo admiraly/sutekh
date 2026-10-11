@@ -53,6 +53,7 @@ typedef struct SuLirModule {
     SuLirField *fields;          /* verified table: ascending field id */
     uint32_t register_count;
     uint32_t insn_count;
+    uint64_t max_rows;           /* capsule limits.max_rows; enforced by the VM wrapper */
     SuInsn *insns;               /* field operands are table indices */
     uint8_t source_hash[32];
     char source_hash_hex[65];
