@@ -306,7 +306,10 @@ def main() -> int:
     try:
         json_count = 0
         for path in (p for p in pack_files() if p.suffix == '.json'):
-            if "invalid" in path.parts or path.name in ("PACK_VALIDATION.json", "PACK_INDEX.json"):
+            # Intentionally invalid/negative engine fixtures (malformed JSON, duplicate keys, ...) are
+            # exercised by the engine harness, not by this specification checker.
+            if ({"invalid", "m0_neg"} & set(path.parts)
+                    or path.name in ("PACK_VALIDATION.json", "PACK_INDEX.json")):
                 continue
             load(path)
             json_count += 1
