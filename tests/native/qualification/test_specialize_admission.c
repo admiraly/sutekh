@@ -496,6 +496,28 @@ static void scenario_perturbed_recompile(void) {
     sess_stop(&s);
 }
 
+/* A kernel whose artifact hash differs from the admitted one at the install's second check (trust) is
+ * refused and nothing is published. The install's own equality check runs first, so the perturbation
+ * (SU_TEST_FAULT=perturb_trust) reaches the trust check directly. */
+static void scenario_trust_mismatch(void) {
+    Sess s = sess_start("perturb_trust", NULL, 60000, "perturb_trust");
+    char wid[64];
+    char rev[65];
+    Resp r;
+    uint64_t active;
+    long long start;
+
+    CHECK(create_movement(&s, wid, sizeof wid, rev, sizeof rev));
+    active = active_pid(&s);
+    start = proc_starttime((pid_t)active);
+    specialize(&s, wid, rev, "scalar", &r);
+    CHECK(!resp_ok(&r));
+    CHECK(err_status(&r) == SU_E_CANDIDATE_FAILED);
+    resp_free(&r);
+    check_unchanged(&s, active, start, wid, rev, "trust");
+    sess_stop(&s);
+}
+
 /* Refusals decided before any admission runs. */
 static void scenario_refusals(void) {
     Sess s = sess_start(NULL, NULL, 60000, "refuse");
@@ -642,6 +664,26 @@ static void scenario_worker_install(void) {
     CHECK(wcall(&dis, line, &r) == 0 && resp_ok(&r));
     CHECK(str_of(member(r.root, "result"), "status", got, sizeof got) && strcmp(got, "admitted") == 0);
     CHECK(str_of(member(r.root, "result"), "artifact_hash", admitted, sizeof admitted) && strlen(admitted) == 64u);
+    resp_free(&r);
+
+    /* Admission gate (worker.c layout and semantic checks): the disposable admits only when the
+     * expected layout generation and semantic hash are the identity the supervisor read. A mismatch in
+     * either is refused before any kernel is compiled or differentially run. */
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"ad\",\"method\":\"internal.specialize.admit\",\"params\":{"
+             "\"capsule_path\":\"%s\",\"source_path\":\"%s\",\"test_path\":\"%s\","
+             "\"expected_source_hash\":\"%s\",\"expected_capsule_hash\":\"%s\",\"expected_semantic_hash\":\"%s\","
+             "\"expected_layout_generation\":%llu,\"backend\":\"scalar\"}}",
+             cap, src, test, srch, caph, sem, (unsigned long long)(gen + 1u));
+    CHECK(wcall(&dis, line, &r) == 0 && !resp_ok(&r) && err_status(&r) == SU_E_SCHEMA_MISMATCH);
+    resp_free(&r);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"ad\",\"method\":\"internal.specialize.admit\",\"params\":{"
+             "\"capsule_path\":\"%s\",\"source_path\":\"%s\",\"test_path\":\"%s\","
+             "\"expected_source_hash\":\"%s\",\"expected_capsule_hash\":\"%s\",\"expected_semantic_hash\":\"%s\","
+             "\"expected_layout_generation\":%llu,\"backend\":\"scalar\"}}",
+             cap, src, test, srch, caph, zeros, (unsigned long long)gen);
+    CHECK(wcall(&dis, line, &r) == 0 && !resp_ok(&r) && err_status(&r) == SU_E_SCHEMA_MISMATCH);
     resp_free(&r);
 
     /* A. stale semantic hash at install. */
@@ -827,6 +869,7 @@ int main(int argc, char **argv) {
     scenario_fault("crash", "crash", NULL, 60000, SU_E_WORKER_FAILED, "SU_E_WORKER_FAILED");
     scenario_fault("hang", "hang", NULL, 3000, SU_E_WORKER_FAILED, "SU_E_WORKER_FAILED");
     scenario_perturbed_recompile();
+    scenario_trust_mismatch();
     scenario_refusals();
     scenario_delay();
     scenario_worker_install();

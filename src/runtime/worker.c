@@ -2053,6 +2053,12 @@ static int spec_fault_perturb_install(void) {
     const char *m = getenv("SU_TEST_FAULT");
     return m != NULL && strcmp(m, "perturb_recompile") == 0;
 }
+/* perturb_trust: the hash handed to su_nv_trust_admitted differs from the admitted one. The equality
+ * check before it refuses the install first, so this reaches the second (defense-in-depth) check. */
+static int spec_fault_perturb_trust(void) {
+    const char *m = getenv("SU_TEST_FAULT");
+    return m != NULL && strcmp(m, "perturb_trust") == 0;
+}
 #define SPEC_FAULT_ARM_ADMIT() spec_fault_arm_admit()
 #define SPEC_FAULT_PERTURB() spec_fault_perturb_install()
 #else
@@ -2503,10 +2509,21 @@ static uint32_t h_internal_specialize_install(WorkerState *s, const SuJsonValue 
              "artifact_hash differs from the admitted kernel: not installed (stale or non-deterministic build)");
         return SU_E_CANDIDATE_FAILED;
     }
-    if (su_nv_trust_admitted(seq2, admitted) != SU_OK || su_nv_install(seq2) != SU_OK) {
-        su_nv_release(seq2);
-        fail(f, SU_E_CANDIDATE_FAILED, "recompiled artifact could not be marked admitted");
-        return SU_E_CANDIDATE_FAILED;
+    {
+        const char *trust_arg = admitted;
+#ifdef SU_TEST_FAULT_HOOKS
+        char trust_hash[65];
+        if (spec_fault_perturb_trust()) {
+            memcpy(trust_hash, admitted, sizeof trust_hash);
+            trust_hash[0] = trust_hash[0] == '0' ? '1' : '0';
+            trust_arg = trust_hash;
+        }
+#endif
+        if (su_nv_trust_admitted(seq2, trust_arg) != SU_OK || su_nv_install(seq2) != SU_OK) {
+            su_nv_release(seq2);
+            fail(f, SU_E_CANDIDATE_FAILED, "recompiled artifact could not be marked admitted");
+            return SU_E_CANDIDATE_FAILED;
+        }
     }
     /* Publish between requests: the schedule entry switches; the previous kernel is released at once
      * (no tick is in flight in the serial worker). The world revision is not changed. */
