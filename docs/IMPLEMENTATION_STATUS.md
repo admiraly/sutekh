@@ -338,7 +338,8 @@ Result: passed, on `build/sutekh` built by `tools/dev.py build --profile release
 
 ### Not done (honest list)
 
-- M1 closure is not claimed. Scheduler chunk runner not integrated into the runtime (audit item 3). C07 containment defects (audit item 4) open. Stale-artifact mutants H1, L1, L2 survive (audit item 5).
+- M1 closure is not claimed until the independent re-audit. Status of the first M1 audit's blockers (planning/audit/M1-audit.md): (3) chunked scheduler: wired as an OPT-IN (`SUTEKH_TICK_WORKERS`, default serial) in commit a42cce7, VM systems only, native kernels run as one call; (4) C07 containment: workers now run under RLIMIT_AS 4 GiB and a scrubbed environment (commit 4f31ac8), asserted by harness TX6; (5) stale-artifact mutants H1, L1, L2: now killed by `test_specialize_admission` (the audit mislabelled L1/L2 as install-time; they are admission-time checks) with `tests/native/qualification/run_mutants.sh`; (1), (2) build latency and isolated throughput: stored in planning/evidence/m1/; (6) workflow experiment: tokens and integration latency remain null.
+- Known gaps in the new opt-in features: native kernels are not row-sliced under tick workers; installs are not re-checked against the schedule; candidate evaluation stays serial; `world.create` now refuses unordered conflicting systems (every system is treated as declared parallel), a behaviour change from M0 where list order was accepted; the "N>1 row order" mutant is equivalent and a discriminating mutant is still missing.
 - No Windows-native build or run; Win64 results remain under wine only.
 - No pinned-frequency, PMU, or repeated-run throughput; no AVX-512 backend or measurement.
 - Build latency is one host and one tree; no ccache/sccache comparison; no clang sanitizer runs.
