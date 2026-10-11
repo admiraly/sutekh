@@ -1,0 +1,32 @@
+# M1-00 contract draft r1: native kernel ABI, artifact identity, broker
+
+Status: DRAFT for owner review. Header: `include/sutekh/native/abi.h` (compile-checked with gcc 13.3 and clang 18.1, `-std=c17 -Wall -Wextra -Werror -pedantic`). Layout authority is the header; this file is the semantic authority. Consumers: M1-01 scalar backend, M1-02 lifetime/recovery, M1-03 AVX2, M1-04 scheduler. A change after acceptance needs a new generation.
+
+## 1. Semantics and call path
+- A kernel executes one verified system over all rows and must match the reference VM bit for bit (`u32_mod_v1`; reference VM is never removed, constitution/architecture). Differential testing is a precondition of admission, not a courtesy.
+- Call path: `su_vm_invoke_v1`-style wrapper (all M0 checks) -> builds `SuNativeArgs` from the validated bindings -> `SuNativeKernelFn`. Generated code makes no calls, allocates nothing, performs no syscalls and no bounds checks of its own; safety rests on the wrapper plus generated-code correctness. It is therefore **trusted compiler output**; unreviewed native candidates remain isolated-worker only (C07).
+- Operand order: `in_cols`/`out_cols` follow the verified field table (ascending field id), readable and writable subsets respectively, exactly as `SuInvocation`/`SuOutputs`.
+- Loads read entry values; each writable column is written once per row; staging never overlaps (wrapper guarantee). Zero rows write nothing. Tails and unaligned columns are mandatory test cases for every backend.
+
+## 2. Host ABI
+One pointer argument; return `uint32_t` in eax (`SU_OK` or `SU_E_INTERNAL`). SysV: rdi; Win64: rcx, caller-provided shadow space respected if the kernel ever calls (it does not). Callee-saved registers preserved; no red zone assumption on Win64; MXCSR/x87/direction flag untouched; `vzeroupper` before return after any YMM use. ABI clobber tests (poison callee-saved registers before the call, check after) are required on every supported host ABI. Only Linux SysV is exercised in this environment; Win64 paths are **not run** here and must be reported as such (M1-05).
+
+## 3. Artifact identity
+`artifact_hash` = SHA-256 over: ABI version, artifact format, semantic hash, layout generation, required caps, backend id and backend semantic version, assembler library identity (AsmJit commit), host ABI, and the exact lowering option flags. Changing any input changes the hash. The semantic hash (behaviour) and the artifact hash (build) stay distinct (architecture section 5). A kernel is valid only for the exact `(semantic_hash, layout_generation)` it was lowered against; mismatch is `SU_E_SCHEMA_MISMATCH`, never a lookup by name or fallback to a raw offset.
+
+## 4. Publication, lifetime, recovery
+- Code pages: write while RW, flip to RX, flush instruction cache where the platform requires it, never permanent RWX. Allocation or protection failure leaves the previous implementation active and reports `SU_E_RESOURCE_LIMIT`.
+- Install is a normal M0 safe-point transaction: the VM stays installed until the native artifact is admitted (differential tests passed, caps checked), then the schedule entry switches at a tick boundary. Retire old code only after no execution can reference it (epoch/generation quiescence; M0's serial scheduler makes the boundary trivial, M1-04 parallel jobs do not).
+- A native fault kills the worker; recovery replaces the worker from the supervisor-held checkpoint plus accepted input/semantic-revision log (C02, C06). Fault recovery is not "same-process hot reload" and is reported with the replaced PID. Repeated fault at a tick quarantines the artifact and falls back to the reference VM.
+
+## 5. Build/specialization broker (M1-00 scope)
+- Job key = artifact-hash inputs (section 3) so identical requests deduplicate. Durable job record: key, inputs' hashes, state (`queued, running, succeeded, failed, cancelled, stale`), timestamps (host monotonic), exit code, log hash, resource limits. `not_run`, `running`, `passed`, `failed`, `skipped`, `unavailable` stay distinct (protocol).
+- Results are keyed to the exact input snapshot; a result whose `(semantic_hash, layout_generation, backend identity)` no longer matches the installed revision is `stale` and cannot be installed. Superseded queued jobs are cancelled; running ones are best-effort cancelled and their results discarded.
+- Bounded concurrency and memory (C15); queue length, p95 wait and failure rate are reported. Broker invocations use validated argument vectors, never shell interpolation. The broker is never on the gameplay edit path: IR-only edits keep using the VM and ask for specialization asynchronously (C01).
+
+## 6. AsmJit decision inputs (researched 2026-10-12)
+- Upstream `github.com/asmjit/asmjit`, licence **zlib** (copyright 2008-2025 Petr Kobalicek): permissive, allows commercial use and modification; modified sources must be marked, notice must not be removed. Compatible with the project licence; attribution belongs in `THIRD_PARTY_NOTICES.md` when it is vendored/fetched. This is a dependency licence, not a project licence decision.
+- **No release tags exist upstream** (the releases page is empty). Pin by **commit** `0d7f01052f2d3f6d6b9bb6714ef32bd7b80177eb` (2026-09-23, reports library version 1.23.0), verified by `git rev-parse HEAD` after fetch.
+- **Requires C++20** (`-std=c++17` fails: `constexpr` flow-off-end and `auto` in a function prototype). The C++ adapter translation unit is the only C++; core stays C17.
+- Probe results on this machine (x86-64, AVX2 and AVX512F present, g++ 13.3.0, clang++ 18.1.3, cmake 3.28.3, ninja 1.11.1, lld 18.1.3): with `-std=c++20 -DASMJIT_STATIC -DASMJIT_NO_AARCH64 -DASMJIT_NO_UJIT` and the 65 core+x86 `.cpp` files, both compilers built it (about 20-28 s one-time) and a JIT function (`lea eax,[rdi+rsi]`) returned the correct modular sum (4,000,000,000 + 500,000,000 mod 2^32 = 205,032,704; 1+2 = 3) through `JitRuntime`. Probe source lived outside the repo; this is existence evidence for toolchain and runtime, not backend evidence. Whether `JitRuntime` here follows W^X on Linux is **not yet verified** and must be tested in M1-01 (check mapping permissions).
+- Recommended integration: bootstrap fetches the pinned commit into an ignored `third_party/asmjit/` (offline afterwards, per BACKENDS_AND_DEPENDENCIES section 6), builds the static library once per toolchain, links it only into an optional `su_native` target. Alternative: vendor the ~65 files (about 3 MB). Owner picks.
