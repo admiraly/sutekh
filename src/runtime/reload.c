@@ -87,9 +87,12 @@ static uint32_t reject(SuRegistry *reg, SuReloadResult *out, uint64_t txid, SuRe
                        uint32_t code, const char *reason) {
     char text[SU_REG_REASON_MAX];
     su_reg_finish(reg, txid, state, code, reason);
-    snprintf(text, sizeof text, "%s", reason);
-    snprintf(out->msg, sizeof out->msg, "txid=%llu state=%s: %s", (unsigned long long)txid,
-             su_rev_state_name(state), text);
+    /* Deliberate truncation of the reason to the registry record size. */
+    size_t rlen = strnlen(reason, sizeof text - 1);
+    memcpy(text, reason, rlen);
+    text[rlen] = '\0';
+    (void)snprintf(out->msg, sizeof out->msg, "txid=%llu state=%s: %.*s", (unsigned long long)txid,
+                   su_rev_state_name(state), (int)rlen, text);
     return code;
 }
 

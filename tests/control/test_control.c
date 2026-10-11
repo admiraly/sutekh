@@ -297,8 +297,8 @@ static void test_symlink_escape(const SuAgentConfig *base, const char *scratch, 
     Resp r;
     SuAgentConfig cfg = *base;
 
-    snprintf(link_path, sizeof link_path, "%s/escape.json", scratch);
-    snprintf(target, sizeof target, "%s/examples/movement.capsule.json", root);
+    CHECK(snprintf(link_path, sizeof link_path, "%s/escape.json", scratch) < (int)sizeof link_path);
+    CHECK(snprintf(target, sizeof target, "%s/examples/movement.capsule.json", root) < (int)sizeof target);
     unlink(link_path);
     CHECK(symlink(target, link_path) == 0);
     cfg.project_root = scratch;
