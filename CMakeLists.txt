@@ -189,3 +189,17 @@ if(SUTEKH_NATIVE)
     set_tests_properties(native_avx2 PROPERTIES DEPENDS native_avx2_corpus_gen)
 endif()
 # ---- END M1-01 optional native scalar backend ----
+
+# M1-02a: worker crash recovery tests (crash seam only in the test worker, never in sutekh)
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/recovery_scratch")
+add_executable(recovery_worker tests/recovery/recovery_worker.c src/runtime/worker.c)
+target_link_libraries(recovery_worker PRIVATE su_agent)
+target_compile_definitions(recovery_worker PRIVATE _POSIX_C_SOURCE=200809L SU_TEST_FAULT_HOOKS)
+sutekh_apply_warnings(recovery_worker)
+add_executable(test_recovery tests/recovery/test_recovery.c)
+target_link_libraries(test_recovery PRIVATE su_agent)
+target_compile_definitions(test_recovery PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_recovery)
+add_test(NAME recovery COMMAND test_recovery $<TARGET_FILE:recovery_worker> "${CMAKE_CURRENT_SOURCE_DIR}"
+         "${CMAKE_BINARY_DIR}/recovery_scratch" $<TARGET_FILE:sutekh>
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
