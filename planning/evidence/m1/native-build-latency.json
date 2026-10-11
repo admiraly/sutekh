@@ -1,0 +1,1042 @@
+{
+ "report_format": "0.1",
+ "kind": "native_build_latency",
+ "generated_utc": "2026-10-11T23:45:57.820418+00:00",
+ "git": {
+  "head_at_start": "f73af8f6bee3457571983724e6360c3c0ef8052e",
+  "dirty_at_start": false,
+  "head_at_end": "f73af8f6bee3457571983724e6360c3c0ef8052e",
+  "dirty_at_end": false,
+  "note": "recorded tree is the commit above; sources were committed before this run; mtime-only touches do not change git content"
+ },
+ "configuration": {
+  "option": "-DSUTEKH_NATIVE=ON",
+  "generator": "Ninja",
+  "samples_per_case": 7,
+  "build_dir": "fresh per sample, under --scratch (outside the repository; path not recorded)",
+  "touched_files_mtime_only": [
+   "backends/native/su_native_asmjit.cpp",
+   "backends/native/su_native.c",
+   "src/vm/su_vm.c",
+   "include/sutekh/native/abi.h",
+   "include/sutekh/abi.h"
+  ],
+  "step_count_source": "ninja -v output of each cmake --build (one line per executed command)"
+ },
+ "machine": {
+  "cpu_model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+  "logical_cpus": 4,
+  "memory_total_kib": 16479424,
+  "kernel": "6.18.44-fc-v114",
+  "os": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "container": {
+   "is_container": false,
+   "reason": "no container marker (no /.dockerenv; PID 1 cgroup has no container runtime)"
+  },
+  "versions": {
+   "gcc": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+   "g++": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+   "clang": "Ubuntu clang version 18.1.3 (1ubuntu1)",
+   "clang++": "Ubuntu clang version 18.1.3 (1ubuntu1)",
+   "cmake": "cmake version 3.28.3",
+   "ninja": "1.11.1"
+  },
+  "ninja_default_parallelism": 6,
+  "python": "3.13.16"
+ },
+ "cases": [
+  {
+   "name": "gcc-Release",
+   "compiler": {
+    "cc": "gcc",
+    "cxx": "g++"
+   },
+   "build_type": "Release",
+   "cold_first_build_with_asmjit": {
+    "definition": "fresh build directory: configure, then full build compiling AsmJit core/x86/axl and all first-party targets",
+    "configure_s": {
+     "n": 7,
+     "min": 0.4859,
+     "median": 0.5203,
+     "p95": 0.5463,
+     "max": 0.5463,
+     "percentile_method": "nearest-rank"
+    },
+    "configure_samples_s": [
+     0.5203,
+     0.5134,
+     0.522,
+     0.4942,
+     0.5291,
+     0.5463,
+     0.4859
+    ],
+    "clean_full_build_s": {
+     "n": 7,
+     "min": 12.4203,
+     "median": 12.7315,
+     "p95": 16.5738,
+     "max": 16.5738,
+     "percentile_method": "nearest-rank"
+    },
+    "clean_full_build_samples_s": [
+     12.7129,
+     12.5111,
+     12.7315,
+     12.9638,
+     16.5738,
+     12.4203,
+     13.511
+    ],
+    "steps_per_clean_build": {
+     "compile_steps": [
+      104
+     ],
+     "link_steps": [
+      30
+     ],
+     "other_steps": [
+      1
+     ]
+    }
+   },
+   "warm_iteration_with_asmjit_already_built": {
+    "definition": "same build directory as the cold build, no source change (noop) or mtime-only touch of one file",
+    "noop_build_s": {
+     "n": 7,
+     "min": 0.0299,
+     "median": 0.0347,
+     "p95": 0.0373,
+     "max": 0.0373,
+     "percentile_method": "nearest-rank"
+    },
+    "noop_build_samples_s": [
+     0.037,
+     0.0357,
+     0.0332,
+     0.0347,
+     0.0315,
+     0.0299,
+     0.0373
+    ],
+    "noop_steps": {
+     "compile_steps": [
+      0
+     ],
+     "link_steps": [
+      0
+     ],
+     "other_steps": [
+      1
+     ]
+    },
+    "incremental": {
+     "backends/native/su_native_asmjit.cpp": {
+      "seconds": {
+       "n": 7,
+       "min": 2.072,
+       "median": 2.1317,
+       "p95": 2.2945,
+       "max": 2.2945,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       2.0775,
+       2.1607,
+       2.2945,
+       2.072,
+       2.1317,
+       2.0868,
+       2.1794
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        16
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "backends/native/su_native.c": {
+      "seconds": {
+       "n": 7,
+       "min": 0.5667,
+       "median": 0.5962,
+       "p95": 0.6444,
+       "max": 0.6444,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       0.5667,
+       0.5954,
+       0.6421,
+       0.6176,
+       0.5958,
+       0.5962,
+       0.6444
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        16
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "src/vm/su_vm.c": {
+      "seconds": {
+       "n": 7,
+       "min": 0.5507,
+       "median": 0.5823,
+       "p95": 0.6289,
+       "max": 0.6289,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       0.599,
+       0.5507,
+       0.5945,
+       0.5641,
+       0.5629,
+       0.6289,
+       0.5823
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        18
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "include/sutekh/native/abi.h": {
+      "seconds": {
+       "n": 7,
+       "min": 3.0484,
+       "median": 3.1291,
+       "p95": 3.3907,
+       "max": 3.3907,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       3.1585,
+       3.155,
+       3.1291,
+       3.3907,
+       3.0484,
+       3.073,
+       3.0879
+      ],
+      "steps": {
+       "compile_steps": [
+        18
+       ],
+       "link_steps": [
+        18
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "include/sutekh/abi.h": {
+      "seconds": {
+       "n": 7,
+       "min": 4.1275,
+       "median": 4.6276,
+       "p95": 5.495,
+       "max": 5.495,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       4.6276,
+       4.769,
+       4.4796,
+       5.495,
+       4.4839,
+       4.7421,
+       4.1275
+      ],
+      "steps": {
+       "compile_steps": [
+        37
+       ],
+       "link_steps": [
+        28
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "gcc-Debug",
+   "compiler": {
+    "cc": "gcc",
+    "cxx": "g++"
+   },
+   "build_type": "Debug",
+   "cold_first_build_with_asmjit": {
+    "definition": "fresh build directory: configure, then full build compiling AsmJit core/x86/axl and all first-party targets",
+    "configure_s": {
+     "n": 7,
+     "min": 0.4648,
+     "median": 0.4969,
+     "p95": 0.5582,
+     "max": 0.5582,
+     "percentile_method": "nearest-rank"
+    },
+    "configure_samples_s": [
+     0.5398,
+     0.4648,
+     0.4657,
+     0.5582,
+     0.5008,
+     0.4735,
+     0.4969
+    ],
+    "clean_full_build_s": {
+     "n": 7,
+     "min": 9.6187,
+     "median": 9.8679,
+     "p95": 10.4547,
+     "max": 10.4547,
+     "percentile_method": "nearest-rank"
+    },
+    "clean_full_build_samples_s": [
+     9.8381,
+     9.6453,
+     9.8679,
+     10.075,
+     9.6187,
+     10.4547,
+     10.4262
+    ],
+    "steps_per_clean_build": {
+     "compile_steps": [
+      104
+     ],
+     "link_steps": [
+      30
+     ],
+     "other_steps": [
+      1
+     ]
+    }
+   },
+   "warm_iteration_with_asmjit_already_built": {
+    "definition": "same build directory as the cold build, no source change (noop) or mtime-only touch of one file",
+    "noop_build_s": {
+     "n": 7,
+     "min": 0.0305,
+     "median": 0.0349,
+     "p95": 0.0427,
+     "max": 0.0427,
+     "percentile_method": "nearest-rank"
+    },
+    "noop_build_samples_s": [
+     0.0367,
+     0.0427,
+     0.0311,
+     0.0319,
+     0.0352,
+     0.0349,
+     0.0305
+    ],
+    "noop_steps": {
+     "compile_steps": [
+      0
+     ],
+     "link_steps": [
+      0
+     ],
+     "other_steps": [
+      1
+     ]
+    },
+    "incremental": {
+     "backends/native/su_native_asmjit.cpp": {
+      "seconds": {
+       "n": 7,
+       "min": 3.067,
+       "median": 3.1503,
+       "p95": 3.2616,
+       "max": 3.2616,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       3.2616,
+       3.1749,
+       3.067,
+       3.1297,
+       3.1503,
+       3.1905,
+       3.1501
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        16
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "backends/native/su_native.c": {
+      "seconds": {
+       "n": 7,
+       "min": 0.6661,
+       "median": 0.7469,
+       "p95": 0.7893,
+       "max": 0.7893,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       0.7893,
+       0.752,
+       0.6918,
+       0.7043,
+       0.6661,
+       0.7469,
+       0.7687
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        16
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "src/vm/su_vm.c": {
+      "seconds": {
+       "n": 7,
+       "min": 0.6285,
+       "median": 0.701,
+       "p95": 0.8055,
+       "max": 0.8055,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       0.7159,
+       0.6664,
+       0.701,
+       0.6285,
+       0.6307,
+       0.8055,
+       0.7033
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        18
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "include/sutekh/native/abi.h": {
+      "seconds": {
+       "n": 7,
+       "min": 1.1233,
+       "median": 1.2899,
+       "p95": 1.4449,
+       "max": 1.4449,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       1.2899,
+       1.1585,
+       1.3872,
+       1.2072,
+       1.1233,
+       1.4449,
+       1.3094
+      ],
+      "steps": {
+       "compile_steps": [
+        18
+       ],
+       "link_steps": [
+        18
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "include/sutekh/abi.h": {
+      "seconds": {
+       "n": 7,
+       "min": 1.5932,
+       "median": 1.7127,
+       "p95": 2.0143,
+       "max": 2.0143,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       1.5932,
+       1.6805,
+       1.7127,
+       1.6928,
+       2.0143,
+       1.8591,
+       1.7678
+      ],
+      "steps": {
+       "compile_steps": [
+        37
+       ],
+       "link_steps": [
+        28
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "clang-Release",
+   "compiler": {
+    "cc": "clang",
+    "cxx": "clang++"
+   },
+   "build_type": "Release",
+   "cold_first_build_with_asmjit": {
+    "definition": "fresh build directory: configure, then full build compiling AsmJit core/x86/axl and all first-party targets",
+    "configure_s": {
+     "n": 7,
+     "min": 0.8192,
+     "median": 0.8623,
+     "p95": 0.9331,
+     "max": 0.9331,
+     "percentile_method": "nearest-rank"
+    },
+    "configure_samples_s": [
+     0.9079,
+     0.8766,
+     0.8498,
+     0.9331,
+     0.8602,
+     0.8192,
+     0.8623
+    ],
+    "clean_full_build_s": {
+     "n": 7,
+     "min": 9.9156,
+     "median": 11.0804,
+     "p95": 14.6866,
+     "max": 14.6866,
+     "percentile_method": "nearest-rank"
+    },
+    "clean_full_build_samples_s": [
+     12.2935,
+     11.6091,
+     11.0804,
+     14.6866,
+     10.0153,
+     10.5876,
+     9.9156
+    ],
+    "steps_per_clean_build": {
+     "compile_steps": [
+      104
+     ],
+     "link_steps": [
+      30
+     ],
+     "other_steps": [
+      1
+     ]
+    }
+   },
+   "warm_iteration_with_asmjit_already_built": {
+    "definition": "same build directory as the cold build, no source change (noop) or mtime-only touch of one file",
+    "noop_build_s": {
+     "n": 7,
+     "min": 0.0305,
+     "median": 0.0318,
+     "p95": 0.0351,
+     "max": 0.0351,
+     "percentile_method": "nearest-rank"
+    },
+    "noop_build_samples_s": [
+     0.0325,
+     0.0305,
+     0.0319,
+     0.031,
+     0.0351,
+     0.0318,
+     0.0305
+    ],
+    "noop_steps": {
+     "compile_steps": [
+      0
+     ],
+     "link_steps": [
+      0
+     ],
+     "other_steps": [
+      1
+     ]
+    },
+    "incremental": {
+     "backends/native/su_native_asmjit.cpp": {
+      "seconds": {
+       "n": 7,
+       "min": 1.3264,
+       "median": 1.4528,
+       "p95": 1.6354,
+       "max": 1.6354,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       1.5422,
+       1.5675,
+       1.4528,
+       1.3396,
+       1.3264,
+       1.6354,
+       1.3699
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        16
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "backends/native/su_native.c": {
+      "seconds": {
+       "n": 7,
+       "min": 0.571,
+       "median": 0.6472,
+       "p95": 0.7221,
+       "max": 0.7221,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       0.6472,
+       0.7144,
+       0.6662,
+       0.571,
+       0.5858,
+       0.7221,
+       0.5806
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        16
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "src/vm/su_vm.c": {
+      "seconds": {
+       "n": 7,
+       "min": 0.5794,
+       "median": 0.6865,
+       "p95": 0.7874,
+       "max": 0.7874,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       0.6865,
+       0.7874,
+       0.6884,
+       0.5794,
+       0.5974,
+       0.7826,
+       0.6627
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        18
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "include/sutekh/native/abi.h": {
+      "seconds": {
+       "n": 7,
+       "min": 2.2134,
+       "median": 2.764,
+       "p95": 3.9629,
+       "max": 3.9629,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       2.764,
+       2.939,
+       2.9029,
+       2.2395,
+       2.3162,
+       3.9629,
+       2.2134
+      ],
+      "steps": {
+       "compile_steps": [
+        18
+       ],
+       "link_steps": [
+        18
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "include/sutekh/abi.h": {
+      "seconds": {
+       "n": 7,
+       "min": 3.3014,
+       "median": 3.5571,
+       "p95": 4.8327,
+       "max": 4.8327,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       3.5571,
+       3.589,
+       3.6125,
+       3.3878,
+       3.3014,
+       4.8327,
+       3.4453
+      ],
+      "steps": {
+       "compile_steps": [
+        37
+       ],
+       "link_steps": [
+        28
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "clang-Debug",
+   "compiler": {
+    "cc": "clang",
+    "cxx": "clang++"
+   },
+   "build_type": "Debug",
+   "cold_first_build_with_asmjit": {
+    "definition": "fresh build directory: configure, then full build compiling AsmJit core/x86/axl and all first-party targets",
+    "configure_s": {
+     "n": 7,
+     "min": 0.8738,
+     "median": 0.8916,
+     "p95": 0.9454,
+     "max": 0.9454,
+     "percentile_method": "nearest-rank"
+    },
+    "configure_samples_s": [
+     0.8764,
+     0.8834,
+     0.8916,
+     0.912,
+     0.8738,
+     0.9115,
+     0.9454
+    ],
+    "clean_full_build_s": {
+     "n": 7,
+     "min": 6.6936,
+     "median": 7.799,
+     "p95": 11.1597,
+     "max": 11.1597,
+     "percentile_method": "nearest-rank"
+    },
+    "clean_full_build_samples_s": [
+     6.6936,
+     7.5094,
+     9.1165,
+     7.799,
+     11.1597,
+     7.9314,
+     7.6969
+    ],
+    "steps_per_clean_build": {
+     "compile_steps": [
+      104
+     ],
+     "link_steps": [
+      30
+     ],
+     "other_steps": [
+      1
+     ]
+    }
+   },
+   "warm_iteration_with_asmjit_already_built": {
+    "definition": "same build directory as the cold build, no source change (noop) or mtime-only touch of one file",
+    "noop_build_s": {
+     "n": 7,
+     "min": 0.0313,
+     "median": 0.0322,
+     "p95": 0.0415,
+     "max": 0.0415,
+     "percentile_method": "nearest-rank"
+    },
+    "noop_build_samples_s": [
+     0.0315,
+     0.0388,
+     0.0415,
+     0.0322,
+     0.0313,
+     0.0384,
+     0.0318
+    ],
+    "noop_steps": {
+     "compile_steps": [
+      0
+     ],
+     "link_steps": [
+      0
+     ],
+     "other_steps": [
+      1
+     ]
+    },
+    "incremental": {
+     "backends/native/su_native_asmjit.cpp": {
+      "seconds": {
+       "n": 7,
+       "min": 1.5523,
+       "median": 1.8679,
+       "p95": 2.0038,
+       "max": 2.0038,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       1.5523,
+       2.0038,
+       1.9972,
+       1.6695,
+       1.8679,
+       1.6735,
+       1.9982
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        16
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "backends/native/su_native.c": {
+      "seconds": {
+       "n": 7,
+       "min": 0.6409,
+       "median": 0.8065,
+       "p95": 1.0098,
+       "max": 1.0098,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       0.6409,
+       0.8426,
+       1.0098,
+       0.7129,
+       0.9545,
+       0.7822,
+       0.8065
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        16
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "src/vm/su_vm.c": {
+      "seconds": {
+       "n": 7,
+       "min": 0.6354,
+       "median": 0.7727,
+       "p95": 0.9828,
+       "max": 0.9828,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       0.6354,
+       0.9733,
+       0.9828,
+       0.7634,
+       0.8368,
+       0.7727,
+       0.7064
+      ],
+      "steps": {
+       "compile_steps": [
+        1
+       ],
+       "link_steps": [
+        18
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "include/sutekh/native/abi.h": {
+      "seconds": {
+       "n": 7,
+       "min": 0.9417,
+       "median": 1.3783,
+       "p95": 1.8825,
+       "max": 1.8825,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       0.9417,
+       1.8825,
+       1.5011,
+       1.2015,
+       1.4861,
+       1.2713,
+       1.3783
+      ],
+      "steps": {
+       "compile_steps": [
+        18
+       ],
+       "link_steps": [
+        18
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     },
+     "include/sutekh/abi.h": {
+      "seconds": {
+       "n": 7,
+       "min": 1.5802,
+       "median": 1.7604,
+       "p95": 2.4004,
+       "max": 2.4004,
+       "percentile_method": "nearest-rank"
+      },
+      "samples_s": [
+       1.5802,
+       2.4004,
+       2.329,
+       1.6637,
+       1.9808,
+       1.7332,
+       1.7604
+      ],
+      "steps": {
+       "compile_steps": [
+        37
+       ],
+       "link_steps": [
+        28
+       ],
+       "other_steps": [
+        1
+       ]
+      }
+     }
+    }
+   }
+  }
+ ],
+ "failures": [],
+ "cold_vs_warm": "cold = fresh build directory (configure, then full build including AsmJit). warm = same directory with AsmJit already built (no-op or mtime-only touch). Warm numbers are not cold numbers and must not be reported as first-build cost.",
+ "live_edit_path": {
+  "claim": "The live gameplay edit path spawns none of these builds (ENGINE_CONSTITUTION C01). Gameplay IR edits run without a native project build.",
+  "source_scan": {
+   "pattern": "\\b(cmake|ninja|gcc|clang)\\b|execv|posix_spawn|system\\(",
+   "scope": "src/",
+   "hits": [
+    "src/runtime/schedule.c:234:                    st = su_nv_run_system(s->sys[i].native_seq, w);",
+    "src/runtime/schedule.c:238:                    st = su_vm_run_system(w, s->sys[i].ctx);",
+    "src/runtime/registry.h:83:void su_reg_set_system(SuRegistry *r, uint64_t txid, const char *system_id);",
+    "src/runtime/native_versions.c:578:uint32_t su_nv_run_system(uint64_t seq, SuWorld *w) {",
+    "src/runtime/registry.c:106:void su_reg_set_system(SuRegistry *r, uint64_t txid, const char *system_id) {",
+    "src/runtime/worker.c:526:        su_reg_set_system(&s->reg, txid, e->system_id);",
+    "src/runtime/worker.c:800:    return s->hooks.fail_system != NULL && s->hooks.fail_system(idx) != 0;",
+    "src/runtime/worker.c:1507:        su_reg_set_system(&s->reg, txid, n->system_id);",
+    "src/runtime/native_versions.h:51:uint32_t su_nv_run_system(uint64_t seq, SuWorld *w);",
+    "src/runtime/reload.c:151:    su_reg_set_system(reg, txid, mod->system_id);",
+    "src/agent/su_proc.c:237:        execve(argv[0], (char *const *)argv, child_env);",
+    "src/agent/su_proc.h:1:/* Worker child processes (POSIX only: fork, execv, pipes, poll, waitpid, kill).",
+    "src/ir/su_lir.c:181:static void diag_system(SuDiag *d, Str s) {",
+    "src/ir/su_lir.c:821:    diag_system(d, ii.system);",
+    "src/vm/su_vm.c:523:uint32_t su_vm_run_system(SuWorld *w, SuExecContext *ctx) {",
+    "src/vm/su_vm.h:37:uint32_t su_vm_run_system(SuWorld *w, SuExecContext *ctx);"
+   ],
+   "hit_count": 16,
+   "meaning": "hits listed for review; a build-tool spawn in the live edit path would appear here"
+  }
+ },
+ "not_measured": [
+  "Windows native build (MSVC or clang-cl) was not run",
+  "ccache/sccache not used; no caching-layer measurements",
+  "scratch build directories were deleted after each sample",
+  "time for the first-party build alone with AsmJit prebuilt is covered only by the incremental rows",
+  "wall-clock includes the cmake and ninja process start; no CPU-time breakdown"
+ ],
+ "total_wall_s": 566.6
+}

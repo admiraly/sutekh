@@ -1,23 +1,34 @@
 {
   "report_format": "0.1",
   "kind": "workflow_observation",
-  "head": "a628edfa32e1b5c117381871279acaa4f704a327",
+  "head": "f73af8f6bee3457571983724e6360c3c0ef8052e",
   "summary": {
-    "tasks_total": 32,
-    "implementation_tasks": 28,
+    "usage_input": "present",
+    "tokens": {
+      "n": 0,
+      "total": null,
+      "median": null
+    },
+    "tool_calls": {
+      "n": 0,
+      "total": null,
+      "median": null
+    },
+    "tasks_total": 37,
+    "implementation_tasks": 29,
     "review_or_audit_tasks": 4,
-    "impl_accepted_as_is": 19,
+    "impl_accepted_as_is": 20,
     "impl_accepted_with_integrator_fix": 7,
     "impl_partial": 2,
     "impl_no_work": 0,
     "reviews_that_found_issues": 4,
-    "impl_first_pass_accept_rate": 0.679,
-    "impl_rework_rate": 0.321,
+    "impl_first_pass_accept_rate": 0.69,
+    "impl_rework_rate": 0.31,
     "agent_wall_s": {
-      "n": 32,
+      "n": 36,
       "min": 65,
-      "median": 551.5,
-      "p95": 1246,
+      "median": 581.0,
+      "p95": 1325,
       "max": 2241
     },
     "integration_latency_s": {
@@ -32,7 +43,7 @@
       "single orchestrator session, model tier fixed (Haiku-class workers), one repository; no controlled comparison and no baseline of other agent counts",
       "launch is a proxy (worktree creation); finish is last commit; integration latency is only derivable when the integrator made derivable from git history; it was not recorded at merge time, so it is null for all rows",
       "outcome classes are the orchestrator's judgement, recorded in agent_outcomes.json before this script ran",
-      "tokens/tool calls were not stored; reported as null",
+      "tokens and tool calls come only from planning/evidence/m1/agent_usage.json (harness values copied by the orchestrator); null where absent",
       "this is an observation and does not justify raising the agent count by itself; verification debt and rework rate are the gating metrics"
     ]
   },
@@ -50,7 +61,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "aa803fbe2321742b2",
@@ -65,7 +77,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "ae394f7ec09bbcdbe",
@@ -80,7 +93,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a564669118a2be4ba",
@@ -95,7 +109,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a80c9013ba1a3595f",
@@ -110,7 +125,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "ab5d1183daefdf39e",
@@ -125,7 +141,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a9f9b138b61a93e3c",
@@ -140,7 +157,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "ade847c66d2f2c8f3",
@@ -155,7 +173,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "afbc14c1926077e0a",
@@ -170,7 +189,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a3991af1ecb37422b",
@@ -185,7 +205,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a533f4e67ab74b530",
@@ -200,7 +221,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "abba9205fa7e3b778",
@@ -215,7 +237,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a05c7cbd10af2b15a",
@@ -230,7 +253,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "ae5cb005cb5d07048",
@@ -245,7 +269,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a0bcc13996ce95354",
@@ -260,7 +285,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a2f7681b6e9648bfe",
@@ -275,7 +301,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a844b0db68f33b383",
@@ -290,7 +317,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "ac87c1936bea31207",
@@ -305,7 +333,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a6d66e91b813f7517",
@@ -320,7 +349,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "aa8b20db3ed520483",
@@ -335,7 +365,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a908fc9f47c512a41",
@@ -350,7 +381,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a9c4decc809881da7",
@@ -365,7 +397,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a5f4c698cc7d039c5",
@@ -380,7 +413,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a197df5d5f8dea632",
@@ -395,7 +429,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a94930b31c8974aff",
@@ -410,7 +445,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "ad3c2e6d879985de1",
@@ -425,7 +461,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a37e499e0aa89b014",
@@ -440,7 +477,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a2bcf23a7fc0ad04c",
@@ -455,7 +493,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a0f1339e96f775aaf",
@@ -470,7 +509,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "abcdd0b7a38bbe344",
@@ -485,7 +525,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "ae7f6cab3fd5287cc",
@@ -500,7 +541,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a9d8746aa3cf136bc",
@@ -515,14 +557,79 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     },
     {
       "agent": "a0b496d125408ea84",
       "task": "M1-05a platform paths",
       "kind": "impl",
-      "outcome": "in_progress",
+      "outcome": "accepted_as_is",
       "launch_proxy_utc": "2026-10-11T22:20:06+00:00",
+      "last_commit_utc": "2026-10-11T22:32:32+00:00",
+      "agent_wall_s": 746,
+      "commits": 1,
+      "diffstat": "10 files changed, 2252 insertions(+)",
+      "integrated_utc": null,
+      "integration_latency_s": null,
+      "tokens": null,
+      "tool_calls": null,
+      "harness_duration_ms": null
+    },
+    {
+      "agent": "abb2fd2a4c686b3e8",
+      "task": "UNCLASSIFIED",
+      "kind": "unknown",
+      "outcome": "unclassified",
+      "launch_proxy_utc": "2026-10-11T22:33:37+00:00",
+      "last_commit_utc": "2026-10-11T22:56:28+00:00",
+      "agent_wall_s": 1371,
+      "commits": 1,
+      "diffstat": "1 file changed, 208 insertions(+)",
+      "integrated_utc": null,
+      "integration_latency_s": null,
+      "tokens": null,
+      "tool_calls": null,
+      "harness_duration_ms": null
+    },
+    {
+      "agent": "a2600552f6d79bae8",
+      "task": "UNCLASSIFIED",
+      "kind": "unknown",
+      "outcome": "unclassified",
+      "launch_proxy_utc": "2026-10-11T23:19:21+00:00",
+      "last_commit_utc": "2026-10-11T23:36:28+00:00",
+      "agent_wall_s": 1027,
+      "commits": 3,
+      "diffstat": "8 files changed, 3679 insertions(+), 7 deletions(-)",
+      "integrated_utc": null,
+      "integration_latency_s": null,
+      "tokens": null,
+      "tool_calls": null,
+      "harness_duration_ms": null
+    },
+    {
+      "agent": "ade4ddc3da6586da0",
+      "task": "UNCLASSIFIED",
+      "kind": "unknown",
+      "outcome": "unclassified",
+      "launch_proxy_utc": "2026-10-11T23:19:21+00:00",
+      "last_commit_utc": "2026-10-11T23:31:02+00:00",
+      "agent_wall_s": 701,
+      "commits": 3,
+      "diffstat": "5 files changed, 267 insertions(+), 4 deletions(-)",
+      "integrated_utc": null,
+      "integration_latency_s": null,
+      "tokens": null,
+      "tool_calls": null,
+      "harness_duration_ms": null
+    },
+    {
+      "agent": "a564d896d74db497b",
+      "task": "UNCLASSIFIED",
+      "kind": "unknown",
+      "outcome": "unclassified",
+      "launch_proxy_utc": "2026-10-11T23:33:06+00:00",
       "last_commit_utc": null,
       "agent_wall_s": null,
       "commits": 0,
@@ -530,7 +637,8 @@
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,
-      "tool_calls": null
+      "tool_calls": null,
+      "harness_duration_ms": null
     }
   ]
 }

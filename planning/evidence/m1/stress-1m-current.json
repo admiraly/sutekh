@@ -1,0 +1,292 @@
+{
+ "binary": {
+  "bytes": 240888,
+  "path_relative_to_repo": "build/sutekh",
+  "sha256": "4757fc098096b4f9b1328ea89333927af51e87f688878b3255333bb805e5432c"
+ },
+ "configuration_in_source": {
+  "environment_overrides_present": [],
+  "fixture_cap": "SUTEKH_FIXTURE_MAX_BYTES (src/runtime/worker.c; default 64 MiB)",
+  "recovery_spool": "512 MiB default (src/platform/sutekh_main.c); SUTEKH_SPOOL_BYTES_MAX overrides",
+  "worker_address_space": "RLIMIT_AS 4 GiB default (src/platform/sutekh_main.c); SUTEKH_WORKER_AS_BYTES overrides"
+ },
+ "environment": {
+  "binary": {
+   "bytes": 240888,
+   "path": "build/sutekh",
+   "sha256": "4757fc098096b4f9b1328ea89333927af51e87f688878b3255333bb805e5432c"
+  },
+  "build": {
+   "build_dir_for_cache": "build",
+   "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+   "cmake": "cmake version 3.28.3",
+   "cmake_build_type": "Release",
+   "ninja": "1.11.1",
+   "profile_label": "release"
+  },
+  "container": {
+   "container_detected": false,
+   "evidence": []
+  },
+  "cpu": {
+   "hypervisor_flag": true,
+   "logical_processors": 4,
+   "model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+   "physical_cores": 4
+  },
+  "cpu_governor_cpu0": {
+   "reason": "cpufreq governor not exposed",
+   "value": null
+  },
+  "kernel": {
+   "release": "6.18.44-fc-v114",
+   "version": "#1 SMP PREEMPT_DYNAMIC @0"
+  },
+  "loadavg_before_run": [
+   5.4765625,
+   5.9365234375,
+   4.96826171875
+  ],
+  "memory_kB": {
+   "MemAvailable": 15276808,
+   "MemTotal": 16479424
+  },
+  "os": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "pmu": {
+   "reason": "not collected: no perf_event_open counters are used by this bench (PERFORMANCE.md section 5 makes them optional)",
+   "status": "unavailable"
+  },
+  "python": "3.13.16",
+  "shared_vm_note": "4 vCPU shared VM (hypervisor flag set). Timing here is not performance qualification (C10).",
+  "source": {
+   "dirty": true,
+   "dirty_entries": [
+    "?? planning/evidence/m1/native-build-latency.json"
+   ],
+   "git_head": "f73af8f6bee3457571983724e6360c3c0ef8052e",
+   "tree_CMakeLists": "14d0938249e40ebadc0e413c712a1c0edd4fbe8d",
+   "tree_include": "7f1c989cba2a4b7fe27b87daabed29562ba3893c",
+   "tree_src": "11f2e1f85aaf64a4f5cdf1d5c446b988b2ecb1e5"
+  }
+ },
+ "error": null,
+ "fixture": {
+  "bytes": 27833861,
+  "path": "build/bench-reload/world_1000000_seed1000000.json",
+  "rows": 1000000,
+  "seed": 1000000,
+  "sha256": "2f465ad976435e25f2757a763106eb4596052028fb24bf80f00223099f3526e5"
+ },
+ "generated_utc": "2026-10-11T23:46:14.922406+00:00",
+ "git": {
+  "dirty_tracked_files": false,
+  "head": "f73af8f6bee3457571983724e6360c3c0ef8052e"
+ },
+ "kind": "stress_1m_current_binary",
+ "nominal_column_bytes": 8000000,
+ "procedure": "bench/reload/bench_reload.py stress_mode, imported and not modified",
+ "report_format": "0.1",
+ "result": {
+  "fixture": {
+   "bytes": 27833861,
+   "path": "build/bench-reload/world_1000000_seed1000000.json",
+   "sha256": "2f465ad976435e25f2757a763106eb4596052028fb24bf80f00223099f3526e5"
+  },
+  "nominal_column_bytes": 8000000,
+  "phases": {
+   "edits": [
+    {
+     "candidate_id": "candidate-1",
+     "effective_tick": 20,
+     "evaluate_ms": 7.727821,
+     "evaluation_cases": 4,
+     "install_rpc_ms": 518.246557,
+     "source_bytes": 657,
+     "step_first_effect_ms": 198.351874,
+     "submit_ms": 0.60775,
+     "tick_after": 21,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 725.393458,
+     "txid": 2,
+     "verified": true,
+     "version": "v2"
+    },
+    {
+     "candidate_id": "candidate-2",
+     "effective_tick": 21,
+     "evaluate_ms": 7.356248,
+     "evaluation_cases": 3,
+     "install_rpc_ms": 494.295836,
+     "source_bytes": 483,
+     "step_first_effect_ms": 221.82428,
+     "submit_ms": 0.283525,
+     "tick_after": 22,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 724.086866,
+     "txid": 3,
+     "verified": true,
+     "version": "v1"
+    },
+    {
+     "candidate_id": "candidate-3",
+     "effective_tick": 22,
+     "evaluate_ms": 7.222338,
+     "evaluation_cases": 4,
+     "install_rpc_ms": 532.941366,
+     "source_bytes": 657,
+     "step_first_effect_ms": 231.849201,
+     "submit_ms": 0.384407,
+     "tick_after": 23,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 772.809401,
+     "txid": 4,
+     "verified": true,
+     "version": "v2"
+    },
+    {
+     "candidate_id": "candidate-4",
+     "effective_tick": 23,
+     "evaluate_ms": 7.013642,
+     "evaluation_cases": 3,
+     "install_rpc_ms": 521.180846,
+     "source_bytes": 483,
+     "step_first_effect_ms": 194.830641,
+     "submit_ms": 0.180908,
+     "tick_after": 24,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 723.561678,
+     "txid": 5,
+     "verified": true,
+     "version": "v1"
+    },
+    {
+     "candidate_id": "candidate-5",
+     "effective_tick": 24,
+     "evaluate_ms": 7.438217,
+     "evaluation_cases": 4,
+     "install_rpc_ms": 379.139976,
+     "source_bytes": 657,
+     "step_first_effect_ms": 198.794923,
+     "submit_ms": 0.237204,
+     "tick_after": 25,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 585.967584,
+     "txid": 6,
+     "verified": true,
+     "version": "v2"
+    },
+    {
+     "candidate_id": "candidate-6",
+     "effective_tick": 25,
+     "evaluate_ms": 7.121153,
+     "evaluation_cases": 3,
+     "install_rpc_ms": 512.999792,
+     "source_bytes": 483,
+     "step_first_effect_ms": 166.567007,
+     "submit_ms": 0.152164,
+     "tick_after": 26,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 687.195196,
+     "txid": 7,
+     "verified": true,
+     "version": "v1"
+    }
+   ],
+   "restore": {
+    "host_ms": 895.679574,
+    "restored_tick": 26
+   },
+   "snapshot": {
+    "bytes": 28092684,
+    "engine_capture_ns": null,
+    "host_ms": 203.670686,
+    "sha256": "ca6e95b2a8c13b4ba3362e57890510c2a8408095b2198eda0bcfec8e567c2802",
+    "tick": 26
+   },
+   "step_ms": [
+    213.446542,
+    200.246255,
+    188.423093,
+    188.65925,
+    188.987287,
+    190.121208,
+    198.136506,
+    199.160863,
+    198.096269,
+    191.838283,
+    161.23384,
+    159.480653,
+    196.652986,
+    199.50742,
+    193.95629,
+    200.154587,
+    160.182643,
+    193.203821,
+    161.862717,
+    167.532721
+   ],
+   "world_create_ms": 797.179719
+  },
+  "reason": null,
+  "rows": 1000000,
+  "seed": 1000000,
+  "status": "passed",
+  "supervisor_rss_after_create": {
+   "VmHWM_KiB": 29280,
+   "VmRSS_KiB": 2428,
+   "reason": null
+  },
+  "worker_rss_after_create": {
+   "VmHWM_KiB": 178532,
+   "VmRSS_KiB": 156256,
+   "reason": null
+  },
+  "worker_rss_after_steps": {
+   "VmHWM_KiB": 178532,
+   "VmRSS_KiB": 167572,
+   "reason": null
+  },
+  "worker_rss_end": {
+   "VmHWM_KiB": 262092,
+   "VmRSS_KiB": 167892,
+   "reason": null
+  }
+ },
+ "rows": 1000000,
+ "seed": 1000000,
+ "status": "passed",
+ "summary": {
+  "reason": null,
+  "refused_code": null,
+  "restore_host_ms": 895.679574,
+  "snapshot": {
+   "bytes": 28092684,
+   "engine_capture_ns": null,
+   "host_ms": 203.670686
+  },
+  "status": "passed",
+  "step_ms": {
+   "max": 213.446542,
+   "median": 193.203821,
+   "n": 20,
+   "p95_nearest_rank": 200.246255
+  },
+  "timed_edit_samples": 6,
+  "worker_rss_after_create": {
+   "VmHWM_KiB": 178532,
+   "VmRSS_KiB": 156256,
+   "reason": null
+  },
+  "worker_rss_after_steps": {
+   "VmHWM_KiB": 178532,
+   "VmRSS_KiB": 167572,
+   "reason": null
+  },
+  "worker_rss_end": {
+   "VmHWM_KiB": 262092,
+   "VmRSS_KiB": 167892,
+   "reason": null
+  },
+  "world_create_ms": 797.179719
+ }
+}
