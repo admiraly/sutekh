@@ -224,6 +224,28 @@ if(SUTEKH_NATIVE)
     add_test(NAME native_fault COMMAND test_native_fault $<TARGET_FILE:native_test_worker>
              "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/native_fault_scratch"
              WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # M1-02c-3: test supervisor = the agent library compiled with the test seams (SU_TEST_INTERLEAVE).
+    # Only the test links it; sutekh is built from su_agent without SU_TEST_FAULT_HOOKS.
+    add_library(su_agent_test STATIC ${SU_AGENT_SOURCES} src/runtime/native_versions.c)
+    target_include_directories(su_agent_test PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
+    target_link_libraries(su_agent_test PUBLIC su_vm su_world su_ir su_platform su_snapshot su_native)
+    target_compile_definitions(su_agent_test PRIVATE _POSIX_C_SOURCE=200809L SU_HAVE_NATIVE SU_TEST_FAULT_HOOKS)
+    sutekh_apply_warnings(su_agent_test)
+    add_executable(test_specialize_inflight tests/native/qualification/test_specialize_inflight.c)
+    target_link_libraries(test_specialize_inflight PRIVATE su_agent_test su_native su_ir)
+    sutekh_apply_warnings(test_specialize_inflight)
+    add_dependencies(test_specialize_inflight native_test_worker)
+    add_test(NAME specialize_inflight COMMAND test_specialize_inflight $<TARGET_FILE:native_test_worker>
+             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/specialize_inflight_scratch"
+             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # M1-02c-3: 1000 specialize cycles and revision swaps on one agent (production supervisor).
+    add_executable(test_specialize_churn tests/native/qualification/test_specialize_churn.c)
+    target_link_libraries(test_specialize_churn PRIVATE su_agent su_native su_ir)
+    sutekh_apply_warnings(test_specialize_churn)
+    add_dependencies(test_specialize_churn native_test_worker)
+    add_test(NAME specialize_churn COMMAND test_specialize_churn $<TARGET_FILE:native_test_worker>
+             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/specialize_churn_scratch"
+             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME release_seams COMMAND python3
              "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/qualification/check_release_seams.py"
              $<TARGET_FILE:sutekh>)

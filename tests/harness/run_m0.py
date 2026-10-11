@@ -2656,6 +2656,45 @@ def tx3(t: TestCtx):
         close_world(t, sess, ctrl)
 
 
+SPAWN_PROBE = os.path.join(REPO, "tests", "e2e", "native_spawn_probe.py")
+
+
+def native_spawn_mismatches(rc, evidence) -> list:
+    """Pure verdict of one native_spawn_probe run (TX4). rc 0 with a pass verdict is the only pass; rc 3 is
+    'not a native build'; every other outcome is a mismatch (a violation, or an inconclusive probe that must
+    not be read as a pass)."""
+    if rc == 0:
+        if not isinstance(evidence, dict) or evidence.get("verdict") != "pass":
+            return ["probe exited 0 without a pass verdict"]
+        if not evidence.get("own_successful_execs") or not isinstance(evidence.get("steps"), list):
+            return ["probe pass lacks the traced session evidence"]
+        return []
+    if rc == 1:
+        return ["a build tool was executed by the native session (violation)"]
+    return [f"probe verdict is not a pass (exit {rc}: {(evidence or {}).get('verdict')})"]
+
+
+def tx4(t: TestCtx):
+    """Native specialization spawns no build tool (extra check; not a TEST_SPEC id). The session of TX3 plus an
+    IR edit (capsule.submit, candidate.evaluate, candidate.install) runs under strace -f with execve and
+    execveat traced. Positive controls must detect a deliberate cc (PATH and absolute path). Unavailable on a
+    binary that does not advertise world.specialize."""
+    out = os.path.join(REPO, "build", "tx4_native_spawn_probe.json")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    rc, text = t.run_cmd([sys.executable, SPAWN_PROBE, "--binary", t.binary, "--out", out], timeout=900)
+    try:
+        with open(out, encoding="utf-8") as fh:
+            evidence = json.load(fh)
+    except (OSError, ValueError):
+        evidence = None
+    if rc == 3:
+        raise Unavailable(f"binary is not a native build: {(evidence or {}).get('reason', text[-200:])}")
+    mism = native_spawn_mismatches(rc, evidence)
+    t.check_mismatches("TX4 native session executes no build tool and the probe passes", mism)
+    t.details["tx4_steps"] = (evidence or {}).get("steps")
+    t.details["tx4_exec_summary"] = (evidence or {}).get("summary", {}).get("distinct_executed_basenames")
+
+
 TESTS = [
     ("T00", "Clean bootstrap", (), t00),
     ("T01", "Reference movement", ("world.create", "world.step", "world.inspect"), t01),
@@ -2678,6 +2717,7 @@ TESTS = [
                                                           "world.close"), tx1),
     ("TX2", "Worker crash recovery (extra)", _EVAL + ("engine.info", "world.close"), tx2),
     ("TX3", "Native specialization (extra)", _EVAL + ("world.close", "world.specialize"), tx3),
+    ("TX4", "Native specialization spawns no build tool (extra)", _EVAL + ("world.close", "world.specialize"), tx4),
 ]
 
 
@@ -3343,6 +3383,15 @@ def self_test() -> int:
                              "worlds_recovered": 1, "ops_replayed": 0, "duration_ms": 2,
                              "from_checkpoint_tick": 3, "worker_generation": 2, "unrecoverable": [],
                              "quarantined": []}}
+    ok("tx4: exit 0 with a pass verdict and session evidence passes",
+       native_spawn_mismatches(0, {"verdict": "pass", "own_successful_execs": 7, "steps": ["x"]}) == [])
+    ok("tx4: exit 0 without a pass verdict fails",
+       native_spawn_mismatches(0, {"verdict": "inconclusive", "own_successful_execs": 7, "steps": ["x"]}) != [])
+    ok("tx4: exit 0 with a pass but no traced execs fails",
+       native_spawn_mismatches(0, {"verdict": "pass", "own_successful_execs": 0, "steps": ["x"]}) != [])
+    ok("tx4: exit 1 (build tool executed) fails", native_spawn_mismatches(1, {"verdict": "violation"}) != [])
+    ok("tx4: exit 2 (inconclusive) is never a pass", native_spawn_mismatches(2, {"verdict": "inconclusive"}) != [])
+    ok("tx4: missing evidence file on exit 0 fails", native_spawn_mismatches(0, None) != [])
     ok("recovery: a successful recovery object passes", recovery_mismatches(good_rec, 100) == [])
     ok("recovery: the replacement pid equal to the old one is a mismatch",
        recovery_mismatches({**good_rec, "recovery": {**good_rec["recovery"], "replaced_pid_new": 100}}, 100) != [])

@@ -14,6 +14,7 @@ SEAM_STRINGS = [
     b"perturb_recompile",      # active-worker install seam
     b"wrong_kernel",           # disposable admission seam
     b"wrong_world",            # disposable own-case seam
+    b"SU_TEST_INTERLEAVE",     # M1-02c-3: supervisor request between admission and install (su_agent_test)
 ]
 
 

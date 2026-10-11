@@ -247,3 +247,26 @@ respecialization succeeds.
   the test worker die with SIGSEGV inside the installed kernel while computing tick N. They exist only in the
   test worker (`tests/native/qualification/native_test_worker`); `check_release_seams.py` checks the production
   binary for them.
+
+## 11. In-flight ordering, admission corpus and no-spawn evidence (M1-02c-3; SUTEKH_NATIVE builds only)
+
+- Admission corpus. A specialization whose system has its own test cases runs them in the disposable worker:
+  `<stem>.test.json` beside `<stem>.capsule.json`, or `test.json` beside `capsule.json` (the t03 numeric-edge
+  fixtures). `evidence.cases` counts corpus plus own cases (45 for `examples/movement`, 43 for a t03 fixture).
+  An own-case mismatch reports `first_mismatch` with `source: "own_case"`, `case`, `reason` and, for a column
+  mismatch, `field`, `row`, `expected`, `actual`.
+- Ordering. The supervisor does not interleave requests of clients. The install of a specialization follows its
+  admission in the same call; a candidate.install or world.close that lands between them changes the world
+  revision or closes the world, so the install is refused (stale revision or unknown world_id) and nothing is
+  installed for the old revision. Test-only seam, `SU_TEST_INTERLEAVE=candidate|close` (one shot per supervisor
+  process), exists only in `su_agent_test` (built with `SU_TEST_FAULT_HOOKS`); `check_release_seams.py` checks
+  the production binary for it.
+- No-spawn evidence (TX4). `tests/e2e/native_spawn_probe.py --binary <sutekh>` runs a session (world.create,
+  world.specialize scalar and avx2, capsule.submit, candidate.evaluate, candidate.install, world.specialize
+  again, world.step, world.close) under `strace -f -e trace=execve,execveat`. Exit 0 only when the two positive
+  controls are detected and no compiler, assembler, linker or build tool is executed. Exit 2 inconclusive, 3
+  not a native build (TX4 reports unavailable).
+- Churn. `test_specialize_churn` (ctest `specialize_churn`): 1000 specialize cycles alternating scalar and avx2,
+  then six revision swaps; checks the worker's mappings (no writable and executable mapping, count flat), RSS
+  bound, the VM tier after each swap and world.close releasing the world's mapping. Sanitizer runs need
+  `ASAN_OPTIONS=quarantine_size_mb=1` for the RSS bound to be meaningful.

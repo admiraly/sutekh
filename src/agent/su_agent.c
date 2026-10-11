@@ -3249,11 +3249,17 @@ static int own_test_path(SuAgent *a, const char *cap_real, char *out) {
 
     base = base != NULL ? base + 1 : cap_real;
     n = strlen(base);
-    if (n <= 13u || strcmp(base + n - 13u, ".capsule.json") != 0) {
+    if (n > 13u && strcmp(base + n - 13u, ".capsule.json") == 0) {
+        snprintf(test_name, sizeof test_name, "%.*s.test.json", (int)(n - 13u), base);
+        if (su_path_sibling(a->root, cap_real, test_name, out, SU_PATH_BUF) == SU_OK && access(out, R_OK) == 0) {
+            return 1;
+        }
+    }
+    /* M1-02c-3: the t03 numeric-edge fixtures (capsule.json) keep their cases in test.json beside it. */
+    if (strcmp(base, "capsule.json") != 0 && (n <= 13u || strcmp(base + n - 13u, ".capsule.json") != 0)) {
         return 0;
     }
-    snprintf(test_name, sizeof test_name, "%.*s.test.json", (int)(n - 13u), base);
-    if (su_path_sibling(a->root, cap_real, test_name, out, SU_PATH_BUF) != SU_OK) {
+    if (su_path_sibling(a->root, cap_real, "test.json", out, SU_PATH_BUF) != SU_OK) {
         return 0;
     }
     return access(out, R_OK) == 0;
@@ -3367,6 +3373,95 @@ static void nat_note_install(AgentWorld *w, const char *system_id, const char *b
 static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char *expect,
                                     const char *system_id, const char *backend, const char *sem, SuBuf *res,
                                     AgentCall *c);
+
+#ifdef SU_TEST_FAULT_HOOKS
+static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c);
+
+/* M1-02c-3 test seam (SU_TEST_FAULT_HOOKS builds only). SU_TEST_INTERLEAVE selects one request the
+ * supervisor issues itself, through route() as a client would, between admission and install:
+ *   candidate  candidate.install of SU_TEST_INTERLEAVE_CANDIDATE at the world's current revision (a new
+ *              semantic revision lands after admission);
+ *   close      world.close of the world at its current revision.
+ * The nested answer is discarded; the outer call's answer and the world state are what the test checks. */
+static void test_interleave(SuAgent *a, const char *world_id) {
+    const char *mode = getenv("SU_TEST_INTERLEAVE");
+    const char *cid = getenv("SU_TEST_INTERLEAVE_CANDIDATE");
+    AgentWorld *w;
+    uint32_t k;
+    AgentCall ic;
+    SuBuf params_txt;
+    SuBuf res;
+    SuJsonDoc doc;
+    SuJsonLimits lim;
+    SuJsonError err;
+    SuRequest rq;
+    char rev[AGENT_REV_CAP];
+    uint32_t st;
+
+    static int fired; /* one-shot per process: the first specialization admitted after the arm */
+
+    if (mode == NULL || mode[0] == '\0' || fired) {
+        return;
+    }
+    w = find_world(a, world_id);
+    if (w == NULL) {
+        return;
+    }
+    fired = 1;
+    wrev(w, w->rev, rev, sizeof rev);
+    su_buf_init(&params_txt);
+    su_buf_str(&params_txt, "{\"world_id\":");
+    su_buf_quoted(&params_txt, world_id, strlen(world_id));
+    su_buf_str(&params_txt, ",\"expected_world_revision\":");
+    su_buf_quoted(&params_txt, rev, strlen(rev));
+    if (strcmp(mode, "candidate") == 0 && cid == NULL) {
+        /* No id given: the most recent candidate that passed its evaluation and was never installed. */
+        for (k = 0; k < AGENT_MAX_CANDIDATES; k++) {
+            if (a->cand[k].used && strcmp(a->cand[k].eval_status, "passed") == 0 &&
+                strcmp(a->cand[k].install_state, "not_attempted") == 0) {
+                cid = a->cand[k].id;
+            }
+        }
+    }
+    if (strcmp(mode, "candidate") == 0 && cid != NULL) {
+        su_buf_str(&params_txt, ",\"candidate_id\":");
+        su_buf_quoted(&params_txt, cid, strlen(cid));
+        su_buf_str(&params_txt, ",\"allowed_effective_tick\":0");
+        su_buf_str(&params_txt, "}");
+        memset(&rq, 0, sizeof rq);
+        snprintf(rq.method, sizeof rq.method, "candidate.install");
+    } else if (strcmp(mode, "close") == 0) {
+        su_buf_str(&params_txt, "}");
+        memset(&rq, 0, sizeof rq);
+        snprintf(rq.method, sizeof rq.method, "world.close");
+    } else {
+        su_buf_free(&params_txt);
+        return;
+    }
+    if (params_txt.failed) {
+        su_buf_free(&params_txt);
+        return;
+    }
+    lim.max_bytes = params_txt.len;
+    lim.max_depth = SU_PROTO_MAX_DEPTH;
+    if (su_json_parse(params_txt.data, params_txt.len, &lim, &doc, &err) != SU_OK) {
+        su_buf_free(&params_txt);
+        su_json_doc_free(&doc);
+        return;
+    }
+    rq.has_id = 1;
+    snprintf(rq.id, sizeof rq.id, "interleave");
+    rq.params = doc.root;
+    memset(&ic, 0, sizeof ic);
+    ic.id = "interleave";
+    su_buf_init(&res);
+    st = route(a, &rq, &res, &ic);
+    (void)st;
+    su_buf_free(&res);
+    su_json_doc_free(&doc);
+    su_buf_free(&params_txt);
+}
+#endif
 
 static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"world_id", "expected_world_revision", "system_id", "backend",
@@ -3572,7 +3667,7 @@ static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char
     if (strcmp(status, "mismatch") == 0) {
         const SuJsonValue *fm = su_json_member(r.result, "first_mismatch");
         static const char *const keys[] = {"source", "case", "reason", "case_index", "case_rows",
-                                           "case_offset", "field_id", "row", "expected", "actual"};
+                                           "case_offset", "field_id", "field", "row", "expected", "actual"};
         size_t k;
         int n = 0;
         su_buf_free(&det);
@@ -3618,6 +3713,12 @@ static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char
         }
     }
 
+#ifdef SU_TEST_FAULT_HOOKS
+    /* M1-02c-3 test seam: the supervisor issues one request of its own between admission and install.
+     * Only in the test supervisor (su_agent_test); the production binary has no such string. */
+    test_interleave(a, world_id);
+#endif
+
     /* 3. install: the active worker recompiles and requires this artifact_hash. */
     req_begin(&req, c->id, "internal.specialize.install");
     su_buf_str(&req, "\"world_id\":");
@@ -3652,7 +3753,9 @@ static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char
         Reply ir;
         char tier[16];
         reply_parse(&ir, resp.data, resp.len);
-        if (ir.ok && jstr(ir.result, "execution_tier", tier, sizeof tier)) {
+        /* w may have been closed by the test seam between admission and install: look it up again. */
+        w = find_world(a, world_id);
+        if (w != NULL && ir.ok && jstr(ir.result, "execution_tier", tier, sizeof tier)) {
             nat_note_install(w, system_id, backend, hash, tier);
         }
         reply_free(&ir);

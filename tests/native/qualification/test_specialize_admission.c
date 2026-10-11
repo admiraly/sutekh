@@ -452,7 +452,16 @@ static void scenario_fault(const char *label, const char *fault, const char *ms,
     } else {
         CHECK(str_of(member(det, "first_mismatch"), "source", got, sizeof got));
         if (strcmp(label, "wrong_world") == 0) {
+            const SuJsonValue *fm = member(det, "first_mismatch");
             CHECK(strcmp(got, "own_case") == 0);
+            /* The own-case detail names the case, the field, the row and both values, as the corpus does. */
+            CHECK(str_of(fm, "case", got, sizeof got) && strlen(got) > 0u);
+            CHECK(str_of(fm, "reason", got, sizeof got) && strncmp(got, "column_mismatch:", 16) == 0);
+            CHECK(str_of(fm, "field", got, sizeof got) && strlen(got) > 0u);
+            CHECK(uint_of(fm, "row") != UINT64_MAX);
+            CHECK(uint_of(fm, "expected") != UINT64_MAX);
+            CHECK(uint_of(fm, "actual") != UINT64_MAX);
+            CHECK(uint_of(fm, "expected") != uint_of(fm, "actual"));
         } else {
             CHECK(strcmp(got, "corpus") == 0);
         }
@@ -714,6 +723,78 @@ static void scenario_worker_install(void) {
     wstop(&act);
 }
 
+/* M1-02c-3: the t03 numeric-edge fixtures (capsule.json + test.json, one case each, demo.movement) are
+ * admitted through world.specialize: their own test case joins the 42 corpus cases (43 in all). The
+ * project is a separate directory, so g_proj is pointed there for this scenario only. */
+static void copy_t03(const char *fixture, const char *name) {
+    char src[1200];
+    char dst[1200];
+    FILE *fi;
+    FILE *fo;
+    char buf[4096];
+    size_t n;
+
+    snprintf(src, sizeof src, "%s/tests/fixtures/t03/%s/%s", g_root, fixture, name);
+    snprintf(dst, sizeof dst, "%s/%s", g_proj, name);
+    fi = fopen(src, "rb");
+    fo = fopen(dst, "wb");
+    if (fi == NULL || fo == NULL) {
+        perror(src);
+        exit(2);
+    }
+    while ((n = fread(buf, 1, sizeof buf, fi)) > 0) {
+        if (fwrite(buf, 1, n, fo) != n) {
+            perror(dst);
+            exit(2);
+        }
+    }
+    fclose(fi);
+    fclose(fo);
+}
+
+static void scenario_t03(const char *fixture, const char *backend, int expect_avx2_tier) {
+    char saved[sizeof g_proj];
+    char dir[1100];
+    Sess s;
+    char wid[64];
+    char rev[65];
+    char got[65];
+    char tier[32];
+    Resp r;
+    const SuJsonValue *res;
+
+    memcpy(saved, g_proj, sizeof g_proj);
+    snprintf(dir, sizeof dir, "%s/t03-%s-%s", g_scratch, fixture, backend);
+    mkdir(dir, 0700);
+    snprintf(g_proj, sizeof g_proj, "%s", dir);
+    copy_t03(fixture, "capsule.json");
+    copy_t03(fixture, "program.lir.json");
+    copy_t03(fixture, "test.json");
+    copy_t03(fixture, "world.json");
+    s = sess_start(NULL, NULL, 120000, "t03");
+    {
+        char line[512];
+        snprintf(line, sizeof line,
+                 "{\"protocol\":\"0.1\",\"id\":\"cw\",\"method\":\"world.create\",\"params\":{\"fixture_path\":"
+                 "\"world.json\",\"capsule_path\":\"capsule.json\"}}");
+        call(&s, line, &r, 120000);
+    }
+    CHECK(resp_ok(&r) && str_of(member(r.root, "result"), "world_id", wid, sizeof wid) &&
+          str_of(member(r.root, "result"), "world_revision", rev, sizeof rev));
+    resp_free(&r);
+    specialize(&s, wid, rev, backend, &r);
+    CHECK(resp_ok(&r));
+    res = member(r.root, "result");
+    CHECK(str_of(res, "state", got, sizeof got) && strcmp(got, "installed") == 0);
+    CHECK(str_of(res, "execution_tier", tier, sizeof tier));
+    CHECK(strcmp(tier, expect_avx2_tier ? "native_avx2" : "native_scalar") == 0);
+    CHECK(uint_of(member(member(res, "source"), "admission"), "cases") == 43u);
+    CHECK(uint_of(member(member(res, "source"), "admission"), "mismatches") == 0u);
+    resp_free(&r);
+    sess_stop(&s);
+    memcpy(g_proj, saved, sizeof g_proj);
+}
+
 int main(int argc, char **argv) {
     int avx2;
 
@@ -749,6 +830,17 @@ int main(int argc, char **argv) {
     scenario_refusals();
     scenario_delay();
     scenario_worker_install();
+    {
+        static const char *const t03[] = {"eq_edges", "lt_edges", "mul_overflow", "select_min", "sub_underflow",
+                                          "wrap_add"};
+        size_t k;
+        for (k = 0; k < sizeof t03 / sizeof t03[0]; k++) {
+            scenario_t03(t03[k], "scalar", 0);
+            if (avx2) {
+                scenario_t03(t03[k], "avx2", 1);
+            }
+        }
+    }
 
     printf("test_specialize_admission: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

@@ -985,8 +985,16 @@ static void note_failure(CaseFailures *cf, const char *name, const char *reason)
 }
 
 /* Compares expected columns of one case against the committed state. */
+/* M1-02c-3: the first differing word of an own test case, for the admission detail. */
+typedef struct CaseMis {
+    char field[WORKER_NAME_MAX + 1];
+    uint64_t row;
+    uint64_t expected;
+    uint64_t actual;
+} CaseMis;
+
 static int case_columns_match(const SuSchedule *s, const WorldInst *in, const SuJsonValue *expected,
-                              char *reason, size_t reason_cap) {
+                              char *reason, size_t reason_cap, CaseMis *cm) {
     size_t i;
     if (expected == NULL || expected->type != SU_JSON_OBJECT) {
         snprintf(reason, reason_cap, "expected_columns_malformed");
@@ -1020,9 +1028,15 @@ static int case_columns_match(const SuSchedule *s, const WorldInst *in, const Su
             return 0;
         }
         for (r = 0; r < rc; r++) {
-            uint64_t want;
+            uint64_t want = 0;
             if (!su_json_get_uint(mem->value->u.array.items[r], &want) || want != data[r]) {
                 snprintf(reason, reason_cap, "column_mismatch:%s[%llu]", name, (unsigned long long)r);
+                if (cm != NULL) {
+                    snprintf(cm->field, sizeof cm->field, "%s", name);
+                    cm->row = r;
+                    cm->expected = want;
+                    cm->actual = data[r];
+                }
                 return 0;
             }
         }
@@ -1132,7 +1146,7 @@ static uint32_t h_candidate_evaluate(WorkerState *s, const SuJsonValue *params, 
             char r2[WORKER_MSG_CAP];
             snprintf(r2, sizeof r2, "tick_failed:%s", su_status_name(st));
             note_failure(&cf, name, r2);
-        } else if (!case_columns_match(&sched, &in, exp, reason, sizeof reason)) {
+        } else if (!case_columns_match(&sched, &in, exp, reason, sizeof reason, NULL)) {
             note_failure(&cf, name, reason);
         } else {
             passed++;
@@ -2104,12 +2118,22 @@ static uint32_t h_internal_specialize_identity(WorkerState *s, const SuJsonValue
 
 /* Appends the first mismatch of a failed admission (corpus or own test case). */
 static void spec_put_mismatch(SuBuf *res, int own, const char *own_name, const char *own_reason,
-                              const SuNvMismatch *mis) {
+                              const CaseMis *cm, const SuNvMismatch *mis) {
     if (own) {
         su_buf_str(res, "{\"source\":\"own_case\",\"case\":");
         su_buf_quoted(res, own_name, strlen(own_name));
         su_buf_str(res, ",\"reason\":");
         su_buf_quoted(res, own_reason, strlen(own_reason));
+        if (cm != NULL) {
+            su_buf_str(res, ",\"field\":");
+            su_buf_quoted(res, cm->field, strlen(cm->field));
+            su_buf_str(res, ",\"row\":");
+            su_buf_u64(res, cm->row);
+            su_buf_str(res, ",\"expected\":");
+            su_buf_u64(res, cm->expected);
+            su_buf_str(res, ",\"actual\":");
+            su_buf_u64(res, cm->actual);
+        }
         su_buf_str(res, "}");
         return;
     }
@@ -2165,6 +2189,9 @@ static uint32_t h_internal_specialize_admit(WorkerState *s, const SuJsonValue *p
     uint64_t own_bad = 0;
     char own_name[WORKER_MSG_CAP];
     char own_reason[WORKER_MSG_CAP];
+    CaseMis own_mis;
+    CaseMis own_mis_saved;
+    int own_has_mis = 0;
     char fallback[64];
     char msg[WORKER_MSG_CAP];
     char hash[65];
@@ -2181,6 +2208,8 @@ static uint32_t h_internal_specialize_admit(WorkerState *s, const SuJsonValue *p
     fallback[0] = '\0';
     own_name[0] = '\0';
     own_reason[0] = '\0';
+    memset(&own_mis, 0, sizeof own_mis);
+    memset(&own_mis_saved, 0, sizeof own_mis_saved);
     memset(&mis, 0, sizeof mis);
     memset(&doc, 0, sizeof doc);
     if (capsule == NULL || source == NULL || exp_src == NULL || exp_cap == NULL || exp_sem == NULL ||
@@ -2296,6 +2325,7 @@ static uint32_t h_internal_specialize_admit(WorkerState *s, const SuJsonValue *p
                 goto out;
             }
             own_total++;
+            memset(&own_mis, 0, sizeof own_mis);
             st = world_open(&sched, wpath, NULL, &in, f);
             if (st != SU_OK) {
                 goto out;
@@ -2309,11 +2339,13 @@ static uint32_t h_internal_specialize_admit(WorkerState *s, const SuJsonValue *p
                     snprintf(own_reason, sizeof own_reason, "%s", r2);
                 }
                 own_bad++;
-            } else if (!case_columns_match(&sched, &in, exp, reason, sizeof reason)) {
+            } else if (!case_columns_match(&sched, &in, exp, reason, sizeof reason, &own_mis)) {
                 if (own_first) {
                     own_first = 0;
                     snprintf(own_name, sizeof own_name, "%s", name);
                     snprintf(own_reason, sizeof own_reason, "%s", reason);
+                    own_has_mis = own_mis.field[0] != '\0';
+                    own_mis_saved = own_mis;
                 }
                 own_bad++;
             }
@@ -2362,7 +2394,7 @@ static uint32_t h_internal_specialize_admit(WorkerState *s, const SuJsonValue *p
     su_buf_u64(res, own_total);
     su_buf_str(res, "},\"first_mismatch\":");
     if (status_mismatch) {
-        spec_put_mismatch(res, bad == 0u, own_name, own_reason, &mis);
+        spec_put_mismatch(res, bad == 0u, own_name, own_reason, own_has_mis ? &own_mis_saved : NULL, &mis);
     } else {
         su_buf_str(res, "null");
     }
