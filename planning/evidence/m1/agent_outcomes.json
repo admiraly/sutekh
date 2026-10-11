@@ -1,39 +1,196 @@
 {
   "note": "Orchestrator-recorded outcome classification for each delegated worktree agent (judgement by the integrating session, not machine-derived). Classes: accepted_as_is (merged after independent rebuild/rerun with no code change by the integrator); accepted_with_integrator_fix (merged, but the integrator had to change code/CMake/docs or found an engine/harness defect afterwards); review_found_issues (a reviewer/auditor task whose purpose was to find defects and did); partial (merged with explicit scope gaps requiring a follow-up task); no_work (agent made no changes); in_progress (excluded from rates; no row uses it after the M1 evidence refresh). Reviewer/auditor tasks are counted separately from implementation tasks.",
   "outcomes": {
-    "aa803fbe2321742b2": {"task": "M0-00 contract review r1", "kind": "review", "outcome": "review_found_issues"},
-    "ae394f7ec09bbcdbe": {"task": "M0-01 build skeleton", "kind": "impl", "outcome": "accepted_as_is"},
-    "a795cc4a25e897928": {"task": "T02-T04 fixtures", "kind": "impl", "outcome": "accepted_as_is"},
-    "a80c9013ba1a3595f": {"task": "M0-00 contract re-review r2", "kind": "review", "outcome": "review_found_issues"},
-    "a564669118a2be4ba": {"task": "M0-02 parser/verifier", "kind": "impl", "outcome": "accepted_as_is"},
-    "ab5d1183daefdf39e": {"task": "M0-03 world storage", "kind": "impl", "outcome": "accepted_as_is"},
-    "a9f9b138b61a93e3c": {"task": "M0-04 VM", "kind": "impl", "outcome": "accepted_as_is"},
-    "ade847c66d2f2c8f3": {"task": "M0-05 control plane", "kind": "impl", "outcome": "accepted_with_integrator_fix"},
-    "afbc14c1926077e0a": {"task": "M0-06 harness", "kind": "impl", "outcome": "accepted_with_integrator_fix"},
-    "a3991af1ecb37422b": {"task": "M0-06b harness alignment", "kind": "impl", "outcome": "accepted_as_is"},
-    "a533f4e67ab74b530": {"task": "M0-07 install/reload", "kind": "impl", "outcome": "accepted_with_integrator_fix"},
-    "abba9205fa7e3b778": {"task": "M0-08 snapshot library", "kind": "impl", "outcome": "accepted_as_is"},
-    "ae5cb005cb5d07048": {"task": "M0-08b snapshot/restore wiring", "kind": "impl", "outcome": "accepted_with_integrator_fix"},
-    "a05c7cbd10af2b15a": {"task": "M0-06c harness evaluate/install", "kind": "impl", "outcome": "accepted_as_is"},
-    "a0bcc13996ce95354": {"task": "M0-09 demo and probe", "kind": "impl", "outcome": "accepted_as_is"},
-    "a2f7681b6e9648bfe": {"task": "M0-10 latency", "kind": "impl", "outcome": "accepted_with_integrator_fix"},
-    "a844b0db68f33b383": {"task": "M0-04b T04 source_path", "kind": "impl", "outcome": "accepted_with_integrator_fix"},
-    "ac87c1936bea31207": {"task": "M0-11 closure audit", "kind": "review", "outcome": "review_found_issues"},
-    "a6d66e91b813f7517": {"task": "M0-12 harness hardening", "kind": "impl", "outcome": "accepted_as_is"},
-    "aa8b20db3ed520483": {"task": "M0-13 evidence refresh", "kind": "impl", "outcome": "accepted_with_integrator_fix"},
-    "a908fc9f47c512a41": {"task": "M0 re-audit", "kind": "review", "outcome": "review_found_issues"},
-    "a9c4decc809881da7": {"task": "M0-14 re-audit blockers", "kind": "impl", "outcome": "accepted_as_is"},
-    "a5f4c698cc7d039c5": {"task": "world.close", "kind": "impl", "outcome": "accepted_as_is"},
-    "a197df5d5f8dea632": {"task": "M1-00 broker + bootstrap", "kind": "impl", "outcome": "accepted_as_is"},
-    "a94930b31c8974aff": {"task": "M1-04 chunk scheduler", "kind": "impl", "outcome": "accepted_as_is"},
-    "ad3c2e6d879985de1": {"task": "M1-01 scalar backend", "kind": "impl", "outcome": "accepted_as_is"},
-    "a2bcf23a7fc0ad04c": {"task": "M1-03 AVX2", "kind": "impl", "outcome": "accepted_as_is"},
-    "a37e499e0aa89b014": {"task": "M1-02a worker crash recovery", "kind": "impl", "outcome": "accepted_as_is"},
-    "a0f1339e96f775aaf": {"task": "M1-02b native versions", "kind": "impl", "outcome": "partial"},
-    "a5fb35f59ee26ddd1": {"task": "M1-02c (too broad)", "kind": "impl", "outcome": "no_work"},
-    "abcdd0b7a38bbe344": {"task": "M1-02c-1 isolated admission", "kind": "impl", "outcome": "accepted_as_is"},
-    "ae7f6cab3fd5287cc": {"task": "M1-02c-2 native fault quarantine", "kind": "impl", "outcome": "accepted_as_is"},
-    "a9d8746aa3cf136bc": {"task": "M1-02c-3 stale/close/no-spawn", "kind": "impl", "outcome": "partial"},
-    "a0b496d125408ea84": {"task": "M1-05a platform paths", "kind": "impl", "outcome": "accepted_as_is", "note": "platform half merged without code change by the integrator; the status was stale 'in_progress' before this correction"}
+    "aa803fbe2321742b2": {
+      "task": "M0-00 contract review r1",
+      "kind": "review",
+      "outcome": "review_found_issues"
+    },
+    "ae394f7ec09bbcdbe": {
+      "task": "M0-01 build skeleton",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a795cc4a25e897928": {
+      "task": "T02-T04 fixtures",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a80c9013ba1a3595f": {
+      "task": "M0-00 contract re-review r2",
+      "kind": "review",
+      "outcome": "review_found_issues"
+    },
+    "a564669118a2be4ba": {
+      "task": "M0-02 parser/verifier",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "ab5d1183daefdf39e": {
+      "task": "M0-03 world storage",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a9f9b138b61a93e3c": {
+      "task": "M0-04 VM",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "ade847c66d2f2c8f3": {
+      "task": "M0-05 control plane",
+      "kind": "impl",
+      "outcome": "accepted_with_integrator_fix"
+    },
+    "afbc14c1926077e0a": {
+      "task": "M0-06 harness",
+      "kind": "impl",
+      "outcome": "accepted_with_integrator_fix"
+    },
+    "a3991af1ecb37422b": {
+      "task": "M0-06b harness alignment",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a533f4e67ab74b530": {
+      "task": "M0-07 install/reload",
+      "kind": "impl",
+      "outcome": "accepted_with_integrator_fix"
+    },
+    "abba9205fa7e3b778": {
+      "task": "M0-08 snapshot library",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "ae5cb005cb5d07048": {
+      "task": "M0-08b snapshot/restore wiring",
+      "kind": "impl",
+      "outcome": "accepted_with_integrator_fix"
+    },
+    "a05c7cbd10af2b15a": {
+      "task": "M0-06c harness evaluate/install",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a0bcc13996ce95354": {
+      "task": "M0-09 demo and probe",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a2f7681b6e9648bfe": {
+      "task": "M0-10 latency",
+      "kind": "impl",
+      "outcome": "accepted_with_integrator_fix"
+    },
+    "a844b0db68f33b383": {
+      "task": "M0-04b T04 source_path",
+      "kind": "impl",
+      "outcome": "accepted_with_integrator_fix"
+    },
+    "ac87c1936bea31207": {
+      "task": "M0-11 closure audit",
+      "kind": "review",
+      "outcome": "review_found_issues"
+    },
+    "a6d66e91b813f7517": {
+      "task": "M0-12 harness hardening",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "aa8b20db3ed520483": {
+      "task": "M0-13 evidence refresh",
+      "kind": "impl",
+      "outcome": "accepted_with_integrator_fix"
+    },
+    "a908fc9f47c512a41": {
+      "task": "M0 re-audit",
+      "kind": "review",
+      "outcome": "review_found_issues"
+    },
+    "a9c4decc809881da7": {
+      "task": "M0-14 re-audit blockers",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a5f4c698cc7d039c5": {
+      "task": "world.close",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a197df5d5f8dea632": {
+      "task": "M1-00 broker + bootstrap",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a94930b31c8974aff": {
+      "task": "M1-04 chunk scheduler",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "ad3c2e6d879985de1": {
+      "task": "M1-01 scalar backend",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a2bcf23a7fc0ad04c": {
+      "task": "M1-03 AVX2",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a37e499e0aa89b014": {
+      "task": "M1-02a worker crash recovery",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a0f1339e96f775aaf": {
+      "task": "M1-02b native versions",
+      "kind": "impl",
+      "outcome": "partial"
+    },
+    "a5fb35f59ee26ddd1": {
+      "task": "M1-02c (too broad)",
+      "kind": "impl",
+      "outcome": "no_work"
+    },
+    "abcdd0b7a38bbe344": {
+      "task": "M1-02c-1 isolated admission",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "ae7f6cab3fd5287cc": {
+      "task": "M1-02c-2 native fault quarantine",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a9d8746aa3cf136bc": {
+      "task": "M1-02c-3 stale/close/no-spawn",
+      "kind": "impl",
+      "outcome": "partial"
+    },
+    "a0b496d125408ea84": {
+      "task": "M1-05a platform paths",
+      "kind": "impl",
+      "outcome": "accepted_as_is",
+      "note": "platform half merged without code change by the integrator; the status was stale 'in_progress' before this correction"
+    },
+    "abb2fd2a4c686b3e8": {
+      "task": "M1 closure audit",
+      "kind": "review",
+      "outcome": "review_found_issues"
+    },
+    "a2600552f6d79bae8": {
+      "task": "M1 evidence: build latency, throughput, 1M stress",
+      "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "ade4ddc3da6586da0": {
+      "task": "M1 closure tests A/C (survivor mutants, mutation script)",
+      "kind": "impl",
+      "outcome": "partial"
+    },
+    "a564d896d74db497b": {
+      "task": "M1 closure B chunked tick workers, TX5/TX6",
+      "kind": "impl",
+      "outcome": "in_progress"
+    }
   }
 }
