@@ -1,14 +1,14 @@
 {
   "artifacts_sha256": {
-    "build-platform/sutekh-win64.exe": "347830f3cbd1e1573f6d73183ea2027f1445471f8b76966cafad196c3e73d02c",
+    "build-platform/sutekh-win64.exe": "9f4f9d54b77c60e17c823d74026199da4ccae966c6b509dff41b6a9bafcaca3d",
     "build-platform/win64-cross/libsu_asmjit.a": "95275a16efe4736cb863a4d318ed8a2d5adbcfaa5310b3db659997c2cc80b028",
     "build-platform/win64-cross/libsu_ir.a": "2e7c284f816b39e811792d15bd6d85bcc9f23652368ff0a948fabb9e743a54ec",
     "build-platform/win64-cross/libsu_native.a": "66e830bbd0934f17a1a041b8279669fb320b22f22780101fcc75bd020ee353d8",
-    "build-platform/win64-cross/probe/native_abi_probe.exe": "56b79c9a73174d20ac88b1f853dd944b035ccf1631edc7248f274e0d27ddd2cc",
-    "build-platform/win64-cross/test_ir.exe": "e1f815460f4840926feaff80991316338feb7b8d16fd662df286512995e99ee5",
-    "build-platform/win64-cross/test_snapshot.exe": "d7780d203e9cdf5169b422458921182194047e26e312d390514f7cd8f5a36679",
-    "build-platform/win64-cross/test_vm.exe": "6b5e6bb17e36043ff6505544f87d3e46a166146ac16f406b168a525b35017cc4",
-    "build-platform/win64-cross/test_world.exe": "6d9dc00cfb6250ded993e26f0ceddfca2ce5a26327838f1ac5275c805dcb3eff"
+    "build-platform/win64-cross/probe/native_abi_probe.exe": "5ceab2b036e45e64431ca168af659e1a3483f7f36f477ad0d3ca62b1ef50cf86",
+    "build-platform/win64-cross/test_ir.exe": "42a399347b7d75c9f42da34646be4fae1cfb25238bbaba07b38059869c3b3e5c",
+    "build-platform/win64-cross/test_snapshot.exe": "a15c1be248b4e3e8a9698d58e4673ebd2307fda4bac7e8a30832adaca956faf5",
+    "build-platform/win64-cross/test_vm.exe": "88b791ca8feca8c52c5da1032a3305efbd837a5f8e3f3f933113977777325fa9",
+    "build-platform/win64-cross/test_world.exe": "a38f5e2aa57a369e4ba363b3603796c6d2cf6e74c85aca03431df69a96b1707d"
   },
   "checks": [
     {
@@ -117,14 +117,14 @@
         "-G",
         "Ninja",
         "-DCMAKE_BUILD_TYPE=Release",
-        "-DCMAKE_TOOLCHAIN_FILE=/home/user/sutekh/.claude/worktrees/agent-a0b496d125408ea84/tests/platform/toolchains/mingw-w64-x86_64.cmake",
+        "-DCMAKE_TOOLCHAIN_FILE=/home/user/sutekh/tests/platform/toolchains/mingw-w64-x86_64.cmake",
         "-DSUTEKH_NATIVE=ON"
       ],
       "check": "win64cross.configure",
       "cwd": ".",
-      "duration_s": 0.065,
+      "duration_s": 0.718,
       "log": "build-platform/win64cross_configure.log",
-      "log_sha256": "3f4e13f6b23f377333323f40f5acc353687481273d68aba416ab0dc0ca76f95f",
+      "log_sha256": "641975e018de12f7d38d183a3e7447eb6f98591563192786ee47731bd584da93",
       "returncode": 0
     },
     {
@@ -145,9 +145,9 @@
       ],
       "check": "win64cross.build_core",
       "cwd": ".",
-      "duration_s": 0.033,
+      "duration_s": 1.431,
       "log": "build-platform/win64cross_build_core.log",
-      "log_sha256": "c2ed93ffd93c840755c0e91392ae593b1b52de9b7aaf6c208123feaceb1dde2e",
+      "log_sha256": "1e2d93d313f1a92897258c61b65c276b50ed4ed5ed0187a0606a2b5791bb87ee",
       "returncode": 0
     },
     {
@@ -157,9 +157,9 @@
       ],
       "check": "win64cross.unit.test_ir",
       "cwd": ".",
-      "duration_s": 0.517,
+      "duration_s": 7.711,
       "log": "build-platform/win64cross_unit_test_ir.log",
-      "log_sha256": "94bf325b401c5b86796236459e8c91f6d95f1135459bac1a69ba620d5d518325",
+      "log_sha256": "d9c5b40af0fee49839753a2db0b81156b4bfc44cf596f9710e982849be6c7b06",
       "returncode": 0
     },
     {
@@ -169,7 +169,7 @@
       ],
       "check": "win64cross.unit.test_world",
       "cwd": ".",
-      "duration_s": 0.116,
+      "duration_s": 0.115,
       "log": "build-platform/win64cross_unit_test_world.log",
       "log_sha256": "56438d2405eae12eae834570753e18337dc7a8951c89977a5a877a4047802d66",
       "returncode": 0
@@ -193,7 +193,7 @@
       ],
       "check": "win64cross.unit.test_snapshot",
       "cwd": ".",
-      "duration_s": 0.033,
+      "duration_s": 0.067,
       "log": "build-platform/win64cross_unit_test_snapshot.log",
       "log_sha256": "d04a64dfcb8ed1a589977c948718e169733321eb7c623bff99bf3e812aeb7437",
       "returncode": 0
@@ -210,9 +210,9 @@
       ],
       "check": "win64cross.build_native",
       "cwd": ".",
-      "duration_s": 0.033,
+      "duration_s": 9.687,
       "log": "build-platform/win64cross_build_native.log",
-      "log_sha256": "c2ed93ffd93c840755c0e91392ae593b1b52de9b7aaf6c208123feaceb1dde2e",
+      "log_sha256": "c407f07882f8fc5533e43952dcd78764dbba1619b9d44d2fc5eaa025e0390d62",
       "returncode": 0
     },
     {
@@ -267,7 +267,7 @@
       ],
       "check": "win64cross.native_abi_probe",
       "cwd": ".",
-      "duration_s": 0.066,
+      "duration_s": 0.517,
       "log": "build-platform/win64cross_native_abi_probe.log",
       "log_sha256": "9c223b50aeefbfbf72b34a64e6dfdbbbefe76320ed20731e8d7a87115597d0b5",
       "returncode": 0
@@ -298,7 +298,7 @@
       ],
       "check": "win64cross.sutekh_platform_main",
       "cwd": ".",
-      "duration_s": 0.517,
+      "duration_s": 0.571,
       "log": "build-platform/win64cross_sutekh_platform_main.log",
       "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "returncode": 0
@@ -311,9 +311,9 @@
       ],
       "check": "win64cross.sutekh_version",
       "cwd": ".",
-      "duration_s": 0.066,
+      "duration_s": 0.065,
       "log": "build-platform/win64cross_sutekh_version.log",
-      "log_sha256": "d91fce7c4aeeea8d8906e41b9ba4dd0051200be3e9318554c23437b0e51061ec",
+      "log_sha256": "866c3d894114c20adc747b6f825d719832c7c092f9963f3d8927c53f77003a3c",
       "returncode": 0
     },
     {
@@ -340,15 +340,15 @@
       ],
       "check": "win64cross.full_graph",
       "cwd": ".",
-      "duration_s": 0.471,
+      "duration_s": 1.076,
       "log": "build-platform/win64cross_full_graph.log",
-      "log_sha256": "545c4d9e4c47b7a4c610e0456358e63ced40bbf0f65cdf2629258c0ded1d74ed",
+      "log_sha256": "5c3a9e98d6a11b37e2558df05baa6d967db6075bd3c56d9d6a12d32c1b9c9ea8",
       "returncode": 1
     }
   ],
-  "generated_utc": "2026-10-11T22:30:53Z",
+  "generated_utc": "2026-10-11T22:33:15Z",
   "host": {
-    "generated_utc": "2026-10-11T22:30:50Z",
+    "generated_utc": "2026-10-11T22:32:43Z",
     "machine": "x86_64",
     "python": "3.13.16",
     "release": "6.18.44-fc-v114",

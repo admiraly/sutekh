@@ -65,9 +65,9 @@
       ],
       "check": "linux.configure",
       "cwd": ".",
-      "duration_s": 0.116,
+      "duration_s": 0.517,
       "log": "build-platform/linux_configure.log",
-      "log_sha256": "16f5d032cb59a2ac279de7c59542fcfa15140e823cb347298b94b6e0fc10f7d8",
+      "log_sha256": "7c7e173252c625812068770b12f7bf063fef1bf056af03dfaa8f624d6bd43d1e",
       "returncode": 0
     },
     {
@@ -86,9 +86,9 @@
       ],
       "check": "linux.build",
       "cwd": ".",
-      "duration_s": 0.034,
+      "duration_s": 8.169,
       "log": "build-platform/linux_build.log",
-      "log_sha256": "c2ed93ffd93c840755c0e91392ae593b1b52de9b7aaf6c208123feaceb1dde2e",
+      "log_sha256": "796bed91e301c562dbe9b4582fa20c1f6fbe5a06eff113ea3c39672057cf70bd",
       "returncode": 0
     },
     {
@@ -97,7 +97,7 @@
       ],
       "check": "linux.unit.test_ir",
       "cwd": ".",
-      "duration_s": 0.009,
+      "duration_s": 0.016,
       "log": "build-platform/linux_unit_test_ir.log",
       "log_sha256": "e9ecbbfabacd34c3dd4c4557db4a8c761998ee2221225aee837e0e2238b36c8a",
       "returncode": 0
@@ -108,7 +108,7 @@
       ],
       "check": "linux.unit.test_world",
       "cwd": ".",
-      "duration_s": 0.066,
+      "duration_s": 0.065,
       "log": "build-platform/linux_unit_test_world.log",
       "log_sha256": "f48dde76409301f1c43bacf14af5aa1286e71c516e4841823c641e524079ef54",
       "returncode": 0
@@ -119,7 +119,7 @@
       ],
       "check": "linux.unit.test_vm",
       "cwd": ".",
-      "duration_s": 0.005,
+      "duration_s": 0.008,
       "log": "build-platform/linux_unit_test_vm.log",
       "log_sha256": "57d73e6bdce980def243866c4102f5cadb9ef6e2fc83e2295e06076d734351e2",
       "returncode": 0
@@ -130,7 +130,7 @@
       ],
       "check": "linux.unit.test_snapshot",
       "cwd": ".",
-      "duration_s": 0.002,
+      "duration_s": 0.004,
       "log": "build-platform/linux_unit_test_snapshot.log",
       "log_sha256": "40d824cd6e65bc9b817fee8544e6029b2927f947adf6c78969b1b35ca6ebb009",
       "returncode": 0
@@ -162,7 +162,7 @@
       ],
       "check": "linux.native_abi_probe.compile",
       "cwd": ".",
-      "duration_s": 0.27,
+      "duration_s": 0.266,
       "log": "build-platform/linux_native_abi_probe_compile.log",
       "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "returncode": 0
@@ -173,15 +173,15 @@
       ],
       "check": "linux.native_abi_probe",
       "cwd": ".",
-      "duration_s": 0.009,
+      "duration_s": 0.008,
       "log": "build-platform/linux_native_abi_probe.log",
       "log_sha256": "5465ddf3221569e0c371c722df468d925099a58eb836d8ea317bed86e74946e6",
       "returncode": 0
     }
   ],
-  "generated_utc": "2026-10-11T22:30:53Z",
+  "generated_utc": "2026-10-11T22:33:15Z",
   "host": {
-    "generated_utc": "2026-10-11T22:30:50Z",
+    "generated_utc": "2026-10-11T22:32:43Z",
     "machine": "x86_64",
     "python": "3.13.16",
     "release": "6.18.44-fc-v114",
