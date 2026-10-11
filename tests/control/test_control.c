@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include "agent/su_agent.h"
+#include "agent/su_path.h"
 #include "agent/su_proto.h"
 #include "ir/su_json.h"
 #include "sutekh/ir.h"
@@ -310,6 +311,91 @@ static void test_symlink_escape(const SuAgentConfig *base, const char *scratch, 
     unlink(link_path);
 }
 
+/* capsule.submit source_path override (AGENT_RPC: replaces the capsule's own source binding). */
+static int copy_file(const char *from, const char *to) {
+    FILE *in = fopen(from, "rb");
+    FILE *out;
+    char buf[4096];
+    size_t n;
+    int ok = 1;
+
+    if (in == NULL) {
+        return 0;
+    }
+    out = fopen(to, "wb");
+    if (out == NULL) {
+        fclose(in);
+        return 0;
+    }
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            ok = 0;
+        }
+    }
+    ok = ok && ferror(in) == 0;
+    fclose(in);
+    return fclose(out) == 0 && ok;
+}
+
+static void test_source_path(Session *s, const SuAgentConfig *base, const char *scratch, const char *root) {
+    char rdir[1024];
+    char path[1200];
+    char target[1200];
+    Session t;
+    Resp r;
+    SuAgentConfig cfg = *base;
+
+    /* Main project root: valid sibling accepted; traversal, absolute path, wrong type, extra key rejected. */
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"sp-bad-type\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"examples/movement.capsule.json\",\"source_path\":5}}", &r) == 0);
+    CHECK_CODE(r, SU_E_TYPE);
+    resp_free(&r);
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"sp-extra\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"examples/movement.capsule.json\",\"bogus\":1}}", &r) == 0);
+    CHECK_CODE(r, SU_E_TYPE);
+    resp_free(&r);
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"sp-trav\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"examples/movement.capsule.json\",\"source_path\":\"../../../../etc/passwd\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
+    resp_free(&r);
+    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"sp-abs\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"examples/movement.capsule.json\",\"source_path\":\"/etc/hostname\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
+    resp_free(&r);
+
+    /* Scratch project root: a regular sibling with a different name is accepted; a symlink inside the
+     * root that points outside it is rejected. The capsule and its own source are copies in the root. */
+    CHECK(snprintf(rdir, sizeof rdir, "%s/sp-root", scratch) < (int)sizeof rdir);
+    if (mkdir(rdir, 0700) != 0 && errno != EEXIST) {
+        perror("mkdir sp-root");
+        exit(2);
+    }
+    CHECK(snprintf(path, sizeof path, "%s/movement.capsule.json", rdir) < (int)sizeof path);
+    CHECK(copy_file("examples/movement.capsule.json", path));
+    CHECK(snprintf(path, sizeof path, "%s/movement.lir.json", rdir) < (int)sizeof path);
+    CHECK(copy_file("examples/movement.lir.json", path));
+    CHECK(snprintf(path, sizeof path, "%s/alt.lir.json", rdir) < (int)sizeof path);
+    CHECK(copy_file("examples/movement.lir.json", path));
+    CHECK(snprintf(path, sizeof path, "%s/esc.lir.json", rdir) < (int)sizeof path);
+    CHECK(snprintf(target, sizeof target, "%s/examples/movement.lir.json", root) < (int)sizeof target);
+    unlink(path);
+    CHECK(symlink(target, path) == 0);
+
+    cfg.project_root = rdir;
+    t = session_start(&cfg);
+    CHECK(call(&t, "{\"protocol\":\"0.1\",\"id\":\"sp-alt\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"movement.capsule.json\",\"source_path\":\"alt.lir.json\"}}", &r) == 0);
+    CHECK_OK(r);
+    resp_free(&r);
+    CHECK(call(&t, "{\"protocol\":\"0.1\",\"id\":\"sp-esc\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"movement.capsule.json\",\"source_path\":\"esc.lir.json\"}}", &r) == 0);
+    CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
+    resp_free(&r);
+    session_stop(&t);
+    unlink(path);
+    CHECK(snprintf(path, sizeof path, "%s/movement.capsule.json", rdir) < (int)sizeof path);
+    unlink(path);
+    CHECK(snprintf(path, sizeof path, "%s/movement.lir.json", rdir) < (int)sizeof path);
+    unlink(path);
+    CHECK(snprintf(path, sizeof path, "%s/alt.lir.json", rdir) < (int)sizeof path);
+    unlink(path);
+    rmdir(rdir);
+}
+
 static void test_world_sequence(Session *s, const char *fault_file) {
     Resp r;
     const SuJsonValue *res;
@@ -470,6 +556,7 @@ int main(int argc, char **argv) {
     const char *root;
     const char *scratch;
     char cwd_buf[4096];
+    char root_abs[PATH_MAX_TEST];
     char fault_file[PATH_MAX_TEST + 32];
     char scratch_dir[PATH_MAX_TEST];
     const char *tmpdir;
@@ -486,6 +573,12 @@ int main(int argc, char **argv) {
     if (argc < 3 && getcwd(cwd_buf, sizeof cwd_buf) != NULL) {
         root = cwd_buf;
     }
+    /* Symlink targets are built from root, so root must be absolute (a relative root made them dangle). */
+    if (su_path_canonical_root(root, root_abs, sizeof root_abs) != SU_OK) {
+        fprintf(stderr, "project root %s could not be canonicalized\n", root);
+        return 2;
+    }
+    root = root_abs;
     tmpdir = getenv("TMPDIR");
     scratch = getenv("SU_TEST_SCRATCH");
     if (scratch == NULL) {
@@ -516,6 +609,7 @@ int main(int argc, char **argv) {
     test_protocol_errors(&s);
     test_path_policy(&s);
     test_world_sequence(&s, fault_file);
+    test_source_path(&s, &cfg, scratch_dir, root);
     session_stop(&s);
 
     test_symlink_escape(&cfg, scratch_dir, root);

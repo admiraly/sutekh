@@ -894,21 +894,42 @@ def _submit_expect_rejection(t, sess, cap_rel, source_rel, expected_code):
     return True, env
 
 
-BOUND_MANIFEST = "tests/fixtures/invalid/bound_manifest.json"  # written by make_negative_bindings.py
+NEG_MANIFESTS = ["tests/fixtures/negative_cases.json", "examples/negative_cases.json"]
+INVALID_ARGUMENT = "SU_E_INVALID_ARGUMENT"
+CANDIDATE_PROBE_MAX = 20  # AGENT_MAX_CANDIDATES is 16; ids are candidate-<n> from a counter
 
 
-def _negative_manifest(t, rel):
-    doc = t.load(rel)
-    bound = t.load(BOUND_MANIFEST)
-    base_dir = os.path.dirname(rel)
-    cases = []
-    for case in doc["cases"]:
-        cap_rel = os.path.normpath(os.path.join(base_dir, case.get("capsule", doc["capsule"]))).replace(os.sep, "/")
-        src_rel = os.path.normpath(os.path.join(base_dir, case["path"])).replace(os.sep, "/")
-        if declared_source(t, cap_rel) != src_rel and src_rel in bound:
-            cap_rel = bound[src_rel]  # a copy of the capsule whose source field names src_rel
-        cases.append((cap_rel, src_rel, case["expected_code"], case.get("path")))
-    return cases
+def _negative_cases(t) -> list:
+    """Every negative case from both manifests as (capsule_rel, source_rel, expected_code, manifest_rel).
+    Paths resolve against the manifest's directory. Identical (capsule, source) pairs are deduplicated;
+    the same pair with two different expected codes is a manifest error."""
+    seen, out = {}, []
+    for rel in NEG_MANIFESTS:
+        doc = t.load(rel)
+        base_dir = os.path.dirname(rel)
+        for case in doc["cases"]:
+            cap_rel = os.path.normpath(os.path.join(base_dir, case.get("capsule", doc["capsule"]))).replace(os.sep, "/")
+            src_rel = os.path.normpath(os.path.join(base_dir, case["path"])).replace(os.sep, "/")
+            key = (cap_rel, src_rel)
+            if key in seen:
+                if seen[key] != case["expected_code"]:
+                    raise Failed(f"manifest conflict: {src_rel} expects {seen[key]} and {case['expected_code']}")
+                continue
+            seen[key] = case["expected_code"]
+            out.append((cap_rel, src_rel, case["expected_code"], rel))
+    return out
+
+
+def _candidate_probe(sess) -> list:
+    """Existing candidate numbers among candidate-1..candidate-CANDIDATE_PROBE_MAX, via candidate.status."""
+    present = []
+    for k in range(1, CANDIDATE_PROBE_MAX + 1):
+        env = sess.request("candidate.status", {"candidate_id": f"candidate-{k}"})
+        if env.get("ok") is True:
+            present.append(k)
+        elif env.get("error", {}).get("code") != INVALID_ARGUMENT:
+            raise Failed(f"candidate.status candidate-{k} returned unexpected {env.get('error')}")
+    return present
 
 
 def t04(t: TestCtx):
@@ -924,36 +945,38 @@ def t04(t: TestCtx):
     if env["ok"] is False and env["error"].get("code") == UNSUPPORTED:
         raise Unavailable("capsule.submit answered SU_E_UNSUPPORTED_METHOD")
     t.check("control: valid movement candidate accepted", True, env["ok"])
-    cases = _negative_manifest(t, "tests/fixtures/negative_cases.json")
-    cases += _negative_manifest(t, "examples/negative_cases.json")
-    results, failures, not_expressible = [], [], []
-    for cap_rel, src_rel, code, _label in cases:
+    if env["ok"] is not True:
+        raise Failed(f"control submit rejected: {env.get('error')}")
+    known = _candidate_probe(sess)
+    if known != [int(env["result"]["candidate_id"].split("-")[1])]:
+        raise Failed(f"control submit: expected exactly the new candidate, probe found {known}")
+    results, failures = [], []
+    cases = _negative_cases(t)
+    for cap_rel, src_rel, code, manifest_rel in cases:
         t.need_file(cap_rel)
         t.need_file(src_rel)
-        declared = declared_source(t, cap_rel)
-        if declared != src_rel:
-            not_expressible.append(f"{src_rel} (capsule {cap_rel} binds {declared})")
-            continue
-        env = sess.request("capsule.submit", {"capsule_path": cap_rel})
+        # source_path is project-root relative and replaces the capsule's own `source` binding.
+        env = sess.request("capsule.submit", {"capsule_path": cap_rel, "source_path": src_rel})
         if env["ok"] is False and env["error"].get("code") == UNSUPPORTED:
             raise Unavailable("capsule.submit answered SU_E_UNSUPPORTED_METHOD")
         mism = classify_error(env, code)
+        after_probe = _candidate_probe(sess)
+        if after_probe != known:
+            mism.append(f"candidate set changed from {known} to {after_probe}")
         after = inspect(t, sess, wid)
         mism += verify_rejections_leave_state(before_snapshot, after)
+        actual = "accepted" if env["ok"] else env["error"].get("code")
         t.checks.append({"name": f"negative {src_rel} -> {code}", "mismatches": mism[:5], "ok": not mism})
-        results.append({"source": src_rel, "expected": code, "ok": not mism,
-                        "actual": None if env["ok"] else env["error"].get("code")})
+        results.append({"capsule": cap_rel, "source": src_rel, "manifest": manifest_rel,
+                        "expected": code, "actual": actual, "ok": not mism})
         if mism:
-            failures.append(f"{src_rel}: {'; '.join(mism[:2])}")
+            failures.append(f"FAILED {src_rel} (capsule {cap_rel}): expected {code}, actual {actual}; "
+                            + "; ".join(mism[:2]))
     t.details["negative_cases"] = results
-    t.details["not_expressible"] = not_expressible
+    t.details["negative_case_count"] = len(cases)
     if failures:
         raise Failed(f"{len(failures)} of {len(cases)} negative cases not rejected as expected: "
                      + " | ".join(failures[:6]))
-    if not_expressible:
-        raise Unavailable(f"{len(not_expressible)} of {len(cases)} negative cases cannot be expressed: "
-                          "capsule.submit takes only capsule_path and the engine binds each capsule to its "
-                          "own source field; the other cases were checked and all rejected as expected")
 
 
 def _find_candidate(t, manifest_rel, cid):

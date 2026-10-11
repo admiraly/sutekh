@@ -234,6 +234,9 @@ static uint32_t locate_capsule(SuAgent *a, const char *rel, char *cap_real, char
         *cap_bytes = NULL;
         return call_fail(c, st, "capsule metadata is malformed");
     }
+    if (src_real == NULL) {
+        return SU_OK; /* caller supplies the source module itself (capsule.submit source_path) */
+    }
     st = su_path_sibling(a->root, cap_real, source, src_real, SU_PATH_BUF);
     if (st != SU_OK) {
         free(*cap_bytes);
@@ -302,7 +305,7 @@ static uint32_t h_capsule_submit(SuAgent *a, const SuJsonValue *params, SuBuf *r
         param_str(params, "source_path", 1, &src_override, c) != SU_OK) {
         return SU_E_TYPE;
     }
-    st = locate_capsule(a, rel, cap_real, src_real, &cap, &cap_len, c);
+    st = locate_capsule(a, rel, cap_real, src_override != NULL ? NULL : src_real, &cap, &cap_len, c);
     if (st != SU_OK) {
         return st;
     }
