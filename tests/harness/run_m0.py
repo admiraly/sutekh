@@ -971,7 +971,7 @@ def _tool_line(out: str) -> str:
 
 def t00(t: TestCtx):
     """Clean bootstrap (TEST_SPEC T00). Never incremental: a fresh build tree outside the repository is
-    removed if present, configured (Debug, the dev profile's flags) and built. The clean binary's version
+    removed if present, configured (same build type as the binary under test: Debug or Release) and built. The clean binary's version
     must match the headers, and the binary under test must report the same version as the clean build.
     The binary under test is the one every other test runs; with --no-build T00 is not run."""
     if t.run.no_build:
@@ -993,7 +993,16 @@ def t00(t: TestCtx):
         _rc, out_cc = t.run_cmd([cc, "--version"], timeout=60)
         tools["compiler"] = _tool_line(out_cc)
     t.details["tool_versions"] = tools
-    argv = ["cmake", "-S", REPO, "-B", bdir, "-DCMAKE_BUILD_TYPE=Debug"] + (["-G", gen] if gen else [])
+    # The clean reference is built with the same CMAKE_BUILD_TYPE the binary under test reports
+    # (Debug or Release); any other value is a harness error, not a reason to guess.
+    if not os.path.isfile(t.binary):
+        raise Failed(f"binary under test not found: {t.binary}")
+    _rc0, out_probe = t.run_cmd([t.binary, "--version"], timeout=30)
+    probe_type = parse_version_output(out_probe).get("build_type")
+    if probe_type not in ("Debug", "Release"):
+        raise Failed(f"binary under test reports unsupported build_type {probe_type!r}; T00 supports Debug and Release")
+    t.details["clean_build_type"] = probe_type
+    argv = ["cmake", "-S", REPO, "-B", bdir, f"-DCMAKE_BUILD_TYPE={probe_type}"] + (["-G", gen] if gen else [])
     rc_cfg, _ = t.run_cmd(argv, timeout=900)
     t.check("clean configure returncode", 0, rc_cfg)
     rc_bld, _ = t.run_cmd(["cmake", "--build", bdir, "--parallel"], timeout=1800)
