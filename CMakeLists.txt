@@ -75,3 +75,13 @@ target_link_libraries(test_control PRIVATE su_agent)
 target_compile_definitions(test_control PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_control)
 add_test(NAME control COMMAND test_control $<TARGET_FILE:worker_stub> WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_library(su_snapshot STATIC src/world/snapshot.c src/runtime/checkpoint.c)
+target_include_directories(su_snapshot PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
+target_link_libraries(su_snapshot PUBLIC su_world su_ir su_platform)
+sutekh_apply_warnings(su_snapshot)
+
+add_executable(test_snapshot tests/snapshot/test_snapshot.c)
+target_link_libraries(test_snapshot PRIVATE su_snapshot)
+sutekh_apply_warnings(test_snapshot)
+add_test(NAME snapshot COMMAND test_snapshot WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
