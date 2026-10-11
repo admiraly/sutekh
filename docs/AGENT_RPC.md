@@ -32,6 +32,7 @@ IDs in these snippets are illustrative, not current engine state. Response `ok:f
 | `world.run` / `world.pause` | World, pacing policy | Running/paused status |
 | `world.snapshot` | World, expected revision | Immutable snapshot ID and metadata |
 | `world.restore` | World, snapshot, expected revision | Restored revision or mismatch error |
+| `world.close` | World, expected revision | Frees the world, its schedule, checkpoints and registry records; the slot is reusable and closed IDs are never reused (implemented in M1) |
 | `capsule.submit` | Immutable capsule source or allowed path, expected base | Candidate ID, captured source hashes |
 | `candidate.status` | Candidate ID | State, diagnostics, evidence IDs |
 | `candidate.evaluate` | Candidate, fixture/test IDs | Asynchronous test job ID |
