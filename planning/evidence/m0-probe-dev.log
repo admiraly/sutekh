@@ -1,0 +1,8 @@
+positive control (bare cc via PATH (installed cc)): detected=True
+positive control (absolute path /usr/bin/cc (installed cc)): detected=True
+running: /usr/bin/python3 -I /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/tools/demo_zero_wait.py --binary /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build/sutekh --out /tmp/no-build-probe-lybg06zs/demo_evidence.json (under strace)
+traced exec attempts: 43 (successful 7); executed basenames: git, python3, sutekh, uname
+edit window 38.194 ms: build-tool execs in window = 0
+build-tool execs in whole run = 0
+verdict: pass (both positive controls (bare and absolute-path cc) detected; zero build-tool execs in the whole traced run, including the capsule edit/install window)
+evidence: /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/planning/evidence/m0-probe-dev.json

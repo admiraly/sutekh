@@ -1,0 +1,58 @@
+tool versions:
+  python: 3.13.16
+  cmake: cmake version 3.28.3
+  ninja: 1.11.1
+  compiler: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
++ cmake -S /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7 -B /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build -DCMAKE_BUILD_TYPE=Debug -G Ninja
+-- The C compiler identification is GNU 13.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Configuring done (0.2s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build
++ cmake --build /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build --parallel
+[0/2] Re-checking globbed directories...
+[1/41] Building C object CMakeFiles/su_platform.dir/src/platform/su_platform.c.o
+[2/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_sha256.c.o
+[3/41] Building C object CMakeFiles/sutekh.dir/src/platform/sutekh_main.c.o
+[4/41] Linking C static library libsu_platform.a
+[5/41] Building C object CMakeFiles/su_world.dir/src/world/su_world.c.o
+[6/41] Building C object CMakeFiles/test_world.dir/tests/world/test_world.c.o
+[7/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_json.c.o
+[8/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_lir.c.o
+[9/41] Linking C static library libsu_world.a
+[10/41] Building C object CMakeFiles/test_ir.dir/tests/ir/test_ir.c.o
+[11/41] Linking C static library libsu_ir.a
+[12/41] Linking C executable test_world
+[13/41] Building C object CMakeFiles/su_vm.dir/src/vm/su_vm.c.o
+[14/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_agent.c.o
+[15/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_module.c.o
+[16/41] Linking C executable test_ir
+[17/41] Building C object CMakeFiles/test_vm.dir/tests/vm/test_vm.c.o
+[18/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_proto.c.o
+[19/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_path.c.o
+[20/41] Building C object CMakeFiles/su_agent.dir/src/runtime/registry.c.o
+[21/41] Linking C static library libsu_vm.a
+[22/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_proc.c.o
+[23/41] Building C object CMakeFiles/su_agent.dir/src/runtime/reload.c.o
+[24/41] Building C object CMakeFiles/worker_stub.dir/tests/control/worker_stub.c.o
+[25/41] Building C object CMakeFiles/su_agent.dir/src/runtime/schedule.c.o
+[26/41] Linking C executable test_vm
+[27/41] Building C object CMakeFiles/su_agent.dir/src/runtime/worker.c.o
+[28/41] Building C object CMakeFiles/su_snapshot.dir/src/runtime/checkpoint.c.o
+[29/41] Building C object CMakeFiles/su_snapshot.dir/src/world/snapshot.c.o
+[30/41] Building C object CMakeFiles/test_control.dir/tests/control/test_control.c.o
+[31/41] Building C object CMakeFiles/test_snapshot.dir/tests/snapshot/test_snapshot.c.o
+[32/41] Linking C static library libsu_snapshot.a
+[33/41] Building C object CMakeFiles/test_snapshot_cp.dir/tests/snapshot_cp/test_snapshot_cp.c.o
+[34/41] Linking C executable test_snapshot
+[35/41] Building C object CMakeFiles/test_reload.dir/tests/reload/test_reload.c.o
+[36/41] Linking C static library libsu_agent.a
+[37/41] Linking C executable sutekh
+[38/41] Linking C executable test_control
+[39/41] Linking C executable worker_stub
+[40/41] Linking C executable test_snapshot_cp
+[41/41] Linking C executable test_reload

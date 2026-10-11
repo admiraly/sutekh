@@ -1,13 +1,13 @@
 {
   "binary": {
-    "bytes": 338576,
-    "path": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
-    "sha256": "fc8149dfd10c4ceb7018372a58bc66768873436bd717a93414e697feed121210"
+    "bytes": 339128,
+    "path": "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build/sutekh",
+    "sha256": "eb121da9db55754a37e9505b0a338bdb1dd473d2c3fe6fa62d35fd61768d0939"
   },
   "checks": [
     {
-      "actual": 21807,
-      "expected": 21807,
+      "actual": 11034,
+      "expected": 11034,
       "name": "supervisor pid is the serve process",
       "ok": true,
       "phase": "start_serve"
@@ -106,22 +106,22 @@
       "phase": "create_world"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "tick 0: worker pid",
       "ok": true,
       "phase": "create_world"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "worker_pid unchanged",
       "ok": true,
       "phase": "create_world"
     },
     {
-      "actual": 220625,
-      "expected": 220625,
+      "actual": 354683,
+      "expected": 354683,
       "name": "worker process start time unchanged (same process, not a recycled pid)",
       "ok": true,
       "phase": "create_world"
@@ -185,8 +185,8 @@
       "phase": "baseline_v1"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "v1 tick 1: worker pid",
       "ok": true,
       "phase": "baseline_v1"
@@ -250,8 +250,8 @@
       "phase": "baseline_v1"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "v1 tick 2: worker pid",
       "ok": true,
       "phase": "baseline_v1"
@@ -315,22 +315,22 @@
       "phase": "baseline_v1"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "v1 tick 3: worker pid",
       "ok": true,
       "phase": "baseline_v1"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "worker_pid unchanged",
       "ok": true,
       "phase": "baseline_v1"
     },
     {
-      "actual": 220625,
-      "expected": 220625,
+      "actual": 354683,
+      "expected": 354683,
       "name": "worker process start time unchanged (same process, not a recycled pid)",
       "ok": true,
       "phase": "baseline_v1"
@@ -500,8 +500,8 @@
       "phase": "advance_to_effective_tick"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "v1 at effective tick 4: worker pid",
       "ok": true,
       "phase": "advance_to_effective_tick"
@@ -579,8 +579,8 @@
       "phase": "install"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "after install at tick 4 (no step): worker pid",
       "ok": true,
       "phase": "install"
@@ -643,15 +643,15 @@
       "phase": "install"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "worker_pid unchanged",
       "ok": true,
       "phase": "install"
     },
     {
-      "actual": 220625,
-      "expected": 220625,
+      "actual": 354683,
+      "expected": 354683,
       "name": "worker process start time unchanged (same process, not a recycled pid)",
       "ok": true,
       "phase": "install"
@@ -715,8 +715,8 @@
       "phase": "v2_after_install"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "v2 tick 5: worker pid",
       "ok": true,
       "phase": "v2_after_install"
@@ -780,8 +780,8 @@
       "phase": "v2_after_install"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "v2 tick 6: worker pid",
       "ok": true,
       "phase": "v2_after_install"
@@ -845,8 +845,8 @@
       "phase": "v2_after_install"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "v2 tick 7: worker pid",
       "ok": true,
       "phase": "v2_after_install"
@@ -859,15 +859,15 @@
       "phase": "v2_after_install"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "worker_pid unchanged",
       "ok": true,
       "phase": "v2_after_install"
     },
     {
-      "actual": 220625,
-      "expected": 220625,
+      "actual": 354683,
+      "expected": 354683,
       "name": "worker process start time unchanged (same process, not a recycled pid)",
       "ok": true,
       "phase": "v2_after_install"
@@ -954,15 +954,15 @@
       "phase": "invalid_edit_rejected"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "worker_pid unchanged",
       "ok": true,
       "phase": "invalid_edit_rejected"
     },
     {
-      "actual": 220625,
-      "expected": 220625,
+      "actual": 354683,
+      "expected": 354683,
       "name": "worker process start time unchanged (same process, not a recycled pid)",
       "ok": true,
       "phase": "invalid_edit_rejected"
@@ -1026,8 +1026,8 @@
       "phase": "v2_still_active"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "v2 after rejected edit: worker pid",
       "ok": true,
       "phase": "v2_still_active"
@@ -1173,22 +1173,22 @@
       "phase": "snapshot_restore"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "step after restore: worker pid",
       "ok": true,
       "phase": "snapshot_restore"
     },
     {
-      "actual": 21810,
-      "expected": 21810,
+      "actual": 11037,
+      "expected": 11037,
       "name": "worker_pid unchanged",
       "ok": true,
       "phase": "snapshot_restore"
     },
     {
-      "actual": 220625,
-      "expected": 220625,
+      "actual": 354683,
+      "expected": 354683,
       "name": "worker process start time unchanged (same process, not a recycled pid)",
       "ok": true,
       "phase": "snapshot_restore"
@@ -1218,9 +1218,9 @@
       "/usr/bin/python3",
       "tools/demo_zero_wait.py",
       "--binary",
-      "build/sutekh",
+      "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build/sutekh",
       "--out",
-      "/tmp/claude-0/-home-user-sutekh/82533bc6-e6ca-564a-ba43-39dd3091bafa/scratchpad/demo-dev.json"
+      "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/planning/evidence/m0-demo-dev.json"
     ],
     "serve": [
       "build/sutekh",
@@ -1231,14 +1231,14 @@
   },
   "edit_window": {
     "candidate_id": "candidate-1",
-    "end_epoch_ns": 1791741341744326895,
-    "end_mono_ms": 31.072,
-    "start_epoch_ns": 1791741341731871302,
-    "start_mono_ms": 18.617
+    "end_epoch_ns": 1791742682322113707,
+    "end_mono_ms": 29.824,
+    "start_epoch_ns": 1791742682310834705,
+    "start_mono_ms": 18.544
   },
   "evidence_format": "m0-zero-wait-demo/0.1",
   "failure": null,
-  "finished_utc": "2026-10-11T17:55:41.758687+00:00",
+  "finished_utc": "2026-10-11T18:18:02.340315+00:00",
   "invalid_source": {
     "sha256": "f0253dc52d35f2b8af974e7115c4902cf4e5655931e27280142bf7a667294e7b"
   },
@@ -1255,64 +1255,64 @@
   },
   "phases": [
     {
-      "duration_ms": 1.983,
-      "end_ms": 11.835,
+      "duration_ms": 1.596,
+      "end_ms": 12.438,
       "name": "start_serve",
-      "start_ms": 9.852
+      "start_ms": 10.842
     },
     {
-      "duration_ms": 3.747,
-      "end_ms": 15.594,
+      "duration_ms": 3.505,
+      "end_ms": 15.952,
       "name": "create_world",
-      "start_ms": 11.847
+      "start_ms": 12.447
     },
     {
-      "duration_ms": 2.994,
-      "end_ms": 18.6,
+      "duration_ms": 2.573,
+      "end_ms": 18.534,
       "name": "baseline_v1",
-      "start_ms": 15.606
+      "start_ms": 15.961
     },
     {
-      "duration_ms": 10.407,
-      "end_ms": 29.02,
+      "duration_ms": 9.325,
+      "end_ms": 27.867,
       "name": "edit_submit_evaluate",
-      "start_ms": 18.613
+      "start_ms": 18.542
     },
     {
-      "duration_ms": 1.164,
-      "end_ms": 30.193,
+      "duration_ms": 0.723,
+      "end_ms": 28.597,
       "name": "advance_to_effective_tick",
-      "start_ms": 29.029
+      "start_ms": 27.874
     },
     {
-      "duration_ms": 0.875,
-      "end_ms": 31.075,
+      "duration_ms": 1.225,
+      "end_ms": 29.827,
       "name": "install",
-      "start_ms": 30.2
+      "start_ms": 28.602
     },
     {
-      "duration_ms": 1.895,
-      "end_ms": 32.976,
+      "duration_ms": 2.183,
+      "end_ms": 32.02,
       "name": "v2_after_install",
-      "start_ms": 31.081
+      "start_ms": 29.837
     },
     {
-      "duration_ms": 1.074,
-      "end_ms": 34.056,
+      "duration_ms": 0.939,
+      "end_ms": 32.967,
       "name": "invalid_edit_rejected",
-      "start_ms": 32.982
+      "start_ms": 32.028
     },
     {
-      "duration_ms": 0.506,
-      "end_ms": 34.568,
+      "duration_ms": 0.697,
+      "end_ms": 33.67,
       "name": "v2_still_active",
-      "start_ms": 34.062
+      "start_ms": 32.973
     },
     {
-      "duration_ms": 2.279,
-      "end_ms": 36.853,
+      "duration_ms": 2.843,
+      "end_ms": 36.52,
       "name": "snapshot_restore",
-      "start_ms": 34.574
+      "start_ms": 33.677
     }
   ],
   "pre_edit_state": {
@@ -1329,358 +1329,358 @@
   },
   "rpc": [
     {
-      "duration_ms": 0.52,
+      "duration_ms": 0.288,
       "error_code": null,
       "id": "demo-1",
       "method": "engine.info",
       "ok": true,
       "phase": "start_serve",
-      "received_ms": 11.671,
-      "sent_ms": 11.151
+      "received_ms": 12.335,
+      "sent_ms": 12.047
     },
     {
-      "duration_ms": 2.471,
+      "duration_ms": 2.34,
       "error_code": null,
       "id": "demo-2",
       "method": "world.create",
       "ok": true,
       "phase": "create_world",
-      "received_ms": 14.552,
-      "sent_ms": 12.081
+      "received_ms": 15.023,
+      "sent_ms": 12.683
     },
     {
-      "duration_ms": 0.504,
+      "duration_ms": 0.457,
       "error_code": null,
       "id": "demo-3",
       "method": "world.inspect",
       "ok": true,
       "phase": "create_world",
-      "received_ms": 15.37,
-      "sent_ms": 14.866
+      "received_ms": 15.701,
+      "sent_ms": 15.245
     },
     {
-      "duration_ms": 0.393,
+      "duration_ms": 0.401,
       "error_code": null,
       "id": "demo-4",
       "method": "world.step",
       "ok": true,
       "phase": "baseline_v1",
-      "received_ms": 16.079,
-      "sent_ms": 15.686
+      "received_ms": 16.436,
+      "sent_ms": 16.036
     },
     {
-      "duration_ms": 0.438,
+      "duration_ms": 0.456,
       "error_code": null,
       "id": "demo-5",
       "method": "world.inspect",
       "ok": true,
       "phase": "baseline_v1",
-      "received_ms": 16.612,
-      "sent_ms": 16.174
+      "received_ms": 16.951,
+      "sent_ms": 16.495
     },
     {
-      "duration_ms": 0.397,
+      "duration_ms": 0.327,
       "error_code": null,
       "id": "demo-6",
       "method": "world.step",
       "ok": true,
       "phase": "baseline_v1",
-      "received_ms": 17.247,
-      "sent_ms": 16.85
+      "received_ms": 17.465,
+      "sent_ms": 17.138
     },
     {
-      "duration_ms": 0.334,
+      "duration_ms": 0.236,
       "error_code": null,
       "id": "demo-7",
       "method": "world.inspect",
       "ok": true,
       "phase": "baseline_v1",
-      "received_ms": 17.68,
-      "sent_ms": 17.346
+      "received_ms": 17.736,
+      "sent_ms": 17.501
     },
     {
-      "duration_ms": 0.218,
+      "duration_ms": 0.215,
       "error_code": null,
       "id": "demo-8",
       "method": "world.step",
       "ok": true,
       "phase": "baseline_v1",
-      "received_ms": 18.11,
-      "sent_ms": 17.892
+      "received_ms": 18.054,
+      "sent_ms": 17.839
     },
     {
-      "duration_ms": 0.18,
+      "duration_ms": 0.282,
       "error_code": null,
       "id": "demo-9",
       "method": "world.inspect",
       "ok": true,
       "phase": "baseline_v1",
-      "received_ms": 18.348,
-      "sent_ms": 18.168
+      "received_ms": 18.366,
+      "sent_ms": 18.083
     },
     {
-      "duration_ms": 0.521,
+      "duration_ms": 0.444,
       "error_code": null,
       "id": "demo-10",
       "method": "capsule.submit",
       "ok": true,
       "phase": "edit_submit_evaluate",
-      "received_ms": 21.478,
-      "sent_ms": 20.958
+      "received_ms": 20.092,
+      "sent_ms": 19.648
     },
     {
-      "duration_ms": 7.356,
+      "duration_ms": 7.624,
       "error_code": null,
       "id": "demo-11",
       "method": "candidate.evaluate",
       "ok": true,
       "phase": "edit_submit_evaluate",
-      "received_ms": 28.931,
-      "sent_ms": 21.575
+      "received_ms": 27.792,
+      "sent_ms": 20.167
     },
     {
-      "duration_ms": 0.533,
+      "duration_ms": 0.322,
       "error_code": null,
       "id": "demo-12",
       "method": "world.step",
       "ok": true,
       "phase": "advance_to_effective_tick",
-      "received_ms": 29.629,
-      "sent_ms": 29.096
+      "received_ms": 28.252,
+      "sent_ms": 27.93
     },
     {
-      "duration_ms": 0.312,
+      "duration_ms": 0.255,
       "error_code": null,
       "id": "demo-13",
       "method": "world.inspect",
       "ok": true,
       "phase": "advance_to_effective_tick",
-      "received_ms": 30.128,
-      "sent_ms": 29.816
+      "received_ms": 28.544,
+      "sent_ms": 28.29
     },
     {
-      "duration_ms": 0.421,
+      "duration_ms": 0.593,
       "error_code": null,
       "id": "demo-14",
       "method": "candidate.install",
       "ok": true,
       "phase": "install",
-      "received_ms": 30.637,
-      "sent_ms": 30.216
+      "received_ms": 29.21,
+      "sent_ms": 28.616
     },
     {
-      "duration_ms": 0.231,
+      "duration_ms": 0.301,
       "error_code": null,
       "id": "demo-15",
       "method": "world.inspect",
       "ok": true,
       "phase": "install",
-      "received_ms": 30.928,
-      "sent_ms": 30.697
+      "received_ms": 29.565,
+      "sent_ms": 29.263
     },
     {
-      "duration_ms": 0.267,
+      "duration_ms": 0.244,
       "error_code": null,
       "id": "demo-16",
       "method": "world.step",
       "ok": true,
       "phase": "v2_after_install",
-      "received_ms": 31.444,
-      "sent_ms": 31.177
+      "received_ms": 30.181,
+      "sent_ms": 29.937
     },
     {
-      "duration_ms": 0.233,
+      "duration_ms": 0.352,
       "error_code": null,
       "id": "demo-17",
       "method": "world.inspect",
       "ok": true,
       "phase": "v2_after_install",
-      "received_ms": 31.72,
-      "sent_ms": 31.487
+      "received_ms": 30.571,
+      "sent_ms": 30.219
     },
     {
-      "duration_ms": 0.23,
+      "duration_ms": 0.216,
       "error_code": null,
       "id": "demo-18",
       "method": "world.step",
       "ok": true,
       "phase": "v2_after_install",
-      "received_ms": 32.084,
-      "sent_ms": 31.854
+      "received_ms": 31.035,
+      "sent_ms": 30.819
     },
     {
-      "duration_ms": 0.233,
+      "duration_ms": 0.268,
       "error_code": null,
       "id": "demo-19",
       "method": "world.inspect",
       "ok": true,
       "phase": "v2_after_install",
-      "received_ms": 32.349,
-      "sent_ms": 32.116
+      "received_ms": 31.359,
+      "sent_ms": 31.09
     },
     {
-      "duration_ms": 0.219,
+      "duration_ms": 0.181,
       "error_code": null,
       "id": "demo-20",
       "method": "world.step",
       "ok": true,
       "phase": "v2_after_install",
-      "received_ms": 32.649,
-      "sent_ms": 32.43
+      "received_ms": 31.649,
+      "sent_ms": 31.468
     },
     {
-      "duration_ms": 0.2,
+      "duration_ms": 0.223,
       "error_code": null,
       "id": "demo-21",
       "method": "world.inspect",
       "ok": true,
       "phase": "v2_after_install",
-      "received_ms": 32.874,
-      "sent_ms": 32.675
+      "received_ms": 31.899,
+      "sent_ms": 31.676
     },
     {
-      "duration_ms": 0.222,
+      "duration_ms": 0.179,
       "error_code": null,
       "id": "demo-22",
       "method": "world.inspect",
       "ok": true,
       "phase": "invalid_edit_rejected",
-      "received_ms": 33.216,
-      "sent_ms": 32.994
+      "received_ms": 32.219,
+      "sent_ms": 32.04
     },
     {
-      "duration_ms": 0.402,
+      "duration_ms": 0.354,
       "error_code": "SU_E_UNDECLARED_WRITE",
       "id": "demo-23",
       "method": "capsule.submit",
       "ok": false,
       "phase": "invalid_edit_rejected",
-      "received_ms": 33.663,
-      "sent_ms": 33.261
+      "received_ms": 32.616,
+      "sent_ms": 32.262
     },
     {
-      "duration_ms": 0.226,
+      "duration_ms": 0.214,
       "error_code": null,
       "id": "demo-24",
       "method": "world.inspect",
       "ok": true,
       "phase": "invalid_edit_rejected",
-      "received_ms": 33.942,
-      "sent_ms": 33.715
+      "received_ms": 32.867,
+      "sent_ms": 32.653
     },
     {
-      "duration_ms": 0.202,
+      "duration_ms": 0.283,
       "error_code": null,
       "id": "demo-25",
       "method": "world.step",
       "ok": true,
       "phase": "v2_still_active",
-      "received_ms": 34.3,
-      "sent_ms": 34.098
+      "received_ms": 33.291,
+      "sent_ms": 33.008
     },
     {
-      "duration_ms": 0.193,
+      "duration_ms": 0.215,
       "error_code": null,
       "id": "demo-26",
       "method": "world.inspect",
       "ok": true,
       "phase": "v2_still_active",
-      "received_ms": 34.523,
-      "sent_ms": 34.33
+      "received_ms": 33.584,
+      "sent_ms": 33.369
     },
     {
-      "duration_ms": 0.156,
+      "duration_ms": 0.391,
       "error_code": null,
       "id": "demo-27",
       "method": "world.inspect",
       "ok": true,
       "phase": "snapshot_restore",
-      "received_ms": 34.74,
-      "sent_ms": 34.584
+      "received_ms": 34.081,
+      "sent_ms": 33.69
     },
     {
-      "duration_ms": 0.232,
+      "duration_ms": 0.324,
       "error_code": null,
       "id": "demo-28",
       "method": "world.snapshot",
       "ok": true,
       "phase": "snapshot_restore",
-      "received_ms": 35.031,
-      "sent_ms": 34.8
+      "received_ms": 34.442,
+      "sent_ms": 34.118
     },
     {
-      "duration_ms": 0.147,
+      "duration_ms": 0.272,
       "error_code": null,
       "id": "demo-29",
       "method": "world.step",
       "ok": true,
       "phase": "snapshot_restore",
-      "received_ms": 35.301,
-      "sent_ms": 35.154
+      "received_ms": 34.95,
+      "sent_ms": 34.678
     },
     {
-      "duration_ms": 0.136,
+      "duration_ms": 0.185,
       "error_code": null,
       "id": "demo-30",
       "method": "world.step",
       "ok": true,
       "phase": "snapshot_restore",
-      "received_ms": 35.463,
-      "sent_ms": 35.326
+      "received_ms": 35.173,
+      "sent_ms": 34.988
     },
     {
-      "duration_ms": 0.139,
+      "duration_ms": 0.187,
       "error_code": null,
       "id": "demo-31",
       "method": "world.inspect",
       "ok": true,
       "phase": "snapshot_restore",
-      "received_ms": 35.626,
-      "sent_ms": 35.487
+      "received_ms": 35.388,
+      "sent_ms": 35.2
     },
     {
-      "duration_ms": 0.328,
+      "duration_ms": 0.305,
       "error_code": null,
       "id": "demo-32",
       "method": "world.restore",
       "ok": true,
       "phase": "snapshot_restore",
-      "received_ms": 36.001,
-      "sent_ms": 35.673
+      "received_ms": 35.749,
+      "sent_ms": 35.444
     },
     {
-      "duration_ms": 0.181,
+      "duration_ms": 0.167,
       "error_code": null,
       "id": "demo-33",
       "method": "world.inspect",
       "ok": true,
       "phase": "snapshot_restore",
-      "received_ms": 36.245,
-      "sent_ms": 36.064
+      "received_ms": 35.963,
+      "sent_ms": 35.796
     },
     {
-      "duration_ms": 0.145,
+      "duration_ms": 0.151,
       "error_code": null,
       "id": "demo-34",
       "method": "world.step",
       "ok": true,
       "phase": "snapshot_restore",
-      "received_ms": 36.496,
-      "sent_ms": 36.351
+      "received_ms": 36.188,
+      "sent_ms": 36.037
     },
     {
-      "duration_ms": 0.145,
+      "duration_ms": 0.16,
       "error_code": null,
       "id": "demo-35",
       "method": "world.inspect",
       "ok": true,
       "phase": "snapshot_restore",
-      "received_ms": 36.696,
-      "sent_ms": 36.552
+      "received_ms": 36.395,
+      "sent_ms": 36.235
     }
   ],
   "scratch": {
-    "dir": "build/demo-scratch/20261011T175541731880-21798",
+    "dir": "build/demo-scratch/20261011T181802310841-11030",
     "edit": "add_u32(p, v) -> mul_u32(v, 2) then add_u32(p, twice_v)",
     "files": {
       "movement.capsule.json": "0530f651ebd04c326d16d46b711a347ef00e756bc629f30c53a19790add995f6",
@@ -1691,10 +1691,10 @@
   },
   "scratch_dir_kept": false,
   "serve_argv": [
-    "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+    "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build/sutekh",
     "serve",
     "--root",
-    "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483"
+    "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7"
   ],
   "serve_exit_code": 0,
   "snapshot": {
@@ -1704,12 +1704,16 @@
   },
   "source": {
     "dirty_paths": [
-      "?? planning/evidence/m0-latency-release-raw.json",
-      "?? planning/evidence/m0-latency-release.json"
+      " M planning/evidence/m0-ctest-dev.log",
+      " M planning/evidence/m0-harness-dev-summary.txt",
+      " M planning/evidence/m0-harness-dev.json",
+      "?? planning/evidence/m0-demo-dev.log",
+      "?? planning/evidence/m0-dev-build.log",
+      "?? planning/evidence/m0-dev-clean.log"
     ],
     "git_dirty": true,
-    "git_head": "3feeacf44bd2a734bf63a50e2dea6c468a97fdde",
-    "repo_root": "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483"
+    "git_head": "c0e83359ad5b96cf3902b1e74e85cbe3dcb61d40",
+    "repo_root": "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7"
   },
   "status": "passed",
   "step_table": [
@@ -1732,7 +1736,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r1"
     },
     {
@@ -1754,7 +1758,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r2"
     },
     {
@@ -1776,7 +1780,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r3"
     },
     {
@@ -1798,7 +1802,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r4"
     },
     {
@@ -1820,7 +1824,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r5"
     },
     {
@@ -1842,7 +1846,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r6"
     },
     {
@@ -1864,7 +1868,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r7"
     },
     {
@@ -1886,7 +1890,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r8"
     },
     {
@@ -1908,7 +1912,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r9"
     },
     {
@@ -1930,7 +1934,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r10"
     },
     {
@@ -1952,7 +1956,7 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r13"
     },
     {
@@ -1974,14 +1978,14 @@
         1,
         0
       ],
-      "worker_pid": 21810,
+      "worker_pid": 11037,
       "world_revision": "world-1.r14"
     }
   ],
-  "supervisor_pid": 21807,
+  "supervisor_pid": 11034,
   "worker": {
-    "pid": 21810,
+    "pid": 11037,
     "same_pid_all_run": true,
-    "start_time_ticks": 220625
+    "start_time_ticks": 354683
   }
 }

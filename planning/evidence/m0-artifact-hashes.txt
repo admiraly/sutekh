@@ -1,23 +1,30 @@
-M0-13 artifact hashes (sha256)
+M0-14 artifact hashes (sha256)
 
-Source state of every run in this directory: git tree of src/, include/, tests/, tools/, bench/ and CMakeLists.txt
-is identical at b5bddbd (bench commit) and 3feeacf (evidence commit). Dev runs recorded git_head b5bddbd, dirty false;
-release bench recorded git_head 3feeacf, dirty false.
+Source state of every M0-14 run in this directory: source commit c0e8335 (the harness reports record repo_head c0e8335).
+M0-14 source commits: 3bddc07 (engine install timing), 3bbc6b7 (fixtures), c0e8335 (harness).
+The evidence commit adds planning/evidence/ and docs/IMPLEMENTATION_STATUS.md only; no source changed after c0e8335.
 
-Binaries
-  build/sutekh, dev profile (CMAKE_BUILD_TYPE=Debug)      fc8149dfd10c4ceb7018372a58bc66768873436bd717a93414e697feed121210
-  build/sutekh, release profile (CMAKE_BUILD_TYPE=Release) c99583976107a8b96fe8d9bcdedc89503de0a3af49e5f3db98954206b1387717
+Binaries (clean build in build/ with tools/dev.py clean, then build; the build path is the same for both)
+  build/sutekh, dev profile (CMAKE_BUILD_TYPE=Debug)      eb121da9db55754a37e9505b0a338bdb1dd473d2c3fe6fa62d35fd61768d0939
+  build/sutekh, release profile (CMAKE_BUILD_TYPE=Release) d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf
+  ASan+UBSan build (scratch, outside the repository; sources from git archive c0e8335) see planning/evidence/m0-asan-harness-summary.txt for its report
 
-Scripts
-  tests/harness/run_m0.py                 0c6e5fee544290efe18140f1bc42a51def4cbc85374478e83903b4f0d0c4933c
+Scripts and changed runtime sources
+  tests/harness/run_m0.py                 a03512a05e205dcab3d231ee3bf16f869d79aff382b26fceaa0ca3cb7b452afc
   tests/harness/reference_eval.py         b9919314fd9ee2526d163e27f5a698bf8e086d3b9497e0824fd421790eec04dc
   tools/demo_zero_wait.py                 8739d5f5e38cbbe503013bcbbacdc8364d3c05edc0840c86a73e6a2d017a2952
   tests/e2e/no_build_probe.py             de6ed98aedfd92a24a6ea302cefb310de4150db19f9f22f59a23410067d9c18e
-  bench/reload/bench_reload.py            7a8f949d510189e97c0c208588d82148cca40b8668d1271dfc5d9ea2ce485adb
+  src/runtime/reload.c                    01af20cdeff234e3ff9d4b2537c73ed3a1efc4d5cbb68953c9b80f2aa9a778eb
+  src/runtime/reload.h                    b6897c73510ce4b8fc8cda2da1107a7db45fb0460bdf4f00b42af31e8fcad906
+  src/runtime/worker.c                    e991bcff3e20a3737840a1cfb501bc9bebacfa2d65583c6d2e6903b7f833257c
 
-Run to binary mapping
-  m0-harness-dev*.{json,txt}      build/sutekh = dev binary (fc8149df...)
-  m0-harness-release*.{json,txt}  build/sutekh = release binary (c9958397...)
-  m0-demo-dev.json, m0-probe-dev.json, m0-latency-dev*           dev binary
-  m0-latency-release*                                            release binary
-  m0-ctest-dev.log, m0-ctest-release.log                         the respective builds
+Run to binary mapping (all M0-14)
+  m0-harness-dev.json, m0-harness-dev-summary.txt          build/sutekh = dev binary (eb121da9...)
+  m0-harness-release.json, m0-harness-release-summary.txt  build/sutekh = release binary (d5714cb0...)
+  m0-demo-dev.json, m0-probe-dev.json                      dev binary
+  m0-demo-release.json, m0-probe-release.json              release binary
+  m0-ctest-dev.log, m0-ctest-release.log                   the respective builds
+  m0-harness-self-test.log                                 tests/harness/run_m0.py at c0e8335
+
+Earlier M0-13 bench evidence (m0-latency-*, m0-native-build*) was produced before M0-14 on the M0-13 tree
+(b5bddbd / 3feeacf) and is not re-run here; see docs/IMPLEMENTATION_STATUS.md section 2.2 to 2.4.

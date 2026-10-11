@@ -1,14 +1,14 @@
 {
   "build_tool_pattern": "^(cc|c\\+\\+|gcc|g\\+\\+|clang|clang\\+\\+|cpp|cc1|cc1plus|collect2|as|ld|ld\\.(bfd|gold|lld)|lld|ld64|ar|ranlib|nasm|yasm|cmake|ninja|make|gmake|meson|rustc|tcc|mold|(x86_64|aarch64)-linux-gnu-(gcc|g\\+\\+|as|ld))(-?[0-9.]+)?$",
   "demo": {
-    "binary_sha256": "fc8149dfd10c4ceb7018372a58bc66768873436bd717a93414e697feed121210",
+    "binary_sha256": "eb121da9db55754a37e9505b0a338bdb1dd473d2c3fe6fa62d35fd61768d0939",
     "failure": null,
     "status": "passed"
   },
   "edit_window_epoch_s": {
-    "duration_ms": 43.241,
-    "end": 1791741342.1732779,
-    "start": 1791741342.130037
+    "duration_ms": 38.194,
+    "end": 1791742684.6640718,
+    "start": 1791742684.6258779
   },
   "method": "strace -f -ttt -e trace=execve,execveat -s 4096 (exec-family syscalls, all children)",
   "positive_control": {
@@ -25,8 +25,8 @@
       "build_tool_execs_total": [
         {
           "path": "/usr/bin/cc",
-          "pid": 21817,
-          "ts": 1791741341.849188
+          "pid": 11051,
+          "ts": 1791742684.334029
         }
       ],
       "distinct_executed_basenames": [
@@ -53,8 +53,8 @@
         "build_tool_execs_total": [
           {
             "path": "/usr/bin/cc",
-            "pid": 21817,
-            "ts": 1791741341.849188
+            "pid": 11051,
+            "ts": 1791742684.334029
           }
         ],
         "distinct_executed_basenames": [
@@ -80,8 +80,8 @@
         "build_tool_execs_total": [
           {
             "path": "/usr/bin/cc",
-            "pid": 21822,
-            "ts": 1791741341.869596
+            "pid": 11056,
+            "ts": 1791742684.356344
           }
         ],
         "distinct_executed_basenames": [
@@ -109,7 +109,7 @@
     "failed_exec_attempts": 36,
     "successful_execs": 7
   },
-  "started_utc": "20261011T175541Z",
+  "started_utc": "20261011T181804Z",
   "static_scan": {
     "binary": {
       "path": "build/sutekh"
@@ -151,15 +151,15 @@
       "-s",
       "4096",
       "-o",
-      "/tmp/no-build-probe-yqohkjtu/run.strace",
+      "/tmp/no-build-probe-lybg06zs/run.strace",
       "--",
       "/usr/bin/python3",
       "-I",
-      "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/tools/demo_zero_wait.py",
+      "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/tools/demo_zero_wait.py",
       "--binary",
-      "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+      "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build/sutekh",
       "--out",
-      "/tmp/no-build-probe-yqohkjtu/demo_evidence.json"
+      "/tmp/no-build-probe-lybg06zs/demo_evidence.json"
     ],
     "log_lines": 58,
     "strace_returncode": 0,

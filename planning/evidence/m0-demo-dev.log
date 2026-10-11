@@ -1,0 +1,204 @@
+sutekh zero-wait demo (repo /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7)
+== phase start_serve
+[+     12.047 ms] -> demo-1 engine.info {}
+[+     12.335 ms] <- demo-1 ok (0.288 ms)
+    check ok   supervisor pid is the serve process: expected 11034 actual 11034
+    check ok   capability candidate.install advertised: expected True actual True
+    check ok   capability world.snapshot advertised: expected True actual True
+    check ok   capability world.restore advertised: expected True actual True
+   phase start_serve took 1.596 ms
+== phase create_world
+[+     12.683 ms] -> demo-2 world.create {"capsule_path": "examples/movement.capsule.json", "fixture_path": "examples/world.json"}
+[+     15.023 ms] <- demo-2 ok (2.340 ms)
+    check ok   worker pid is not the supervisor pid: expected False actual False
+    check ok   worker start time readable: expected True actual True
+[+     15.245 ms] -> demo-3 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     15.701 ms] <- demo-3 ok (0.457 ms)
+    check ok   tick 0: tick: expected 0 actual 0
+    check ok   tick 0: position_x matches reference evaluator: expected [0, 1, 4294967295, 7] actual [0, 1, 4294967295, 7]
+    check ok   tick 0: velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   tick 0: entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   tick 0: worker pid: expected 11037 actual 11037
+    check ok   worker_pid unchanged: expected 11037 actual 11037
+    check ok   worker process start time unchanged (same process, not a recycled pid): expected 354683 actual 354683
+   phase create_world took 3.505 ms
+== phase baseline_v1
+[+     16.036 ms] -> demo-4 world.step {"expected_world_revision": "world-1.r1", "ticks": 1, "world_id": "world-1"}
+[+     16.436 ms] <- demo-4 ok (0.401 ms)
+[+     16.495 ms] -> demo-5 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     16.951 ms] <- demo-5 ok (0.456 ms)
+    check ok   v1 tick 1: tick: expected 1 actual 1
+    check ok   v1 tick 1: position_x matches reference evaluator: expected [1, 3, 0, 7] actual [1, 3, 0, 7]
+    check ok   v1 tick 1: velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   v1 tick 1: entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   v1 tick 1: worker pid: expected 11037 actual 11037
+[+     17.138 ms] -> demo-6 world.step {"expected_world_revision": "world-1.r2", "ticks": 1, "world_id": "world-1"}
+[+     17.465 ms] <- demo-6 ok (0.327 ms)
+[+     17.501 ms] -> demo-7 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     17.736 ms] <- demo-7 ok (0.236 ms)
+    check ok   v1 tick 2: tick: expected 2 actual 2
+    check ok   v1 tick 2: position_x matches reference evaluator: expected [2, 5, 1, 7] actual [2, 5, 1, 7]
+    check ok   v1 tick 2: velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   v1 tick 2: entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   v1 tick 2: worker pid: expected 11037 actual 11037
+[+     17.839 ms] -> demo-8 world.step {"expected_world_revision": "world-1.r3", "ticks": 1, "world_id": "world-1"}
+[+     18.054 ms] <- demo-8 ok (0.215 ms)
+[+     18.083 ms] -> demo-9 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     18.366 ms] <- demo-9 ok (0.282 ms)
+    check ok   v1 tick 3: tick: expected 3 actual 3
+    check ok   v1 tick 3: position_x matches reference evaluator: expected [3, 7, 2, 7] actual [3, 7, 2, 7]
+    check ok   v1 tick 3: velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   v1 tick 3: entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   v1 tick 3: worker pid: expected 11037 actual 11037
+    check ok   worker_pid unchanged: expected 11037 actual 11037
+    check ok   worker process start time unchanged (same process, not a recycled pid): expected 354683 actual 354683
+   phase baseline_v1 took 2.573 ms
+== phase edit_submit_evaluate
+    check ok   scratch edit reproduces examples/movement_v2.lir.json: expected {'ir_version': '0.1', 'system_id': 'demo.movement', 'numeric_profile': 'u32_mod_v1', 'query': 'demo.actor', 'instructions': [{'op': 'load_u3 actual {'ir_version': '0.1', 'system_id': 'demo.movement', 'numeric_profile': 'u32_mod_v1', 'query': 'demo.actor', 'instructions': [{'op': 'load_u3
+[+     19.648 ms] -> demo-10 capsule.submit {"capsule_path": "build/demo-scratch/20261011T181802310841-11030/movement.capsule.json"}
+[+     20.092 ms] <- demo-10 ok (0.444 ms)
+[+     20.167 ms] -> demo-11 candidate.evaluate {"candidate_id": "candidate-1", "test_path": "build/demo-scratch/20261011T181802310841-11030/movement.test.json"}
+[+     27.792 ms] <- demo-11 ok (7.624 ms)
+    check ok   candidate evaluation status: expected 'passed' actual 'passed'
+    check ok   every evaluation case passed: expected 3 actual 3
+    check ok   evaluation case count: expected 3 actual 3
+   phase edit_submit_evaluate took 9.325 ms
+== phase advance_to_effective_tick
+[+     27.930 ms] -> demo-12 world.step {"expected_world_revision": "world-1.r4", "ticks": 1, "world_id": "world-1"}
+[+     28.252 ms] <- demo-12 ok (0.322 ms)
+[+     28.290 ms] -> demo-13 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     28.544 ms] <- demo-13 ok (0.255 ms)
+    check ok   v1 at effective tick 4: tick: expected 4 actual 4
+    check ok   v1 at effective tick 4: position_x matches reference evaluator: expected [4, 9, 3, 7] actual [4, 9, 3, 7]
+    check ok   v1 at effective tick 4: velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   v1 at effective tick 4: entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   v1 at effective tick 4: worker pid: expected 11037 actual 11037
+   phase advance_to_effective_tick took 0.723 ms
+== phase install
+[+     28.616 ms] -> demo-14 candidate.install {"allowed_effective_tick": 4, "candidate_id": "candidate-1", "expected_world_revision": "world-1.r5", "world_id": "world-1"}
+[+     29.210 ms] <- demo-14 ok (0.593 ms)
+    check ok   install state: expected 'installed' actual 'installed'
+    check ok   install effective tick: expected 4 actual 4
+[+     29.263 ms] -> demo-15 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     29.565 ms] <- demo-15 ok (0.301 ms)
+    check ok   after install at tick 4 (no step): tick: expected 4 actual 4
+    check ok   after install at tick 4 (no step): position_x matches reference evaluator: expected [4, 9, 3, 7] actual [4, 9, 3, 7]
+    check ok   after install at tick 4 (no step): velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   after install at tick 4 (no step): entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   after install at tick 4 (no step): worker pid: expected 11037 actual 11037
+    check ok   every column unchanged by install: expected {'position_x': [4, 9, 3, 7], 'velocity_x': [1, 2, 1, 0]} actual {'position_x': [4, 9, 3, 7], 'velocity_x': [1, 2, 1, 0]}
+    check ok   entity ids unchanged by install: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   semantic manifest changed by install: expected True actual True
+    check ok   worker_pid unchanged: expected 11037 actual 11037
+    check ok   worker process start time unchanged (same process, not a recycled pid): expected 354683 actual 354683
+   phase install took 1.225 ms
+== phase v2_after_install
+[+     29.937 ms] -> demo-16 world.step {"expected_world_revision": "world-1.r6", "ticks": 1, "world_id": "world-1"}
+[+     30.181 ms] <- demo-16 ok (0.244 ms)
+[+     30.219 ms] -> demo-17 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     30.571 ms] <- demo-17 ok (0.352 ms)
+    check ok   v2 tick 5: tick: expected 5 actual 5
+    check ok   v2 tick 5: position_x matches reference evaluator: expected [6, 13, 5, 7] actual [6, 13, 5, 7]
+    check ok   v2 tick 5: velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   v2 tick 5: entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   v2 tick 5: worker pid: expected 11037 actual 11037
+[+     30.819 ms] -> demo-18 world.step {"expected_world_revision": "world-1.r7", "ticks": 1, "world_id": "world-1"}
+[+     31.035 ms] <- demo-18 ok (0.216 ms)
+[+     31.090 ms] -> demo-19 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     31.359 ms] <- demo-19 ok (0.268 ms)
+    check ok   v2 tick 6: tick: expected 6 actual 6
+    check ok   v2 tick 6: position_x matches reference evaluator: expected [8, 17, 7, 7] actual [8, 17, 7, 7]
+    check ok   v2 tick 6: velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   v2 tick 6: entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   v2 tick 6: worker pid: expected 11037 actual 11037
+[+     31.468 ms] -> demo-20 world.step {"expected_world_revision": "world-1.r8", "ticks": 1, "world_id": "world-1"}
+[+     31.649 ms] <- demo-20 ok (0.181 ms)
+[+     31.676 ms] -> demo-21 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     31.899 ms] <- demo-21 ok (0.223 ms)
+    check ok   v2 tick 7: tick: expected 7 actual 7
+    check ok   v2 tick 7: position_x matches reference evaluator: expected [10, 21, 9, 7] actual [10, 21, 9, 7]
+    check ok   v2 tick 7: velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   v2 tick 7: entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   v2 tick 7: worker pid: expected 11037 actual 11037
+    check ok   v1 and v2 differ at the first post-install tick: expected True actual True
+    check ok   worker_pid unchanged: expected 11037 actual 11037
+    check ok   worker process start time unchanged (same process, not a recycled pid): expected 354683 actual 354683
+   phase v2_after_install took 2.183 ms
+== phase invalid_edit_rejected
+[+     32.040 ms] -> demo-22 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     32.219 ms] <- demo-22 ok (0.179 ms)
+[+     32.262 ms] -> demo-23 capsule.submit {"capsule_path": "build/demo-scratch/20261011T181802310841-11030/bad/movement.capsule.json"}
+[+     32.616 ms] <- demo-23 error SU_E_UNDECLARED_WRITE (0.354 ms)
+    check ok   invalid capsule refused with SU_E_UNDECLARED_WRITE: expected {'ok': False, 'code': 'SU_E_UNDECLARED_WRITE'} actual {'ok': False, 'code': 'SU_E_UNDECLARED_WRITE'}
+[+     32.653 ms] -> demo-24 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     32.867 ms] <- demo-24 ok (0.214 ms)
+    check ok   world revision unchanged: expected 'world-1.r9' actual 'world-1.r9'
+    check ok   tick unchanged: expected 7 actual 7
+    check ok   columns unchanged: expected {'position_x': [10, 21, 9, 7], 'velocity_x': [1, 2, 1, 0]} actual {'position_x': [10, 21, 9, 7], 'velocity_x': [1, 2, 1, 0]}
+    check ok   active semantic manifest unchanged: expected [{'system_id': 'demo.movement', 'semantic_hash': '754229e77aa56c9e71f74e1336831318b4223d17fb1d34b585c813b51a829771', 'source_hash': '192fbce actual [{'system_id': 'demo.movement', 'semantic_hash': '754229e77aa56c9e71f74e1336831318b4223d17fb1d34b585c813b51a829771', 'source_hash': '192fbce
+    check ok   worker_pid unchanged: expected 11037 actual 11037
+    check ok   worker process start time unchanged (same process, not a recycled pid): expected 354683 actual 354683
+   phase invalid_edit_rejected took 0.939 ms
+== phase v2_still_active
+[+     33.008 ms] -> demo-25 world.step {"expected_world_revision": "world-1.r9", "ticks": 1, "world_id": "world-1"}
+[+     33.291 ms] <- demo-25 ok (0.283 ms)
+[+     33.369 ms] -> demo-26 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     33.584 ms] <- demo-26 ok (0.215 ms)
+    check ok   v2 after rejected edit: tick: expected 8 actual 8
+    check ok   v2 after rejected edit: position_x matches reference evaluator: expected [12, 25, 11, 7] actual [12, 25, 11, 7]
+    check ok   v2 after rejected edit: velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   v2 after rejected edit: entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   v2 after rejected edit: worker pid: expected 11037 actual 11037
+   phase v2_still_active took 0.697 ms
+== phase snapshot_restore
+[+     33.690 ms] -> demo-27 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     34.081 ms] <- demo-27 ok (0.391 ms)
+[+     34.118 ms] -> demo-28 world.snapshot {"expected_world_revision": "world-1.r10", "world_id": "world-1"}
+[+     34.442 ms] <- demo-28 ok (0.324 ms)
+    check ok   snapshot tick: expected 8 actual 8
+[+     34.678 ms] -> demo-29 world.step {"expected_world_revision": "world-1.r10", "ticks": 1, "world_id": "world-1"}
+[+     34.950 ms] <- demo-29 ok (0.272 ms)
+[+     34.988 ms] -> demo-30 world.step {"expected_world_revision": "world-1.r11", "ticks": 1, "world_id": "world-1"}
+[+     35.173 ms] <- demo-30 ok (0.185 ms)
+[+     35.200 ms] -> demo-31 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     35.388 ms] <- demo-31 ok (0.187 ms)
+    check ok   state moved on before restore (tick): expected 10 actual 10
+    check ok   state moved on before restore (columns match reference): expected {'position_x': [16, 33, 15, 7], 'velocity_x': [1, 2, 1, 0]} actual {'position_x': [16, 33, 15, 7], 'velocity_x': [1, 2, 1, 0]}
+[+     35.444 ms] -> demo-32 world.restore {"expected_world_revision": "world-1.r12", "snapshot_id": "664cdd9b94b8ae689297d65c23149e7482b9172b73850494e31569d66d53ae49", "world_id": "world-1"}
+[+     35.749 ms] <- demo-32 ok (0.305 ms)
+[+     35.796 ms] -> demo-33 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     35.963 ms] <- demo-33 ok (0.167 ms)
+    check ok   restored tick equals snapshot tick: expected 8 actual 8
+    check ok   restored canonical state equals snapshot state byte-for-byte: expected '53ae2387b0c8cb95d1909445c25837d0417c13c589710b3334cf12191903f220' actual '53ae2387b0c8cb95d1909445c25837d0417c13c589710b3334cf12191903f220'
+    check ok   restored semantic manifest equals snapshot manifest: expected [{'system_id': 'demo.movement', 'semantic_hash': '754229e77aa56c9e71f74e1336831318b4223d17fb1d34b585c813b51a829771', 'source_hash': '192fbce actual [{'system_id': 'demo.movement', 'semantic_hash': '754229e77aa56c9e71f74e1336831318b4223d17fb1d34b585c813b51a829771', 'source_hash': '192fbce
+[+     36.037 ms] -> demo-34 world.step {"expected_world_revision": "world-1.r13", "ticks": 1, "world_id": "world-1"}
+[+     36.188 ms] <- demo-34 ok (0.151 ms)
+[+     36.235 ms] -> demo-35 world.inspect {"fields": ["position_x", "velocity_x"], "limit": 256, "offset": 0, "world_id": "world-1"}
+[+     36.395 ms] <- demo-35 ok (0.160 ms)
+    check ok   step after restore: tick: expected 9 actual 9
+    check ok   step after restore: position_x matches reference evaluator: expected [14, 29, 13, 7] actual [14, 29, 13, 7]
+    check ok   step after restore: velocity_x matches reference evaluator: expected [1, 2, 1, 0] actual [1, 2, 1, 0]
+    check ok   step after restore: entity ids: expected [1, 2, 3, 4] actual [1, 2, 3, 4]
+    check ok   step after restore: worker pid: expected 11037 actual 11037
+    check ok   worker_pid unchanged: expected 11037 actual 11037
+    check ok   worker process start time unchanged (same process, not a recycled pid): expected 354683 actual 354683
+   phase snapshot_restore took 2.843 ms
+    check ok   worker pid identical in every step row: expected True actual True
+    check ok   serve exits 0 after stdin closes: expected 0 actual 0
+
+step table (position_x / velocity_x are the committed columns after each row)
+  n phase                      method             tick     pid position_x                   velocity_x             ref
+  1 create_world               world.create          0   11037 [0, 1, 4294967295, 7]        [1, 2, 1, 0]           match
+  2 baseline_v1                world.step            1   11037 [1, 3, 0, 7]                 [1, 2, 1, 0]           match
+  3 baseline_v1                world.step            2   11037 [2, 5, 1, 7]                 [1, 2, 1, 0]           match
+  4 baseline_v1                world.step            3   11037 [3, 7, 2, 7]                 [1, 2, 1, 0]           match
+  5 advance_to_effective_tick  world.step            4   11037 [4, 9, 3, 7]                 [1, 2, 1, 0]           match
+  6 install                    candidate.install     4   11037 [4, 9, 3, 7]                 [1, 2, 1, 0]           match
+  7 v2_after_install           world.step            5   11037 [6, 13, 5, 7]                [1, 2, 1, 0]           match
+  8 v2_after_install           world.step            6   11037 [8, 17, 7, 7]                [1, 2, 1, 0]           match
+  9 v2_after_install           world.step            7   11037 [10, 21, 9, 7]               [1, 2, 1, 0]           match
+ 10 v2_still_active            world.step            8   11037 [12, 25, 11, 7]              [1, 2, 1, 0]           match
+ 11 snapshot_restore           world.restore         8   11037 [12, 25, 11, 7]              [1, 2, 1, 0]           match
+ 12 snapshot_restore           world.step            9   11037 [14, 29, 13, 7]              [1, 2, 1, 0]           match
+evidence: /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/planning/evidence/m0-demo-dev.json
+status: passed
