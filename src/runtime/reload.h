@@ -15,7 +15,9 @@
  *  10 publish: swap the schedule entry, retire the old revision, free the old module
  *     and context (INSTALLED). World state and the worker process are untouched.
  * Any failure before step 10 leaves the schedule, the committed state and the active
- * module unchanged. */
+ * module unchanged. The critical section is steps 10's registry update and schedule swap:
+ * it starts before the old schedule entry is replaced and ends when the new entry is in
+ * place (retiring and freeing the old entry is after the section). */
 #ifndef SU_RUNTIME_RELOAD_H
 #define SU_RUNTIME_RELOAD_H
 
@@ -60,6 +62,12 @@ typedef struct SuReloadResult {
     char previous_semantic_hash[65];
     char semantic_hash[65];
     char msg[256];             /* "txid=N state=S: reason" on failure */
+    /* Timings on the monotonic clock (su_platform.h), set only when the install succeeded.
+     * clock_ok is 0 when the clock was unreadable; the timings are then meaningless. */
+    int clock_ok;
+    int bindings_prepared;     /* 1 when the VM context (bindings) existed before publish */
+    uint64_t prepare_ns;       /* install entry -> start of the critical section */
+    uint64_t critical_section_ns; /* stop of the old schedule -> new schedule published */
 } SuReloadResult;
 
 /* Returns SU_OK when the candidate is installed (out is filled), otherwise the SU_E_*

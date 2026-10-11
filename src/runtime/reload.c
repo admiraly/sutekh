@@ -8,6 +8,7 @@
 
 #include "agent/su_module.h"
 #include "agent/su_path.h"
+#include "su_platform.h"
 #include "sutekh/ir.h"
 #include "sutekh/status.h"
 #include "vm/su_vm.h"
@@ -112,8 +113,13 @@ uint32_t su_reload_install(SuRegistry *reg, SuSchedule *s, const SuReloadRequest
     uint32_t st;
     int idx;
     uint64_t txid;
+    uint64_t t_entry = 0;
+    uint64_t t_cs0 = 0;
+    uint64_t t_cs1 = 0;
+    int clk_entry;
 
     memset(out, 0, sizeof *out);
+    clk_entry = su_platform_monotonic_ns(&t_entry);
     memset(&fresh, 0, sizeof fresh);
     memset(&old, 0, sizeof old);
     txid = su_reg_begin(reg, req->world_id, req->candidate_id, req->expect_source_hash,
@@ -168,6 +174,7 @@ uint32_t su_reload_install(SuRegistry *reg, SuSchedule *s, const SuReloadRequest
                       "VM context could not be prepared");
     }
     step(reg, txid, SU_REV_PREPARED);
+    out->bindings_prepared = 1;
 
     /* 7. Evidence gate. The supervisor records evaluation results; the client cannot
      * set them. Only a passing evaluation admits a revision. */
@@ -204,7 +211,8 @@ uint32_t su_reload_install(SuRegistry *reg, SuSchedule *s, const SuReloadRequest
         return reject(reg, out, txid, SU_REV_STALE, SU_E_STALE_REVISION, msg);
     }
 
-    /* 10. Publish. */
+    /* 10. Publish. The critical section starts here: the old entry is still live. */
+    int clk_cs0 = su_platform_monotonic_ns(&t_cs0);
     fresh.txid = txid;
     fresh.system_rev = s->sys[idx].system_rev + 1u;
     fresh.installed_tick = req->current_tick;
@@ -223,6 +231,15 @@ uint32_t su_reload_install(SuRegistry *reg, SuSchedule *s, const SuReloadRequest
         return SU_E_INTERNAL;
     }
     su_sched_swap(s, (uint32_t)idx, &fresh, &old);
+    /* The new entry is published: the critical section ends. */
+    {
+        int clk_cs1 = su_platform_monotonic_ns(&t_cs1);
+        out->clock_ok = clk_entry && clk_cs0 && clk_cs1;
+        if (out->clock_ok) {
+            out->prepare_ns = t_cs0 >= t_entry ? t_cs0 - t_entry : 0;
+            out->critical_section_ns = t_cs1 >= t_cs0 ? t_cs1 - t_cs0 : 0;
+        }
+    }
     if (old.txid != 0) {
         (void)su_reg_retire(reg, old.txid);
     }

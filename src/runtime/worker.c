@@ -758,6 +758,22 @@ static uint32_t h_candidate_install(WorkerState *s, const SuJsonValue *params, S
     su_buf_u64(res, su_world_tick(ww->inst.w));
     su_buf_str(res, ",\"worker_pid\":");
     su_buf_u64(res, (uint64_t)getpid());
+    /* Engine timings (reload.c): bindings prepared before publish; monotonic-clock durations in
+     * nanoseconds. null when the clock could not be read. */
+    su_buf_str(res, ",\"bindings_prepared\":");
+    su_buf_str(res, out.bindings_prepared ? "true" : "false");
+    su_buf_str(res, ",\"prepare_ns\":");
+    if (out.clock_ok) {
+        su_buf_u64(res, out.prepare_ns);
+    } else {
+        su_buf_str(res, "null");
+    }
+    su_buf_str(res, ",\"critical_section_ns\":");
+    if (out.clock_ok) {
+        su_buf_u64(res, out.critical_section_ns);
+    } else {
+        su_buf_str(res, "null");
+    }
     su_buf_str(res, "}");
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
