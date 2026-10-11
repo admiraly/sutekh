@@ -25,7 +25,7 @@
         "Headers describe sizes/lifetimes/statuses and M0 only.",
         "Independent fixture review; contract consumers can implement without guessing."
       ],
-      "status": "planned"
+      "status": "submitted"
     },
     {
       "id": "M0-01",
