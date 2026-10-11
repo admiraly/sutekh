@@ -1,0 +1,208 @@
+{
+ "artifact_hash": "sha256:c99583976107a8b96fe8d9bcdedc89503de0a3af49e5f3db98954206b1387717",
+ "checks": [
+  {
+   "name": "every warm and cold edit verified against the reference model after its timed window",
+   "reason": null,
+   "status": "passed"
+  },
+  {
+   "name": "every failed candidate refused and never published",
+   "reason": null,
+   "status": "passed"
+  },
+  {
+   "name": "stress run (1000000 rows)",
+   "reason": null,
+   "status": "passed"
+  },
+  {
+   "name": "stress run (250000 rows)",
+   "reason": null,
+   "status": "passed"
+  }
+ ],
+ "commands": [
+  "python3 -I bench/reload/bench_reload.py live --binary build/sutekh --profile-label release --epochs 60 --per-epoch 12 --cold-trials 60 --stress-rows 1000000,250000",
+  "build/sutekh serve  (JSON lines over stdio, one process per epoch and per cold trial)"
+ ],
+ "hardware": {
+  "cmake_build_type": "Release",
+  "container": {
+   "container_detected": false,
+   "evidence": []
+  },
+  "cpu": {
+   "hypervisor_flag": true,
+   "logical_processors": 4,
+   "model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+   "physical_cores": 4
+  },
+  "kernel": {
+   "release": "6.18.44-fc-v114",
+   "version": "#1 SMP PREEMPT_DYNAMIC @0"
+  },
+  "memory_kB": {
+   "MemAvailable": 15859532,
+   "MemTotal": 16479424
+  },
+  "profile_label": "release"
+ },
+ "kind": "runtime_evidence",
+ "measurements": {
+  "cold.first_edit_total_ms.p95": {
+   "reason": "new process, first edit, 1024 rows, n=60, min=7.318, median=8.089, max=11.483; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 9.002981
+  },
+  "cold.process_first_request_ms.p95": {
+   "reason": "engine.info as first request of a new serve process, n=60; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 0.888858
+  },
+  "cold.world_create_ms.p95": {
+   "reason": "world.create (spawns worker) in a new process, n=60; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 2.635034
+  },
+  "failed_candidate_publications": {
+   "reason": "120 failed-candidate trials; each refused by candidate.install and verified unchanged after a following tick; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "count",
+   "value": 0
+  },
+  "pmu.cycles_per_entity": {
+   "reason": "no PMU counters collected (PERFORMANCE.md section 5 optional; not part of this bench)",
+   "status": "unavailable",
+   "unit": "cycles/entity",
+   "value": null
+  },
+  "stress_1000000.nominal_column_bytes": {
+   "reason": "derived: 2 u32 columns x 4 bytes x rows; excludes entity_ids and runtime overhead",
+   "status": "measured",
+   "unit": "bytes",
+   "value": 8000000
+  },
+  "stress_1000000.restore_host_ms": {
+   "reason": "world.restore host round trip, 1 sample; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 1042.665006
+  },
+  "stress_1000000.snapshot_bytes": {
+   "reason": "canonical snapshot size reported by the engine",
+   "status": "measured",
+   "unit": "bytes",
+   "value": 28092684
+  },
+  "stress_1000000.snapshot_capture_host_ms": {
+   "reason": "world.snapshot host round trip, 1 sample; engine capture_ns=193928608; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 194.615109
+  },
+  "stress_1000000.worker_VmHWM_KiB": {
+   "reason": "worker VmHWM at end of the stress run",
+   "status": "measured",
+   "unit": "KiB",
+   "value": 267468
+  },
+  "stress_1000000.world_create_ms": {
+   "reason": "world.create host round trip, 1 sample; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 853.002094
+  },
+  "stress_1000000.world_step_ms.p95": {
+   "reason": "1000000-row stress diagnostic (not a game-scale claim), n=20, median=12.355, max=22.994; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 22.408997
+  },
+  "stress_250000.nominal_column_bytes": {
+   "reason": "derived: 2 u32 columns x 4 bytes x rows; excludes entity_ids and runtime overhead",
+   "status": "measured",
+   "unit": "bytes",
+   "value": 2000000
+  },
+  "stress_250000.restore_host_ms": {
+   "reason": "world.restore host round trip, 1 sample; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 111.379738
+  },
+  "stress_250000.snapshot_bytes": {
+   "reason": "canonical snapshot size reported by the engine",
+   "status": "measured",
+   "unit": "bytes",
+   "value": 6940752
+  },
+  "stress_250000.snapshot_capture_host_ms": {
+   "reason": "world.snapshot host round trip, 1 sample; engine capture_ns=62440673; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 63.226101
+  },
+  "stress_250000.worker_VmHWM_KiB": {
+   "reason": "worker VmHWM at end of the stress run",
+   "status": "measured",
+   "unit": "KiB",
+   "value": 68996
+  },
+  "stress_250000.world_create_ms": {
+   "reason": "world.create host round trip, 1 sample; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 92.994836
+  },
+  "stress_250000.world_step_ms.p95": {
+   "reason": "250000-row stress diagnostic (not a game-scale claim), n=20, median=4.933, max=6.874; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 5.25331
+  },
+  "warm.candidate_evaluate_ms.p95": {
+   "reason": "warm, 1024 rows, n=720, min=2.177, median=6.961, p99=9.444, max=17.528; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 7.59391
+  },
+  "warm.candidate_install_rpc_ms.p95": {
+   "reason": "warm, 1024 rows, n=720, min=0.207, median=0.422, p99=1.441, max=8.798; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 0.688178
+  },
+  "warm.capsule_submit_ms.p95": {
+   "reason": "warm, 1024 rows, n=720, min=0.118, median=0.223, p99=0.544, max=1.658; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 0.371207
+  },
+  "warm.tick_boundary_wait_ms": {
+   "reason": "candidate.install is synchronous in M0: queue, tick-boundary wait and publish happen inside the install RPC, and the host cannot separate them. The install RPC time is reported instead.",
+   "status": "unavailable",
+   "unit": "ms",
+   "value": null
+  },
+  "warm.total_edit_to_first_effect_ms.p95": {
+   "reason": "warm, 1024 rows, n=720, min=3.047, median=8.094, p99=11.328, max=18.779; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 9.324627
+  },
+  "warm.world_step_first_effect_ms.p95": {
+   "reason": "warm, 1024 rows, n=720, min=0.084, median=0.217, p99=1.288, max=2.556; raw samples and full statistics: planning/evidence/m0-latency-release-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 0.473002
+  }
+ },
+ "notes": "Summary of planning/evidence/m0-latency-release.json; schema-conforming subset. Full distributions, raw samples, per-epoch RSS and the environment are in m0-latency-release-raw.json. Shared 4-vCPU VM: this is observation, not performance qualification (ENGINE_CONSTITUTION C10). Schema deviation: the schema forbids extra top-level keys and a measurement's percentile table, so the full statistics live in the raw file.",
+ "report_format": "0.1",
+ "source_tree_hash": "git HEAD 3feeacf44bd2a734bf63a50e2dea6c468a97fdde; tree src 3135cdf8a8265af5698ee185044c4890f973454f; tree include bb3fc5c4cbee749218a1e9143cfca497060c059b",
+ "status": "passed"
+}

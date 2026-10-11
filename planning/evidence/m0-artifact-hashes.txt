@@ -1,0 +1,23 @@
+M0-13 artifact hashes (sha256)
+
+Source state of every run in this directory: git tree of src/, include/, tests/, tools/, bench/ and CMakeLists.txt
+is identical at b5bddbd (bench commit) and 3feeacf (evidence commit). Dev runs recorded git_head b5bddbd, dirty false;
+release bench recorded git_head 3feeacf, dirty false.
+
+Binaries
+  build/sutekh, dev profile (CMAKE_BUILD_TYPE=Debug)      fc8149dfd10c4ceb7018372a58bc66768873436bd717a93414e697feed121210
+  build/sutekh, release profile (CMAKE_BUILD_TYPE=Release) c99583976107a8b96fe8d9bcdedc89503de0a3af49e5f3db98954206b1387717
+
+Scripts
+  tests/harness/run_m0.py                 0c6e5fee544290efe18140f1bc42a51def4cbc85374478e83903b4f0d0c4933c
+  tests/harness/reference_eval.py         b9919314fd9ee2526d163e27f5a698bf8e086d3b9497e0824fd421790eec04dc
+  tools/demo_zero_wait.py                 8739d5f5e38cbbe503013bcbbacdc8364d3c05edc0840c86a73e6a2d017a2952
+  tests/e2e/no_build_probe.py             de6ed98aedfd92a24a6ea302cefb310de4150db19f9f22f59a23410067d9c18e
+  bench/reload/bench_reload.py            7a8f949d510189e97c0c208588d82148cca40b8668d1271dfc5d9ea2ce485adb
+
+Run to binary mapping
+  m0-harness-dev*.{json,txt}      build/sutekh = dev binary (fc8149df...)
+  m0-harness-release*.{json,txt}  build/sutekh = release binary (c9958397...)
+  m0-demo-dev.json, m0-probe-dev.json, m0-latency-dev*           dev binary
+  m0-latency-release*                                            release binary
+  m0-ctest-dev.log, m0-ctest-release.log                         the respective builds

@@ -1,0 +1,169 @@
+{
+  "build_tool_pattern": "^(cc|c\\+\\+|gcc|g\\+\\+|clang|clang\\+\\+|cpp|cc1|cc1plus|collect2|as|ld|ld\\.(bfd|gold|lld)|lld|ld64|ar|ranlib|nasm|yasm|cmake|ninja|make|gmake|meson|rustc|tcc|mold|(x86_64|aarch64)-linux-gnu-(gcc|g\\+\\+|as|ld))(-?[0-9.]+)?$",
+  "demo": {
+    "binary_sha256": "fc8149dfd10c4ceb7018372a58bc66768873436bd717a93414e697feed121210",
+    "failure": null,
+    "status": "passed"
+  },
+  "edit_window_epoch_s": {
+    "duration_ms": 43.241,
+    "end": 1791741342.1732779,
+    "start": 1791741342.130037
+  },
+  "method": "strace -f -ttt -e trace=execve,execveat -s 4096 (exec-family syscalls, all children)",
+  "positive_control": {
+    "argv": [
+      "sh",
+      "-c",
+      "cc --version >/dev/null 2>&1; exit 0"
+    ],
+    "detected": true,
+    "name": "bare cc via PATH (installed cc)",
+    "strace_returncode": 0,
+    "summary": {
+      "build_tool_execs_in_window": [],
+      "build_tool_execs_total": [
+        {
+          "path": "/usr/bin/cc",
+          "pid": 21817,
+          "ts": 1791741341.849188
+        }
+      ],
+      "distinct_executed_basenames": [
+        "cc",
+        "sh"
+      ],
+      "exec_attempts": 2,
+      "failed_exec_attempts": 0,
+      "successful_execs": 2
+    }
+  },
+  "positive_controls": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "cc --version >/dev/null 2>&1; exit 0"
+      ],
+      "detected": true,
+      "name": "bare cc via PATH (installed cc)",
+      "strace_returncode": 0,
+      "summary": {
+        "build_tool_execs_in_window": [],
+        "build_tool_execs_total": [
+          {
+            "path": "/usr/bin/cc",
+            "pid": 21817,
+            "ts": 1791741341.849188
+          }
+        ],
+        "distinct_executed_basenames": [
+          "cc",
+          "sh"
+        ],
+        "exec_attempts": 2,
+        "failed_exec_attempts": 0,
+        "successful_execs": 2
+      }
+    },
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "/usr/bin/cc --version >/dev/null 2>&1; exit 0"
+      ],
+      "detected": true,
+      "name": "absolute path /usr/bin/cc (installed cc)",
+      "strace_returncode": 0,
+      "summary": {
+        "build_tool_execs_in_window": [],
+        "build_tool_execs_total": [
+          {
+            "path": "/usr/bin/cc",
+            "pid": 21822,
+            "ts": 1791741341.869596
+          }
+        ],
+        "distinct_executed_basenames": [
+          "cc",
+          "sh"
+        ],
+        "exec_attempts": 2,
+        "failed_exec_attempts": 0,
+        "successful_execs": 2
+      }
+    }
+  ],
+  "probe_format": "m0-no-build-probe/0.1",
+  "reason": "both positive controls (bare and absolute-path cc) detected; zero build-tool execs in the whole traced run, including the capsule edit/install window",
+  "run_summary": {
+    "build_tool_execs_in_window": [],
+    "build_tool_execs_total": [],
+    "distinct_executed_basenames": [
+      "git",
+      "python3",
+      "sutekh",
+      "uname"
+    ],
+    "exec_attempts": 43,
+    "failed_exec_attempts": 36,
+    "successful_execs": 7
+  },
+  "started_utc": "20261011T175541Z",
+  "static_scan": {
+    "binary": {
+      "path": "build/sutekh"
+    },
+    "dynamic_imports": [
+      "execv",
+      "fork"
+    ],
+    "dynamic_imports_all_count": 53,
+    "src_build_tool_literals": [],
+    "src_exec_call_sites": [
+      {
+        "at": "src/runtime/schedule.h:84",
+        "text": "* failing system (UINT32_MAX for begin/publish), and *done counts published ticks. */"
+      },
+      {
+        "at": "src/agent/su_proc.c:83",
+        "text": "pid = fork();"
+      },
+      {
+        "at": "src/agent/su_proc.c:121",
+        "text": "execv(argv[0], (char *const *)argv);"
+      }
+    ],
+    "strings_mentioning_popen_or_system": [
+      "system %s is not in this world's schedule",
+      "system %u (%s) failed; tick discarded, committed state unchanged; completed %llu of %llu ticks, world_revision now %s",
+      "system cannot join this world's schedule (schema or duplicate system_id)"
+    ],
+    "strings_naming_build_tools": []
+  },
+  "traced_run": {
+    "argv": [
+      "strace",
+      "-f",
+      "-ttt",
+      "-e",
+      "trace=execve,execveat",
+      "-s",
+      "4096",
+      "-o",
+      "/tmp/no-build-probe-yqohkjtu/run.strace",
+      "--",
+      "/usr/bin/python3",
+      "-I",
+      "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/tools/demo_zero_wait.py",
+      "--binary",
+      "/home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build/sutekh",
+      "--out",
+      "/tmp/no-build-probe-yqohkjtu/demo_evidence.json"
+    ],
+    "log_lines": 58,
+    "strace_returncode": 0,
+    "strace_stderr_tail": ""
+  },
+  "verdict": "pass"
+}

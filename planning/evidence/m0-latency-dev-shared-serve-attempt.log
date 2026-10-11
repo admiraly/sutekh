@@ -1,0 +1,9 @@
+generating fixtures
+  warm epoch 1/60 done (12 timed edits)
+  warm epoch 2/60 done (24 timed edits)
+  warm epoch 3/60 done (36 timed edits)
+  warm epoch 4/60 done (48 timed edits)
+stress 1000000 rows
+stress 250000 rows
+{"status": "failed", "failures": ["warm: world.create refused: SU_E_RESOURCE_LIMIT: worker already holds the maximum number of worlds"], "warm_n": 0, "cold_n": 60, "stress": [[1000000, "passed"], [250000, "passed"]]}
+bench_rc=1

@@ -1,22 +1,28 @@
-M0 harness 43f3e71e1334 against build/sutekh (sha256 f00aa1fe3a41b005b76a6d62cd2e416f610e16b0699772e6a77263b6a803d37a)
+M0 harness 0c6e5fee5442 against build/sutekh (sha256 fc8149dfd10c4ceb7018372a58bc66768873436bd717a93414e697feed121210)
 probe: present
 
-T00  passed       Clean bootstrap
-T01  passed       Reference movement
-T02  passed       Empty and awkward counts
-T03  passed       Numeric edges
-T04  unavailable  Invalid input matrix
-       7 of 14 negative cases cannot be expressed: capsule.submit takes only capsule_path and the engine binds each capsule to its own source field; the other cases were checked and all rejected as expected
-T05  passed       Successful code-only swap
-T06  passed       Failed swap
-T07  passed       Stale candidate
-T08  passed       Snapshot round trip
-T09  passed       Working-root failure
-T10  passed       Candidate isolation
-T11  passed       Repeated reload
-T12  passed       No native gameplay build
-T13  passed       Latency decomposition
-T14  passed       Deterministic fixture repeat
-T15  passed       Structured protocol
+T00  passed       Clean bootstrap  (checks 9, failed 0, dropped from detail 0)
+T01  passed       Reference movement  (checks 6, failed 0, dropped from detail 0)
+T02  passed       Empty and awkward counts  (checks 24, failed 0, dropped from detail 0)
+T03  passed       Numeric edges  (checks 12, failed 0, dropped from detail 0)
+T04  passed       Invalid input matrix  (checks 33, failed 0, dropped from detail 0)
+T05  passed       Successful code-only swap  (checks 22, failed 0, dropped from detail 0)
+T06  passed       Failed swap  (checks 7, failed 0, dropped from detail 0)
+T07  passed       Stale candidate  (checks 7, failed 0, dropped from detail 0)
+T08  passed       Snapshot round trip  (checks 10, failed 0, dropped from detail 0)
+T09  passed       Working-root failure  (checks 11, failed 0, dropped from detail 0)
+T10  passed       Candidate isolation  (checks 15, failed 0, dropped from detail 0)
+T11  passed       Repeated reload  (checks 6413, failed 0, dropped from detail 0)
+T12  passed       No native gameplay build  (checks 11, failed 0, dropped from detail 0)
+T13  passed       Latency decomposition  (checks 93, failed 0, dropped from detail 0)
+T14  passed       Deterministic fixture repeat  (checks 8, failed 0, dropped from detail 0)
+T15  passed       Structured protocol  (checks 15, failed 0, dropped from detail 0)
 
-totals: passed=15, failed=0, not_run=0, unavailable=1
+timing targets (docs/PERFORMANCE.md section 2; provisional, shared VM, C10):
+  ir_prepare                 not_comparable  p95 10.652 ms (target <= 20.0 ms)
+  preview_response           met             p95 8.526 ms (target <= 100.0 ms)
+  install_critical_section   not_comparable  p95 1.406 ms (target <= 1.0 ms)
+  warm_edit_to_first_effect  met             p95 12.933 ms (target <= 100.0 ms)
+  native_incremental_check   not_comparable  p95 n/a (target <= 2000.0 ms)
+
+totals: passed=16, failed=0, not_run=0, unavailable=0

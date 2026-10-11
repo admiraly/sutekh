@@ -1,28 +1,28 @@
 {
  "clean_build": [
   {
-   "build_ms": 921.079847,
+   "build_ms": 687.273536,
    "compile_steps": 26,
-   "configure_ms": 289.841104,
+   "configure_ms": 225.158962,
    "link_steps": 15,
    "repeat": 0,
-   "total_ms": 1210.920951
+   "total_ms": 912.432498
   },
   {
-   "build_ms": 966.349241,
+   "build_ms": 591.68115,
    "compile_steps": 26,
-   "configure_ms": 283.712516,
+   "configure_ms": 203.053285,
    "link_steps": 15,
    "repeat": 1,
-   "total_ms": 1250.061757
+   "total_ms": 794.734435
   },
   {
-   "build_ms": 1089.609553,
+   "build_ms": 680.213569,
    "compile_steps": 26,
-   "configure_ms": 291.505277,
+   "configure_ms": 201.481986,
    "link_steps": 15,
    "repeat": 2,
-   "total_ms": 1381.11483
+   "total_ms": 881.695555
   }
  ],
  "commands": [
@@ -34,19 +34,19 @@
  "dependency_builds": "none: the project has no external dependencies to build",
  "incremental_ir_h": [
   {
-   "build_ms": 889.833737,
+   "build_ms": 572.766598,
    "compile_steps": 17,
    "link_steps": 14,
    "repeat": 0
   },
   {
-   "build_ms": 766.366244,
+   "build_ms": 564.315615,
    "compile_steps": 17,
    "link_steps": 14,
    "repeat": 1
   },
   {
-   "build_ms": 806.644442,
+   "build_ms": 549.23913,
    "compile_steps": 17,
    "link_steps": 14,
    "repeat": 2
@@ -54,69 +54,69 @@
  ],
  "incremental_su_vm_c": [
   {
-   "build_ms": 292.156777,
+   "build_ms": 189.296589,
    "compile_steps": 1,
    "link_steps": 7,
    "repeat": 0
   },
   {
-   "build_ms": 262.567453,
+   "build_ms": 183.268063,
    "compile_steps": 1,
    "link_steps": 7,
    "repeat": 1
   },
   {
-   "build_ms": 281.737311,
+   "build_ms": 185.557469,
    "compile_steps": 1,
    "link_steps": 7,
    "repeat": 2
   }
  ],
  "reason": null,
- "report": "M0-10 native build latency (separate from live edit latency)",
+ "report": "M0-13 native build latency (separate from live edit latency)",
  "scratch_build_dir": "<scratch outside repo>",
  "source": {
-  "git_head": "b7958792ba6bba6013db3bb6ae4b07d4c8ab3102"
+  "git_head": "3feeacf44bd2a734bf63a50e2dea6c468a97fdde"
  },
  "status": "passed",
  "summary": {
   "clean_total_ms": {
-   "max": 1089.609553,
-   "median": 966.349241,
-   "min": 921.079847,
+   "max": 687.273536,
+   "median": 680.213569,
+   "min": 591.68115,
    "n": 3,
    "p95": null,
    "p95_reason": "n is below 20, so a p95 would not be meaningful; min/median/max and raw values are reported",
    "values": [
-    921.079847,
-    966.349241,
-    1089.609553
+    687.273536,
+    591.68115,
+    680.213569
    ]
   },
   "incremental_ir_h_ms": {
-   "max": 889.833737,
-   "median": 806.644442,
-   "min": 766.366244,
+   "max": 572.766598,
+   "median": 564.315615,
+   "min": 549.23913,
    "n": 3,
    "p95": null,
    "p95_reason": "n is below 20, so a p95 would not be meaningful; min/median/max and raw values are reported",
    "values": [
-    889.833737,
-    766.366244,
-    806.644442
+    572.766598,
+    564.315615,
+    549.23913
    ]
   },
   "incremental_su_vm_c_ms": {
-   "max": 292.156777,
-   "median": 281.737311,
-   "min": 262.567453,
+   "max": 189.296589,
+   "median": 185.557469,
+   "min": 183.268063,
    "n": 3,
    "p95": null,
    "p95_reason": "n is below 20, so a p95 would not be meaningful; min/median/max and raw values are reported",
    "values": [
-    292.156777,
-    262.567453,
-    281.737311
+    189.296589,
+    183.268063,
+    185.557469
    ]
   }
  },

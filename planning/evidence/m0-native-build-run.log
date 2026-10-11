@@ -1,0 +1,10 @@
+  clean 0: configure 225 ms, build 687 ms
+  clean 1: configure 203 ms, build 592 ms
+  clean 2: configure 201 ms, build 680 ms
+  incremental su_vm.c 0: 189 ms
+  incremental su_vm.c 1: 183 ms
+  incremental su_vm.c 2: 186 ms
+  incremental ir.h 0: 573 ms
+  incremental ir.h 1: 564 ms
+  incremental ir.h 2: 549 ms
+{"status": "passed", "reason": null}
