@@ -52,6 +52,43 @@ int su_proc_exited(SuProc *p) {
     return 1;
 }
 
+
+/* Children (workers, disposable admission workers) get a scrubbed environment: only test seams
+ * (SU_TEST_*), engine settings (SUTEKH_*) and sanitizer options are passed on. Everything else,
+ * including credentials or tokens in the supervisor's environment, is dropped (constitution C07). */
+extern char **environ;
+static int env_allowed(const char *kv) {
+    static const char *const prefixes[] = {"SU_TEST_", "SUTEKH_", "ASAN_OPTIONS=", "UBSAN_OPTIONS=",
+                                           "LSAN_OPTIONS=", "MSAN_OPTIONS=", "TSAN_OPTIONS=", NULL};
+    for (size_t i = 0; prefixes[i] != NULL; i++) {
+        if (strncmp(kv, prefixes[i], strlen(prefixes[i])) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+static char **scrubbed_env(void) {
+    size_t n = 0;
+    char **out;
+    size_t k = 0;
+    if (environ != NULL) {
+        while (environ[n] != NULL) {
+            n++;
+        }
+    }
+    out = calloc(n + 1u, sizeof *out);
+    if (out == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (env_allowed(environ[i])) {
+            out[k++] = environ[i];
+        }
+    }
+    out[k] = NULL;
+    return out;
+}
+
 /* Records how a failed child ended. A child that is already gone (crash, exit) is reaped here and
  * its status kept; a child still running at grace_until_ms is left for su_proc_kill, and is
  * recorded as killed by the supervisor. */
@@ -150,8 +187,17 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
     fcntl(pout[0], F_SETFD, FD_CLOEXEC);
     fcntl(pout[1], F_SETFD, FD_CLOEXEC);
 
+    char **child_env = scrubbed_env();
+    if (child_env == NULL) {
+        close(pin[0]);
+        close(pin[1]);
+        close(pout[0]);
+        close(pout[1]);
+        return SU_E_RESOURCE_LIMIT;
+    }
     pid = fork();
     if (pid < 0) {
+        free(child_env);
         close(pin[0]);
         close(pin[1]);
         close(pout[0]);
@@ -188,9 +234,10 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
             rl.rlim_max = (rlim_t)limits->cpu_seconds + 1u;
             setrlimit(RLIMIT_CPU, &rl);
         }
-        execv(argv[0], (char *const *)argv);
+        execve(argv[0], (char *const *)argv, child_env);
         _exit(127);
     }
+    free(child_env);
 
     close(pin[0]);
     close(pout[1]);

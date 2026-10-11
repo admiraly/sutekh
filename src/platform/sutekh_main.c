@@ -4,6 +4,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sutekh/abi.h"
@@ -74,6 +75,32 @@ static int run_serve(int argc, char **argv) {
     SuAgentConfig cfg = {0};
     cfg.project_root = root;
     cfg.worker_argv = worker_argv;
+    /* Workers and disposable admission children run under RLIMIT_AS (constitution C07). Default
+     * 4 GiB; SUTEKH_WORKER_AS_BYTES overrides it (0 = unlimited, needed under AddressSanitizer). */
+    cfg.worker_address_space_bytes = UINT64_C(4) * 1024u * 1024u * 1024u;
+    /* Recovery spool (checkpoints, captured capsules): default 512 MiB so a 1,000,000-row world
+     * (about 28 MB per checkpoint, retain+1 reserved) fits; SUTEKH_SPOOL_BYTES_MAX overrides. */
+    cfg.spool_bytes_max = UINT64_C(512) * 1024u * 1024u;
+    {
+        const char *sp_env = getenv("SUTEKH_SPOOL_BYTES_MAX");
+        if (sp_env != NULL && sp_env[0] >= '1' && sp_env[0] <= '9') {
+            char *end = NULL;
+            unsigned long long v = strtoull(sp_env, &end, 10);
+            if (end != NULL && *end == '\0' && v > 0) {
+                cfg.spool_bytes_max = (uint64_t)v;
+            }
+        }
+    }
+    {
+        const char *as_env = getenv("SUTEKH_WORKER_AS_BYTES");
+        if (as_env != NULL && as_env[0] >= '0' && as_env[0] <= '9') {
+            char *end = NULL;
+            unsigned long long v = strtoull(as_env, &end, 10);
+            if (end != NULL && *end == '\0') {
+                cfg.worker_address_space_bytes = (uint64_t)v;
+            }
+        }
+    }
     return su_agent_serve(0, 1, &cfg) == 0 ? 0 : 1;
 }
 #endif
