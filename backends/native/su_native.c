@@ -1,0 +1,631 @@
+/* M1-01 native backend: C glue (see su_native.h).
+ *
+ * Owns: compile orchestration, artifact hash (planning/contracts/M1_NATIVE_CONTRACT.md section 3),
+ * executable publication (W^X: RW while writing, then R+X, never RWX), the mirrored wrapper checks
+ * of su_vm_invoke_v1, and the kernel call. Lowering lives in su_native_asmjit.cpp. */
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
+#include "backends/native/su_native.h"
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "backends/native/su_native_internal.h"
+#include "backends/native/su_native_lower.h"
+#include "ir/su_lir.h"
+#include "ir/su_sha256.h"
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
+#ifndef SU_NATIVE_ASMJIT_COMMIT
+#error "SU_NATIVE_ASMJIT_COMMIT must be defined by the build (third_party/asmjit.lock.json)"
+#endif
+
+#define SU_NATIVE_BACKEND_VERSION UINT32_C(1)
+#define SU_NATIVE_NO_FAILED_INSN UINT32_MAX
+#define SU_NATIVE_HASH_TAG "SUTEKH-NATIVE-ARTIFACT-V1"
+
+/* The C++ lowering uses its own op and access numbers; they must equal the frozen values. */
+_Static_assert(SU_NLOW_OP_CONST_U32 == SU_OP_CONST_U32, "op CONST");
+_Static_assert(SU_NLOW_OP_LOAD_U32 == SU_OP_LOAD_U32, "op LOAD");
+_Static_assert(SU_NLOW_OP_ADD_U32 == SU_OP_ADD_U32, "op ADD");
+_Static_assert(SU_NLOW_OP_SUB_U32 == SU_OP_SUB_U32, "op SUB");
+_Static_assert(SU_NLOW_OP_MUL_U32 == SU_OP_MUL_U32, "op MUL");
+_Static_assert(SU_NLOW_OP_EQ_U32 == SU_OP_EQ_U32, "op EQ");
+_Static_assert(SU_NLOW_OP_LT_U32 == SU_OP_LT_U32, "op LT");
+_Static_assert(SU_NLOW_OP_SELECT_U32 == SU_OP_SELECT_U32, "op SELECT");
+_Static_assert(SU_NLOW_OP_STORE_U32 == SU_OP_STORE_U32, "op STORE");
+_Static_assert(SU_NLOW_ACCESS_READ == SU_ACCESS_READ, "access read");
+_Static_assert(SU_NLOW_ACCESS_WRITE == SU_ACCESS_WRITE, "access write");
+
+static uint32_t g_inject_mask = 0u;
+
+void su_native_test_inject_failure(uint32_t mask) {
+    g_inject_mask = mask;
+}
+
+const char *su_native_asmjit_commit(void) {
+    return SU_NATIVE_ASMJIT_COMMIT;
+}
+
+/* ---- identity --------------------------------------------------------- */
+
+static void put_u32(SuSha256 *h, uint32_t v) {
+    uint8_t b[4];
+    b[0] = (uint8_t)v;
+    b[1] = (uint8_t)(v >> 8);
+    b[2] = (uint8_t)(v >> 16);
+    b[3] = (uint8_t)(v >> 24);
+    su_sha256_update(h, b, sizeof b);
+}
+
+/* Every input of M1_NATIVE_CONTRACT.md section 3. Variable-length text is length-prefixed.
+ * Lowering option flags are the empty set in this backend (word = 0). */
+void su_native_test_hash(const uint8_t semantic_hash[SU_HASH_BYTES], uint32_t layout_generation,
+                         uint32_t caps, uint8_t out[SU_HASH_BYTES]) {
+    SuSha256 h;
+    const char *commit = SU_NATIVE_ASMJIT_COMMIT;
+    uint32_t host_abi;
+#if defined(_WIN32)
+    host_abi = SU_NATIVE_HOST_ABI_WIN64;
+#else
+    host_abi = SU_NATIVE_HOST_ABI_SYSV;
+#endif
+    su_sha256_init(&h);
+    su_sha256_update(&h, SU_NATIVE_HASH_TAG, sizeof SU_NATIVE_HASH_TAG);
+    put_u32(&h, SU_NATIVE_ABI_VERSION);
+    put_u32(&h, SU_ARTIFACT_FORMAT_VERSION);
+    put_u32(&h, SU_NATIVE_BACKEND_VERSION);
+    put_u32(&h, SU_NATIVE_BACKEND_ASMJIT_SCALAR);
+    put_u32(&h, host_abi);
+    put_u32(&h, 0u);
+    put_u32(&h, layout_generation);
+    put_u32(&h, caps);
+    su_sha256_update(&h, semantic_hash, SU_HASH_BYTES);
+    put_u32(&h, (uint32_t)strlen(commit));
+    su_sha256_update(&h, commit, strlen(commit));
+    su_sha256_final(&h, out);
+}
+
+/* ---- executable publication ------------------------------------------- */
+
+#if defined(_WIN32)
+
+uint32_t su_native_exec_publish(const uint8_t *src, size_t size, uint8_t **code, size_t *map_size) {
+    SYSTEM_INFO si;
+    size_t page;
+    size_t map;
+    DWORD old = 0;
+    uint8_t *p;
+    GetSystemInfo(&si);
+    page = si.dwPageSize;
+    map = (size + page - 1u) / page * page;
+    if ((g_inject_mask & SU_NATIVE_FAIL_MMAP) != 0u) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    p = VirtualAlloc(NULL, map, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (p == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memcpy(p, src, size);
+    if ((g_inject_mask & SU_NATIVE_FAIL_MPROTECT) != 0u || !VirtualProtect(p, map, PAGE_EXECUTE_READ, &old)) {
+        VirtualFree(p, 0, MEM_RELEASE);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    FlushInstructionCache(GetCurrentProcess(), p, size);
+    *code = p;
+    *map_size = map;
+    return SU_OK;
+}
+
+void su_native_exec_release(uint8_t *code, size_t map_size) {
+    (void)map_size;
+    if (code != NULL) {
+        VirtualFree(code, 0, MEM_RELEASE);
+    }
+}
+
+#else
+
+uint32_t su_native_exec_publish(const uint8_t *src, size_t size, uint8_t **code, size_t *map_size) {
+    long page_l = sysconf(_SC_PAGESIZE);
+    size_t page = page_l > 0 ? (size_t)page_l : 4096u;
+    size_t map = (size + page - 1u) / page * page;
+    uint8_t *p;
+    if ((g_inject_mask & SU_NATIVE_FAIL_MMAP) != 0u) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    /* Written while RW only. Never RWX. */
+    p = mmap(NULL, map, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memcpy(p, src, size);
+    if ((g_inject_mask & SU_NATIVE_FAIL_MPROTECT) != 0u || mprotect(p, map, PROT_READ | PROT_EXEC) != 0) {
+        munmap(p, map);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    __builtin___clear_cache((char *)p, (char *)p + size);
+    *code = p;
+    *map_size = map;
+    return SU_OK;
+}
+
+void su_native_exec_release(uint8_t *code, size_t map_size) {
+    if (code != NULL) {
+        munmap(code, map_size);
+    }
+}
+
+#endif
+
+/* ---- lowering glue ---------------------------------------------------- */
+
+static void lowered_free(SuNativeLowered *l) {
+    if (l == NULL) {
+        return;
+    }
+    free(l->bytes);
+    free(l->insn_ranges);
+    free(l->disasm);
+    memset(l, 0, sizeof *l);
+}
+
+static uint32_t map_lower_status(uint32_t st) {
+    switch (st) {
+    case SU_NLOW_OK:
+        return SU_OK;
+    case SU_NLOW_RESOURCE:
+        return SU_E_RESOURCE_LIMIT;
+    default:
+        return SU_E_INTERNAL;
+    }
+}
+
+/* Flattens the verified module into plain arrays. The caller frees *words and *access. */
+static uint32_t build_lower_input(const SuLirModule *m, SuNativeLowerInput *in, uint32_t **words,
+                                  uint32_t **access) {
+    uint32_t i;
+    *words = calloc(5u * (size_t)m->insn_count + 1u, sizeof **words);
+    *access = calloc((size_t)m->field_count + 1u, sizeof **access);
+    if (*words == NULL || *access == NULL) {
+        free(*words);
+        free(*access);
+        *words = NULL;
+        *access = NULL;
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (i = 0; i < m->insn_count; i++) {
+        (*words)[5u * i + 0u] = m->insns[i].op;
+        (*words)[5u * i + 1u] = m->insns[i].dst;
+        (*words)[5u * i + 2u] = m->insns[i].a;
+        (*words)[5u * i + 3u] = m->insns[i].b;
+        (*words)[5u * i + 4u] = m->insns[i].c;
+    }
+    for (i = 0; i < m->field_count; i++) {
+        (*access)[i] = m->fields[i].access;
+    }
+    in->register_count = m->register_count;
+    in->field_count = m->field_count;
+    in->insn_count = m->insn_count;
+    in->field_access = *access;
+    in->insn_words = *words;
+    return SU_OK;
+}
+
+/* ---- artifact lifetime ------------------------------------------------ */
+
+void su_native_artifact_free(SuNativeArtifact *a) {
+    if (a == NULL) {
+        return;
+    }
+    su_native_exec_release(a->code, a->map_size);
+    free(a->ranges);
+    free(a->disasm);
+    free(a);
+}
+
+static void diag_set(SuNativeDiag *d, uint32_t code, uint32_t insn, const char *msg) {
+    if (d == NULL) {
+        return;
+    }
+    d->code = code;
+    d->failed_insn = insn;
+    d->message[0] = '\0';
+    if (msg != NULL) {
+        size_t n = strlen(msg);
+        if (n >= sizeof d->message) {
+            n = sizeof d->message - 1u;
+        }
+        memcpy(d->message, msg, n);
+        d->message[n] = '\0';
+    }
+}
+
+uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uint32_t caps,
+                           SuNativeArtifact **out, SuNativeDiag *diag) {
+    SuNativeArtifact *a;
+    SuNativeLowered low;
+    SuNativeLowerInput in;
+    SuNativeSourceRange *ranges = NULL;
+    uint32_t *words = NULL;
+    uint32_t *access = NULL;
+    uint32_t st;
+    uint32_t failed = SU_NATIVE_NO_FAILED_INSN;
+    uint32_t host_abi;
+    uint32_t k;
+    char msg[160];
+    void *code_ptr;
+
+    if (out == NULL) {
+        diag_set(diag, SU_E_INVALID_ARGUMENT, SU_NATIVE_NO_FAILED_INSN, "out is NULL");
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    diag_set(diag, SU_OK, SU_NATIVE_NO_FAILED_INSN, NULL);
+    if (m == NULL) {
+        diag_set(diag, SU_E_INVALID_ARGUMENT, SU_NATIVE_NO_FAILED_INSN, "module is NULL");
+        return SU_E_INVALID_ARGUMENT;
+    }
+#if !(defined(__x86_64__) || defined(_M_X64))
+    diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "host is not x86-64");
+    return SU_E_CAPABILITY_DENIED;
+#endif
+    if (caps != SU_NCAP_X86_64_SCALAR) {
+        diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN,
+                 "only SU_NCAP_X86_64_SCALAR is available in this build");
+        return SU_E_CAPABILITY_DENIED;
+    }
+    if ((m->insn_count > 0u && m->insns == NULL) || (m->field_count > 0u && m->fields == NULL)) {
+        diag_set(diag, SU_E_INVALID_ARGUMENT, SU_NATIVE_NO_FAILED_INSN, "module tables are NULL");
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (m->register_count > SU_LIMIT_REGISTERS || m->field_count > SU_LIMIT_FIELDS ||
+        m->insn_count > SU_LIMIT_INSTRUCTIONS) {
+        diag_set(diag, SU_E_RESOURCE_LIMIT, SU_NATIVE_NO_FAILED_INSN, "module exceeds M0 limits");
+        return SU_E_RESOURCE_LIMIT;
+    }
+
+    st = build_lower_input(m, &in, &words, &access);
+    if (st != SU_OK) {
+        diag_set(diag, st, SU_NATIVE_NO_FAILED_INSN, "cannot build lowering input");
+        return st;
+    }
+    memset(&low, 0, sizeof low);
+    msg[0] = '\0';
+    st = map_lower_status(su_native_lower_x64(&in, &low, msg, sizeof msg, &failed));
+    free(words);
+    free(access);
+    if (st != SU_OK) {
+        diag_set(diag, st, failed, msg);
+        lowered_free(&low);
+        return st;
+    }
+
+    if (m->insn_count > 0u) {
+        ranges = calloc(m->insn_count, sizeof *ranges);
+        if (ranges == NULL) {
+            lowered_free(&low);
+            diag_set(diag, SU_E_RESOURCE_LIMIT, SU_NATIVE_NO_FAILED_INSN, "allocation failed");
+            return SU_E_RESOURCE_LIMIT;
+        }
+        for (k = 0; k < m->insn_count; k++) {
+            ranges[k].insn = k;
+            ranges[k].begin = low.insn_ranges[2u * k];
+            ranges[k].end = low.insn_ranges[2u * k + 1u];
+            ranges[k].reserved = 0u;
+        }
+    }
+
+    a = calloc(1, sizeof *a);
+    if (a == NULL) {
+        free(ranges);
+        lowered_free(&low);
+        diag_set(diag, SU_E_RESOURCE_LIMIT, SU_NATIVE_NO_FAILED_INSN, "allocation failed");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    st = su_native_exec_publish(low.bytes, low.size, &a->code, &a->map_size);
+    if (st != SU_OK) {
+        free(ranges);
+        free(a);
+        lowered_free(&low);
+        diag_set(diag, st, SU_NATIVE_NO_FAILED_INSN, "executable mapping failed; nothing kept");
+        return st;
+    }
+    a->code_size = low.size;
+    code_ptr = a->code;
+    memcpy(&a->fn, &code_ptr, sizeof code_ptr); /* object pointer to function pointer */
+    a->ranges = ranges;
+    a->disasm = low.disasm;
+    a->disasm_len = low.disasm_len;
+    low.disasm = NULL;
+    lowered_free(&low);
+
+    host_abi =
+#if defined(_WIN32)
+        SU_NATIVE_HOST_ABI_WIN64;
+#else
+        SU_NATIVE_HOST_ABI_SYSV;
+#endif
+    a->module = m;
+    a->row_limit = (m->max_rows != 0u && m->max_rows < SU_LIMIT_ROWS) ? m->max_rows : SU_LIMIT_ROWS;
+    a->info.struct_size = (uint32_t)sizeof a->info;
+    a->info.abi_version = SU_NATIVE_ABI_VERSION;
+    a->info.artifact_format = SU_ARTIFACT_FORMAT_VERSION;
+    a->info.layout_generation = layout_generation;
+    a->info.required_caps = caps;
+    a->info.backend_id = SU_NATIVE_BACKEND_ASMJIT_SCALAR;
+    a->info.host_abi = host_abi;
+    memcpy(a->info.semantic_hash, m->semantic_hash, SU_HASH_BYTES);
+    su_native_test_hash(m->semantic_hash, layout_generation, caps, a->info.artifact_hash);
+    a->info.code_size = a->code_size;
+    a->info.insn_count = m->insn_count;
+
+    *out = a;
+    return SU_OK;
+}
+
+uint32_t su_native_artifact_info(const SuNativeArtifact *a, SuNativeArtifactInfo *out) {
+    if (a == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = a->info;
+    return SU_OK;
+}
+
+SuNativeKernelFn su_native_entry(const SuNativeArtifact *a) {
+    return a != NULL ? a->fn : NULL;
+}
+
+uint32_t su_native_source_map(const SuNativeArtifact *a, const SuNativeSourceRange **ranges,
+                              uint32_t *count) {
+    if (a == NULL || ranges == NULL || count == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *ranges = a->ranges;
+    *count = a->info.insn_count;
+    return SU_OK;
+}
+
+uint32_t su_native_code(const SuNativeArtifact *a, const uint8_t **code, size_t *size) {
+    if (a == NULL || code == NULL || size == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *code = a->code;
+    *size = a->code_size;
+    return SU_OK;
+}
+
+uint32_t su_native_disassemble(const SuNativeArtifact *a, char *buf, size_t cap, size_t *len) {
+    if (a == NULL || len == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *len = a->disasm_len;
+    if (buf == NULL || cap <= a->disasm_len) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memcpy(buf, a->disasm, a->disasm_len + 1u);
+    return SU_OK;
+}
+
+uint32_t su_native_set_row_limit(SuNativeArtifact *a, uint64_t limit) {
+    if (a == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    a->row_limit = limit;
+    return SU_OK;
+}
+
+/* ---- checked invocation (mirror of su_vm_invoke_v1 wrapper checks) ------ */
+
+static long find_field(const SuLirModule *m, uint32_t id, uint32_t access) {
+    uint32_t i;
+    for (i = 0; i < m->field_count; i++) {
+        if (m->fields[i].id == id && (m->fields[i].access & access) != 0u) {
+            return (long)i;
+        }
+    }
+    return -1;
+}
+
+static uint32_t check_shape(const SuColumnBinding *b, uint32_t access) {
+    if (b->struct_size != (uint32_t)sizeof(SuColumnBinding)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (b->elem_type != SU_TYPE_U32 || b->access != access || b->stride_bytes != 4u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (b->data == NULL) {
+        return b->row_count == 0u ? SU_OK : SU_E_INVALID_ARGUMENT;
+    }
+    if (((uintptr_t)b->data % 4u) != 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return SU_OK;
+}
+
+static uint32_t check_schema(const SuNativeArtifact *a, const SuColumnBinding *b, uint64_t rows,
+                             uint32_t access, uint8_t *bound, uint32_t **cols) {
+    long idx;
+    if (b->layout_generation != a->info.layout_generation) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    if (b->row_count != rows) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    idx = find_field(a->module, b->field_id, access);
+    if (idx < 0 || bound[idx] != 0u) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    bound[idx] = 1u;
+    cols[idx] = (uint32_t *)b->data;
+    return SU_OK;
+}
+
+static uint32_t check_set(const SuNativeArtifact *a, const SuColumnBinding *b, uint32_t n,
+                          uint32_t access, uint64_t rows, uint8_t *bound, uint32_t **cols) {
+    uint32_t i;
+    uint32_t st;
+    for (i = 0; i < n; i++) {
+        st = check_shape(&b[i], access);
+        if (st != SU_OK) {
+            return st;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        st = check_schema(a, &b[i], rows, access, bound, cols);
+        if (st != SU_OK) {
+            return st;
+        }
+    }
+    return SU_OK;
+}
+
+static int ranges_overlap(uintptr_t a0, uintptr_t a1, uintptr_t b0, uintptr_t b1) {
+    return a0 < b1 && b0 < a1;
+}
+
+static uint32_t check_alias(const SuColumnBinding *in, uint32_t nin, const SuColumnBinding *out,
+                            uint32_t nout, uint64_t rows) {
+    uintptr_t bytes;
+    uint32_t i;
+    uint32_t j;
+    uint32_t k;
+    if (rows == 0u) {
+        return SU_OK;
+    }
+    bytes = (uintptr_t)rows * 4u;
+    for (j = 0; j < nout; j++) {
+        uintptr_t os = (uintptr_t)out[j].data;
+        uintptr_t oe;
+        if (os > UINTPTR_MAX - bytes) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        oe = os + bytes;
+        for (i = 0; i < nin; i++) {
+            uintptr_t is = (uintptr_t)in[i].data;
+            if (is > UINTPTR_MAX - bytes) {
+                return SU_E_INVALID_ARGUMENT;
+            }
+            if (ranges_overlap(os, oe, is, is + bytes)) {
+                return SU_E_INVALID_ARGUMENT;
+            }
+        }
+        for (k = 0; k < nout; k++) {
+            uintptr_t ks;
+            if (k == j) {
+                continue;
+            }
+            ks = (uintptr_t)out[k].data;
+            if (ks > UINTPTR_MAX - bytes) {
+                return SU_E_INVALID_ARGUMENT;
+            }
+            if (ranges_overlap(os, oe, ks, ks + bytes)) {
+                return SU_E_INVALID_ARGUMENT;
+            }
+        }
+    }
+    return SU_OK;
+}
+
+uint32_t su_native_run_checked(SuNativeArtifact *a, const SuInvocation *input, SuOutputs *out) {
+    const SuLirModule *m;
+    uint32_t readable = 0u;
+    uint32_t writable = 0u;
+    uint32_t i;
+    uint32_t st;
+    uint64_t rows;
+    uint32_t *in_by_field[SU_LIMIT_FIELDS];
+    uint32_t *out_by_field[SU_LIMIT_FIELDS];
+    uint8_t bound[SU_LIMIT_FIELDS];
+    const uint32_t *in_ptr[SU_LIMIT_FIELDS];
+    uint32_t *out_ptr[SU_LIMIT_FIELDS];
+    SuNativeArgs args;
+    SuNativeKernelFn fn;
+
+    if (a == NULL || input == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    m = a->module;
+    for (i = 0; i < m->field_count; i++) {
+        if ((m->fields[i].access & SU_ACCESS_READ) != 0u) {
+            readable++;
+        }
+        if ((m->fields[i].access & SU_ACCESS_WRITE) != 0u) {
+            writable++;
+        }
+    }
+    if (input->struct_size != (uint32_t)sizeof(SuInvocation) || input->abi_version != SU_ABI_VERSION) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (out->struct_size != (uint32_t)sizeof(SuOutputs) || out->reserved != 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (input->binding_count != readable || out->binding_count != writable) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if ((input->binding_count > 0u && input->bindings == NULL) ||
+        (out->binding_count > 0u && out->bindings == NULL)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (input->layout_generation != a->info.layout_generation) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    memset(in_by_field, 0, sizeof in_by_field);
+    memset(out_by_field, 0, sizeof out_by_field);
+    memset(bound, 0, sizeof bound);
+
+    rows = input->row_count;
+    st = check_set(a, input->bindings, input->binding_count, SU_ACCESS_READ, rows, bound, in_by_field);
+    if (st != SU_OK) {
+        return st;
+    }
+    memset(bound, 0, sizeof bound);
+    st = check_set(a, out->bindings, out->binding_count, SU_ACCESS_WRITE, rows, bound, out_by_field);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (rows > a->row_limit || rows > SIZE_MAX / sizeof(uint32_t)) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    st = check_alias(input->bindings, input->binding_count, out->bindings, out->binding_count, rows);
+    if (st != SU_OK) {
+        return st;
+    }
+    out->failed_insn = SU_NATIVE_NO_FAILED_INSN;
+    if (rows == 0u) {
+        return SU_OK;
+    }
+
+    /* Table-order ordinals: readable fields in in_ptr, writable fields in out_ptr. */
+    {
+        uint32_t ni = 0;
+        uint32_t no = 0;
+        for (i = 0; i < m->field_count; i++) {
+            if ((m->fields[i].access & SU_ACCESS_READ) != 0u) {
+                in_ptr[ni++] = in_by_field[i];
+            }
+            if ((m->fields[i].access & SU_ACCESS_WRITE) != 0u) {
+                out_ptr[no++] = out_by_field[i];
+            }
+        }
+    }
+    args.struct_size = (uint32_t)sizeof args;
+    args.abi_version = SU_NATIVE_ABI_VERSION;
+    args.row_count = rows;
+    args.in_cols = in_ptr;
+    args.out_cols = out_ptr;
+    fn = a->fn;
+    st = fn(&args);
+    if (st != SU_OK) {
+        return st;
+    }
+    return SU_OK;
+}
