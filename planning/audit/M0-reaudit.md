@@ -1,6 +1,6 @@
 # M0 independent closure re-audit (M0-reaudit)
 
-Auditor: independent re-auditor, worktree `agent-a908fc9f47c512a41`, HEAD `3919cb6` (branch `worktree-agent-a908fc9f47c512a41`).
+Auditor: independent re-auditor, worktree `agent-a908fc9f47c512a41`, HEAD `ecbdc07` (branch `worktree-agent-a908fc9f47c512a41`).
 Scope: reproduction, blocker verification, mutation testing and sanitizer/fuzz runs in scratch copies outside the repository. No engine, harness, or status-doc source was edited. Scratch root: `/tmp/claude-0/-home-user-sutekh/82533bc6-e6ca-564a-ba43-39dd3091bafa/scratchpad/re/` (not in the repo). Evidence in `planning/evidence/` and `docs/IMPLEMENTATION_STATUS.md` was not trusted until reproduced.
 
 ## 1. Verdict
@@ -20,7 +20,7 @@ Blockers 1 and 2 are one defect: no timing target is evaluated at its declared c
 
 Everything else in the closure checklist passes or is partly met (section 5).
 
-## 2. Reproduction (both profiles, HEAD 3919cb6)
+## 2. Reproduction (both profiles, HEAD ecbdc07)
 
 | Check | Command (run from worktree root) | Return code | Result |
 |---|---|---|---|
@@ -46,7 +46,7 @@ Notes: the first release run used `build/` after a dev configure, not a fresh tr
 | 1 | T13 compares no timing target | **Partly resolved** | Verdicts exist for all five targets (`planning/evidence/m0-harness-dev-summary.txt`, release report `timing_targets`). Dev: ir_prepare not_comparable (4-row), preview met (8.526 ms), install not_comparable (1.406 ms RPC), warm met (12.933 ms), native not_comparable. Still blocks (section 1). |
 | 2 | T11 is 200 iterations, no failed or reverted installs | **Resolved for count; partly for content** | `DEFAULT_RELOAD_ITERATIONS = 1000` (run_m0.py line 545). Report counters: 1000 operations, `successful_install` 400 (200 `revert`), `failed_install` 600 (200 each stale revision, past tick, layout generation), `invalid_refused` 1000. Gap: the loop never installs a candidate whose evaluation failed; that path is tested once in T06 (mutant MJ is red only in T06). |
 | 3 | T04 misses oversize, parse, missing-store, schema cases; M08 survives T04 | **Partly resolved** | T04 now has 28 negative cases (`negative_case_count` 28): oversize IR, depth-40 IR and capsule, truncated JSON, invalid UTF-8, duplicate key, four schema-mismatch cases, missing store, 1 MiB+1 protocol line. Every TEST_SPEC T04 item (unknown op, bad type, duplicate key/register, undefined register, denied read/write, oversize) is covered. Still open: no capsule `limits.max_rows` case in T04; mutant MA (ignore max_rows) is red only in T09. |
-| 4 | Status doc and evidence stale; reproduction omits demo and probe | **Partly resolved** | Demo and probe are in `docs/IMPLEMENTATION_STATUS.md` section 6 (lines 193-196) and run correctly (table above). Still wrong: header says "as committed at 3feeacf" (HEAD is 3919cb6); dev hash `fc8149df...` is not reproduced (fresh dev build `2a8ba85f...`; cause not verified); release section 2 T13 column does not match its evidence file (section 6 below). |
+| 4 | Status doc and evidence stale; reproduction omits demo and probe | **Partly resolved** | Demo and probe are in `docs/IMPLEMENTATION_STATUS.md` section 6 (lines 193-196) and run correctly (table above). Still wrong: header says "as committed at 8108166" (HEAD is ecbdc07); dev hash `fc8149df...` is not reproduced (fresh dev build `2a8ba85f...`; cause not verified); release section 2 T13 column does not match its evidence file (section 6 below). |
 
 Hygiene items from the first audit, checked individually:
 
@@ -58,13 +58,13 @@ Hygiene items from the first audit, checked individually:
 | Runner passes zero-check bodies | Resolved | Guard at run_m0.py line 2096: passed with 0 checks becomes not_run. |
 | Recorded checks cap silent | Resolved | `MAX_RECORDED_CHECKS = 20000`; report has `checks_dropped` (line 2101). |
 | su_proc.c non-CLOEXEC duplicated pipe ends (defect 11) | Resolved | Child closes both duplicated descriptors and every pipe end above fd 2 (`src/agent/su_proc.c` lines 103-108). |
-| su_proc.c unchecked `req_len + 1u` (defect 12) | Resolved | `req_len == SIZE_MAX` rejected (`su_proc.c` line 148); framing size guard landed in 324dfee. |
+| su_proc.c unchecked `req_len + 1u` (defect 12) | Resolved | `req_len == SIZE_MAX` rejected (`su_proc.c` line 148); framing size guard landed in 5619a58. |
 | T11 RSS bound fails under ASan | Partly | Harness sets `quarantine_size_mb=1` for ASan binaries; T11 passed under ASan in section 7. Bound is still harness-chosen. |
 | T09 docstring says runtime part unavailable | Not re-checked | Runtime part runs (MF/MK red in T09). |
 
 ## 4. Test table T00-T15 (checks total; failed; status)
 
-Source: `<scratch>/h-dev/m0_report.json` and `<scratch>/h-rel/m0_report.json`, both produced by this audit at HEAD 3919cb6.
+Source: `<scratch>/h-dev/m0_report.json` and `<scratch>/h-rel/m0_report.json`, both produced by this audit at HEAD ecbdc07.
 
 | ID | Name | Dev (Debug) | Release | Note |
 |---|---|---|---|---|
@@ -118,7 +118,7 @@ Checked against raw files and fresh runs:
 | Native build 26 compile, 15 link; configure 201.5 to 225.2 ms; build 591.7 to 687.3 ms | `m0-native-build.json` | MATCH |
 | Release binary sha256 prefix `c9958397` | fresh release build | MATCH (full hash equal) |
 | Dev binary sha256 prefix `fc8149df` | fresh dev build sha `2a8ba85f...`; artifact file | **MISMATCH** (not reproduced; build-path dependence not verified) |
-| Header "as committed at 3feeacf" | HEAD is 3919cb6; 6b576c3 and 3919cb6 changed after it | **MISMATCH** (stale) |
+| Header "as committed at 8108166" | HEAD is ecbdc07; 16c3393 and ecbdc07 changed after it | **MISMATCH** (stale) |
 | T13 dev table: IR 10.652, preview 8.526, install 1.406, warm 12.933 | `m0-harness-dev-summary.txt` | MATCH |
 | T13 release table: IR 10.525, preview 8.993, install 1.604, warm 12.977 (section 2 and section 5) | `m0-harness-release.json` and `-summary.txt`: IR 9.665, preview 11.736, install 1.864, warm 11.391 | **MISMATCH** |
 | Stress fixture bytes 27,833,861 (1M) and 6,875,843 (250k) | both raw files | MATCH |
@@ -186,13 +186,13 @@ Caveat: the valid-class failures (about 18%) are mostly `SU_E_STALE_REVISION` fr
 6. **Medium:** ME and MG survive because the stale and layout checks are repeated (reload.c and schedule.c). Ordering of the cheap stale check before file reads is untested.
 7. **Medium (docs):** `docs/IMPLEMENTATION_STATUS.md` release T13 column does not match `planning/evidence/m0-harness-release.json` (three figures in two sections); header commit is stale; dev hash does not reproduce.
 8. **Medium:** under ASan, T12 is `not_run` (probe inconclusive), so the no-build claim has no sanitizer-instrumented evidence.
-9. **Low:** 18 commits between 22f7950 and b0623b5 carry `Co-Authored-By` trailers; none of the 22 commits after b0623b5 carry one.
+9. **Low:** 18 commits between e1f63c7 and e36e5ca carry `Co-Authored-By` trailers; none of the 22 commits after e36e5ca carry one.
 10. **Low:** T11 RSS bound is harness-chosen (8 MiB window); ASan pass depends on `quarantine_size_mb=1` set by the harness.
 
 ## 10. Commit identity, licenses, vendored code, secrets
 
 - Commits after 20f2625: 45, all authored and committed as `admiraly <249692417+admiraly@users.noreply.github.com>` (`git log --format='%an %ae %cn %ce' 20f2625..HEAD`). Identity is uniform.
-- `Co-Authored-By` in commit messages after 20f2625: 18 commits (all between 22f7950 and b0623b5). 0 after b0623b5. Across all history: 38. `Claude-Session` trailers after 20f2625: 39.
+- `Co-Authored-By` in commit messages after 20f2625: 18 commits (all between e1f63c7 and e36e5ca). 0 after e36e5ca. Across all history: 38. `Claude-Session` trailers after 20f2625: 39.
 - License files (`LICENSE`, `COMMERCIAL_LICENSE.md`, `CLA.md`, `NOTICE.md`, `LICENSES/`, `THIRD_PARTY_NOTICES.md`): 0 commits after 20f2625.
 - Vendored or downloaded code: `git ls-files` matches only `THIRD_PARTY_NOTICES.md` for vendor/third_party/external/deps/subprojects (315 tracked files).
 - Secrets: `git grep` over HEAD for private-key headers, `ghp_`, `AKIA`, `xox*`, `sk-ant-`, and key assignments: no matches. No occurrence of the user's email in tracked files.

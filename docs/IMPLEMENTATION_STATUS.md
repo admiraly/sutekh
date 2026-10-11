@@ -1,6 +1,6 @@
 # Implementation status (M0)
 
-Status as of M0-14 (2026-10-11). This document describes the source tree at commit `c0e8335` (the last M0-14 source commit; M0-14 source commits are `3bddc07`, `3bbc6b7`, `c0e8335`). Every harness report in `planning/evidence/` records `repo_head` `c0e8335`. The evidence commit that adds `planning/evidence/` and this document changes no source. Every figure below comes from a file under `planning/evidence/`; the file is named next to the figure. M0 is not closed: the M0-11 closure audit (`planning/audit/M0-audit.md`) and the M0-reaudit (`planning/audit/M0-reaudit.md`) are the references for the open items in section 4. `planning/tasks.json` and `planning/status.json` belong to the orchestrator and were not edited here.
+Status as of M0-14 (2026-10-11). This document describes the source tree at commit `d352b54` (the last M0-14 source commit; M0-14 source commits are `8a2f68c`, `5cad0d3`, `d352b54`). Every harness report in `planning/evidence/` records `repo_head` `d352b54`. The evidence commit that adds `planning/evidence/` and this document changes no source. Every figure below comes from a file under `planning/evidence/`; the file is named next to the figure. M0 is not closed: the M0-11 closure audit (`planning/audit/M0-audit.md`) and the M0-reaudit (`planning/audit/M0-reaudit.md`) are the references for the open items in section 4. `planning/tasks.json` and `planning/status.json` belong to the orchestrator and were not edited here.
 
 Shared-VM timing is observation, not performance qualification (ENGINE_CONSTITUTION C10). Targets are the proposed values in `docs/PERFORMANCE.md` section 2; no target is declared met by any spec. Sections 2.2 to 2.4 are M0-13 bench figures from an earlier tree (not re-run in M0-14).
 
@@ -8,26 +8,26 @@ Shared-VM timing is observation, not performance qualification (ENGINE_CONSTITUT
 
 | Task | Status | Commits (git log) | What exists |
 |---|---|---|---|
-| M0-00 | submitted; reviewed | 22f7950 (freeze), bd1288f (review), 1b6d55a and 735d698 (r2), 200aa68 (r3) | ABI v1 headers and M0 contract |
-| M0-01 | implemented | 114900c | C17 CMake skeleton, platform clock and pid, `tools/dev.py` (`configure`, `build`, `clean`; `--profile dev\|release`) |
-| M0-02 | implemented | 2c99818, merge 5e76608 | strict JSON reader, SU-LIR verifier, SHA-256 (`test_ir`) |
-| M0-03 | implemented | 98dbab8, merge 914ac34 | fixed-row SoA u32 world; committed, working and staging roots (`test_world`) |
-| M0-04 | implemented | bfeae5d, wiring a6b14a8 | checked scalar reference VM (`test_vm`) |
-| M0-05 | implemented | 268753a, merge c7ccfce | POSIX supervisor/worker control plane, `serve` and `worker` roles (`test_control`) |
-| M0-06 | implemented | 373de54, 2c31bda, b0623b5, 831e9a5 (contract r3.2), 3da93ec, 6058752 | fixtures and stdlib harness `tests/harness/run_m0.py` (T00 to T15) |
-| M0-07 | implemented | ce8ae87 | revision registry, serial schedule, safe-point `candidate.install` with evidence gate (`test_reload`) |
-| M0-08 | implemented (library half) | 2a579fc | canonical snapshot capture and restore, bounded checkpoint store (`test_snapshot`) |
-| M0-08b | implemented | ceeb78f | `world.snapshot` and `world.restore` in the control plane; capsule `max_rows` enforced in the VM (`test_snapshot_cp`) |
-| M0-09 | implemented | 80face8 | `tools/demo_zero_wait.py` and `tests/e2e/no_build_probe.py` |
-| M0-10 | implemented; superseded by M0-13 | 1d119ec | live-edit and native build bench; its evidence is replaced by M0-13 |
-| M0-11 | audit (verdict: cannot close yet) | c81d023 | `planning/audit/M0-audit.md` |
-| M0-12 | implemented | 0a26b46 | harness hardening after the audit (T04 matrix, T11 1,000 iterations, T13 per-target verdicts, strace-based T12, runner hygiene) |
-| M0-13 | implemented | f8583b9, b5bddbd, 3feeacf | bench re-run on the real release build; 1,000,000-row stress run |
-| M0-14 | implemented (this pass; M0 not closed) | 3bddc07, 3bbc6b7, c0e8335 | install critical section measured in the engine; T13 gates observed, not assumed; T11 failed-evaluation installs; T04 runtime `max_rows` case; candidate worker record checked against the OS; native incremental check measured by the harness |
+| M0-00 | submitted; reviewed | e1f63c7 (freeze), d7c935b (review), c6d4f59 and 498470f (r2), f51a38a (r3) | ABI v1 headers and M0 contract |
+| M0-01 | implemented | 267f9be | C17 CMake skeleton, platform clock and pid, `tools/dev.py` (`configure`, `build`, `clean`; `--profile dev\|release`) |
+| M0-02 | implemented | 895e433, merge 7f821c6 | strict JSON reader, SU-LIR verifier, SHA-256 (`test_ir`) |
+| M0-03 | implemented | 399b00c, merge 6a3e843 | fixed-row SoA u32 world; committed, working and staging roots (`test_world`) |
+| M0-04 | implemented | 1361f93, wiring 75c6713 | checked scalar reference VM (`test_vm`) |
+| M0-05 | implemented | f4cd562, merge eafbe7a | POSIX supervisor/worker control plane, `serve` and `worker` roles (`test_control`) |
+| M0-06 | implemented | 2109989, 50b2a6f, e36e5ca, 4d8150c (contract r3.2), feddb56, 8e6c8a2 | fixtures and stdlib harness `tests/harness/run_m0.py` (T00 to T15) |
+| M0-07 | implemented | 77fc90f | revision registry, serial schedule, safe-point `candidate.install` with evidence gate (`test_reload`) |
+| M0-08 | implemented (library half) | cc50278 | canonical snapshot capture and restore, bounded checkpoint store (`test_snapshot`) |
+| M0-08b | implemented | 4928890 | `world.snapshot` and `world.restore` in the control plane; capsule `max_rows` enforced in the VM (`test_snapshot_cp`) |
+| M0-09 | implemented | 0630e77 | `tools/demo_zero_wait.py` and `tests/e2e/no_build_probe.py` |
+| M0-10 | implemented; superseded by M0-13 | 369583f | live-edit and native build bench; its evidence is replaced by M0-13 |
+| M0-11 | audit (verdict: cannot close yet) | 465d5fa | `planning/audit/M0-audit.md` |
+| M0-12 | implemented | 22e112c | harness hardening after the audit (T04 matrix, T11 1,000 iterations, T13 per-target verdicts, strace-based T12, runner hygiene) |
+| M0-13 | implemented | 8b94674, aae7112, 8108166 | bench re-run on the real release build; 1,000,000-row stress run |
+| M0-14 | implemented (this pass; M0 not closed) | 8a2f68c, 5cad0d3, d352b54 | install critical section measured in the engine; T13 gates observed, not assumed; T11 failed-evaluation installs; T04 runtime `max_rows` case; candidate worker record checked against the OS; native incremental check measured by the harness |
 
-Engine fixes that landed between the M0-10 measurements and M0-13 (commit hashes from git log): 93db0d6 (release-profile `-Werror` format-truncation fixed in `reload.c` and `test_control.c`), d005726 (oldest candidate record evicted when the table is full), d87fcf0 (world fixture cap and snapshot cap raised to 64 MiB), 74da737 and 0acd478 (`capsule.submit` optional `source_path`; T04 uses it), 324dfee (inherited pipe ends closed in spawned workers; request framing size guard), 8675a08 (earlier status doc update).
+Engine fixes that landed between the M0-10 measurements and M0-13 (commit hashes from git log): 4c64deb (release-profile `-Werror` format-truncation fixed in `reload.c` and `test_control.c`), c811a6d (oldest candidate record evicted when the table is full), d8ddcf8 (world fixture cap and snapshot cap raised to 64 MiB), c14010e and 22e28bd (`capsule.submit` optional `source_path`; T04 uses it), 5619a58 (inherited pipe ends closed in spawned workers; request framing size guard), 9ec6106 (earlier status doc update).
 
-M0-14 engine change (3bddc07): `candidate.install` returns `bindings_prepared`, `prepare_ns` (install entry to the start of the publish) and `critical_section_ns` (registry publish through the new schedule entry in place), on the monotonic clock; both timings are `null` if the clock is unreadable. The old entry is retired and freed after the section.
+M0-14 engine change (8a2f68c): `candidate.install` returns `bindings_prepared`, `prepare_ns` (install entry to the start of the publish) and `critical_section_ns` (registry publish through the new schedule entry in place), on the monotonic clock; both timings are `null` if the clock is unreadable. The old entry is retired and freed after the section.
 
 Engine capabilities advertised by `build/sutekh serve` (`engine.info`): `engine.info`, `capsule.submit`, `candidate.status`, `candidate.evaluate`, `candidate.install`, `world.create`, `world.inspect`, `world.step`, `world.snapshot`, `world.restore`. There is no RPC that closes or destroys a world.
 
@@ -65,7 +65,7 @@ Harness, `python3 -I tests/harness/run_m0.py --binary build/sutekh --report-dir 
 | T14 Deterministic fixture repeat | passed | passed | |
 | T15 Structured protocol | passed | passed | |
 
-Totals: dev 16 passed, 0 failed (`planning/evidence/m0-harness-dev-summary.txt`, `planning/evidence/m0-harness-dev.json`, `repo_head` c0e8335, binary eb121da9). Release 16 passed, 0 failed (`planning/evidence/m0-harness-release-summary.txt`, `planning/evidence/m0-harness-release.json`, binary d5714cb0).
+Totals: dev 16 passed, 0 failed (`planning/evidence/m0-harness-dev-summary.txt`, `planning/evidence/m0-harness-dev.json`, `repo_head` d352b54, binary eb121da9). Release 16 passed, 0 failed (`planning/evidence/m0-harness-release-summary.txt`, `planning/evidence/m0-harness-release.json`, binary d5714cb0).
 
 ### 2.1 T13 timing targets (provisional; shared VM, C10)
 
@@ -89,14 +89,14 @@ Verdicts are recorded by the harness and are provisional (C10). They do not make
 
 ### 2.3 Sanitizers (ASan + UBSan, Debug, scratch build outside the repository)
 
-Sources from `git archive c0e8335`; `-fsanitize=address,undefined -fno-sanitize-recover=undefined`.
+Sources from `git archive d352b54`; `-fsanitize=address,undefined -fno-sanitize-recover=undefined`.
 
 - ctest: 7 of 7, no sanitizer reports (`planning/evidence/m0-asan-ctest.log`).
 - Harness with the ASan binary, `--no-build` (`planning/evidence/m0-asan-harness-summary.txt`): 14 passed, 0 failed. T00 `not_run` (the flag skips the clean build). T12 `not_run`: the strace probe is inconclusive under ASan, because the demo did not complete with status passed under the probe's ptrace (see section 4). T04, T05, T06, T09, T10, T11 (1,000 iterations) and T13 passed under ASan.
 
 ### 2.4 Live-edit bench (`bench/reload/bench_reload.py live`), M0-13 tree
 
-Both profiles: 720 warm edits (60 epochs of 12 timed edits), 60 cold trials, 120 failed-candidate trials (0 published), 1,000,000-row and 250,000-row stress runs. Each warm epoch uses a fresh `serve` process (section 4). Status `passed` in both raw files. These were produced at b5bddbd/3feeacf and were not re-run in M0-14.
+Both profiles: 720 warm edits (60 epochs of 12 timed edits), 60 cold trials, 120 failed-candidate trials (0 published), 1,000,000-row and 250,000-row stress runs. Each warm epoch uses a fresh `serve` process (section 4). Status `passed` in both raw files. These were produced at aae7112/8108166 and were not re-run in M0-14.
 
 Warm edit, host clock, n=720, p95 (median):
 
@@ -159,7 +159,7 @@ Each mutant is a copy of the committed tree with one anchored edit, built in Deb
 
 ## 4. Known limitations and gaps
 
-- **(Fixed in 6b576c3) T00 failed on the release binary** because the reference build was always Debug; it now follows the binary under test.
+- **(Fixed in 16c3393) T00 failed on the release binary** because the reference build was always Debug; it now follows the binary under test.
 - **(Fixed in M0-14) T04 gap: capsule `limits.max_rows`.** A runtime case now sends a capsule with `max_rows` 4 against an 8-row world. The mutant that ignores `max_rows` is caught in T04 as well as T09.
 - **(Fixed in M0-14) T13 gate facts were hard-coded.** Each gate is now observed; a missing fact gives `not_comparable`. The self-test covers `not_met` on a slow sample and `not_comparable` on a missing fact.
 - **(Fixed in M0-14) Candidate record pid.** The candidate record's `worker_pid` is checked against the live active worker (OS ppid and identity) in T05 and T11. The pid+1 mutant is caught.

@@ -1,6 +1,6 @@
 # M0 independent closure audit (M0-11)
 
-Auditor: independent closure auditor, worktree `agent-ac87c1936bea31207`, HEAD `0acd478` at start of audit.
+Auditor: independent closure auditor, worktree `agent-ac87c1936bea31207`, HEAD `22e28bd` at start of audit.
 Scope: read-only review and reproduction. No engine, harness, or doc source was edited. Mutations ran only in scratch copies outside the repository. Raw logs are under the session scratchpad (`/tmp/claude-0/-home-user-sutekh/82533bc6-e6ca-564a-ba43-39dd3091bafa/scratchpad/`), not in the repo.
 
 ## Verdict
@@ -14,7 +14,7 @@ Blockers, exactly:
 3. **T04 does not cover the required matrix.** TEST_SPEC requires "oversize input rejected" and the matrix is incomplete (no oversize IR, no `SU_E_PARSE`, no `SU_E_MISSING_STORE`, no `SU_E_SCHEMA_MISMATCH`). Mutation M08 (max_rows ignored) passes T04.
 4. **Stored evidence and the reproduction guide are stale.** `docs/IMPLEMENTATION_STATUS.md` reports T04 unavailable, a release build that fails, old harness and binary hashes, and omits the demo and probe commands from its reproduction section.
 
-## Reproduction (clean builds, HEAD 0acd478)
+## Reproduction (clean builds, HEAD 22e28bd)
 
 | Check | Result |
 |---|---|
@@ -28,7 +28,7 @@ Blockers, exactly:
 | `python3 tools/demo_zero_wait.py` (dev, release) | rc 0, status passed |
 | `python3 -I tests/e2e/no_build_probe.py` (dev, release) | rc 0, verdict pass, 0 build-tool execs in run, positive control detected |
 
-Hashes (dev build at HEAD 0acd478): `build/sutekh` sha256 `184ab82b839cc793dd786caa1b22f85852c0ab70978081bf7df185cd2f7b3a6e`; `run_m0.py` sha256 `2263a43d5dc3cea6c6eb607bcb8967e397d3aab949f0b551a2e2e899a43b48b8`; `reference_eval.py` sha256 `b9919314fd9ee2526d163e27f5a698bf8e086d3b9497e0824fd421790eec04dc`.
+Hashes (dev build at HEAD 22e28bd): `build/sutekh` sha256 `184ab82b839cc793dd786caa1b22f85852c0ab70978081bf7df185cd2f7b3a6e`; `run_m0.py` sha256 `2263a43d5dc3cea6c6eb607bcb8967e397d3aab949f0b551a2e2e899a43b48b8`; `reference_eval.py` sha256 `b9919314fd9ee2526d163e27f5a698bf8e086d3b9497e0824fd421790eec04dc`.
 
 ## Test table (T00-T15)
 
@@ -95,7 +95,7 @@ Additional MILESTONES and TEST_SPEC conditions: T11 at 1,000 revisions (**FAIL**
 - **No unconditional PASS**: the runner marks a test passed whenever its body returns without an exception and has no minimum check count, so a body with zero checks would pass. The demo and probe derive status from real comparisons. T13 is passed without any target, so it cannot fail on latency. PARTIAL.
 - **No fabricated benchmarks**: spot-checked 8 figures in `docs/IMPLEMENTATION_STATUS.md` against `planning/evidence/m0-latency-dev-raw.json` and `...-release-waiver-raw.json`, all reproduced: dev warm p95 submit 0.633, evaluate 9.023, install RPC 1.014, edit-to-first-effect 11.759 ms (720 samples, nearest-rank); release evaluate 8.564 and install 0.765 ms; cold first-edit p95 11.029 ms (n=60); failed-candidate published count 0 of 120; 1M-row fixture 27,833,861 bytes; native build 26 compile and 15 link steps. The doc's median 9.757 versus my 9.758 is a rounding difference in the median method. PASS for numbers; the doc itself is stale (see defects).
 - **Commit identity**: recent commits are by `admiraly <249692417+admiraly@users.noreply.github.com>`. No trailers were added by this audit. PASS for this audit's commit.
-- **License files untouched**: `LICENSE`, `COMMERCIAL_LICENSE.md`, `CLA.md`, `NOTICE.md`, `LICENSES`, `THIRD_PARTY_NOTICES.md` last changed in `20f2625` and `c0b84f6`, both ancestors of M0-00 (`22f7950`). PASS.
+- **License files untouched**: `LICENSE`, `COMMERCIAL_LICENSE.md`, `CLA.md`, `NOTICE.md`, `LICENSES`, `THIRD_PARTY_NOTICES.md` last changed in `20f2625` and `c0b84f6`, both ancestors of M0-00 (`e1f63c7`). PASS.
 - **No vendored or downloaded code**: `git ls-files` matching vendor, third_party, external or deps lists only `THIRD_PARTY_NOTICES.md`. No downloads in tools, bench, tests or src. PASS.
 
 ## Memory-safety review and fuzzing
