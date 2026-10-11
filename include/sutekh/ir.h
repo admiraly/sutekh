@@ -35,12 +35,17 @@
 #define SU_TYPE_U32   UINT32_C(1)
 #define SU_TYPE_BOOL  UINT32_C(2)
 
-/* Sentinel for an unused operand slot. */
+/* Sentinel for an unused operand slot. Register/field indices are bounded by
+ * SU_LIMIT_REGISTERS/SU_LIMIT_FIELDS, so this value is never a valid index;
+ * const_u32 values live in operand a only for SU_OP_CONST_U32, where a may be
+ * any u32 (including 0xFFFFFFFF) and is never interpreted as an index. */
 #define SU_OPERAND_NONE UINT32_C(0xFFFFFFFF)
 
 /* Verified instruction. Registers are numbered by definition order (this is
  * also the register normalization used by the semantic hash). Field operands
- * are indices into the capsule's verified field table, never names.
+ * are indices into the VERIFIED FIELD TABLE: the capsule's declared fields
+ * sorted ascending by field_id (declaration order is not identity). Never names.
+ * eq/lt operands must both be u32 registers; results are bool.
  *
  *  op            dst        a              b          c
  *  CONST_U32     reg        value          NONE       NONE

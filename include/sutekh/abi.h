@@ -38,9 +38,11 @@ typedef struct SuColumnBinding {
 } SuColumnBinding;
 
 /* Read-side inputs for one system over the whole table. Loads read these
- * views (state at system entry). bindings[i] corresponds to field table entry
- * i of the verified capsule, for readable fields only; binding_count equals
- * the number of readable fields in table order. */
+ * views (state at system entry); the executor must never write through them.
+ * bindings contains exactly the READABLE fields of the verified field table,
+ * in verified-table order (ascending field_id); binding_count is their count.
+ * The executor matches a load's field index to its binding by field_id, never
+ * by position alone. */
 typedef struct SuInvocation {
     uint32_t struct_size;        /* sizeof(SuInvocation) */
     uint32_t abi_version;        /* SU_ABI_VERSION */
@@ -50,10 +52,13 @@ typedef struct SuInvocation {
     const SuColumnBinding *bindings;
 } SuInvocation;
 
-/* Write-side staging. One binding per writable field, in field table order,
- * pointing at staging columns that never alias any input column. The runtime,
- * not the executor, commits staging to the working root after SU_OK. On any
- * non-OK status staging contents are unspecified and must be discarded. */
+/* Write-side staging. One binding per WRITABLE field, in verified-table order,
+ * matched by field_id. Staging columns never overlap (byte ranges) any input or
+ * other staging column. Because every writable field is stored exactly once per
+ * row, a successful call fully defines every staging column. The runtime, not
+ * the executor, then COPIES staging into the working root; staging memory is
+ * reused every tick. On any non-OK status staging contents are unspecified and
+ * must be discarded. */
 typedef struct SuOutputs {
     uint32_t struct_size;        /* sizeof(SuOutputs) */
     uint32_t binding_count;
@@ -62,14 +67,16 @@ typedef struct SuOutputs {
     SuColumnBinding *bindings;
 } SuOutputs;
 
-/* Opaque executor context; owned by the runtime. */
+/* Opaque executor context. Created, sized and destroyed by the executor
+ * implementation behind the VM interface (M0-04); this header does not export
+ * create/destroy. NULL ctx returns SU_E_INVALID_ARGUMENT. */
 typedef struct SuExecContext SuExecContext;
 
 /* Entry point shared by the reference VM and (M1) native variants.
  * Preconditions are CHECKED by the wrapper: struct sizes, abi_version,
  * generations, lengths equal to row_count, no aliasing between staging and
  * inputs, and row_count within SU_LIMIT_ROWS. Violations return
- * SU_E_INVALID_ARGUMENT or SU_E_SCHEMA_MISMATCH without touching any column.
+ * the status in M0_CONTRACT.md section 4 without touching any column.
  * row_count == 0 returns SU_OK and executes no instruction.
  * Rows run in ascending index order; at most one store per field per row. */
 typedef uint32_t (*SuInvokeV1Fn)(SuExecContext *ctx, const SuInvocation *input,

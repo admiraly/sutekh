@@ -2,28 +2,44 @@
 
 Headers: `include/sutekh/{status,ir,abi}.h`. Consumers implement against these; any change needs a new generation and revalidation of dependents (owner: contract owner / integrator).
 
+## 0. Revision log
+- r1: initial draft (43dba6d). r2: resolves blocking findings 1-9 of `planning/handoffs/2026-10-11-m0-00-review.md`; adds `SU_E_MISSING_STORE` (20). Headers are the layout authority; this document is the semantic authority.
+
 ## 1. Numeric and effect contract
-- Profile `u32_mod_v1`: add/sub/mul modulo 2^32, unsigned `lt`, exact `eq`, `select` on bool; bool never coerces to u32. Use unsigned C arithmetic only.
-- Registers are per-row, single assignment, numbered by definition order. Loads read system-entry values; each writable field is stored exactly once; reads and writes must match the capsule declaration (`SU_E_UNDECLARED_READ/WRITE`).
+- Profile `u32_mod_v1`: add/sub/mul modulo 2^32, unsigned `lt`, exact `eq` (both operands u32, result bool), `select` on bool; bool never coerces to u32. Unsigned C arithmetic only.
+- Registers: per-row, single assignment, numbered from 0 in definition order.
+- Loads read system-entry values. **Every declared-writable field must be stored exactly once** (unchanged values are copied with load+store; "no needless copy" in the spec means no extra registers beyond that). A second store of one field -> `SU_E_UNDECLARED_WRITE`; a writable field never stored -> `SU_E_MISSING_STORE`; store/load of a field without the permission -> `SU_E_UNDECLARED_WRITE` / `SU_E_UNDECLARED_READ`.
+- Verifier reports the **first** error only, in this fixed order: input size/depth limits (`SU_E_RESOURCE_LIMIT`), JSON syntax/UTF-8 (`SU_E_PARSE`), duplicate keys (`SU_E_DUPLICATE_KEY`), key/shape/type errors (`SU_E_TYPE`), then instructions in ascending order, then end-of-body checks (`SU_E_MISSING_STORE`). Multi-fault fixtures therefore expect the earliest category.
 - Execution: row loop owned by runtime, ascending order, zero rows run nothing, whole table per call.
 
-## 2. Lifetimes
-- Bindings/invocation/output pointers are borrowed for one `SuInvokeV1Fn` call only. Wrapper checks sizes, ABI version, generations, lengths, no staging/input aliasing, rows <= `SU_LIMIT_ROWS`.
-- Staging columns are allocated at world preparation/admission, never per row or mid-tick. Runtime commits staging only after `SU_OK`; any failure discards it.
+## 2. Schema and field identity
+M0 has no separate schema file. The **capsule `fields` array is the authoritative schema declaration** for table `schema.id` (field id, name, type, permission). IR `query` must equal `schema.id`, and IR/capsule `system_id` and `numeric_profile` must match (`SU_E_SCHEMA_MISMATCH`). Field IDs are unique within a capsule (duplicate id or name -> `SU_E_SCHEMA_MISMATCH`). A world binds fixture column names to field IDs through the first installed capsule; a later capsule is code-only only if every shared name has the same id/type and layout_generation (else `SU_E_SCHEMA_MISMATCH`).
+The **verified field table** is the capsule's fields sorted ascending by field id; `SuInsn` field operands index this table. IR source names resolve to table indices once, at verification.
 
-## 3. Tick and publish (M0)
-Copy committed columns into the working root; run systems serially, each system's committed staging visible to later systems; publish a new committed root only if the full tick succeeds (T09). Code-only swaps install at a tick boundary after revalidating expected world revision and layout generation (`SU_E_STALE_REVISION` / `SU_E_SCHEMA_MISMATCH`).
+## 3. Lifetimes, wrapper checks, and commit
+- Pointers in the structs are borrowed for one `SuInvokeV1Fn` call. Input `data` is read-only to the executor.
+- `SuExecContext` is created/destroyed by the executor implementation (M0-04); NULL ctx -> `SU_E_INVALID_ARGUMENT`.
+- Wrapper checks, all before any access: NULL pointer, `struct_size`, `abi_version`, `stride_bytes != 4`, `elem_type`, binding/staging counts -> `SU_E_INVALID_ARGUMENT`; `layout_generation` mismatch or a binding `row_count != row_count` or missing/extra field_id -> `SU_E_SCHEMA_MISMATCH`; any byte-range overlap between staging and any other column (alias) -> `SU_E_INVALID_ARGUMENT`; `row_count > SU_LIMIT_ROWS` (runtime-configurable default) -> `SU_E_RESOURCE_LIMIT`.
+- Staging columns are preallocated at world preparation/admission. After `SU_OK` the runtime **copies** staging into the working root; on failure it discards staging.
 
-## 4. Errors
-Codes in `status.h` are the spec set (1..17) plus `SU_E_INVALID_ARGUMENT` (18) and `SU_E_INTERNAL` (19). Mapping: bad JSON/UTF-8/oversize message framing -> `SU_E_PARSE`; limits -> `SU_E_RESOURCE_LIMIT`; path escape -> `SU_E_CAPABILITY_DENIED`; file errors -> `SU_E_IO`; worker death/timeout -> `SU_E_WORKER_FAILED`. Diagnostics carry the fields in LIVE_IR_SPEC section 8. Negative fixtures: `examples/negative_cases.json`.
+## 4. Tick and publish (M0)
+Copy committed columns into the working root; run systems serially, each system's committed staging visible to later systems; publish a new committed root only if the whole tick succeeds (T09). Code-only swaps install at a tick boundary after revalidating expected world revision (`SU_E_STALE_REVISION`) and layout generation (`SU_E_SCHEMA_MISMATCH`).
 
-## 5. Identities
-- `source_hash`: SHA-256 of original bytes. `semantic_hash`: SHA-256 over the canonical encoding below. Both lowercase hex in JSON.
-- Canonical semantic encoding (all integers little-endian u32): ASCII `SULIR-SEM\0`, artifact format, numeric profile length+bytes, system_id length+bytes, query length+bytes, layout_generation, field table count then per field (id, type, access bits) sorted by field id, instruction count, then per instruction the 5 `SuInsn` words with registers in definition order and field operands replaced by field id.
-- Whitespace/key order must not change the hash. Changing this encoding bumps `SU_ARTIFACT_FORMAT_VERSION`.
+Error mapping beyond section 3: malformed JSON/UTF-8/duplicate keys in a protocol line -> `SU_E_PARSE`; message over 1 MiB or collection limits -> `SU_E_RESOURCE_LIMIT`; path escape or denied path -> `SU_E_CAPABILITY_DENIED`; file errors -> `SU_E_IO`; worker death/timeout -> `SU_E_WORKER_FAILED`. Codes 18-20 are engine-wide additions to the RPC error list.
+
+## 5. Identities and canonical hash
+- `source_hash`: SHA-256 of the exact `.lir.json` bytes. `capsule_hash`: SHA-256 of exact capsule bytes. Both lowercase hex.
+- `semantic_hash` = SHA-256 of the byte string below. All integers are u32 little-endian; a *string* is u32 byte length + UTF-8 bytes, no NUL; type codes are `SU_TYPE_*`; access is the `SU_ACCESS_*` bitmask.
+  1. ASCII bytes `SULIR-SEM` + one 0x00 byte
+  2. artifact format (`SU_ARTIFACT_FORMAT_VERSION`)
+  3. strings: numeric_profile, system_id, query(=schema.id)
+  4. field count, then per field of the verified table (ascending id): id, type, access. Names, layout_generation and file paths are **excluded** (rename or relayout is not a behavior change; layout invalidation is tracked separately).
+  5. instruction count, then per instruction the five `SuInsn` words, registers numbered from 0, field operands replaced by field **id**, unused slots 0xFFFFFFFF.
+  - M0 has no referenced external definitions; LIVE_IR section 9 "referenced hashes" is empty.
+- Whitespace and key order never change `semantic_hash`. Any change here bumps the artifact format version.
 
 ## 6. Snapshot (M0, JSON)
-Fields: `snapshot_format`, `world_revision`, `tick`, `schema_id`, `schema_version`, `layout_generation`, `numeric_profile`, `semantic_manifest` (system_id + semantic_hash per installed system, schedule order), `entity_ids`, `columns` (names resolved to ids; values as decimal u32). Restore must reproduce all of it exactly (T08).
+`snapshot_format` = `"0.1"`; `world_revision` (string); `tick` (decimal u64 as JSON integer); `schema_id`; `schema_version`; `layout_generation`; `numeric_profile`; `fields` [{id,name,type}] ascending id; `semantic_manifest` [{system_id, semantic_hash}] in schedule order; `entity_ids`; `columns` keyed by field **name**, values JSON integers 0..2^32-1. Restore is `world.restore` with expected current revision; it sets tick, columns and manifest from the snapshot and assigns a **new** world revision, recording `restored_from` = snapshot id (T08 compares everything except the revision string).
 
 ## 7. Control plane
 JSON-lines v0.1 per `docs/AGENT_RPC.md`, stdio only, 1 MiB messages. Executable roles `sutekh serve|worker`. Unimplemented methods return `SU_E_UNSUPPORTED_METHOD`.
@@ -32,4 +48,4 @@ JSON-lines v0.1 per `docs/AGENT_RPC.md`, stdio only, 1 MiB messages. Executable 
 Contract owner: M0-00 (integrator). M0-01 build skeleton, M0-02 parser/verifier, M0-03 world storage, M0-04 VM, M0-05/06 worker+control: consume only these headers.
 
 ## 9. Checks run
-`gcc` and `clang` `-std=c17 -Wall -Wextra -Werror -pedantic -Iinclude planning/contracts/abi_check.c` compile and run OK (static layout asserts included). Independent fixture review (acceptance item 2): not yet done.
+r2: gcc 13.3 and clang 18.1 `-std=c17 -Wall -Wextra -Werror -pedantic -Iinclude planning/contracts/abi_check.c` compile and run OK (statuses=21). Independent review of r1 done (accept-with-changes); r2 changes are not yet independently re-reviewed, so M0-00 stays `submitted`. Non-blocking review items still open: fixtures with several faults, no fixtures for several error codes.
