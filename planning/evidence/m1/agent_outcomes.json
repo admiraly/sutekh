@@ -1,5 +1,5 @@
 {
-  "note": "Orchestrator-recorded outcome classification for each delegated worktree agent (judgement by the integrating session, not machine-derived). Classes: accepted_as_is (merged after independent rebuild/rerun with no code change by the integrator); accepted_with_integrator_fix (merged, but the integrator had to change code/CMake/docs or found an engine/harness defect afterwards); review_found_issues (a reviewer/auditor task whose purpose was to find defects and did); partial (merged with explicit scope gaps requiring a follow-up task); no_work (agent made no changes); in_progress (excluded from rates). Reviewer/auditor tasks are counted separately from implementation tasks.",
+  "note": "Orchestrator-recorded outcome classification for each delegated worktree agent (judgement by the integrating session, not machine-derived). Classes: accepted_as_is (merged after independent rebuild/rerun with no code change by the integrator); accepted_with_integrator_fix (merged, but the integrator had to change code/CMake/docs or found an engine/harness defect afterwards); review_found_issues (a reviewer/auditor task whose purpose was to find defects and did); partial (merged with explicit scope gaps requiring a follow-up task); no_work (agent made no changes); in_progress (excluded from rates; no row uses it after the M1 evidence refresh). Reviewer/auditor tasks are counted separately from implementation tasks.",
   "outcomes": {
     "aa803fbe2321742b2": {"task": "M0-00 contract review r1", "kind": "review", "outcome": "review_found_issues"},
     "ae394f7ec09bbcdbe": {"task": "M0-01 build skeleton", "kind": "impl", "outcome": "accepted_as_is"},
@@ -34,6 +34,6 @@
     "abcdd0b7a38bbe344": {"task": "M1-02c-1 isolated admission", "kind": "impl", "outcome": "accepted_as_is"},
     "ae7f6cab3fd5287cc": {"task": "M1-02c-2 native fault quarantine", "kind": "impl", "outcome": "accepted_as_is"},
     "a9d8746aa3cf136bc": {"task": "M1-02c-3 stale/close/no-spawn", "kind": "impl", "outcome": "partial"},
-    "a0b496d125408ea84": {"task": "M1-05a platform paths", "kind": "impl", "outcome": "in_progress"}
+    "a0b496d125408ea84": {"task": "M1-05a platform paths", "kind": "impl", "outcome": "accepted_as_is", "note": "platform half merged without code change by the integrator; the status was stale 'in_progress' before this correction"}
   }
 }

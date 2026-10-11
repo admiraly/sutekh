@@ -20,6 +20,8 @@ import json, os, statistics, subprocess, sys
 from datetime import datetime, timezone
 
 ROOT = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
+GITDIR = os.path.abspath(os.path.join(ROOT, subprocess.check_output(
+    ["git", "-C", ROOT, "rev-parse", "--git-common-dir"], text=True).strip()))
 OUT = os.path.join(ROOT, "planning/evidence/m1/agent_workflow.json")
 USAGE = os.path.join(ROOT, "planning/evidence/m1/agent_usage.json")
 
@@ -60,7 +62,7 @@ def main():
     rows = []
     for ref in git("for-each-ref", "--format=%(refname:short)", "refs/heads/worktree-agent-*").splitlines():
         aid = ref.replace("worktree-agent-", "")
-        wt = os.path.join(ROOT, ".git/worktrees", "agent-" + aid)
+        wt = os.path.join(GITDIR, "worktrees", "agent-" + aid)  # common dir: works from any linked worktree
         launch = birth(wt) if os.path.exists(wt) else None
         tip = git("rev-parse", ref)
         # Own commits = commits reachable from the branch tip made after the worktree was created.
