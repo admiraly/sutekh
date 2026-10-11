@@ -1,1 +1,1 @@
-{"protocol":"0.1","id":"p-2","method":"capsule.submit","params":{"capsule_path":"/etc/passwd","expected_world_revision":"world-0"}}
+{"protocol":"0.1","id":"p-2","method":"capsule.submit","params":{"capsule_path":"/etc/passwd"}}

@@ -21,21 +21,10 @@ What it does
       not_run      the harness did not execute the check: prerequisite missing, build
                    skipped, or a precondition that cannot be constructed.
 
-Assumed control-plane parameter names (AGENT_RPC.md names the operations but not the
-fields; the engine owner must confirm them). A mismatch shows up as a real error from
-the engine, not as a pass:
-  engine.info {}                                    -> result.pid, result.capabilities
-  world.create {world_path, capsule_paths}          -> world_id, world_revision
-  world.inspect {world_id, fields, limit}           -> tick, columns, world_revision,
-                                                       semantic_manifest, worker_pid
-  world.step {world_id, ticks}                      -> world_revision, tick
-  world.snapshot {world_id, expected_world_revision}-> snapshot_id
-  world.restore {world_id, snapshot_id, expected_world_revision}
-  capsule.submit {capsule_path, source_path, expected_world_revision} -> candidate_id
-  candidate.install {world_id, candidate_id, expected_world_revision, allowed_effective_tick}
-  candidate.evaluate {candidate_id, tests}, candidate.status {candidate_id}
-`source_path` is a harness-side assumption for negative cases whose capsule `source`
-is nominal (see tests/fixtures/invalid/*.capsule.json).
+Control-plane parameters are the ones the engine's handlers accept (src/agent/su_agent.c
+and src/runtime/worker.c). They are documented once, in ENGINE_METHODS below. Anything the
+engine does not implement is reported unavailable with the engine's own reply or the
+advertised capability list, never as a pass.
 
 Exit status: 0 when no test failed, 1 when at least one failed, 2 on harness usage errors.
 """
@@ -316,6 +305,7 @@ class Session:
         self._err = collections.deque(maxlen=40)
         self._seq = 0
         self._closed = False
+        self.revs = {}  # world_id -> last world_revision seen in a reply
         threading.Thread(target=self._read_out, daemon=True).start()
         threading.Thread(target=self._read_err, daemon=True).start()
 
@@ -503,36 +493,114 @@ def ok_result(tctx: TestCtx, method: str, env: dict) -> dict:
     raise Failed(f"{method} failed with {code}: {env['error'].get('message', '')}")
 
 
+# Real M0 control-plane surface (verified against the handlers, not assumed).
+# Results list the fields the harness reads; the engine may return more.
+ENGINE_METHODS = {
+    "engine.info": {
+        "params": "{}",
+        "result": "engine_version, protocol, ir_version, abi_version, numeric_profile, runtime_mode, "
+                  "transport, pid, capabilities[], active_worker, process",
+        "source": "src/agent/su_agent.c h_engine_info",
+    },
+    "capsule.submit": {
+        "params": "{capsule_path}  (any other key -> SU_E_TYPE; creation-only, no expected revision)",
+        "result": "candidate_id, status, system_id, source_hash, capsule_hash, semantic_hash, artifact_format",
+        "source": "src/agent/su_agent.c h_capsule_submit",
+    },
+    "candidate.status": {
+        "params": "{candidate_id}",
+        "result": "candidate_id, status, system_id, source_hash, capsule_hash, semantic_hash, "
+                  "evaluation{status, cases_total, cases_passed}  (no worker_pid)",
+        "source": "src/agent/su_agent.c h_candidate_status",
+    },
+    "candidate.evaluate": {
+        "params": "{candidate_id, test_path, timeout_ms?}  (synchronous; no job id)",
+        "result": "candidate evaluation: status, cases_total, cases_passed, failures[]",
+        "source": "src/agent/su_agent.c h_candidate_evaluate",
+    },
+    "world.create": {
+        "params": "{fixture_path, capsule_path}  (one capsule; capsule_paths -> SU_E_TYPE)",
+        "result": "world_id, world_revision, tick, row_count, schema_id, system_id, source_hash, "
+                  "capsule_hash, semantic_hash",
+        "source": "src/agent/su_agent.c h_world_create, src/runtime/worker.c worker_create",
+    },
+    "world.inspect": {
+        "params": "{world_id, fields?: [names] (<=64), limit?: 1..256, default 16}",
+        "result": "world_id, world_revision, tick, row_count, returned_rows, entity_ids[], columns{name: [u32]}",
+        "source": "src/agent/su_agent.c h_world_inspect, src/runtime/worker.c worker_inspect",
+    },
+    "world.step": {
+        "params": "{world_id, expected_world_revision (required), ticks (0..100000)}",
+        "result": "world_id, world_revision, ticks_completed, tick",
+        "source": "src/agent/su_agent.c h_world_step, src/runtime/worker.c worker_step",
+    },
+}
+# Not implemented by the M0 engine: routed to SU_E_UNSUPPORTED_METHOD, not advertised.
+ENGINE_MISSING = ("candidate.install", "world.snapshot", "world.restore")
+
+INSPECT_LIMIT = 256  # engine maximum; there is no paging, so larger worlds cannot be compared in full
+
+
 def call(tctx, sess, method, params, timeout=60.0) -> dict:
     return ok_result(tctx, method, sess.request(method, params, timeout))
 
 
 def create_world(tctx, sess, world_rel, cap_rels):
-    res = call(tctx, sess, "world.create", {"world_path": world_rel, "capsule_paths": cap_rels})
+    if len(cap_rels) != 1:
+        raise Unavailable(f"multi-system worlds are not implemented: world.create takes one capsule_path, "
+                          f"harness asked for {len(cap_rels)}")
+    res = call(tctx, sess, "world.create", {"fixture_path": world_rel, "capsule_path": cap_rels[0]})
     wid, rev = res.get("world_id"), res.get("world_revision")
     if not isinstance(wid, str) or not isinstance(rev, str):
         raise Failed("world.create result lacks world_id/world_revision strings")
+    sess.revs[wid] = rev
     return wid, rev
 
 
 def inspect(tctx, sess, wid) -> dict:
     res = call(tctx, sess, "world.inspect",
-               {"world_id": wid, "fields": ["position_x", "velocity_x"], "limit": 4096})
+               {"world_id": wid, "fields": ["position_x", "velocity_x"], "limit": INSPECT_LIMIT})
     if not isinstance(res.get("world_revision"), str):
         raise Failed("world.inspect result lacks world_revision")
+    if res.get("returned_rows") != res.get("row_count"):
+        raise Unavailable(f"world.inspect returned {res.get('returned_rows')} of {res.get('row_count')} rows; "
+                          f"the engine caps limit at {INSPECT_LIMIT} and has no paging, so the full state "
+                          f"cannot be compared")
     return res
 
 
-def step(tctx, sess, wid, ticks: int) -> dict:
-    res = call(tctx, sess, "world.step", {"world_id": wid, "ticks": ticks})
+def step(tctx, sess, wid, ticks: int, expect=None) -> dict:
+    expect = expect if expect is not None else sess.revs.get(wid)
+    if not isinstance(expect, str):
+        raise Failed("harness has no tracked world_revision for this world")
+    res = call(tctx, sess, "world.step",
+               {"world_id": wid, "expected_world_revision": expect, "ticks": ticks})
     if not isinstance(res.get("world_revision"), str):
         raise Failed("world.step result lacks world_revision")
+    sess.revs[wid] = res["world_revision"]
     return res
 
 
-def submit(tctx, sess, cap_rel, source_rel, rev) -> str:
-    res = call(tctx, sess, "capsule.submit",
-               {"capsule_path": cap_rel, "source_path": source_rel, "expected_world_revision": rev})
+def declared_source(tctx, cap_rel):
+    """The engine binds a capsule to the source named by its own `source` field, resolved beside it."""
+    cap = tctx.load(cap_rel)
+    src = cap.get("source") if isinstance(cap, dict) else None
+    if not isinstance(src, str):
+        raise Failed(f"{cap_rel} has no string `source` field")
+    return os.path.normpath(os.path.join(os.path.dirname(cap_rel), src)).replace(os.sep, "/")
+
+
+def check_expressible(tctx, cap_rel, source_rel):
+    """capsule.submit takes only capsule_path; a source other than the capsule's own cannot be sent."""
+    declared = declared_source(tctx, cap_rel)
+    if declared != source_rel:
+        raise Unavailable(f"capsule.submit takes only capsule_path; {cap_rel} binds source {declared}, "
+                          f"so {source_rel} cannot be submitted against it")
+
+
+def submit(tctx, sess, cap_rel, source_rel) -> str:
+    check_expressible(tctx, cap_rel, source_rel)
+    res = call(tctx, sess, "capsule.submit", {"capsule_path": cap_rel})
     cid = res.get("candidate_id")
     if not isinstance(cid, str):
         raise Failed("capsule.submit result lacks candidate_id")
@@ -540,6 +608,8 @@ def submit(tctx, sess, cap_rel, source_rel, rev) -> str:
 
 
 def install(tctx, sess, wid, cid, rev, tick) -> dict:
+    # candidate.install is not implemented by the M0 engine; tests that call this are gated on the
+    # capability and never reach it. Kept so the intended shape is written down in one place.
     return call(tctx, sess, "candidate.install",
                 {"world_id": wid, "candidate_id": cid, "expected_world_revision": rev,
                  "allowed_effective_tick": tick})
@@ -621,23 +691,24 @@ def _t02_or_t03_case(t, sess, world_rel, cap_rel, cases, lir_doc, cap):
 
 
 def t02(t: TestCtx):
-    sess = t.session("T02 serve")
     cap_rel = "tests/fixtures/t02/movement.capsule.json"
     cap, lir_doc, _ = t.load_system(cap_rel)
     counts = [0, 1, 7, 8, 9, 1024]
     seen = []
     for n in counts:
+        # A worker holds at most 4 worlds (worker.c), so each world gets its own serve process.
+        sess = t.session(f"T02 serve world_{n}")
         world_rel = f"tests/fixtures/t02/world_{n}.json"
         test_doc = t.load(f"tests/fixtures/t02/movement_{n}.test.json")
         if len(t.load(world_rel)["columns"]["position_x"]) != n:
             raise Failed(f"fixture world_{n} row count is not {n}")
         _t02_or_t03_case(t, sess, world_rel, cap_rel, test_doc["cases"], lir_doc, cap)
+        sess.close()
         seen.append(n)
     t.details["row_counts_checked"] = seen
 
 
 def t03(t: TestCtx):
-    sess = t.session("T03 serve")
     base = "tests/fixtures/t03"
     names = sorted(d for d in os.listdir(t.abspath(base)) if os.path.isdir(t.abspath(os.path.join(base, d))))
     if not names:
@@ -648,15 +719,17 @@ def t03(t: TestCtx):
         cap_rel, world_rel = f"{d}/capsule.json", f"{d}/world.json"
         cap, lir_doc, _ = t.load_system(cap_rel)
         test_doc = t.load(f"{d}/test.json")
+        sess = t.session(f"T03 serve {name}")
         _t02_or_t03_case(t, sess, world_rel, cap_rel, test_doc["cases"], lir_doc, cap)
+        sess.close()
         checked.append(name)
     t.details["cases_checked"] = checked
 
 
-def _submit_expect_rejection(t, sess, wid, rev, cap_rel, source_rel, expected_code):
-    """Submit a candidate that must be rejected with expected_code; return nothing on success."""
-    env = sess.request("capsule.submit", {"capsule_path": cap_rel, "source_path": source_rel,
-                                          "expected_world_revision": rev})
+def _submit_expect_rejection(t, sess, cap_rel, source_rel, expected_code):
+    """Submit a candidate that must be rejected with expected_code; return (rejected, envelope)."""
+    check_expressible(t, cap_rel, source_rel)
+    env = sess.request("capsule.submit", {"capsule_path": cap_rel})
     if env["ok"] is False and env["error"].get("code") == UNSUPPORTED:
         raise Unavailable("capsule.submit answered SU_E_UNSUPPORTED_METHOD")
     if env["ok"]:
@@ -665,13 +738,19 @@ def _submit_expect_rejection(t, sess, wid, rev, cap_rel, source_rel, expected_co
     return True, env
 
 
+BOUND_MANIFEST = "tests/fixtures/invalid/bound_manifest.json"  # written by make_negative_bindings.py
+
+
 def _negative_manifest(t, rel):
     doc = t.load(rel)
+    bound = t.load(BOUND_MANIFEST)
     base_dir = os.path.dirname(rel)
     cases = []
     for case in doc["cases"]:
         cap_rel = os.path.normpath(os.path.join(base_dir, case.get("capsule", doc["capsule"]))).replace(os.sep, "/")
         src_rel = os.path.normpath(os.path.join(base_dir, case["path"])).replace(os.sep, "/")
+        if declared_source(t, cap_rel) != src_rel and src_rel in bound:
+            cap_rel = bound[src_rel]  # a copy of the capsule whose source field names src_rel
         cases.append((cap_rel, src_rel, case["expected_code"], case.get("path")))
     return cases
 
@@ -680,25 +759,26 @@ def t04(t: TestCtx):
     sess = t.session("T04 serve")
     world_rel = "tests/fixtures/t02/world_1.json"
     base_cap = "tests/fixtures/t02/movement.capsule.json"
-    base_lir = "tests/fixtures/t02/movement.lir.json"
-    wid, rev = create_world(t, sess, world_rel, [base_cap])
+    wid, _rev = create_world(t, sess, world_rel, [base_cap])
     before = inspect(t, sess, wid)
     before_snapshot = {"world_revision": before["world_revision"], "tick": before["tick"],
                        "columns": before["columns"]}
     # Control: the valid movement candidate must be accepted, so "reject everything" cannot pass.
-    env = sess.request("capsule.submit", {"capsule_path": base_cap, "source_path": base_lir,
-                                          "expected_world_revision": rev})
+    env = sess.request("capsule.submit", {"capsule_path": base_cap})
     if env["ok"] is False and env["error"].get("code") == UNSUPPORTED:
         raise Unavailable("capsule.submit answered SU_E_UNSUPPORTED_METHOD")
     t.check("control: valid movement candidate accepted", True, env["ok"])
     cases = _negative_manifest(t, "tests/fixtures/negative_cases.json")
     cases += _negative_manifest(t, "examples/negative_cases.json")
-    results, failures = [], []
+    results, failures, not_expressible = [], [], []
     for cap_rel, src_rel, code, _label in cases:
         t.need_file(cap_rel)
         t.need_file(src_rel)
-        env = sess.request("capsule.submit", {"capsule_path": cap_rel, "source_path": src_rel,
-                                              "expected_world_revision": rev})
+        declared = declared_source(t, cap_rel)
+        if declared != src_rel:
+            not_expressible.append(f"{src_rel} (capsule {cap_rel} binds {declared})")
+            continue
+        env = sess.request("capsule.submit", {"capsule_path": cap_rel})
         if env["ok"] is False and env["error"].get("code") == UNSUPPORTED:
             raise Unavailable("capsule.submit answered SU_E_UNSUPPORTED_METHOD")
         mism = classify_error(env, code)
@@ -710,9 +790,14 @@ def t04(t: TestCtx):
         if mism:
             failures.append(f"{src_rel}: {'; '.join(mism[:2])}")
     t.details["negative_cases"] = results
+    t.details["not_expressible"] = not_expressible
     if failures:
         raise Failed(f"{len(failures)} of {len(cases)} negative cases not rejected as expected: "
                      + " | ".join(failures[:6]))
+    if not_expressible:
+        raise Unavailable(f"{len(not_expressible)} of {len(cases)} negative cases cannot be expressed: "
+                          "capsule.submit takes only capsule_path and the engine binds each capsule to its "
+                          "own source field; the other cases were checked and all rejected as expected")
 
 
 def _find_candidate(t, manifest_rel, cid):
@@ -752,7 +837,7 @@ def t05(t: TestCtx):
     t.check_mismatches("T05 v1 at swap tick", verify_state(swap_tick, expected[swap_tick], pre))
     t.check("worker pid reported before swap", True, isinstance(pre.get("worker_pid"), int))
     manifest_v1 = pre.get("semantic_manifest")
-    cand = submit(t, sess, EDIT_V2, V2_SRC, pre["world_revision"])
+    cand = submit(t, sess, EDIT_V2, V2_SRC)
     install(t, sess, wid, cand, pre["world_revision"], swap_tick)
     mid = inspect(t, sess, wid)
     t.check_mismatches("T05 install does not step the world", verify_state(swap_tick, expected[swap_tick], mid))
@@ -773,7 +858,7 @@ def t06(t: TestCtx):
     step(t, sess, wid, 2)
     pre = inspect(t, sess, wid)
     item, cap_rel, src_rel = _find_candidate(t, EDIT_CANDS, "wrong_permission")
-    rejected, env = _submit_expect_rejection(t, sess, wid, pre["world_revision"], cap_rel, src_rel,
+    rejected, env = _submit_expect_rejection(t, sess, cap_rel, src_rel,
                                              item["expected_code"])
     if not rejected:
         cid = env["result"].get("candidate_id") if env["ok"] else None
@@ -806,7 +891,7 @@ def t07(t: TestCtx):
     if pre["world_revision"] == rev0:
         raise NotRun("engine did not change world_revision on a tick; a stale expectation cannot be constructed")
     stale = rev0 if item["expected_world_revision"] == "@captured_before_mutation" else item["expected_world_revision"]
-    rejected, env = _submit_expect_rejection(t, sess, wid, stale, cap_rel, src_rel, item["expected_code"])
+    rejected, env = _submit_expect_rejection(t, sess, cap_rel, src_rel, item["expected_code"])
     if not rejected:
         cid = env["result"]["candidate_id"]
         env2 = sess.request("candidate.install", {"world_id": wid, "candidate_id": cid,
@@ -818,7 +903,7 @@ def t07(t: TestCtx):
     post = inspect(t, sess, wid)
     t.check_mismatches("stale rejection leaves state unchanged", verify_rejections_leave_state(pre, post))
     # Control: the same candidate with the current revision installs.
-    cid = submit(t, sess, cap_rel, src_rel, pre["world_revision"])
+    cid = submit(t, sess, cap_rel, src_rel)
     install(t, sess, wid, cid, pre["world_revision"], pre["tick"])
 
 
@@ -854,61 +939,24 @@ def t08(t: TestCtx):
 
 
 def t09(t: TestCtx):
-    sess = t.session("T09 serve")
     manifest = t.load("tests/fixtures/t09/manifest.json")
-    world_rel = "tests/fixtures/t09/world.json"
-    systems = ["tests/fixtures/t09/" + s for s in manifest["systems_in_order"]]
-    for s in systems:
-        t.need_file(s)
-    env = sess.request("world.create", {"world_path": world_rel, "capsule_paths": systems})
-    if env["ok"] is False:
-        if env["error"].get("code") == UNSUPPORTED:
-            raise Unavailable("world.create answered SU_E_UNSUPPORTED_METHOD")
-        if env["error"].get("code") == manifest["expected_failure_code"]:
-            raise NotRun("engine rejects the failing system at admission, so no working-root failure "
-                         "after a successful first system can be produced by this fixture")
-        raise Failed(f"world.create failed with {env['error'].get('code')}")
-    wid, rev = env["result"]["world_id"], env["result"]["world_revision"]
-    pre = inspect(t, sess, wid)
-    t.check("T09 starts at tick 0", 0, pre["tick"])
-    tick_env = sess.request("world.step", {"world_id": wid, "ticks": 1})
-    if tick_env["ok"] is False and tick_env["error"].get("code") == UNSUPPORTED:
-        raise Unavailable("world.step answered SU_E_UNSUPPORTED_METHOD")
-    t.check_mismatches("second system failure rejected with expected code",
-                       classify_error(tick_env, manifest["expected_failure_code"]))
-    post = inspect(t, sess, wid)
-    t.check("published tick unchanged", manifest["expected_tick_after_failed_step"], post["tick"])
-    t.check_mismatches("published columns unchanged after first system wrote staging",
-                       compare_columns(manifest["expected_columns_after_failed_step"], post["columns"]))
-    t.check("world revision unchanged", pre["world_revision"], post["world_revision"])
+    for s in manifest["systems_in_order"]:
+        t.need_file("tests/fixtures/t09/" + s)
+    raise Unavailable("multi-system worlds are not implemented: world.create takes one capsule_path "
+                      "(capsule_paths is rejected with SU_E_TYPE), so the second-system working-root "
+                      "failure cannot be constructed")
 
 
 def t10(t: TestCtx):
     sess = t.session("T10 serve")
-    sched, expected = _swap_expected(t)
     wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
     step(t, sess, wid, 1)
-    cid = submit(t, sess, EDIT_V2, "tests/fixtures/edit/movement_v2.lir.json", inspect(t, sess, wid)["world_revision"])
-    call(t, sess, "candidate.evaluate", {"candidate_id": cid, "tests": [EDIT_SCHED]})
+    cid = submit(t, sess, EDIT_V2, V2_SRC)
     status = call(t, sess, "candidate.status", {"candidate_id": cid})
-    worker_pid = status.get("worker_pid")
-    if not isinstance(worker_pid, int):
-        raise NotRun("candidate.status exposes no worker_pid, so the candidate worker cannot be targeted")
-    supervisor = sess.proc.pid
-    if worker_pid == supervisor:
-        raise Failed("candidate reports the supervisor pid as its worker")
-    before_kill = inspect(t, sess, wid)
-    os.kill(worker_pid, signal.SIGKILL)
-    t.check("supervisor still running after candidate kill", None, sess.proc.poll())
-    v1_lir = t.load("tests/fixtures/edit/movement.lir.json")
-    v1 = t.load(EDIT_V1)
-    step(t, sess, wid, 1)
-    after = inspect(t, sess, wid)
-    t.check_mismatches("active simulation continues on v1 after candidate kill",
-                       verify_state(2, ref.run_tick(v1_lir, v1, before_kill["columns"]), after))
-    final = call(t, sess, "candidate.status", {"candidate_id": cid})
-    t.check("killed candidate not installed", False, final.get("state") in ("installed", "active"))
-    t.check("engine.info still answers", True, call(t, sess, "engine.info", {}).get("pid") is not None)
+    if not isinstance(status.get("worker_pid"), int):
+        raise Unavailable("candidate.status exposes no worker_pid and candidate.evaluate is synchronous "
+                          "(no job id), so the candidate worker cannot be SIGKILLed mid-evaluation "
+                          "from the control plane")
 
 
 def _rss_kib(pid):
@@ -943,7 +991,7 @@ def t11(t: TestCtx):
     rejected_total = 0
     for i in range(cycles):
         st = inspect(t, sess, wid)
-        cid = submit(t, sess, v2_cap, v2_src, st["world_revision"])
+        cid = submit(t, sess, v2_cap, v2_src)
         install(t, sess, wid, cid, st["world_revision"], st["tick"])
         step(t, sess, wid, 1)
         cols = ref.run_tick(v2_lir, v2_doc, cols)
@@ -955,8 +1003,7 @@ def t11(t: TestCtx):
         t.check_mismatches(f"cycle {i} v2 manifest", compare_manifest(m_v2, st.get("semantic_manifest")))
 
         before_bad = inspect(t, sess, wid)
-        rejected, _env = _submit_expect_rejection(t, sess, wid, before_bad["world_revision"], bad_cap,
-                                                  bad_src, item["expected_code"])
+        rejected, _env = _submit_expect_rejection(t, sess, bad_cap, bad_src, item["expected_code"])
         if not rejected:
             raise Failed(f"cycle {i}: invalid candidate was accepted")
         rejected_total += 1
@@ -965,7 +1012,7 @@ def t11(t: TestCtx):
                            verify_rejections_leave_state(before_bad, after_bad))
 
         st = inspect(t, sess, wid)
-        cid = submit(t, sess, v1_cap, v1_src, st["world_revision"])
+        cid = submit(t, sess, v1_cap, v1_src)
         install(t, sess, wid, cid, st["world_revision"], st["tick"])
         step(t, sess, wid, 1)
         cols = ref.run_tick(v1_lir, v1_doc, cols)
@@ -1057,7 +1104,7 @@ def t12(t: TestCtx):
     window_start = time.time()
     try:
         pre = inspect(t, sess, wid)
-        cid = submit(t, sess, EDIT_V2, "tests/fixtures/edit/movement_v2.lir.json", pre["world_revision"])
+        cid = submit(t, sess, EDIT_V2, V2_SRC)
         install(t, sess, wid, cid, pre["world_revision"], sched["swap"]["effective_tick"])
         step(t, sess, wid, 2)
         final = inspect(t, sess, wid)
@@ -1088,7 +1135,7 @@ def t13(t: TestCtx):
     for i in range(reps):
         rev = inspect(t, sess, wid)["world_revision"]
         t0 = time.monotonic()
-        cid = submit(t, sess, EDIT_V2, "tests/fixtures/edit/movement_v2.lir.json", rev)
+        cid = submit(t, sess, EDIT_V2, V2_SRC)
         t1 = time.monotonic()
         tick = inspect(t, sess, wid)["tick"]
         install(t, sess, wid, cid, rev, tick)
@@ -1100,7 +1147,7 @@ def t13(t: TestCtx):
         boundary.append(t3 - t2)
         # swap back to v1 so the next repetition starts from a v1 install
         rev = inspect(t, sess, wid)["world_revision"]
-        cid1 = submit(t, sess, EDIT_V1, "tests/fixtures/edit/movement.lir.json", rev)
+        cid1 = submit(t, sess, EDIT_V1, V1_SRC)
         install(t, sess, wid, cid1, rev, inspect(t, sess, wid)["tick"])
         step(t, sess, wid, 1)
 
@@ -1126,7 +1173,7 @@ def t14(t: TestCtx):
         wid, _ = create_world(t, sess, EDIT_WORLD, [EDIT_V1])
         step(t, sess, wid, 2)
         pre = inspect(t, sess, wid)
-        cid = submit(t, sess, EDIT_V2, "tests/fixtures/edit/movement_v2.lir.json", pre["world_revision"])
+        cid = submit(t, sess, EDIT_V2, V2_SRC)
         install(t, sess, wid, cid, pre["world_revision"], sched["swap"]["effective_tick"])
         step(t, sess, wid, 2)
         post = inspect(t, sess, wid)

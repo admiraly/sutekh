@@ -1,0 +1,8 @@
+{
+  "tests/fixtures/invalid/bool_as_u32.lir.json": "tests/fixtures/invalid/bound_bool_as_u32.capsule.json",
+  "tests/fixtures/invalid/constant_4294967296.lir.json": "tests/fixtures/invalid/bound_constant_4294967296.capsule.json",
+  "tests/fixtures/invalid/fractional_constant.lir.json": "tests/fixtures/invalid/bound_fractional_constant.capsule.json",
+  "tests/fixtures/invalid/nested_depth_33.lir.json": "tests/fixtures/invalid/bound_nested_depth_33.capsule.json",
+  "tests/fixtures/invalid/store_same_field_twice.lir.json": "tests/fixtures/invalid/bound_store_same_field_twice.capsule.json",
+  "tests/fixtures/invalid/too_many_instructions.lir.json": "tests/fixtures/invalid/bound_too_many_instructions.capsule.json"
+}

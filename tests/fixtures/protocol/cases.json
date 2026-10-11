@@ -5,8 +5,8 @@
     {
       "id": "duplicate_key",
       "file": "duplicate_key.jsonl",
-      "expected_code": "SU_E_PARSE",
-      "note": "same key 'method' twice in one object (contract section 4: duplicate keys -> SU_E_PARSE)"
+      "expected_code": "SU_E_DUPLICATE_KEY",
+      "note": "same key 'method' twice in one object (M0_CONTRACT section 4, ruling r3.2: duplicate keys in a protocol line -> SU_E_DUPLICATE_KEY)"
     },
     {
       "id": "invalid_utf8",
