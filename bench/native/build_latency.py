@@ -78,10 +78,12 @@ def count_steps(text):
         if not m:
             continue
         cmd = m.group(3)
-        if "cmake -E" in cmd or cmd.startswith("cd ") and "cmake" in cmd:
-            other_n += 1
-        elif COMPILE_RE.search(cmd):
+        if COMPILE_RE.search(cmd):
             compile_n += 1
+        elif re.search(r"\bar qc\b| -o ", cmd):
+            link_n += 1  # linker or archiver (ar qc ... && ranlib)
+        elif "cmake" in cmd:
+            other_n += 1  # cmake -P (glob verification), regeneration, cmake -E without an archive
         else:
             link_n += 1
     return {"compile_steps": compile_n, "link_steps": link_n, "other_steps": other_n}
