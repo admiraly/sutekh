@@ -1,6 +1,6 @@
 # Implementation status (M0)
 
-Status as of M0-10 (2026-10-11). This document reports what the repository does now, what the tests showed, and what is not built. M0 is not closed: M0-09 has no commit or handoff in the history, and M0-11 (independent closure audit) is planned. `planning/tasks.json` still lists tasks as `planned` or `submitted`; that file belongs to the orchestrator and was not edited here.
+Status as of M0-10 (2026-10-11). This document reports what the repository does now, what the tests showed, and what is not built. M0 is not closed: M0-11 (independent closure audit) is planned, T04 is still unavailable, and the T13 comparison is against proposed targets only. Update after M0-10: M0-09 landed (80face8), the release-profile warnings were fixed (93db0d6) and the candidate table now evicts its oldest record (d005726); the evidence files below were recorded before those fixes and are noted where they differ. `planning/tasks.json` still lists tasks as `planned` or `submitted`; that file belongs to the orchestrator and was not edited here.
 
 All numbers below come from runs recorded under `planning/evidence/`. Shared-VM timing is observation, not performance qualification (ENGINE_CONSTITUTION C10).
 
@@ -18,7 +18,7 @@ All numbers below come from runs recorded under `planning/evidence/`. Shared-VM 
 | M0-07 | implemented | ce8ae87 | version registry, serial schedule, safe-point `candidate.install` with evidence gate (`test_reload`) |
 | M0-08 | implemented (library half) | 2a579fc | canonical snapshot capture and restore, bounded checkpoint store (`test_snapshot`) |
 | M0-08b | implemented | ceeb78f | `world.snapshot` and `world.restore` in the control plane; capsule `max_rows` enforced in the VM (`test_snapshot_cp`) |
-| M0-09 | **not evidenced** | none found | no "reproducible no-build gameplay demo" commit or handoff. 6058752 is a harness T09 fix, not M0-09 work. |
+| M0-09 | implemented | 80face8 | `tools/demo_zero_wait.py` live-edit demo and `tests/e2e/no_build_probe.py` (strace exec probe with positive control); 6058752 is a separate harness T09 fix |
 | M0-10 | implemented (this task) | e1af932, a678b87, b795879, and the commit of this file | live edit and native build latency bench, evidence, this status document |
 
 Engine capabilities advertised by `build/sutekh serve` (`engine.info`): `engine.info`, `capsule.submit`, `candidate.status`, `candidate.evaluate`, `candidate.install`, `world.create`, `world.inspect`, `world.step`, `world.snapshot`, `world.restore`.
@@ -28,7 +28,7 @@ Engine capabilities advertised by `build/sutekh serve` (`engine.info`): `engine.
 Platform: Linux 6.18, 4 vCPU Intel Xeon 2.80 GHz (hypervisor flag set), 16 GB, GCC 13.3.0, CMake 3.28.3, Ninja 1.11.1, Python 3.13.16. Binary `build/sutekh` built with `tools/dev.py build --profile dev` (CMAKE_BUILD_TYPE=Debug), SHA-256 `f00aa1fe3a41b005...`, source trees `HEAD:src` `ac7b061d...`, `HEAD:include` `bb3fc5c4...`.
 
 - **ctest** (`ctest --test-dir build --output-on-failure`): 7 of 7 passed (world, ir, vm, control, snapshot, reload, snapshot_cp), 1.14 s.
-- **Harness** (`python3 -I tests/harness/run_m0.py --binary build/sutekh --report-dir <scratch>`): passed 15, failed 0, not_run 0, unavailable 1.
+- **Harness** (`python3 -I tests/harness/run_m0.py --binary build/sutekh --report-dir <scratch>`): at M0-10 time passed 15, failed 0, not_run 0, unavailable 1. A later run with `--no-build` reports T00 as `not_run` by design, so it shows 14 passed.
   - T04 unavailable: 7 of 14 negative cases cannot be expressed through `capsule.submit`, which takes only `capsule_path`; the engine binds each capsule to its own `source`. The other 7 were checked and rejected with the expected codes.
   - Copies: `planning/evidence/m0-harness-dev.json` and `planning/evidence/m0-harness-dev-summary.txt`. Harness script SHA-256 `43f3e71e13348...`.
 - **Harness self-test** (`python3 -I tests/harness/run_m0.py --self-test`): 82 checks, 0 failures.
@@ -45,12 +45,11 @@ Platform: Linux 6.18, 4 vCPU Intel Xeon 2.80 GHz (hypervisor flag set), 16 GB, G
 - O(tick) restore. `world.restore` rebuilds the whole world from a canonical snapshot; there is no incremental or tick-journal restore.
 - Separate timing of queue, tick-boundary wait and publish. `candidate.install` is synchronous.
 - A 1,000,000-row world. The engine refuses it (see section 5).
-- Full M0-09 integration demo.
 
 ## 4. Known limitations
 
-- **Release profile does not build.** `python3 tools/dev.py build --profile release` exits 1 under `-O3 -Werror`: `-Werror=format-truncation` at `src/runtime/reload.c:90` and `tests/control/test_control.c:300-301` (log: `planning/evidence/m0-release-build-attempt.log`). The release numbers below come from a scratch build outside the repository with `-DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-Wno-error=format-truncation`. This waives that one warning class only. It is labelled `release-waiver` everywhere. These defects are in files outside M0-10's write scope and need an owner.
-- **Warm sessions restart often.** Candidate slots are 16 and never evicted, so each warm epoch is a fresh `serve` process with one warm-up edit, 12 timed edits, and 2 failed-candidate trials (15 submissions). The worker is spawned once per epoch and warm before timing.
+- **(Fixed in 93db0d6) Release profile did not build.** `python3 tools/dev.py build --profile release` exits 1 under `-O3 -Werror`: `-Werror=format-truncation` at `src/runtime/reload.c:90` and `tests/control/test_control.c:300-301` (log: `planning/evidence/m0-release-build-attempt.log`). The release numbers below come from a scratch build outside the repository with `-DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-Wno-error=format-truncation`. This waives that one warning class only. It is labelled `release-waiver` everywhere. These defects are in files outside M0-10's write scope and need an owner.
+- **(Fixed in d005726) Warm sessions restarted often.** Candidate slots were 16 and never evicted, so each warm epoch is a fresh `serve` process with one warm-up edit, 12 timed edits, and 2 failed-candidate trials (15 submissions). The worker is spawned once per epoch and warm before timing.
 - **Host clock.** Each call is timed from request write to reply read, including JSON encode and decode and Python overhead.
 - **Samples.** 720 warm edits per profile (60 epochs), 60 cold trials, 20 stress steps, 6 stress edits, one stress snapshot and restore. Native build: n=3 per case.
 - **No PMU counters.** Not collected; recorded as unavailable with reason.
