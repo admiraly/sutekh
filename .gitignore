@@ -17,3 +17,6 @@ __pycache__/
 
 # Generated handoff archives
 /SUTEKH_Engine_Specs_and_Prompts.zip
+
+# AsmJit checkout fetched by tools/bootstrap_asmjit.py (third_party/asmjit.lock.json is tracked)
+/third_party/asmjit/

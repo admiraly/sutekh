@@ -1,0 +1,10 @@
+{
+  "commit": "0d7f01052f2d3f6d6b9bb6714ef32bd7b80177eb",
+  "license": "zlib",
+  "license_file": "LICENSE.md",
+  "license_sha256": "13870bd53bce53fb9a9bd72e72dcceeffc547c84d9a00d3d4833737a79651828",
+  "name": "asmjit",
+  "origin": "https://github.com/asmjit/asmjit.git",
+  "pin_note": "No upstream release tags exist; pinned by commit.",
+  "pinned_by": "tools/bootstrap_asmjit.py"
+}
