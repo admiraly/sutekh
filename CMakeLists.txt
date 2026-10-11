@@ -38,3 +38,12 @@ add_executable(test_world tests/world/test_world.c)
 target_link_libraries(test_world PRIVATE su_world)
 sutekh_apply_warnings(test_world)
 add_test(NAME world COMMAND test_world)
+
+add_library(su_ir STATIC src/ir/su_sha256.c src/ir/su_json.c src/ir/su_lir.c)
+target_include_directories(su_ir PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
+sutekh_apply_warnings(su_ir)
+
+add_executable(test_ir tests/ir/test_ir.c)
+target_link_libraries(test_ir PRIVATE su_ir)
+sutekh_apply_warnings(test_ir)
+add_test(NAME ir COMMAND test_ir WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
