@@ -280,8 +280,9 @@ static uint32_t h_engine_info(SuAgent *a, const SuJsonValue *params, SuBuf *res,
 }
 
 static uint32_t h_capsule_submit(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
-    static const char *const allowed[] = {"capsule_path"};
+    static const char *const allowed[] = {"capsule_path", "source_path"};
     const char *rel = NULL;
+    const char *src_override = NULL;
     char cap_real[SU_PATH_BUF];
     char src_real[SU_PATH_BUF];
     uint8_t *cap = NULL;
@@ -294,12 +295,25 @@ static uint32_t h_capsule_submit(SuAgent *a, const SuJsonValue *params, SuBuf *r
     size_t i;
     uint32_t st;
 
-    if (check_keys(params, allowed, 1, c) != SU_OK || param_str(params, "capsule_path", 1, &rel, c) != SU_OK) {
+    if (check_keys(params, allowed, 2, c) != SU_OK || param_str(params, "capsule_path", 1, &rel, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    if (su_json_member(params, "source_path") != NULL &&
+        param_str(params, "source_path", 1, &src_override, c) != SU_OK) {
         return SU_E_TYPE;
     }
     st = locate_capsule(a, rel, cap_real, src_real, &cap, &cap_len, c);
     if (st != SU_OK) {
         return st;
+    }
+    if (src_override != NULL) {
+        /* Optional explicit source module (same project-root path policy as every other path). It
+         * replaces the capsule's own `source` binding for this candidate only. */
+        st = su_path_resolve(a->root, src_override, src_real, SU_PATH_BUF);
+        if (st != SU_OK) {
+            free(cap);
+            return call_fail(c, st, "source path rejected by the project path policy");
+        }
     }
     st = su_path_read_file(src_real, SU_LIMIT_IR_SOURCE_BYTES, &lir, &lir_len);
     if (st != SU_OK) {
