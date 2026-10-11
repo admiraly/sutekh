@@ -25,7 +25,7 @@
         "Headers describe sizes/lifetimes/statuses and M0 only.",
         "Independent fixture review; contract consumers can implement without guessing."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-01",
@@ -55,7 +55,7 @@
         "T00 clean native build with real version/command evidence.",
         "No mandatory JIT/GPU dependency; small independent targets."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-02",
@@ -83,7 +83,7 @@
         "T03/T04 malformed, typed/effect, duplicate/limit tests pass.",
         "Valid examples normalize consistently."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-03",
@@ -111,7 +111,7 @@
         "Zero/edge row counts and overflow-safe size checks.",
         "Working-root failures never publish partial state."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-04",
@@ -139,7 +139,7 @@
         "T01/T02/T03 fixtures match exact expected fields.",
         "Invocation-entry reads and one staged store per writable field."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-05",
@@ -168,7 +168,7 @@
         "T10/T15 candidate isolation and structured errors.",
         "No public listener or native candidate execution in supervisor."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-06",
@@ -196,7 +196,7 @@
         "Known-answer fixtures cover wrap, empty data and intentional behavior edit.",
         "Expected results independent of VM output; no fake runtime passes."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-07",
@@ -226,7 +226,7 @@
         "T05/T06/T07/T11 preserve PID/state; reject invalid/stale revisions.",
         "Record exact effective tick and semantic revisions."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-08",
@@ -256,7 +256,7 @@
         "T08/T09 round-trip exact state/manifest; no partial tick publication.",
         "Checkpoint costs and retained memory are observable."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-09",
@@ -285,7 +285,7 @@
         "T00–T15 runtime evidence, with timings reported as actuals.",
         "T12 instrumentation proves no compiler/assembler/linker on capsule edit."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-10",
@@ -313,7 +313,7 @@
         "Warm/cold and queue/boundary costs separated.",
         "All unmeasured counters are null; publish real sample data."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M0-11",
@@ -341,7 +341,7 @@
         "Verifier reproduces required demo and gates on exact tree.",
         "M0 not closed on missing native tests; next M1 handoff explicit."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M1-00",
