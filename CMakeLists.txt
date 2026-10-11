@@ -99,3 +99,62 @@ target_compile_definitions(test_snapshot_cp PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_snapshot_cp)
 add_test(NAME snapshot_cp COMMAND test_snapshot_cp $<TARGET_FILE:worker_stub> "${CMAKE_CURRENT_SOURCE_DIR}"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# ---- BEGIN M1-01 optional native scalar backend (SUTEKH_NATIVE; default OFF) ----
+# Enable with: cmake -DSUTEKH_NATIVE=ON -S . -B <build>   (the default build is unchanged)
+option(SUTEKH_NATIVE "Build the M1 AsmJit native scalar backend and its tests" OFF)
+if(SUTEKH_NATIVE)
+    enable_language(CXX)
+    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS OFF)
+
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asmjit.lock.json" SU_ASMJIT_LOCK_TEXT)
+    string(JSON SU_ASMJIT_COMMIT GET "${SU_ASMJIT_LOCK_TEXT}" commit)
+    string(LENGTH "${SU_ASMJIT_COMMIT}" SU_ASMJIT_COMMIT_LEN)
+    if(NOT SU_ASMJIT_COMMIT MATCHES "^[0-9a-f]+$" OR NOT SU_ASMJIT_COMMIT_LEN EQUAL 40)
+        message(FATAL_ERROR "third_party/asmjit.lock.json has no pinned commit; run tools/bootstrap_asmjit.py")
+    endif()
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asmjit/asmjit/core/code_holder.cpp")
+        message(FATAL_ERROR "AsmJit is not present; run: python3 tools/bootstrap_asmjit.py")
+    endif()
+
+    # Core and x86 translation units only (no ARM, A64, UJIT, and no *_test.cpp).
+    file(GLOB SU_ASMJIT_CORE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asmjit/asmjit/core/*.cpp")
+    file(GLOB SU_ASMJIT_X86_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asmjit/asmjit/x86/*.cpp")
+    # axl is AsmJit's support library (arena, vector, hash); core and x86 link against it.
+    file(GLOB SU_ASMJIT_AXL_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asmjit/asmjit/axl/*.cpp")
+    set(SU_ASMJIT_SOURCES ${SU_ASMJIT_CORE_SOURCES} ${SU_ASMJIT_X86_SOURCES} ${SU_ASMJIT_AXL_SOURCES})
+    list(FILTER SU_ASMJIT_SOURCES EXCLUDE REGEX "/(arm|a64|ujit)[^/]*$|_test\\.cpp$|/arm/|/ujit/")
+
+    add_library(su_asmjit STATIC ${SU_ASMJIT_SOURCES})
+    target_include_directories(su_asmjit PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asmjit")
+    target_compile_definitions(su_asmjit PUBLIC ASMJIT_STATIC ASMJIT_NO_AARCH64 ASMJIT_NO_UJIT)
+    set_target_properties(su_asmjit PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_compile_options(su_asmjit PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-w>)
+
+    add_library(su_native STATIC backends/native/su_native.c backends/native/su_native_asmjit.cpp)
+    target_include_directories(su_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" src "${SUTEKH_CONTRACT_INCLUDE}")
+    target_link_libraries(su_native PUBLIC su_ir su_asmjit)
+    target_compile_definitions(su_native PRIVATE SU_NATIVE_ASMJIT_COMMIT="${SU_ASMJIT_COMMIT}")
+    set_target_properties(su_native PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    # Strict C17 set for the C files. The C++ adapter gets -Wall -Wextra -Werror only: the AsmJit
+    # headers rely on compiler extensions that -pedantic rejects.
+    target_compile_options(su_native PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra -Werror -pedantic>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra -Werror>)
+
+    add_executable(test_native_scalar tests/native/scalar/test_native_scalar.c)
+    target_link_libraries(test_native_scalar PRIVATE su_native su_vm su_world su_ir)
+    sutekh_apply_warnings(test_native_scalar)
+
+    set(SU_NATIVE_CORPUS_DIR "${CMAKE_BINARY_DIR}/native_scalar_corpus")
+    add_test(NAME native_scalar_corpus_gen
+             COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/scalar/gen/gen_corpus.py"
+                     --out "${SU_NATIVE_CORPUS_DIR}"
+                     --expect-sha "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/scalar/gen/corpus.sha256")
+    add_test(NAME native_scalar COMMAND test_native_scalar "${SU_NATIVE_CORPUS_DIR}"
+             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_scalar PROPERTIES DEPENDS native_scalar_corpus_gen)
+endif()
+# ---- END M1-01 optional native scalar backend ----
