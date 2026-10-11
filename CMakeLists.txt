@@ -200,6 +200,25 @@ if(SUTEKH_NATIVE)
     sutekh_apply_warnings(test_native_versions)
     add_test(NAME native_versions COMMAND test_native_versions "${CMAKE_CURRENT_SOURCE_DIR}"
              WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    # M1-02c-1: world.specialize admission in a disposable worker (C07). The test worker is the production
+    # worker entry compiled with SU_TEST_FAULT_HOOKS and the native registry; the seams exist only there.
+    add_executable(native_test_worker tests/native/qualification/native_test_worker.c src/runtime/worker.c
+                   src/runtime/native_versions.c)
+    target_link_libraries(native_test_worker PRIVATE su_agent)
+    target_compile_definitions(native_test_worker PRIVATE _POSIX_C_SOURCE=200809L SU_TEST_FAULT_HOOKS)
+    sutekh_apply_warnings(native_test_worker)
+    add_executable(test_specialize_admission tests/native/qualification/test_specialize_admission.c)
+    target_link_libraries(test_specialize_admission PRIVATE su_agent su_native su_ir)
+    sutekh_apply_warnings(test_specialize_admission)
+    add_dependencies(test_specialize_admission native_test_worker)
+    add_test(NAME specialize_admission COMMAND test_specialize_admission $<TARGET_FILE:native_test_worker>
+             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/specialize_admission_scratch"
+             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # The production engine binary must carry none of the fault seams.
+    add_test(NAME release_seams COMMAND python3
+             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/qualification/check_release_seams.py"
+             $<TARGET_FILE:sutekh>)
 endif()
 # ---- END M1-01 optional native scalar backend ----
 

@@ -35,6 +35,7 @@
 #define AGENT_TEST_MAX (256u * 1024u)
 #define AGENT_MAX_TICKS 100000u
 #define AGENT_MSG_CAP 640u
+#define AGENT_DETAIL_CAP 2048u
 #define AGENT_MAX_PARAM_STRING 255u
 #define AGENT_MAX_FIELD_ARGS 64u
 #define AGENT_MAX_SYSTEMS 8u
@@ -184,6 +185,7 @@ typedef struct SuAgent {
 typedef struct AgentCall {
     const char *id; /* the client request id; always set before routing */
     char msg[AGENT_MSG_CAP];
+    char detail[AGENT_DETAIL_CAP]; /* optional error.detail: a complete JSON object, or empty */
     int relay; /* res holds one complete worker response line, to be sent as-is */
     int has_rec; /* the response reports a recovery (top-level "recovery" member) */
 } AgentCall;
@@ -2930,11 +2932,115 @@ static uint32_t h_candidate_install(SuAgent *a, const SuJsonValue *params, SuBuf
 /* ---------- dispatch ---------- */
 
 #ifdef SU_HAVE_NATIVE
+/* Project paths of an installed system: its creation or candidate files, else the spool. */
+static uint32_t system_paths(SuAgent *a, const AgentWorld *w, const SysRef *sys, char *cap, char *src) {
+    const char *cp = NULL;
+    const char *sp = NULL;
+    char cap_sp[SU_PATH_BUF];
+    char src_sp[SU_PATH_BUF];
+    AgentCandidate *cd;
+    uint32_t k;
+
+    for (k = 0; k < w->creation_count && cp == NULL; k++) {
+        if (strcmp(w->creation[k].capsule_sha, sys->capsule_sha) == 0 &&
+            strcmp(w->creation[k].source_sha, sys->source_sha) == 0) {
+            cp = w->creation_paths[k].capsule;
+            sp = w->creation_paths[k].source;
+        }
+    }
+    cd = cp == NULL ? candidate_by_capsule(a, sys->capsule_sha) : NULL;
+    if (cd != NULL && strcmp(cd->source_hash, sys->source_sha) == 0) {
+        cp = cd->capsule_real;
+        sp = cd->source_real;
+    }
+    if (cp == NULL) {
+        if (spool_file(a, sys->capsule_sha, "capsule", cap_sp, sizeof cap_sp) != SU_OK ||
+            spool_file(a, sys->source_sha, "source", src_sp, sizeof src_sp) != SU_OK) {
+            return SU_E_INTERNAL;
+        }
+        cp = cap_sp;
+        sp = src_sp;
+    }
+    snprintf(cap, SU_PATH_BUF, "%s", cp);
+    snprintf(src, SU_PATH_BUF, "%s", sp);
+    return SU_OK;
+}
+
+/* The system's own test file: <stem>.test.json beside <stem>.capsule.json. Returns 1 and the real
+ * path when it exists; 0 when the capsule has no such file (its own cases are then not run). */
+static int own_test_path(SuAgent *a, const char *cap_real, char *out) {
+    const char *base = strrchr(cap_real, '/');
+    char test_name[SU_PATH_BUF];
+    size_t n;
+
+    base = base != NULL ? base + 1 : cap_real;
+    n = strlen(base);
+    if (n <= 13u || strcmp(base + n - 13u, ".capsule.json") != 0) {
+        return 0;
+    }
+    snprintf(test_name, sizeof test_name, "%.*s.test.json", (int)(n - 13u), base);
+    if (su_path_sibling(a->root, cap_real, test_name, out, SU_PATH_BUF) != SU_OK) {
+        return 0;
+    }
+    return access(out, R_OK) == 0;
+}
+
+/* Detail object for a disposable worker that did not answer: how it ended. */
+static void put_end_detail(SuBuf *d, const SuProc *p, uint64_t timeout_ms) {
+    su_buf_str(d, "{\"phase\":\"admission\",\"end\":");
+    if (p->end_kind == SU_PROC_END_EXITED) {
+        su_buf_str(d, "\"exited\",\"exit_code\":");
+        su_buf_u64(d, (uint64_t)p->exit_code);
+    } else if (p->end_kind == SU_PROC_END_SIGNALED) {
+        su_buf_str(d, "\"signaled\",\"signal\":");
+        su_buf_u64(d, (uint64_t)p->term_signal);
+    } else {
+        su_buf_str(d, "\"supervisor_killed\",\"timeout_ms\":");
+        su_buf_u64(d, timeout_ms);
+    }
+    su_buf_str(d, "}");
+}
+
+/* Copies one member of the first mismatch into the detail (absent members are omitted). */
+static int put_mismatch_member(SuBuf *d, const SuJsonValue *fm, const char *key, int written) {
+    const SuJsonValue *v = su_json_member(fm, key);
+    uint64_t x = 0;
+    if (v == NULL) {
+        return 0;
+    }
+    su_buf_str(d, written > 0 ? ",\"" : "\"");
+    su_buf_str(d, key);
+    su_buf_str(d, "\":");
+    if (su_json_is_string(v)) {
+        su_buf_quoted(d, v->u.string.data, v->u.string.len);
+    } else if (su_json_get_uint(v, &x)) {
+        su_buf_u64(d, x);
+    } else {
+        su_buf_str(d, "null");
+    }
+    return 1;
+}
+
+/* Records a failure detail for the error envelope; the caller frees d. */
+static uint32_t call_detail(AgentCall *c, uint32_t code, const char *msg, const SuBuf *d) {
+    if (!d->failed && d->len < sizeof c->detail) {
+        memcpy(c->detail, d->data, d->len);
+        c->detail[d->len] = '\0';
+    }
+    return call_fail(c, code, msg);
+}
+
 /* world.specialize {world_id, expected_world_revision, system_id, backend, expected_semantic_hash?}
- * (M1-02b). The worker compiles, admits and installs; the answer is relayed unchanged. A kernel is
- * not canonical state, so nothing is logged or checkpointed. A worker death answers
- * SU_E_WORKER_FAILED and recovers the world; the specialization is then gone and the system runs
- * on the VM tier (specialization is not replayed yet: M1-02c). */
+ * (M1-02c-1). Three steps, docs/AGENT_RPC.md section 9:
+ *  1. identity: the active worker reports the installed system's identity. Read-only.
+ *  2. admission: a DISPOSABLE worker (a fresh child per request, RLIMIT_AS and CPU, wall timeout,
+ *     killed on timeout) compiles and runs differential admission against the reference VM, over the
+ *     seeded corpus and the system's own test cases. The active worker never runs a candidate kernel.
+ *     A disposable that is killed, times out or crashes answers SU_E_WORKER_FAILED with
+ *     detail {phase:"admission", ...}; a mismatch answers SU_E_CANDIDATE_FAILED with the first mismatch.
+ *  3. install: only after an admitted result, the active worker recompiles (compilation only), requires
+ *     the admitted artifact_hash, rechecks the revision and semantic hash, and publishes. A worker death
+ *     here recovers the world as before; the kernel is not canonical state, so nothing is logged. */
 static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"world_id", "expected_world_revision", "system_id", "backend",
                                           "expected_semantic_hash"};
@@ -2946,6 +3052,26 @@ static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf 
     AgentWorld *w = NULL;
     SuBuf req;
     SuBuf resp;
+    SuBuf adm;
+    SuBuf det;
+    SuProc p;
+    SuProcLimits plim;
+    Reply r;
+    char ident_sem[65];
+    char ident_src[65];
+    char ident_cap[65];
+    char cap_real[SU_PATH_BUF];
+    char src_real[SU_PATH_BUF];
+    char test_real[SU_PATH_BUF];
+    char hash[65];
+    char status[16];
+    uint64_t ident_gen = 0;
+    uint64_t cases = 0;
+    uint64_t rows = 0;
+    uint64_t mis = 0;
+    uint64_t timeout = a->timeout_ms;
+    int own = 0;
+    uint32_t i;
     uint32_t st;
 
     if (check_keys(params, allowed, 5, c) != SU_OK ||
@@ -2967,15 +3093,15 @@ static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf 
     if (st != SU_OK) {
         return st;
     }
-    req_begin(&req, c->id, "world.specialize");
+
+    /* 1. identity (active worker, read-only). */
+    req_begin(&req, c->id, "internal.specialize.identity");
     su_buf_str(&req, "\"world_id\":");
     su_buf_quoted(&req, world_id, strlen(world_id));
     su_buf_str(&req, ",\"expected_world_revision\":");
     su_buf_quoted(&req, expect, strlen(expect));
     su_buf_str(&req, ",\"system_id\":");
     su_buf_quoted(&req, system_id, strlen(system_id));
-    su_buf_str(&req, ",\"backend\":");
-    su_buf_quoted(&req, backend, strlen(backend));
     if (sem != NULL) {
         su_buf_str(&req, ",\"expected_semantic_hash\":");
         su_buf_quoted(&req, sem, strlen(sem));
@@ -2984,6 +3110,191 @@ static uint32_t h_world_specialize(SuAgent *a, const SuJsonValue *params, SuBuf 
     if (req.failed) {
         su_buf_free(&req);
         return call_fail(c, SU_E_RESOURCE_LIMIT, "world.specialize request too large");
+    }
+    su_buf_init(&resp);
+    st = roundtrip(a, c->id, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, NULL);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        reply_free(&r);
+        relay(res, &resp, c);
+        su_buf_free(&resp);
+        return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+    }
+    if (!jstr(r.result, "semantic_hash", ident_sem, sizeof ident_sem) ||
+        !jstr(r.result, "source_hash", ident_src, sizeof ident_src) ||
+        !jstr(r.result, "capsule_hash", ident_cap, sizeof ident_cap) ||
+        !ju64(r.result, "layout_generation", &ident_gen)) {
+        reply_free(&r);
+        su_buf_free(&resp);
+        return call_fail(c, SU_E_INTERNAL, "specialize identity answer was incomplete");
+    }
+    reply_free(&r);
+    su_buf_free(&resp);
+    for (i = 0; i < w->count; i++) {
+        if (strcmp(w->sys[i].system_id, system_id) == 0) {
+            break;
+        }
+    }
+    if (i == w->count || strcmp(w->sys[i].source_sha, ident_src) != 0 ||
+        strcmp(w->sys[i].capsule_sha, ident_cap) != 0) {
+        return call_fail(c, SU_E_SCHEMA_MISMATCH, "installed system differs between the supervisor and the worker");
+    }
+    if (system_paths(a, w, &w->sys[i], cap_real, src_real) != SU_OK) {
+        return call_fail(c, SU_E_INTERNAL, "system project files are unavailable");
+    }
+    own = own_test_path(a, cap_real, test_real);
+
+    /* 2. admission in a disposable worker. */
+    if (a->cfg.worker_argv == NULL) {
+        return call_fail(c, SU_E_WORKER_FAILED, "no worker executable is configured");
+    }
+    req_begin(&req, c->id, "internal.specialize.admit");
+    su_buf_str(&req, "\"capsule_path\":");
+    su_buf_quoted(&req, cap_real, strlen(cap_real));
+    su_buf_str(&req, ",\"source_path\":");
+    su_buf_quoted(&req, src_real, strlen(src_real));
+    if (own) {
+        su_buf_str(&req, ",\"test_path\":");
+        su_buf_quoted(&req, test_real, strlen(test_real));
+    }
+    buf_hash_field(&req, "expected_source_hash", ident_src);
+    buf_hash_field(&req, "expected_capsule_hash", ident_cap);
+    buf_hash_field(&req, "expected_semantic_hash", ident_sem);
+    su_buf_str(&req, ",\"expected_layout_generation\":");
+    su_buf_u64(&req, ident_gen);
+    su_buf_str(&req, ",\"backend\":");
+    su_buf_quoted(&req, backend, strlen(backend));
+    req_end(&req);
+    if (req.failed) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "specialization request too large");
+    }
+    su_buf_init(&det);
+    memset(&plim, 0, sizeof plim);
+    plim.address_space_bytes = a->cfg.worker_address_space_bytes;
+    plim.cpu_seconds = (uint32_t)(timeout / 1000u) + 2u;
+    if (su_proc_spawn(&p, a->cfg.worker_argv, &plim) != SU_OK) {
+        su_buf_free(&req);
+        su_buf_free(&det);
+        return call_fail(c, SU_E_WORKER_FAILED, "admission worker could not be started");
+    }
+    su_buf_init(&adm);
+    {
+        const uint8_t *line = NULL;
+        size_t len = 0;
+        st = su_proc_request(&p, req.data, req.len, su_now_ms() + (int64_t)timeout, &line, &len);
+        su_buf_free(&req);
+        if (st != SU_OK) {
+            /* su_proc_request has killed and reaped the child; p holds how it ended. */
+            su_buf_free(&adm);
+            su_buf_free(&det);
+            su_buf_init(&det);
+            put_end_detail(&det, &p, timeout);
+            su_proc_kill(&p);
+            (void)call_detail(c, SU_E_WORKER_FAILED,
+                              "admission worker was killed, crashed or exceeded its time limit", &det);
+            su_buf_free(&det);
+            return SU_E_WORKER_FAILED;
+        }
+        su_buf_put(&adm, line, len);
+    }
+    su_proc_finish(&p, 1000);
+    if (adm.failed) {
+        su_buf_free(&adm);
+        su_buf_free(&det);
+        return call_fail(c, SU_E_WORKER_FAILED, "admission worker response was too large");
+    }
+    reply_parse(&r, adm.data, adm.len);
+    if (!r.parsed) {
+        reply_free(&r);
+        su_buf_free(&adm);
+        su_buf_free(&det);
+        return call_fail(c, SU_E_WORKER_FAILED, "admission worker response was malformed");
+    }
+    if (!r.ok) {
+        /* The worker rejected the candidate itself (load, compile or schedule failure). */
+        char msg[AGENT_MSG_CAP];
+        snprintf(msg, sizeof msg, "%.500s", r.msg);
+        reply_free(&r);
+        su_buf_free(&adm);
+        su_buf_free(&det);
+        return call_fail(c, SU_E_CANDIDATE_FAILED, msg);
+    }
+    if (!jstr(r.result, "status", status, sizeof status)) {
+        reply_free(&r);
+        su_buf_free(&adm);
+        su_buf_free(&det);
+        return call_fail(c, SU_E_WORKER_FAILED, "admission worker answer was incomplete");
+    }
+    if (strcmp(status, "mismatch") == 0) {
+        const SuJsonValue *fm = su_json_member(r.result, "first_mismatch");
+        static const char *const keys[] = {"source", "case", "reason", "case_index", "case_rows",
+                                           "case_offset", "field_id", "row", "expected", "actual"};
+        size_t k;
+        int n = 0;
+        su_buf_free(&det);
+        su_buf_init(&det);
+        su_buf_str(&det, "{\"phase\":\"admission\",\"first_mismatch\":{");
+        if (fm != NULL && fm->type == SU_JSON_OBJECT) {
+            for (k = 0; k < sizeof keys / sizeof keys[0]; k++) {
+                n += put_mismatch_member(&det, fm, keys[k], n);
+            }
+        }
+        su_buf_str(&det, "}}");
+        reply_free(&r);
+        su_buf_free(&adm);
+        (void)call_detail(c, SU_E_CANDIDATE_FAILED,
+                          "differential admission found a mismatch against the reference VM", &det);
+        su_buf_free(&det);
+        return SU_E_CANDIDATE_FAILED;
+    }
+    if (strcmp(status, "admitted") != 0 || !jstr(r.result, "artifact_hash", hash, sizeof hash)) {
+        reply_free(&r);
+        su_buf_free(&adm);
+        su_buf_free(&det);
+        return call_fail(c, SU_E_WORKER_FAILED, "admission worker answer was incomplete");
+    }
+    {
+        const SuJsonValue *ev = su_json_member(r.result, "evidence");
+        if (ev == NULL || ev->type != SU_JSON_OBJECT || !ju64(ev, "cases", &cases) ||
+            !ju64(ev, "rows_checked", &rows) || !ju64(ev, "mismatches", &mis) || mis != 0u) {
+            reply_free(&r);
+            su_buf_free(&adm);
+            su_buf_free(&det);
+            return call_fail(c, SU_E_CANDIDATE_FAILED, "admission evidence reports mismatches");
+        }
+    }
+    reply_free(&r);
+    su_buf_free(&adm);
+    su_buf_free(&det);
+
+    /* 3. install: the active worker recompiles and requires this artifact_hash. */
+    req_begin(&req, c->id, "internal.specialize.install");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, world_id, strlen(world_id));
+    su_buf_str(&req, ",\"system_id\":");
+    su_buf_quoted(&req, system_id, strlen(system_id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, expect, strlen(expect));
+    buf_hash_field(&req, "expected_semantic_hash", ident_sem);
+    su_buf_str(&req, ",\"expected_layout_generation\":");
+    su_buf_u64(&req, ident_gen);
+    su_buf_str(&req, ",\"backend\":");
+    su_buf_quoted(&req, backend, strlen(backend));
+    buf_hash_field(&req, "artifact_hash", hash);
+    su_buf_str(&req, ",\"admission_cases\":");
+    su_buf_u64(&req, cases);
+    su_buf_str(&req, ",\"admission_rows_checked\":");
+    su_buf_u64(&req, rows);
+    req_end(&req);
+    if (req.failed) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "world.specialize install request too large");
     }
     su_buf_init(&resp);
     st = roundtrip(a, c->id, &req, &resp);
@@ -3081,7 +3392,8 @@ static void agent_handle(SuAgent *a, const uint8_t *line, size_t len, int overfl
     c.id = req.id;
     st = route(a, &req, &res, &c);
     if (st != SU_OK) {
-        su_proto_error(out, req.has_id, req.id, st, c.msg[0] != '\0' ? c.msg : su_status_name(st));
+        su_proto_error_detail(out, req.has_id, req.id, st, c.msg[0] != '\0' ? c.msg : su_status_name(st),
+                              c.detail[0] != '\0' ? c.detail : NULL);
     } else if (c.relay) {
         su_buf_put(out, res.data, res.len);
     } else {

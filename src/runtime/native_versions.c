@@ -6,6 +6,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef SU_TEST_FAULT_HOOKS
+#include <signal.h>
+#include <time.h>
+#include <unistd.h>
+#endif
 
 #include "backends/native/su_native.h"
 #include "sutekh/abi.h"
@@ -32,7 +37,82 @@ struct SuNvArtifact {
     uint32_t n_in;
     uint32_t n_out;
     uint32_t *write_ids;            /* writable field ids, table order */
+    SuNvMismatch first;             /* first mismatch of the last admission */
+    uint32_t cur_case;              /* admission bookkeeping for `first` */
+    uint64_t cur_rows;
+    uint32_t cur_offset;
 };
+static SuNvArtifact *find(uint64_t seq);
+
+#ifdef SU_TEST_FAULT_HOOKS
+static uint32_t g_fault_mode = SU_NV_FAULT_NONE;
+static uint32_t g_fault_delay_ms = 0u;
+
+void su_nv_test_arm(uint32_t mode, uint32_t delay_ms) {
+    g_fault_mode = mode;
+    g_fault_delay_ms = delay_ms;
+}
+
+/* Runs before every kernel call on the admission and world paths. */
+static void fault_before_kernel(void) {
+    if (g_fault_mode == SU_NV_FAULT_CRASH) {
+        signal(SIGSEGV, SIG_DFL);
+        raise(SIGSEGV);
+    } else if (g_fault_mode == SU_NV_FAULT_HANG) {
+        for (;;) {
+            sleep(1);
+        }
+    } else if (g_fault_mode == SU_NV_FAULT_DELAY) {
+        struct timespec ts;
+        ts.tv_sec = (time_t)(g_fault_delay_ms / 1000u);
+        ts.tv_nsec = (long)(g_fault_delay_ms % 1000u) * 1000000L;
+        nanosleep(&ts, NULL);
+    }
+}
+#define NV_FAULT_BEFORE() fault_before_kernel()
+#else
+void su_nv_test_arm(uint32_t mode, uint32_t delay_ms) {
+    (void)mode;
+    (void)delay_ms;
+}
+#define NV_FAULT_BEFORE() ((void)0)
+#endif
+
+static void note_first(SuNvArtifact *a, uint32_t field_id, uint64_t row, uint32_t expected,
+                       uint32_t actual) {
+    if (a->first.valid) {
+        return;
+    }
+    a->first.valid = 1u;
+    a->first.case_index = a->cur_case;
+    a->first.case_rows = (uint32_t)a->cur_rows;
+    a->first.case_offset = a->cur_offset;
+    a->first.field_id = field_id;
+    a->first.row = row;
+    a->first.expected = expected;
+    a->first.actual = actual;
+}
+
+uint32_t su_nv_first_mismatch(uint64_t seq, SuNvMismatch *out) {
+    SuNvArtifact *a = find(seq);
+    if (a == NULL || out == NULL) {
+        return SU_E_INTERNAL;
+    }
+    *out = a->first;
+    return SU_OK;
+}
+
+uint32_t su_nv_trust_admitted(uint64_t seq, const char *admitted_hash) {
+    SuNvArtifact *a = find(seq);
+    if (a == NULL || a->state != SU_NV_STATE_PREPARED || admitted_hash == NULL) {
+        return SU_E_INTERNAL;
+    }
+    if (strcmp(a->artifact_hash, admitted_hash) != 0) {
+        return SU_E_CANDIDATE_FAILED;
+    }
+    a->state = SU_NV_STATE_ADMITTED;
+    return SU_OK;
+}
 
 /* Process-global registry: the worker is single-threaded. Slots hold live artifacts only. */
 static SuNvArtifact *g_slots[SU_NV_MAX_ARTIFACTS];
@@ -300,14 +380,22 @@ static uint64_t admit_case(SuNvArtifact *a, SuExecContext *vm, uint64_t rows, ui
         outs_nat.bindings = bno;
 
         st_vm = su_vm_invoke_v1(vm, &inv, &outs_vm);
+        NV_FAULT_BEFORE();
         st_nat = su_native_run_checked(a->art, &inv, &outs_nat);
+#ifdef SU_TEST_FAULT_HOOKS
+        if (g_fault_mode == SU_NV_FAULT_WRONG_KERNEL && st_nat == SU_OK && n_out > 0u && rows > 0u) {
+            nat_out[0][0] ^= 1u;
+        }
+#endif
         if (st_vm != st_nat) {
             bad++;
+            note_first(a, 0u, 0u, (uint32_t)st_vm, (uint32_t)st_nat);
         } else if (st_vm == SU_OK) {
             for (i = 0; i < n_out; i++) {
                 for (r = 0; r < rows; r++) {
                     if (vm_out[i][r] != nat_out[i][r]) {
                         bad++;
+                        note_first(a, a->write_ids[i], r, vm_out[i][r], nat_out[i][r]);
                     }
                 }
                 /* One element beyond the view must be untouched by both. */
@@ -356,12 +444,16 @@ uint32_t su_nv_admit(uint64_t seq, uint32_t seed, uint32_t *cases, uint64_t *row
     if (st != SU_OK) {
         return st;
     }
+    memset(&a->first, 0, sizeof a->first);
     for (s = 0; s < sizeof k_sizes / sizeof k_sizes[0]; s++) {
         uint32_t off;
         for (off = 0; off < 2u; off++) {
             uint32_t rep;
             for (rep = 0; rep < 3u; rep++) {
                 uint32_t edge = rep == 0u ? 1u : (rep == 1u ? 2u : 0u);
+                a->cur_case = n;
+                a->cur_rows = k_sizes[s];
+                a->cur_offset = off;
                 bad += admit_case(a, vm, k_sizes[s], off, &rng, edge);
                 n++;
                 rows += k_sizes[s];
@@ -452,7 +544,13 @@ static uint32_t run_bound(SuNvArtifact *a, SuWorld *w) {
     outs.reserved = 0u;
     outs.bindings = a->scr_out;
 
+    NV_FAULT_BEFORE();
     st = su_native_run_checked(a->art, &inv, &outs);
+#ifdef SU_TEST_FAULT_HOOKS
+    if (g_fault_mode == SU_NV_FAULT_WRONG_WORLD && st == SU_OK && n_out > 0u && wi.row_count > 0u) {
+        ((uint32_t *)a->scr_out[0].data)[0] ^= 1u;
+    }
+#endif
     if (st != SU_OK) {
         return st;
     }

@@ -54,6 +54,36 @@ uint32_t su_nv_run_system(uint64_t seq, SuWorld *w);
  * when the last call returns. Unknown or already retired handles are a no-op. */
 void su_nv_release(uint64_t seq);
 
+/* First mismatch recorded by the last su_nv_admit of this artifact (valid = 0 when none). */
+typedef struct SuNvMismatch {
+    uint32_t valid;
+    uint32_t case_index;  /* corpus case number, admission order */
+    uint32_t case_rows;   /* rows of that case */
+    uint32_t case_offset; /* 0 aligned, 1 one element into the column */
+    uint32_t field_id;
+    uint64_t row;
+    uint32_t expected;    /* VM word */
+    uint32_t actual;      /* kernel word (or the status when st_vm != st_nat) */
+} SuNvMismatch;
+uint32_t su_nv_first_mismatch(uint64_t seq, SuNvMismatch *out);
+
+/* PREPARED -> ADMITTED without running the kernel, when the artifact identity equals the hash a
+ * disposable worker admitted. The active worker calls this after recompiling (compilation only).
+ * SU_E_CANDIDATE_FAILED on a hash mismatch (state unchanged). */
+uint32_t su_nv_trust_admitted(uint64_t seq, const char *admitted_hash);
+
+/* Test-only fault seams. Outside SU_TEST_FAULT_HOOKS builds this is a no-op and no fault code is
+ * compiled. delay_ms applies to SU_NV_FAULT_DELAY. */
+enum {
+    SU_NV_FAULT_NONE = 0,
+    SU_NV_FAULT_WRONG_KERNEL = 1, /* flips one output bit in the corpus and in world runs */
+    SU_NV_FAULT_WRONG_WORLD = 2,  /* flips one output bit in world runs only (own test cases) */
+    SU_NV_FAULT_CRASH = 3,        /* SIGSEGV before the kernel call */
+    SU_NV_FAULT_HANG = 4,         /* never returns from the kernel call */
+    SU_NV_FAULT_DELAY = 5         /* sleeps delay_ms before the kernel call, then runs it */
+};
+void su_nv_test_arm(uint32_t mode, uint32_t delay_ms);
+
 /* Introspection (tests, engine.info). */
 uint32_t su_nv_state(uint64_t seq);
 uint32_t su_nv_live_count(void);

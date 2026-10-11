@@ -2559,6 +2559,12 @@ def tx3(t: TestCtx):
         t.check(f"TX3 {backend} artifact_hash is 64 hex", True,
                 isinstance(res.get("artifact_hash"), str) and len(res["artifact_hash"]) == 64)
         t.check(f"TX3 {backend} revision unchanged by specialize", sess.revs[nat], res.get("world_revision"))
+        # M1-02c-1 (C07): admission ran in a disposable worker, over the corpus (42) and the system's own
+        # test cases (3 in examples/movement.test.json).
+        t.check(f"TX3 {backend} admission in a disposable worker", "disposable_worker",
+                res.get("source", {}).get("kind"))
+        t.check(f"TX3 {backend} admission covers the 42 corpus and 3 own cases", 45,
+                res.get("source", {}).get("admission", {}).get("cases"))
         for tick in range(11, 51):
             step(t, sess, ctrl, 1)
             step(t, sess, nat, 1)

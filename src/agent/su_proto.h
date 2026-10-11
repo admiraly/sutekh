@@ -76,6 +76,9 @@ uint32_t su_proto_parse_request(const uint8_t *line, size_t len, int overflow,
 /* Response writers. Each produces one complete JSON object (no newline). */
 void su_proto_ok(SuBuf *out, int has_id, const char *id, const SuBuf *result);
 void su_proto_error(SuBuf *out, int has_id, const char *id, uint32_t code, const char *message);
+/* As su_proto_error, plus error.detail = detail_json (a complete JSON object; NULL omits it). */
+void su_proto_error_detail(SuBuf *out, int has_id, const char *id, uint32_t code, const char *message,
+                           const char *detail_json);
 
 /* Shared JSON helpers over parsed values. */
 int su_json_is_string(const SuJsonValue *v);

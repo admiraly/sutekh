@@ -163,11 +163,29 @@ Result: `{world_id, specialization_id, state: "installed", system_id, backend, r
 execution_tier, artifact_hash, semantic_hash, fallback, source: {kind, admission: {cases, rows_checked,
 mismatches}, recompile_hash_equal}, world_revision, tick, worker_pid}`.
 
-- Pipeline: the worker compiles the installed semantic revision (AsmJit, in process), runs differential
-  admission against the reference VM over a seeded corpus (row counts 0,1,7,8,9,17,1024; aligned and
-  one-element-unaligned columns; edge and seeded random words), recompiles, requires the same
-  `artifact_hash`, and installs the kernel into that schedule entry between requests (a tick boundary).
-  Any compile, admission or hash failure is `SU_E_CANDIDATE_FAILED` and changes nothing.
+- Pipeline (M1-02c-1; the supervisor runs it, not the worker): (1) the active worker answers the
+  installed system's identity (`internal.specialize.identity`: semantic hash, source and capsule hashes,
+  layout generation, revision), read-only. (2) A DISPOSABLE worker is spawned for this request only
+  (RLIMIT_AS and RLIMIT_CPU as configured, wall timeout, killed on timeout, reaped). It compiles the system
+  from its project files (`internal.specialize.admit`) and runs differential admission against the
+  reference VM over: the seeded corpus (row counts 0,1,7,8,9,17,1024; aligned and one-element-unaligned
+  columns; edge and seeded random words; 42 cases) and the system's own test cases (`<stem>.test.json`
+  beside `<stem>.capsule.json`, run by the kernel through the world fixture the file names; 3 cases for
+  `movement`). A kernel that passes the corpus can still fail the own cases. (3) Only on an admitted
+  result, the active worker recompiles (compilation only; it never executes this kernel), requires the
+  admitted `artifact_hash`, rechecks the revision, the semantic hash and the layout generation, marks the
+  kernel admitted by hash, and installs it into that schedule entry between requests (a tick boundary).
+- Failures. A disposable worker that is killed, crashes, exceeds the time limit or answers malformed
+  output is `SU_E_WORKER_FAILED` with `error.detail = {phase: "admission", end: "exited" | "signaled" |
+  "supervisor_killed", exit_code | signal | timeout_ms}`. A mismatch is `SU_E_CANDIDATE_FAILED` with
+  `error.detail.first_mismatch`: `{source: "corpus", case_index, case_rows, case_offset, field_id, row,
+  expected, actual}` or `{source: "own_case", case, reason}`. A compile or load failure is
+  `SU_E_CANDIDATE_FAILED`. A recompile whose `artifact_hash` differs from the admitted one is refused by
+  the active worker with `SU_E_CANDIDATE_FAILED` and nothing is installed. In every failure case the active
+  worker PID, the world revision and the canonical state are unchanged, and the supervisor still answers.
+- Test-only fault seams exist only in the test worker (`tests/native/qualification/native_test_worker.c`,
+  built with SU_TEST_FAULT_HOOKS). The production `sutekh` binary contains none of them
+  (`tests/native/qualification/check_release_seams.py`, ctest `release_seams`).
 - `world_revision` is not changed: a kernel is not canonical state. Worker PID is unchanged.
 - `avx2` on a host without AVX2 is `SU_E_CAPABILITY_DENIED` with the scalar fallback named in the message.
   `auto` selects AVX2 when the host reports it, falls back to scalar on an AVX2 frame-bound failure
@@ -182,6 +200,5 @@ mismatches}, recompile_hash_equal}, world_revision, tick, worker_pid}`.
 - Kernels are not canonical state. Snapshot and restore return the system to the VM tier. Worker
   recovery (`SU_E_WORKER_FAILED`) rebuilds the worlds on the VM tier. **Specialization is not replayed
   yet (M1-02c).**
-- Not yet implemented: running admission and the recompile in a disposable worker (C07 asks for
-  isolation of unreviewed candidates; the current path is in process); the system's own test cases in
-  the admission corpus; test-only perturbation hooks for the hash and admission rejection paths.
+- Not yet implemented: the t03 numeric-edge programs in admission (the corpus and the own test cases are
+  used); a replayed specialization after recovery (M1-02c-2).

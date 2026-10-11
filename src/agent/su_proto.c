@@ -399,7 +399,8 @@ void su_proto_ok(SuBuf *out, int has_id, const char *id, const SuBuf *result) {
     su_buf_str(out, "}");
 }
 
-void su_proto_error(SuBuf *out, int has_id, const char *id, uint32_t code, const char *message) {
+void su_proto_error_detail(SuBuf *out, int has_id, const char *id, uint32_t code, const char *message,
+                           const char *detail_json) {
     int retry = code == SU_E_WORKER_FAILED || code == SU_E_STALE_REVISION;
     su_buf_str(out, "{\"protocol\":\"" SU_PROTOCOL_VERSION "\",\"id\":");
     put_id(out, has_id, id);
@@ -411,5 +412,14 @@ void su_proto_error(SuBuf *out, int has_id, const char *id, uint32_t code, const
     su_buf_quoted(out, message, strlen(message));
     su_buf_str(out, ",\"retry\":");
     su_buf_str(out, retry ? "true" : "false");
+    if (detail_json != NULL) {
+        /* detail_json is a complete JSON object written by the supervisor, never client text. */
+        su_buf_str(out, ",\"detail\":");
+        su_buf_str(out, detail_json);
+    }
     su_buf_str(out, "}}");
+}
+
+void su_proto_error(SuBuf *out, int has_id, const char *id, uint32_t code, const char *message) {
+    su_proto_error_detail(out, has_id, id, code, message, NULL);
 }

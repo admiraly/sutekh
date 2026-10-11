@@ -52,6 +52,50 @@ int su_proc_exited(SuProc *p) {
     return 1;
 }
 
+/* Records how a failed child ended. A child that is already gone (crash, exit) is reaped here and
+ * its status kept; a child still running at grace_until_ms is left for su_proc_kill, and is
+ * recorded as killed by the supervisor. */
+static void end_record(SuProc *p, int64_t grace_until_ms) {
+    p->end_kind = SU_PROC_END_SUPERVISOR;
+    p->exit_code = 0;
+    p->term_signal = 0;
+    while (p->pid > 0) {
+        int status = 0;
+        pid_t r = waitpid(p->pid, &status, WNOHANG);
+        if (r == p->pid) {
+            if (WIFSIGNALED(status)) {
+                p->end_kind = SU_PROC_END_SIGNALED;
+                p->term_signal = WTERMSIG(status);
+            } else if (WIFEXITED(status)) {
+                p->end_kind = SU_PROC_END_EXITED;
+                p->exit_code = WEXITSTATUS(status);
+            }
+            p->pid = 0;
+            return;
+        }
+        if (r < 0 && errno != EINTR) {
+            return;
+        }
+        if (su_now_ms() >= grace_until_ms) {
+            return;
+        }
+        {
+            struct timespec ts;
+            ts.tv_sec = 0;
+            ts.tv_nsec = 2000000L;
+            nanosleep(&ts, NULL);
+        }
+    }
+}
+
+static void end_fail(SuProc *p, int64_t deadline_ms) {
+    int64_t now = su_now_ms();
+    /* A pipe that closed before the deadline means the child is exiting: give it a second to be
+     * reaped so that its status is known. At the deadline there is no grace. */
+    end_record(p, now < deadline_ms ? now + 1000 : now);
+    su_proc_kill(p);
+}
+
 void su_proc_kill(SuProc *p) {
     if (p->pid > 0) {
         kill(p->pid, SIGKILL);
@@ -74,6 +118,9 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
     p->in_fd = -1;
     p->out_fd = -1;
     p->alive = 0;
+    p->end_kind = SU_PROC_END_NONE;
+    p->exit_code = 0;
+    p->term_signal = 0;
     memset(&p->reader, 0, sizeof p->reader);
 
     if (argv == NULL || argv[0] == NULL || strchr(argv[0], '/') == NULL) {
@@ -182,17 +229,18 @@ uint32_t su_proc_request(SuProc *p, const uint8_t *req, size_t req_len, int64_t 
     rc = su_write_all(p->in_fd, framed, req_len + 1u, deadline_ms);
     free(framed);
     if (rc != 0) {
-        su_proc_kill(p);
+        end_fail(p, deadline_ms);
         return SU_E_WORKER_FAILED;
     }
 
     p->reader.deadline_ms = deadline_ms;
     rc = su_line_next(&p->reader, &line, &len, &overflow);
     if (rc != 1) {
-        su_proc_kill(p);
+        end_fail(p, deadline_ms);
         return SU_E_WORKER_FAILED;
     }
     if (overflow) {
+        p->end_kind = SU_PROC_END_SUPERVISOR;
         su_proc_kill(p);
         return SU_E_RESOURCE_LIMIT;
     }

@@ -17,11 +17,22 @@ typedef struct SuProcLimits {
     uint32_t cpu_seconds;         /* RLIMIT_CPU; 0 leaves it unchanged */
 } SuProcLimits;
 
+/* How the last su_proc_request that failed ended the child (set only on failure). */
+enum {
+    SU_PROC_END_NONE = 0,
+    SU_PROC_END_EXITED = 1,      /* exit_code holds the status */
+    SU_PROC_END_SIGNALED = 2,    /* term_signal holds the signal (crash, OOM kill, RLIMIT_CPU) */
+    SU_PROC_END_SUPERVISOR = 3   /* the supervisor killed it: deadline, overflow or I/O failure */
+};
+
 typedef struct SuProc {
     pid_t pid;      /* 0 when no child */
     int in_fd;      /* write end to child's stdin */
     int out_fd;     /* read end of child's stdout */
     int alive;
+    int end_kind;   /* SU_PROC_END_* */
+    int exit_code;
+    int term_signal;
     SuLineReader reader;
 } SuProc;
 
