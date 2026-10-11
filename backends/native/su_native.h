@@ -37,9 +37,13 @@ typedef struct SuNativeDiag {
 } SuNativeDiag;
 
 /* Lowers and publishes one artifact (code mapped R+X, never RWX). caps is the required
- * SU_NCAP_* set; only SU_NCAP_X86_64_SCALAR is available in this build, any other bit returns
- * SU_E_CAPABILITY_DENIED. Returns SU_E_RESOURCE_LIMIT on allocation or mapping failure with *out
- * NULL and nothing retained. */
+ * SU_NCAP_* set: exactly SU_NCAP_X86_64_SCALAR selects the scalar lowering; SU_NCAP_X86_64_AVX2
+ * (alone or with SCALAR) selects the AVX2 lowering (M1-03, backends/native/avx2/). Any other value,
+ * or AVX2 when su_native_host_caps() does not report it (or it was disabled by the test hook),
+ * returns SU_E_CAPABILITY_DENIED. The AVX2 lowering returns SU_E_RESOURCE_LIMIT when its frame
+ * would exceed SU_NATIVE_AVX2_FRAME_LIMIT_BYTES; callers then compile with SU_NCAP_X86_64_SCALAR
+ * (see su_native_best_backend). Returns SU_E_RESOURCE_LIMIT on allocation or mapping failure with
+ * *out NULL and nothing retained. */
 uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uint32_t caps,
                            SuNativeArtifact **out, SuNativeDiag *diag);
 
@@ -67,7 +71,19 @@ uint32_t su_native_set_row_limit(SuNativeArtifact *a, uint64_t limit);
  * written. On failure no column is written by the kernel. */
 uint32_t su_native_run_checked(SuNativeArtifact *a, const SuInvocation *input, SuOutputs *out);
 
+/* Host capabilities usable by compile: SU_NCAP_X86_64_SCALAR always, SU_NCAP_X86_64_AVX2 when
+ * CPUID reports AVX2 (leaf 7 EBX[5], with OSXSAVE and AVX), XGETBV(0) has XCR0 bits 1 and 2 set,
+ * and it is not disabled by su_native_test_disable_caps. Other architectures: scalar only. */
+uint32_t su_native_host_caps(void);
+
+/* Selection helper: SU_NCAP_X86_64_AVX2 when su_native_host_caps() reports it, else
+ * SU_NCAP_X86_64_SCALAR. The caller passes the result to su_native_compile. If that compile
+ * returns SU_E_RESOURCE_LIMIT (AVX2 frame bound), the caller retries with SU_NCAP_X86_64_SCALAR. */
+uint32_t su_native_best_backend(void);
+
 /* ---- test hooks (not for gameplay code) ---- */
+/* Bits of SU_NCAP_* removed from su_native_host_caps. Persistent until called with 0. */
+void su_native_test_disable_caps(uint32_t mask);
 #define SU_NATIVE_FAIL_MMAP     UINT32_C(1)
 #define SU_NATIVE_FAIL_MPROTECT UINT32_C(2)
 /* Persistent until called with 0. Makes the exec-mapping step fail with SU_E_RESOURCE_LIMIT. */

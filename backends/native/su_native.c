@@ -9,6 +9,8 @@
 #include "backends/native/su_native.h"
 
 #include <stdint.h>
+
+#include "backends/native/avx2/su_native_avx2.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -66,6 +68,12 @@ static void put_u32(SuSha256 *h, uint32_t v) {
     su_sha256_update(h, b, sizeof b);
 }
 
+/* Backend id implied by the requested caps (M1-03: AVX2 when requested). */
+static uint32_t backend_for_caps(uint32_t caps) {
+    return (caps & SU_NCAP_X86_64_AVX2) != 0u ? SU_NATIVE_BACKEND_ASMJIT_AVX2
+                                              : SU_NATIVE_BACKEND_ASMJIT_SCALAR;
+}
+
 /* Every input of M1_NATIVE_CONTRACT.md section 3. Variable-length text is length-prefixed.
  * Lowering option flags are the empty set in this backend (word = 0). */
 void su_native_test_hash(const uint8_t semantic_hash[SU_HASH_BYTES], uint32_t layout_generation,
@@ -83,7 +91,7 @@ void su_native_test_hash(const uint8_t semantic_hash[SU_HASH_BYTES], uint32_t la
     put_u32(&h, SU_NATIVE_ABI_VERSION);
     put_u32(&h, SU_ARTIFACT_FORMAT_VERSION);
     put_u32(&h, SU_NATIVE_BACKEND_VERSION);
-    put_u32(&h, SU_NATIVE_BACKEND_ASMJIT_SCALAR);
+    put_u32(&h, backend_for_caps(caps));
     put_u32(&h, host_abi);
     put_u32(&h, 0u);
     put_u32(&h, layout_generation);
@@ -261,6 +269,7 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
     uint32_t failed = SU_NATIVE_NO_FAILED_INSN;
     uint32_t host_abi;
     uint32_t k;
+    int use_avx2;
     char msg[160];
     void *code_ptr;
 
@@ -278,9 +287,19 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
     diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "host is not x86-64");
     return SU_E_CAPABILITY_DENIED;
 #endif
-    if (caps != SU_NCAP_X86_64_SCALAR) {
+    if (caps == SU_NCAP_X86_64_SCALAR) {
+        use_avx2 = 0;
+    } else if ((caps & ~(SU_NCAP_X86_64_SCALAR | SU_NCAP_X86_64_AVX2)) == 0u &&
+               (caps & SU_NCAP_X86_64_AVX2) != 0u) {
+        if ((su_native_host_caps() & SU_NCAP_X86_64_AVX2) == 0u) {
+            diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN,
+                     "AVX2 requested but the host does not report it usable");
+            return SU_E_CAPABILITY_DENIED;
+        }
+        use_avx2 = 1;
+    } else {
         diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN,
-                 "only SU_NCAP_X86_64_SCALAR is available in this build");
+                 "unknown capability set (SCALAR, or AVX2 with or without SCALAR)");
         return SU_E_CAPABILITY_DENIED;
     }
     if ((m->insn_count > 0u && m->insns == NULL) || (m->field_count > 0u && m->fields == NULL)) {
@@ -300,7 +319,8 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
     }
     memset(&low, 0, sizeof low);
     msg[0] = '\0';
-    st = map_lower_status(su_native_lower_x64(&in, &low, msg, sizeof msg, &failed));
+    st = map_lower_status(use_avx2 ? su_native_lower_avx2(&in, &low, msg, sizeof msg, &failed)
+                                   : su_native_lower_x64(&in, &low, msg, sizeof msg, &failed));
     free(words);
     free(access);
     if (st != SU_OK) {
@@ -361,7 +381,7 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
     a->info.artifact_format = SU_ARTIFACT_FORMAT_VERSION;
     a->info.layout_generation = layout_generation;
     a->info.required_caps = caps;
-    a->info.backend_id = SU_NATIVE_BACKEND_ASMJIT_SCALAR;
+    a->info.backend_id = backend_for_caps(caps);
     a->info.host_abi = host_abi;
     memcpy(a->info.semantic_hash, m->semantic_hash, SU_HASH_BYTES);
     su_native_test_hash(m->semantic_hash, layout_generation, caps, a->info.artifact_hash);

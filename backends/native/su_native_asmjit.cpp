@@ -178,10 +178,10 @@ extern "C" uint32_t su_native_lower_x64(const SuNativeLowerInput *in, SuNativeLo
             std::snprintf(note, sizeof note, "insn %u op %u", k, ins.op);
             a.comment(note);
             const size_t begin = a.offset();
-            const int32_t dst = kSlotBytes * static_cast<int32_t>(ins.dst);
-            const int32_t sa = kSlotBytes * static_cast<int32_t>(ins.a);
-            const int32_t sb = kSlotBytes * static_cast<int32_t>(ins.b);
-            const int32_t sc = kSlotBytes * static_cast<int32_t>(ins.c);
+            const int32_t dst = static_cast<int32_t>(static_cast<uint32_t>(kSlotBytes) * ins.dst);
+            const int32_t sa = static_cast<int32_t>(static_cast<uint32_t>(kSlotBytes) * ins.a);
+            const int32_t sb = static_cast<int32_t>(static_cast<uint32_t>(kSlotBytes) * ins.b);
+            const int32_t sc = static_cast<int32_t>(static_cast<uint32_t>(kSlotBytes) * ins.c);
 
             switch (ins.op) {
             case SU_NLOW_OP_CONST_U32:

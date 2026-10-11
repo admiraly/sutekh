@@ -1121,7 +1121,7 @@ static int run_metadata(void) {
     }
     {
         SuNativeArtifact *bad = NULL;
-        CHECK_ST(su_native_compile(&m, 1u, SU_NCAP_X86_64_AVX2, &bad, &d), SU_E_CAPABILITY_DENIED);
+        CHECK_ST(su_native_compile(&m, 1u, 0x10u, &bad, &d), SU_E_CAPABILITY_DENIED); /* unknown bit: AVX2 is now a supported set (M1-03) */
         CHECK(bad == NULL);
     }
 
