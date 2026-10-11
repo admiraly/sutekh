@@ -1,0 +1,17 @@
+[
+  {
+    "id": "wrong_permission",
+    "kind": "permission",
+    "capsule": "wrong_permission/capsule.json",
+    "expected_code": "SU_E_UNDECLARED_WRITE",
+    "note": "capsule declares position_x write:false while the body stores position_x"
+  },
+  {
+    "id": "stale_revision",
+    "kind": "stale_revision",
+    "capsule": "../movement_v2.capsule.json",
+    "expected_world_revision": "@captured_before_mutation",
+    "expected_code": "SU_E_STALE_REVISION",
+    "note": "the harness substitutes the world revision captured before the first step; the candidate itself is valid, so only the revision is wrong"
+  }
+]

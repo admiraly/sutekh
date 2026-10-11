@@ -1,0 +1,26 @@
+{
+  "fixture_format": "0.1",
+  "schema_id": "demo.actor",
+  "schema_version": 1,
+  "tick": 0,
+  "entity_ids": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "columns": {
+    "position_x": [
+      0,
+      1,
+      4294967295,
+      7
+    ],
+    "velocity_x": [
+      1,
+      2,
+      1,
+      0
+    ]
+  }
+}

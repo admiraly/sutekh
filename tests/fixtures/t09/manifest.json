@@ -1,0 +1,25 @@
+{
+  "test_format": "0.1",
+  "world": "world.json",
+  "systems_in_order": [
+    "movement_a.capsule.json",
+    "movement_b.capsule.json"
+  ],
+  "expected_failure_code": "SU_E_RESOURCE_LIMIT",
+  "expected_columns_after_failed_step": {
+    "position_x": [
+      0,
+      1,
+      4294967295,
+      7
+    ],
+    "velocity_x": [
+      1,
+      2,
+      1,
+      0
+    ]
+  },
+  "expected_tick_after_failed_step": 0,
+  "note": "B exceeds its own limits.max_rows after A has written staging; the published tick root must not change. If the engine rejects this at admission instead, the harness reports not_run rather than passing."
+}
