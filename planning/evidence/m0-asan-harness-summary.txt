@@ -1,0 +1,30 @@
+M0 harness a03512a05e20 against build/sutekh (sha256 2586e27c942daa857a71575b14fce01573006933643b0adf1ab36685155d5874)
+probe: present
+
+T00  not_run      Clean bootstrap  (checks 0, failed 0, dropped from detail 0)
+       build skipped by --no-build; the clean bootstrap was not run in this invocation
+T01  passed       Reference movement  (checks 6, failed 0, dropped from detail 0)
+T02  passed       Empty and awkward counts  (checks 24, failed 0, dropped from detail 0)
+T03  passed       Numeric edges  (checks 12, failed 0, dropped from detail 0)
+T04  passed       Invalid input matrix  (checks 37, failed 0, dropped from detail 0)
+T05  passed       Successful code-only swap  (checks 23, failed 0, dropped from detail 0)
+T06  passed       Failed swap  (checks 7, failed 0, dropped from detail 0)
+T07  passed       Stale candidate  (checks 7, failed 0, dropped from detail 0)
+T08  passed       Snapshot round trip  (checks 10, failed 0, dropped from detail 0)
+T09  passed       Working-root failure  (checks 11, failed 0, dropped from detail 0)
+T10  passed       Candidate isolation  (checks 15, failed 0, dropped from detail 0)
+T11  passed       Repeated reload  (checks 6350, failed 0, dropped from detail 0)
+T12  not_run      No native gameplay build  (checks 6, failed 0, dropped from detail 0)
+       inconclusive: strace probe verdict 'inconclusive': the demo did not complete with status passed; no conclusion about the edit
+T13  passed       Latency decomposition  (checks 192, failed 0, dropped from detail 0)
+T14  passed       Deterministic fixture repeat  (checks 8, failed 0, dropped from detail 0)
+T15  passed       Structured protocol  (checks 15, failed 0, dropped from detail 0)
+
+timing targets (docs/PERFORMANCE.md section 2; provisional, shared VM, C10):
+  ir_prepare                 not_met         p95 44.619 ms (target <= 20.0 ms)
+  preview_response           not_comparable  p95 29.94 ms (target <= 100.0 ms)
+  install_critical_section   met             p95 0.004 ms (target <= 1.0 ms)
+  warm_edit_to_first_effect  met             p95 34.546 ms (target <= 100.0 ms)
+  native_incremental_check   not_comparable  p95 214.495 ms (target <= 2000.0 ms)
+
+totals: passed=14, failed=0, not_run=2, unavailable=0

@@ -1,0 +1,2000 @@
+{
+  "binary": {
+    "bytes": 177168,
+    "path": "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build/sutekh",
+    "sha256": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf"
+  },
+  "checks": [
+    {
+      "actual": 20745,
+      "expected": 20745,
+      "name": "supervisor pid is the serve process",
+      "ok": true,
+      "phase": "start_serve"
+    },
+    {
+      "actual": true,
+      "expected": true,
+      "name": "capability candidate.install advertised",
+      "ok": true,
+      "phase": "start_serve"
+    },
+    {
+      "actual": true,
+      "expected": true,
+      "name": "capability world.snapshot advertised",
+      "ok": true,
+      "phase": "start_serve"
+    },
+    {
+      "actual": true,
+      "expected": true,
+      "name": "capability world.restore advertised",
+      "ok": true,
+      "phase": "start_serve"
+    },
+    {
+      "actual": false,
+      "expected": false,
+      "name": "worker pid is not the supervisor pid",
+      "ok": true,
+      "phase": "create_world"
+    },
+    {
+      "actual": true,
+      "expected": true,
+      "name": "worker start time readable",
+      "ok": true,
+      "phase": "create_world"
+    },
+    {
+      "actual": 0,
+      "expected": 0,
+      "name": "tick 0: tick",
+      "ok": true,
+      "phase": "create_world"
+    },
+    {
+      "actual": [
+        0,
+        1,
+        4294967295,
+        7
+      ],
+      "expected": [
+        0,
+        1,
+        4294967295,
+        7
+      ],
+      "name": "tick 0: position_x matches reference evaluator",
+      "ok": true,
+      "phase": "create_world"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "tick 0: velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "create_world"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "tick 0: entity ids",
+      "ok": true,
+      "phase": "create_world"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "tick 0: worker pid",
+      "ok": true,
+      "phase": "create_world"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "worker_pid unchanged",
+      "ok": true,
+      "phase": "create_world"
+    },
+    {
+      "actual": 358614,
+      "expected": 358614,
+      "name": "worker process start time unchanged (same process, not a recycled pid)",
+      "ok": true,
+      "phase": "create_world"
+    },
+    {
+      "actual": 1,
+      "expected": 1,
+      "name": "v1 tick 1: tick",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": [
+        1,
+        3,
+        0,
+        7
+      ],
+      "expected": [
+        1,
+        3,
+        0,
+        7
+      ],
+      "name": "v1 tick 1: position_x matches reference evaluator",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "v1 tick 1: velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "v1 tick 1: entity ids",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "v1 tick 1: worker pid",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": 2,
+      "expected": 2,
+      "name": "v1 tick 2: tick",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": [
+        2,
+        5,
+        1,
+        7
+      ],
+      "expected": [
+        2,
+        5,
+        1,
+        7
+      ],
+      "name": "v1 tick 2: position_x matches reference evaluator",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "v1 tick 2: velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "v1 tick 2: entity ids",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "v1 tick 2: worker pid",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": 3,
+      "expected": 3,
+      "name": "v1 tick 3: tick",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": [
+        3,
+        7,
+        2,
+        7
+      ],
+      "expected": [
+        3,
+        7,
+        2,
+        7
+      ],
+      "name": "v1 tick 3: position_x matches reference evaluator",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "v1 tick 3: velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "v1 tick 3: entity ids",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "v1 tick 3: worker pid",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "worker_pid unchanged",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": 358614,
+      "expected": 358614,
+      "name": "worker process start time unchanged (same process, not a recycled pid)",
+      "ok": true,
+      "phase": "baseline_v1"
+    },
+    {
+      "actual": {
+        "instructions": [
+          {
+            "dst": "p",
+            "field": "position_x",
+            "op": "load_u32"
+          },
+          {
+            "dst": "v",
+            "field": "velocity_x",
+            "op": "load_u32"
+          },
+          {
+            "dst": "two",
+            "op": "const_u32",
+            "value": 2
+          },
+          {
+            "a": "v",
+            "b": "two",
+            "dst": "twice_v",
+            "op": "mul_u32"
+          },
+          {
+            "a": "p",
+            "b": "twice_v",
+            "dst": "next",
+            "op": "add_u32"
+          },
+          {
+            "field": "position_x",
+            "op": "store_u32",
+            "src": "next"
+          }
+        ],
+        "ir_version": "0.1",
+        "numeric_profile": "u32_mod_v1",
+        "query": "demo.actor",
+        "system_id": "demo.movement"
+      },
+      "expected": {
+        "instructions": [
+          {
+            "dst": "p",
+            "field": "position_x",
+            "op": "load_u32"
+          },
+          {
+            "dst": "v",
+            "field": "velocity_x",
+            "op": "load_u32"
+          },
+          {
+            "dst": "two",
+            "op": "const_u32",
+            "value": 2
+          },
+          {
+            "a": "v",
+            "b": "two",
+            "dst": "twice_v",
+            "op": "mul_u32"
+          },
+          {
+            "a": "p",
+            "b": "twice_v",
+            "dst": "next",
+            "op": "add_u32"
+          },
+          {
+            "field": "position_x",
+            "op": "store_u32",
+            "src": "next"
+          }
+        ],
+        "ir_version": "0.1",
+        "numeric_profile": "u32_mod_v1",
+        "query": "demo.actor",
+        "system_id": "demo.movement"
+      },
+      "name": "scratch edit reproduces examples/movement_v2.lir.json",
+      "ok": true,
+      "phase": "edit_submit_evaluate"
+    },
+    {
+      "actual": "passed",
+      "expected": "passed",
+      "name": "candidate evaluation status",
+      "ok": true,
+      "phase": "edit_submit_evaluate"
+    },
+    {
+      "actual": 3,
+      "expected": 3,
+      "name": "every evaluation case passed",
+      "ok": true,
+      "phase": "edit_submit_evaluate"
+    },
+    {
+      "actual": 3,
+      "expected": 3,
+      "name": "evaluation case count",
+      "ok": true,
+      "phase": "edit_submit_evaluate"
+    },
+    {
+      "actual": 4,
+      "expected": 4,
+      "name": "v1 at effective tick 4: tick",
+      "ok": true,
+      "phase": "advance_to_effective_tick"
+    },
+    {
+      "actual": [
+        4,
+        9,
+        3,
+        7
+      ],
+      "expected": [
+        4,
+        9,
+        3,
+        7
+      ],
+      "name": "v1 at effective tick 4: position_x matches reference evaluator",
+      "ok": true,
+      "phase": "advance_to_effective_tick"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "v1 at effective tick 4: velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "advance_to_effective_tick"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "v1 at effective tick 4: entity ids",
+      "ok": true,
+      "phase": "advance_to_effective_tick"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "v1 at effective tick 4: worker pid",
+      "ok": true,
+      "phase": "advance_to_effective_tick"
+    },
+    {
+      "actual": "installed",
+      "expected": "installed",
+      "name": "install state",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": 4,
+      "expected": 4,
+      "name": "install effective tick",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": 4,
+      "expected": 4,
+      "name": "after install at tick 4 (no step): tick",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": [
+        4,
+        9,
+        3,
+        7
+      ],
+      "expected": [
+        4,
+        9,
+        3,
+        7
+      ],
+      "name": "after install at tick 4 (no step): position_x matches reference evaluator",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "after install at tick 4 (no step): velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "after install at tick 4 (no step): entity ids",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "after install at tick 4 (no step): worker pid",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": {
+        "position_x": [
+          4,
+          9,
+          3,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      },
+      "expected": {
+        "position_x": [
+          4,
+          9,
+          3,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      },
+      "name": "every column unchanged by install",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "entity ids unchanged by install",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": true,
+      "expected": true,
+      "name": "semantic manifest changed by install",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "worker_pid unchanged",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": 358614,
+      "expected": 358614,
+      "name": "worker process start time unchanged (same process, not a recycled pid)",
+      "ok": true,
+      "phase": "install"
+    },
+    {
+      "actual": 5,
+      "expected": 5,
+      "name": "v2 tick 5: tick",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": [
+        6,
+        13,
+        5,
+        7
+      ],
+      "expected": [
+        6,
+        13,
+        5,
+        7
+      ],
+      "name": "v2 tick 5: position_x matches reference evaluator",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "v2 tick 5: velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "v2 tick 5: entity ids",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "v2 tick 5: worker pid",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": 6,
+      "expected": 6,
+      "name": "v2 tick 6: tick",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": [
+        8,
+        17,
+        7,
+        7
+      ],
+      "expected": [
+        8,
+        17,
+        7,
+        7
+      ],
+      "name": "v2 tick 6: position_x matches reference evaluator",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "v2 tick 6: velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "v2 tick 6: entity ids",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "v2 tick 6: worker pid",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": 7,
+      "expected": 7,
+      "name": "v2 tick 7: tick",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": [
+        10,
+        21,
+        9,
+        7
+      ],
+      "expected": [
+        10,
+        21,
+        9,
+        7
+      ],
+      "name": "v2 tick 7: position_x matches reference evaluator",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "v2 tick 7: velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "v2 tick 7: entity ids",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "v2 tick 7: worker pid",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": true,
+      "expected": true,
+      "name": "v1 and v2 differ at the first post-install tick",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "worker_pid unchanged",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": 358614,
+      "expected": 358614,
+      "name": "worker process start time unchanged (same process, not a recycled pid)",
+      "ok": true,
+      "phase": "v2_after_install"
+    },
+    {
+      "actual": {
+        "code": "SU_E_UNDECLARED_WRITE",
+        "ok": false
+      },
+      "expected": {
+        "code": "SU_E_UNDECLARED_WRITE",
+        "ok": false
+      },
+      "name": "invalid capsule refused with SU_E_UNDECLARED_WRITE",
+      "ok": true,
+      "phase": "invalid_edit_rejected"
+    },
+    {
+      "actual": "world-1.r9",
+      "expected": "world-1.r9",
+      "name": "world revision unchanged",
+      "ok": true,
+      "phase": "invalid_edit_rejected"
+    },
+    {
+      "actual": 7,
+      "expected": 7,
+      "name": "tick unchanged",
+      "ok": true,
+      "phase": "invalid_edit_rejected"
+    },
+    {
+      "actual": {
+        "position_x": [
+          10,
+          21,
+          9,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      },
+      "expected": {
+        "position_x": [
+          10,
+          21,
+          9,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      },
+      "name": "columns unchanged",
+      "ok": true,
+      "phase": "invalid_edit_rejected"
+    },
+    {
+      "actual": [
+        {
+          "capsule_hash": "0530f651ebd04c326d16d46b711a347ef00e756bc629f30c53a19790add995f6",
+          "semantic_hash": "754229e77aa56c9e71f74e1336831318b4223d17fb1d34b585c813b51a829771",
+          "source_hash": "192fbce7aa9a35bae63ff7103c4d3e127ee28bf36761d8e469b32d796f837ab9",
+          "system_id": "demo.movement"
+        }
+      ],
+      "expected": [
+        {
+          "capsule_hash": "0530f651ebd04c326d16d46b711a347ef00e756bc629f30c53a19790add995f6",
+          "semantic_hash": "754229e77aa56c9e71f74e1336831318b4223d17fb1d34b585c813b51a829771",
+          "source_hash": "192fbce7aa9a35bae63ff7103c4d3e127ee28bf36761d8e469b32d796f837ab9",
+          "system_id": "demo.movement"
+        }
+      ],
+      "name": "active semantic manifest unchanged",
+      "ok": true,
+      "phase": "invalid_edit_rejected"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "worker_pid unchanged",
+      "ok": true,
+      "phase": "invalid_edit_rejected"
+    },
+    {
+      "actual": 358614,
+      "expected": 358614,
+      "name": "worker process start time unchanged (same process, not a recycled pid)",
+      "ok": true,
+      "phase": "invalid_edit_rejected"
+    },
+    {
+      "actual": 8,
+      "expected": 8,
+      "name": "v2 after rejected edit: tick",
+      "ok": true,
+      "phase": "v2_still_active"
+    },
+    {
+      "actual": [
+        12,
+        25,
+        11,
+        7
+      ],
+      "expected": [
+        12,
+        25,
+        11,
+        7
+      ],
+      "name": "v2 after rejected edit: position_x matches reference evaluator",
+      "ok": true,
+      "phase": "v2_still_active"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "v2 after rejected edit: velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "v2_still_active"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "v2 after rejected edit: entity ids",
+      "ok": true,
+      "phase": "v2_still_active"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "v2 after rejected edit: worker pid",
+      "ok": true,
+      "phase": "v2_still_active"
+    },
+    {
+      "actual": 8,
+      "expected": 8,
+      "name": "snapshot tick",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": 10,
+      "expected": 10,
+      "name": "state moved on before restore (tick)",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": {
+        "position_x": [
+          16,
+          33,
+          15,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      },
+      "expected": {
+        "position_x": [
+          16,
+          33,
+          15,
+          7
+        ],
+        "velocity_x": [
+          1,
+          2,
+          1,
+          0
+        ]
+      },
+      "name": "state moved on before restore (columns match reference)",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": 8,
+      "expected": 8,
+      "name": "restored tick equals snapshot tick",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": "53ae2387b0c8cb95d1909445c25837d0417c13c589710b3334cf12191903f220",
+      "expected": "53ae2387b0c8cb95d1909445c25837d0417c13c589710b3334cf12191903f220",
+      "name": "restored canonical state equals snapshot state byte-for-byte",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": [
+        {
+          "capsule_hash": "0530f651ebd04c326d16d46b711a347ef00e756bc629f30c53a19790add995f6",
+          "semantic_hash": "754229e77aa56c9e71f74e1336831318b4223d17fb1d34b585c813b51a829771",
+          "source_hash": "192fbce7aa9a35bae63ff7103c4d3e127ee28bf36761d8e469b32d796f837ab9",
+          "system_id": "demo.movement"
+        }
+      ],
+      "expected": [
+        {
+          "capsule_hash": "0530f651ebd04c326d16d46b711a347ef00e756bc629f30c53a19790add995f6",
+          "semantic_hash": "754229e77aa56c9e71f74e1336831318b4223d17fb1d34b585c813b51a829771",
+          "source_hash": "192fbce7aa9a35bae63ff7103c4d3e127ee28bf36761d8e469b32d796f837ab9",
+          "system_id": "demo.movement"
+        }
+      ],
+      "name": "restored semantic manifest equals snapshot manifest",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": 9,
+      "expected": 9,
+      "name": "step after restore: tick",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": [
+        14,
+        29,
+        13,
+        7
+      ],
+      "expected": [
+        14,
+        29,
+        13,
+        7
+      ],
+      "name": "step after restore: position_x matches reference evaluator",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "expected": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "name": "step after restore: velocity_x matches reference evaluator",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "name": "step after restore: entity ids",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "step after restore: worker pid",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": 20748,
+      "expected": 20748,
+      "name": "worker_pid unchanged",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": 358614,
+      "expected": 358614,
+      "name": "worker process start time unchanged (same process, not a recycled pid)",
+      "ok": true,
+      "phase": "snapshot_restore"
+    },
+    {
+      "actual": true,
+      "expected": true,
+      "name": "worker pid identical in every step row",
+      "ok": true,
+      "phase": "summary"
+    },
+    {
+      "actual": 0,
+      "expected": 0,
+      "name": "serve exits 0 after stdin closes",
+      "ok": true,
+      "phase": "shutdown"
+    }
+  ],
+  "commands": {
+    "build": [
+      "python3",
+      "tools/dev.py",
+      "build"
+    ],
+    "demo": [
+      "/usr/bin/python3",
+      "tools/demo_zero_wait.py",
+      "--binary",
+      "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build/sutekh",
+      "--out",
+      "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/planning/evidence/m0-demo-release.json"
+    ],
+    "serve": [
+      "build/sutekh",
+      "serve",
+      "--root",
+      "<repo>"
+    ]
+  },
+  "edit_window": {
+    "candidate_id": "candidate-1",
+    "end_epoch_ns": 1791742721635000283,
+    "end_mono_ms": 27.607,
+    "start_epoch_ns": 1791742721624169910,
+    "start_mono_ms": 16.776
+  },
+  "evidence_format": "m0-zero-wait-demo/0.1",
+  "failure": null,
+  "finished_utc": "2026-10-11T18:18:41.648088+00:00",
+  "invalid_source": {
+    "sha256": "f0253dc52d35f2b8af974e7115c4902cf4e5655931e27280142bf7a667294e7b"
+  },
+  "machine": {
+    "clock": "time.monotonic_ns (host)",
+    "cpu_count": 4,
+    "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+    "python": "3.13.16"
+  },
+  "parameters": {
+    "effective_tick": 4,
+    "ticks_after": 3,
+    "ticks_before": 3
+  },
+  "phases": [
+    {
+      "duration_ms": 1.5,
+      "end_ms": 10.904,
+      "name": "start_serve",
+      "start_ms": 9.404
+    },
+    {
+      "duration_ms": 3.167,
+      "end_ms": 14.08,
+      "name": "create_world",
+      "start_ms": 10.913
+    },
+    {
+      "duration_ms": 2.671,
+      "end_ms": 16.762,
+      "name": "baseline_v1",
+      "start_ms": 14.091
+    },
+    {
+      "duration_ms": 9.121,
+      "end_ms": 25.893,
+      "name": "edit_submit_evaluate",
+      "start_ms": 16.772
+    },
+    {
+      "duration_ms": 0.812,
+      "end_ms": 26.711,
+      "name": "advance_to_effective_tick",
+      "start_ms": 25.899
+    },
+    {
+      "duration_ms": 0.891,
+      "end_ms": 27.609,
+      "name": "install",
+      "start_ms": 26.718
+    },
+    {
+      "duration_ms": 1.87,
+      "end_ms": 29.487,
+      "name": "v2_after_install",
+      "start_ms": 27.617
+    },
+    {
+      "duration_ms": 0.647,
+      "end_ms": 30.14,
+      "name": "invalid_edit_rejected",
+      "start_ms": 29.493
+    },
+    {
+      "duration_ms": 0.337,
+      "end_ms": 30.484,
+      "name": "v2_still_active",
+      "start_ms": 30.147
+    },
+    {
+      "duration_ms": 1.759,
+      "end_ms": 32.248,
+      "name": "snapshot_restore",
+      "start_ms": 30.489
+    }
+  ],
+  "pre_edit_state": {
+    "manifest": [
+      {
+        "capsule_hash": "0530f651ebd04c326d16d46b711a347ef00e756bc629f30c53a19790add995f6",
+        "semantic_hash": "b9e6bd62b4c9aff3e27c114b14f64f02c074c3ba529c3729bef42f15955065b6",
+        "source_hash": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "system_id": "demo.movement"
+      }
+    ],
+    "state_sha256": "30d68a6b9339d1bdd26dcec06f6bc288e5a4b3d2d95a47879fd7c348adaf71fe",
+    "tick": 3
+  },
+  "rpc": [
+    {
+      "duration_ms": 0.392,
+      "error_code": null,
+      "id": "demo-1",
+      "method": "engine.info",
+      "ok": true,
+      "phase": "start_serve",
+      "received_ms": 10.809,
+      "sent_ms": 10.418
+    },
+    {
+      "duration_ms": 2.105,
+      "error_code": null,
+      "id": "demo-2",
+      "method": "world.create",
+      "ok": true,
+      "phase": "create_world",
+      "received_ms": 13.179,
+      "sent_ms": 11.074
+    },
+    {
+      "duration_ms": 0.491,
+      "error_code": null,
+      "id": "demo-3",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "create_world",
+      "received_ms": 13.894,
+      "sent_ms": 13.403
+    },
+    {
+      "duration_ms": 0.628,
+      "error_code": null,
+      "id": "demo-4",
+      "method": "world.step",
+      "ok": true,
+      "phase": "baseline_v1",
+      "received_ms": 14.799,
+      "sent_ms": 14.171
+    },
+    {
+      "duration_ms": 0.378,
+      "error_code": null,
+      "id": "demo-5",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "baseline_v1",
+      "received_ms": 15.218,
+      "sent_ms": 14.841
+    },
+    {
+      "duration_ms": 0.34,
+      "error_code": null,
+      "id": "demo-6",
+      "method": "world.step",
+      "ok": true,
+      "phase": "baseline_v1",
+      "received_ms": 15.737,
+      "sent_ms": 15.397
+    },
+    {
+      "duration_ms": 0.254,
+      "error_code": null,
+      "id": "demo-7",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "baseline_v1",
+      "received_ms": 16.056,
+      "sent_ms": 15.802
+    },
+    {
+      "duration_ms": 0.194,
+      "error_code": null,
+      "id": "demo-8",
+      "method": "world.step",
+      "ok": true,
+      "phase": "baseline_v1",
+      "received_ms": 16.347,
+      "sent_ms": 16.152
+    },
+    {
+      "duration_ms": 0.17,
+      "error_code": null,
+      "id": "demo-9",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "baseline_v1",
+      "received_ms": 16.544,
+      "sent_ms": 16.373
+    },
+    {
+      "duration_ms": 0.308,
+      "error_code": null,
+      "id": "demo-10",
+      "method": "capsule.submit",
+      "ok": true,
+      "phase": "edit_submit_evaluate",
+      "received_ms": 18.28,
+      "sent_ms": 17.972
+    },
+    {
+      "duration_ms": 7.493,
+      "error_code": null,
+      "id": "demo-11",
+      "method": "candidate.evaluate",
+      "ok": true,
+      "phase": "edit_submit_evaluate",
+      "received_ms": 25.811,
+      "sent_ms": 18.318
+    },
+    {
+      "duration_ms": 0.403,
+      "error_code": null,
+      "id": "demo-12",
+      "method": "world.step",
+      "ok": true,
+      "phase": "advance_to_effective_tick",
+      "received_ms": 26.359,
+      "sent_ms": 25.957
+    },
+    {
+      "duration_ms": 0.22,
+      "error_code": null,
+      "id": "demo-13",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "advance_to_effective_tick",
+      "received_ms": 26.618,
+      "sent_ms": 26.398
+    },
+    {
+      "duration_ms": 0.39,
+      "error_code": null,
+      "id": "demo-14",
+      "method": "candidate.install",
+      "ok": true,
+      "phase": "install",
+      "received_ms": 27.125,
+      "sent_ms": 26.735
+    },
+    {
+      "duration_ms": 0.234,
+      "error_code": null,
+      "id": "demo-15",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "install",
+      "received_ms": 27.412,
+      "sent_ms": 27.178
+    },
+    {
+      "duration_ms": 0.309,
+      "error_code": null,
+      "id": "demo-16",
+      "method": "world.step",
+      "ok": true,
+      "phase": "v2_after_install",
+      "received_ms": 28.119,
+      "sent_ms": 27.81
+    },
+    {
+      "duration_ms": 0.182,
+      "error_code": null,
+      "id": "demo-17",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "v2_after_install",
+      "received_ms": 28.344,
+      "sent_ms": 28.162
+    },
+    {
+      "duration_ms": 0.213,
+      "error_code": null,
+      "id": "demo-18",
+      "method": "world.step",
+      "ok": true,
+      "phase": "v2_after_install",
+      "received_ms": 28.666,
+      "sent_ms": 28.453
+    },
+    {
+      "duration_ms": 0.322,
+      "error_code": null,
+      "id": "demo-19",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "v2_after_install",
+      "received_ms": 29.023,
+      "sent_ms": 28.701
+    },
+    {
+      "duration_ms": 0.136,
+      "error_code": null,
+      "id": "demo-20",
+      "method": "world.step",
+      "ok": true,
+      "phase": "v2_after_install",
+      "received_ms": 29.246,
+      "sent_ms": 29.11
+    },
+    {
+      "duration_ms": 0.105,
+      "error_code": null,
+      "id": "demo-21",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "v2_after_install",
+      "received_ms": 29.375,
+      "sent_ms": 29.271
+    },
+    {
+      "duration_ms": 0.115,
+      "error_code": null,
+      "id": "demo-22",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "invalid_edit_rejected",
+      "received_ms": 29.619,
+      "sent_ms": 29.504
+    },
+    {
+      "duration_ms": 0.21,
+      "error_code": "SU_E_UNDECLARED_WRITE",
+      "id": "demo-23",
+      "method": "capsule.submit",
+      "ok": false,
+      "phase": "invalid_edit_rejected",
+      "received_ms": 29.889,
+      "sent_ms": 29.679
+    },
+    {
+      "duration_ms": 0.104,
+      "error_code": null,
+      "id": "demo-24",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "invalid_edit_rejected",
+      "received_ms": 30.036,
+      "sent_ms": 29.933
+    },
+    {
+      "duration_ms": 0.115,
+      "error_code": null,
+      "id": "demo-25",
+      "method": "world.step",
+      "ok": true,
+      "phase": "v2_still_active",
+      "received_ms": 30.296,
+      "sent_ms": 30.181
+    },
+    {
+      "duration_ms": 0.108,
+      "error_code": null,
+      "id": "demo-26",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "v2_still_active",
+      "received_ms": 30.441,
+      "sent_ms": 30.332
+    },
+    {
+      "duration_ms": 0.097,
+      "error_code": null,
+      "id": "demo-27",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "snapshot_restore",
+      "received_ms": 30.595,
+      "sent_ms": 30.499
+    },
+    {
+      "duration_ms": 0.196,
+      "error_code": null,
+      "id": "demo-28",
+      "method": "world.snapshot",
+      "ok": true,
+      "phase": "snapshot_restore",
+      "received_ms": 30.825,
+      "sent_ms": 30.629
+    },
+    {
+      "duration_ms": 0.151,
+      "error_code": null,
+      "id": "demo-29",
+      "method": "world.step",
+      "ok": true,
+      "phase": "snapshot_restore",
+      "received_ms": 31.099,
+      "sent_ms": 30.949
+    },
+    {
+      "duration_ms": 0.095,
+      "error_code": null,
+      "id": "demo-30",
+      "method": "world.step",
+      "ok": true,
+      "phase": "snapshot_restore",
+      "received_ms": 31.218,
+      "sent_ms": 31.123
+    },
+    {
+      "duration_ms": 0.108,
+      "error_code": null,
+      "id": "demo-31",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "snapshot_restore",
+      "received_ms": 31.351,
+      "sent_ms": 31.243
+    },
+    {
+      "duration_ms": 0.294,
+      "error_code": null,
+      "id": "demo-32",
+      "method": "world.restore",
+      "ok": true,
+      "phase": "snapshot_restore",
+      "received_ms": 31.707,
+      "sent_ms": 31.412
+    },
+    {
+      "duration_ms": 0.103,
+      "error_code": null,
+      "id": "demo-33",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "snapshot_restore",
+      "received_ms": 31.847,
+      "sent_ms": 31.744
+    },
+    {
+      "duration_ms": 0.094,
+      "error_code": null,
+      "id": "demo-34",
+      "method": "world.step",
+      "ok": true,
+      "phase": "snapshot_restore",
+      "received_ms": 32.01,
+      "sent_ms": 31.916
+    },
+    {
+      "duration_ms": 0.1,
+      "error_code": null,
+      "id": "demo-35",
+      "method": "world.inspect",
+      "ok": true,
+      "phase": "snapshot_restore",
+      "received_ms": 32.152,
+      "sent_ms": 32.052
+    }
+  ],
+  "scratch": {
+    "dir": "build/demo-scratch/20261011T181841624178-20741",
+    "edit": "add_u32(p, v) -> mul_u32(v, 2) then add_u32(p, twice_v)",
+    "files": {
+      "movement.capsule.json": "0530f651ebd04c326d16d46b711a347ef00e756bc629f30c53a19790add995f6",
+      "movement.lir.json": "192fbce7aa9a35bae63ff7103c4d3e127ee28bf36761d8e469b32d796f837ab9",
+      "movement.test.json": "47701a6652cecdb3024b44ce6b35bfc7d41d7777607ee20ececc1304d59613b2",
+      "world.json": "945f773de8f0e460a2243a1fac99e74725bd5c74d2ec9d95ad722452003a4e15"
+    }
+  },
+  "scratch_dir_kept": false,
+  "serve_argv": [
+    "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build/sutekh",
+    "serve",
+    "--root",
+    "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7"
+  ],
+  "serve_exit_code": 0,
+  "snapshot": {
+    "snapshot_id": "664cdd9b94b8ae689297d65c23149e7482b9172b73850494e31569d66d53ae49",
+    "state_sha256": "53ae2387b0c8cb95d1909445c25837d0417c13c589710b3334cf12191903f220",
+    "tick": 8
+  },
+  "source": {
+    "dirty_paths": [
+      " M planning/evidence/m0-ctest-dev.log",
+      " M planning/evidence/m0-ctest-release.log",
+      " M planning/evidence/m0-demo-dev.json",
+      " M planning/evidence/m0-harness-dev-summary.txt",
+      " M planning/evidence/m0-harness-dev.json",
+      " M planning/evidence/m0-harness-release-summary.txt",
+      " M planning/evidence/m0-harness-release.json",
+      " M planning/evidence/m0-probe-dev.json",
+      " M planning/evidence/m0-release-build.log",
+      "?? planning/evidence/m0-demo-dev.log",
+      "?? planning/evidence/m0-demo-release.log",
+      "?? planning/evidence/m0-dev-build.log",
+      "?? planning/evidence/m0-dev-clean.log",
+      "?? planning/evidence/m0-probe-dev.log",
+      "?? planning/evidence/m0-release-clean.log"
+    ],
+    "git_dirty": true,
+    "git_head": "c0e83359ad5b96cf3902b1e74e85cbe3dcb61d40",
+    "repo_root": "/home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7"
+  },
+  "status": "passed",
+  "step_table": [
+    {
+      "manifest_hash16": "b9e6bd62b4c9aff3",
+      "matches_reference": true,
+      "method": "world.create",
+      "n": 1,
+      "phase": "create_world",
+      "position_x": [
+        0,
+        1,
+        4294967295,
+        7
+      ],
+      "tick": 0,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r1"
+    },
+    {
+      "manifest_hash16": "b9e6bd62b4c9aff3",
+      "matches_reference": true,
+      "method": "world.step",
+      "n": 2,
+      "phase": "baseline_v1",
+      "position_x": [
+        1,
+        3,
+        0,
+        7
+      ],
+      "tick": 1,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r2"
+    },
+    {
+      "manifest_hash16": "b9e6bd62b4c9aff3",
+      "matches_reference": true,
+      "method": "world.step",
+      "n": 3,
+      "phase": "baseline_v1",
+      "position_x": [
+        2,
+        5,
+        1,
+        7
+      ],
+      "tick": 2,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r3"
+    },
+    {
+      "manifest_hash16": "b9e6bd62b4c9aff3",
+      "matches_reference": true,
+      "method": "world.step",
+      "n": 4,
+      "phase": "baseline_v1",
+      "position_x": [
+        3,
+        7,
+        2,
+        7
+      ],
+      "tick": 3,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r4"
+    },
+    {
+      "manifest_hash16": "b9e6bd62b4c9aff3",
+      "matches_reference": true,
+      "method": "world.step",
+      "n": 5,
+      "phase": "advance_to_effective_tick",
+      "position_x": [
+        4,
+        9,
+        3,
+        7
+      ],
+      "tick": 4,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r5"
+    },
+    {
+      "manifest_hash16": "754229e77aa56c9e",
+      "matches_reference": true,
+      "method": "candidate.install",
+      "n": 6,
+      "phase": "install",
+      "position_x": [
+        4,
+        9,
+        3,
+        7
+      ],
+      "tick": 4,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r6"
+    },
+    {
+      "manifest_hash16": "754229e77aa56c9e",
+      "matches_reference": true,
+      "method": "world.step",
+      "n": 7,
+      "phase": "v2_after_install",
+      "position_x": [
+        6,
+        13,
+        5,
+        7
+      ],
+      "tick": 5,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r7"
+    },
+    {
+      "manifest_hash16": "754229e77aa56c9e",
+      "matches_reference": true,
+      "method": "world.step",
+      "n": 8,
+      "phase": "v2_after_install",
+      "position_x": [
+        8,
+        17,
+        7,
+        7
+      ],
+      "tick": 6,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r8"
+    },
+    {
+      "manifest_hash16": "754229e77aa56c9e",
+      "matches_reference": true,
+      "method": "world.step",
+      "n": 9,
+      "phase": "v2_after_install",
+      "position_x": [
+        10,
+        21,
+        9,
+        7
+      ],
+      "tick": 7,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r9"
+    },
+    {
+      "manifest_hash16": "754229e77aa56c9e",
+      "matches_reference": true,
+      "method": "world.step",
+      "n": 10,
+      "phase": "v2_still_active",
+      "position_x": [
+        12,
+        25,
+        11,
+        7
+      ],
+      "tick": 8,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r10"
+    },
+    {
+      "manifest_hash16": "754229e77aa56c9e",
+      "matches_reference": true,
+      "method": "world.restore",
+      "n": 11,
+      "phase": "snapshot_restore",
+      "position_x": [
+        12,
+        25,
+        11,
+        7
+      ],
+      "tick": 8,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r13"
+    },
+    {
+      "manifest_hash16": "754229e77aa56c9e",
+      "matches_reference": true,
+      "method": "world.step",
+      "n": 12,
+      "phase": "snapshot_restore",
+      "position_x": [
+        14,
+        29,
+        13,
+        7
+      ],
+      "tick": 9,
+      "velocity_x": [
+        1,
+        2,
+        1,
+        0
+      ],
+      "worker_pid": 20748,
+      "world_revision": "world-1.r14"
+    }
+  ],
+  "supervisor_pid": 20745,
+  "worker": {
+    "pid": 20748,
+    "same_pid_all_run": true,
+    "start_time_ticks": 358614
+  }
+}

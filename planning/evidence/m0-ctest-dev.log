@@ -1,20 +1,20 @@
-Internal ctest changing into directory: /home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build
-Test project /home/user/sutekh/.claude/worktrees/agent-aa8b20db3ed520483/build
+Internal ctest changing into directory: /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build
+Test project /home/user/sutekh/.claude/worktrees/agent-a9c4decc809881da7/build
     Start 1: world
 1/7 Test #1: world ............................   Passed    0.06 sec
     Start 2: ir
-2/7 Test #2: ir ...............................   Passed    0.02 sec
+2/7 Test #2: ir ...............................   Passed    0.03 sec
     Start 3: vm
 3/7 Test #3: vm ...............................   Passed    0.01 sec
     Start 4: control
-4/7 Test #4: control ..........................   Passed    0.48 sec
+4/7 Test #4: control ..........................   Passed    0.49 sec
     Start 5: snapshot
 5/7 Test #5: snapshot .........................   Passed    0.00 sec
     Start 6: reload
-6/7 Test #6: reload ...........................   Passed    0.27 sec
+6/7 Test #6: reload ...........................   Passed    0.28 sec
     Start 7: snapshot_cp
 7/7 Test #7: snapshot_cp ......................   Passed    0.03 sec
 
 100% tests passed, 0 tests failed out of 7
 
-Total Test time (real) =   0.89 sec
+Total Test time (real) =   0.91 sec
