@@ -47,3 +47,13 @@ add_executable(test_ir tests/ir/test_ir.c)
 target_link_libraries(test_ir PRIVATE su_ir)
 sutekh_apply_warnings(test_ir)
 add_test(NAME ir COMMAND test_ir WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_library(su_vm STATIC src/vm/su_vm.c)
+target_include_directories(su_vm PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
+target_link_libraries(su_vm PUBLIC su_world su_ir)
+sutekh_apply_warnings(su_vm)
+
+add_executable(test_vm tests/vm/test_vm.c)
+target_link_libraries(test_vm PRIVATE su_vm)
+sutekh_apply_warnings(test_vm)
+add_test(NAME vm COMMAND test_vm WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
