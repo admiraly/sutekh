@@ -1,0 +1,153 @@
+tool versions:
+  python: 3.13.16
+  cmake: cmake version 3.28.3
+  ninja: 1.11.1
+  compiler: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
++ cmake -S /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe -B /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build -DCMAKE_BUILD_TYPE=Release -G Ninja
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build
++ cmake --build /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build --parallel
+[0/2] Re-checking globbed directories...
+[1/41] Building C object CMakeFiles/su_platform.dir/src/platform/su_platform.c.o
+[2/41] Building C object CMakeFiles/sutekh.dir/src/platform/sutekh_main.c.o
+[3/41] Linking C static library libsu_platform.a
+[4/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_sha256.c.o
+[5/41] Building C object CMakeFiles/su_world.dir/src/world/su_world.c.o
+[6/41] Linking C static library libsu_world.a
+[7/41] Building C object CMakeFiles/su_vm.dir/src/vm/su_vm.c.o
+[8/41] Building C object CMakeFiles/test_ir.dir/tests/ir/test_ir.c.o
+[9/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_module.c.o
+[10/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_path.c.o
+[11/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_json.c.o
+[12/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_proc.c.o
+[13/41] Building C object CMakeFiles/test_vm.dir/tests/vm/test_vm.c.o
+[14/41] Building C object CMakeFiles/su_ir.dir/src/ir/su_lir.c.o
+[15/41] Building C object CMakeFiles/su_agent.dir/src/runtime/registry.c.o
+[16/41] Linking C static library libsu_ir.a
+[17/41] Building C object CMakeFiles/test_world.dir/tests/world/test_world.c.o
+[18/41] Linking C executable test_ir
+[19/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_agent.c.o
+[20/41] Linking C executable test_world
+[21/41] Building C object CMakeFiles/su_agent.dir/src/agent/su_proto.c.o
+[22/41] Linking C static library libsu_vm.a
+[23/41] Building C object CMakeFiles/su_agent.dir/src/runtime/schedule.c.o
+[24/41] Linking C executable test_vm
+[25/41] Building C object CMakeFiles/worker_stub.dir/tests/control/worker_stub.c.o
+[26/41] Building C object CMakeFiles/su_agent.dir/src/runtime/reload.c.o
+FAILED: CMakeFiles/su_agent.dir/src/runtime/reload.c.o 
+/usr/bin/cc -D_POSIX_C_SOURCE=200809L -I/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src -I/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/include -I/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/platform -O3 -DNDEBUG -std=c17 -Wall -Wextra -Werror -pedantic -MD -MT CMakeFiles/su_agent.dir/src/runtime/reload.c.o -MF CMakeFiles/su_agent.dir/src/runtime/reload.c.o.d -o CMakeFiles/su_agent.dir/src/runtime/reload.c.o -c /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c: In function ‘su_reload_install’:
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:90:34: error: ‘%s’ directive output may be truncated writing up to 255 bytes into a region of size 160 [-Werror=format-truncation=]
+   90 |     snprintf(text, sizeof text, "%s", reason);
+      |                                  ^~
+......
+  201 |         return reject(reg, out, txid, SU_REV_STALE, SU_E_STALE_REVISION, msg);
+      |                                                                          ~~~
+In file included from /usr/include/stdio.h:980,
+                 from /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:5:
+In function ‘snprintf’,
+    inlined from ‘reject’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:90:5,
+    inlined from ‘su_reload_install’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:201:16:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin_snprintf’ output between 1 and 256 bytes into a destination of size 160
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c: In function ‘su_reload_install’:
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:90:34: error: ‘%s’ directive output may be truncated writing up to 255 bytes into a region of size 160 [-Werror=format-truncation=]
+   90 |     snprintf(text, sizeof text, "%s", reason);
+      |                                  ^~
+......
+  185 |         return reject(reg, out, txid, SU_REV_STALE, SU_E_STALE_REVISION, msg);
+      |                                                                          ~~~
+In function ‘snprintf’,
+    inlined from ‘reject’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:90:5,
+    inlined from ‘su_reload_install’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:185:16:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin_snprintf’ output between 1 and 256 bytes into a destination of size 160
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c: In function ‘su_reload_install’:
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:90:34: error: ‘%s’ directive output may be truncated writing up to 255 bytes into a region of size 160 [-Werror=format-truncation=]
+   90 |     snprintf(text, sizeof text, "%s", reason);
+      |                                  ^~
+......
+  135 |         return reject(reg, out, txid, SU_REV_REJECTED, st, msg);
+      |                                                            ~~~
+In function ‘snprintf’,
+    inlined from ‘reject’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:90:5,
+    inlined from ‘su_reload_install’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:135:16:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin_snprintf’ output between 1 and 256 bytes into a destination of size 160
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c: In function ‘su_reload_install’:
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:90:34: error: ‘%s’ directive output may be truncated writing up to 255 bytes into a region of size 160 [-Werror=format-truncation=]
+   90 |     snprintf(text, sizeof text, "%s", reason);
+      |                                  ^~
+......
+  128 |         return reject(reg, out, txid, SU_REV_STALE, SU_E_STALE_REVISION, msg);
+      |                                                                          ~~~
+In function ‘snprintf’,
+    inlined from ‘reject’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:90:5,
+    inlined from ‘su_reload_install’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/runtime/reload.c:128:16:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin_snprintf’ output between 1 and 256 bytes into a destination of size 160
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+cc1: all warnings being treated as errors
+[27/41] Building C object CMakeFiles/su_snapshot.dir/src/runtime/checkpoint.c.o
+[28/41] Building C object CMakeFiles/test_control.dir/tests/control/test_control.c.o
+FAILED: CMakeFiles/test_control.dir/tests/control/test_control.c.o 
+/usr/bin/cc -D_POSIX_C_SOURCE=200809L -I/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src -I/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/include -I/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/src/platform -O3 -DNDEBUG -std=c17 -Wall -Wextra -Werror -pedantic -MD -MT CMakeFiles/test_control.dir/tests/control/test_control.c.o -MF CMakeFiles/test_control.dir/tests/control/test_control.c.o.d -o CMakeFiles/test_control.dir/tests/control/test_control.c.o -c /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/tests/control/test_control.c
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/tests/control/test_control.c: In function ‘main’:
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/tests/control/test_control.c:300:44: error: ‘%s’ directive output may be truncated writing up to 3999 bytes into a region of size 1024 [-Werror=format-truncation=]
+  300 |     snprintf(link_path, sizeof link_path, "%s/escape.json", scratch);
+      |                                            ^~
+......
+  521 |     test_symlink_escape(&cfg, scratch_dir, root);
+      |                               ~~~~~~~~~~~   
+In file included from /usr/include/stdio.h:980,
+                 from /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/tests/control/test_control.c:19:
+In function ‘snprintf’,
+    inlined from ‘test_symlink_escape’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/tests/control/test_control.c:300:5,
+    inlined from ‘main’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/tests/control/test_control.c:521:5:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin___snprintf_chk’ output between 13 and 4012 bytes into a destination of size 1024
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/tests/control/test_control.c: In function ‘main’:
+/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/tests/control/test_control.c:301:38: error: ‘%s’ directive output may be truncated writing up to 4095 bytes into a region of size 1024 [-Werror=format-truncation=]
+  301 |     snprintf(target, sizeof target, "%s/examples/movement.capsule.json", root);
+      |                                      ^~
+In function ‘snprintf’,
+    inlined from ‘test_symlink_escape’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/tests/control/test_control.c:301:5,
+    inlined from ‘main’ at /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/tests/control/test_control.c:521:5:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin___snprintf_chk’ output between 32 and 4127 bytes into a destination of size 1024
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+cc1: all warnings being treated as errors
+[29/41] Building C object CMakeFiles/su_snapshot.dir/src/world/snapshot.c.o
+[30/41] Building C object CMakeFiles/su_agent.dir/src/runtime/worker.c.o
+[31/41] Building C object CMakeFiles/test_snapshot.dir/tests/snapshot/test_snapshot.c.o
+ninja: build stopped: subcommand failed.
+error: command exited with 1

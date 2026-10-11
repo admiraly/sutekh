@@ -1,0 +1,133 @@
+{
+ "clean_build": [
+  {
+   "build_ms": 921.079847,
+   "compile_steps": 26,
+   "configure_ms": 289.841104,
+   "link_steps": 15,
+   "repeat": 0,
+   "total_ms": 1210.920951
+  },
+  {
+   "build_ms": 966.349241,
+   "compile_steps": 26,
+   "configure_ms": 283.712516,
+   "link_steps": 15,
+   "repeat": 1,
+   "total_ms": 1250.061757
+  },
+  {
+   "build_ms": 1089.609553,
+   "compile_steps": 26,
+   "configure_ms": 291.505277,
+   "link_steps": 15,
+   "repeat": 2,
+   "total_ms": 1381.11483
+  }
+ ],
+ "commands": [
+  "cmake -S <repo> -B <scratch>/native-build -G Ninja -DCMAKE_BUILD_TYPE=Debug   (dev.py configure equivalent)",
+  "cmake --build <scratch>/native-build --parallel   (dev.py build equivalent)",
+  "touch src/vm/su_vm.c ; cmake --build ... --parallel",
+  "touch include/sutekh/ir.h ; cmake --build ... --parallel"
+ ],
+ "dependency_builds": "none: the project has no external dependencies to build",
+ "incremental_ir_h": [
+  {
+   "build_ms": 889.833737,
+   "compile_steps": 17,
+   "link_steps": 14,
+   "repeat": 0
+  },
+  {
+   "build_ms": 766.366244,
+   "compile_steps": 17,
+   "link_steps": 14,
+   "repeat": 1
+  },
+  {
+   "build_ms": 806.644442,
+   "compile_steps": 17,
+   "link_steps": 14,
+   "repeat": 2
+  }
+ ],
+ "incremental_su_vm_c": [
+  {
+   "build_ms": 292.156777,
+   "compile_steps": 1,
+   "link_steps": 7,
+   "repeat": 0
+  },
+  {
+   "build_ms": 262.567453,
+   "compile_steps": 1,
+   "link_steps": 7,
+   "repeat": 1
+  },
+  {
+   "build_ms": 281.737311,
+   "compile_steps": 1,
+   "link_steps": 7,
+   "repeat": 2
+  }
+ ],
+ "reason": null,
+ "report": "M0-10 native build latency (separate from live edit latency)",
+ "scratch_build_dir": "<scratch outside repo>",
+ "source": {
+  "git_head": "b7958792ba6bba6013db3bb6ae4b07d4c8ab3102"
+ },
+ "status": "passed",
+ "summary": {
+  "clean_total_ms": {
+   "max": 1089.609553,
+   "median": 966.349241,
+   "min": 921.079847,
+   "n": 3,
+   "p95": null,
+   "p95_reason": "n is below 20, so a p95 would not be meaningful; min/median/max and raw values are reported",
+   "values": [
+    921.079847,
+    966.349241,
+    1089.609553
+   ]
+  },
+  "incremental_ir_h_ms": {
+   "max": 889.833737,
+   "median": 806.644442,
+   "min": 766.366244,
+   "n": 3,
+   "p95": null,
+   "p95_reason": "n is below 20, so a p95 would not be meaningful; min/median/max and raw values are reported",
+   "values": [
+    889.833737,
+    766.366244,
+    806.644442
+   ]
+  },
+  "incremental_su_vm_c_ms": {
+   "max": 292.156777,
+   "median": 281.737311,
+   "min": 262.567453,
+   "n": 3,
+   "p95": null,
+   "p95_reason": "n is below 20, so a p95 would not be meaningful; min/median/max and raw values are reported",
+   "values": [
+    292.156777,
+    262.567453,
+    281.737311
+   ]
+  }
+ },
+ "toolchain": {
+  "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "cmake": "cmake version 3.28.3",
+  "ninja": "1.11.1"
+ },
+ "touch_note": "touch changes mtime only; file contents are unchanged (git sees no content change)",
+ "touched_paths": [
+  "include/sutekh/ir.h",
+  "src/vm/su_vm.c"
+ ]
+}

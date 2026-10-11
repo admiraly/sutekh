@@ -1,0 +1,22 @@
+M0 harness 43f3e71e1334 against build/sutekh (sha256 f00aa1fe3a41b005b76a6d62cd2e416f610e16b0699772e6a77263b6a803d37a)
+probe: present
+
+T00  passed       Clean bootstrap
+T01  passed       Reference movement
+T02  passed       Empty and awkward counts
+T03  passed       Numeric edges
+T04  unavailable  Invalid input matrix
+       7 of 14 negative cases cannot be expressed: capsule.submit takes only capsule_path and the engine binds each capsule to its own source field; the other cases were checked and all rejected as expected
+T05  passed       Successful code-only swap
+T06  passed       Failed swap
+T07  passed       Stale candidate
+T08  passed       Snapshot round trip
+T09  passed       Working-root failure
+T10  passed       Candidate isolation
+T11  passed       Repeated reload
+T12  passed       No native gameplay build
+T13  passed       Latency decomposition
+T14  passed       Deterministic fixture repeat
+T15  passed       Structured protocol
+
+totals: passed=15, failed=0, not_run=0, unavailable=1

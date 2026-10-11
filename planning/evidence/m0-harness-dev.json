@@ -1,0 +1,4191 @@
+{
+  "binary": {
+    "path": "build/sutekh",
+    "sha256": "f00aa1fe3a41b005b76a6d62cd2e416f610e16b0699772e6a77263b6a803d37a"
+  },
+  "generated_utc": "2026-10-11T15:09:52+00:00",
+  "harness": {
+    "argv": [
+      "tests/harness/run_m0.py",
+      "--binary",
+      "build/sutekh",
+      "--report-dir",
+      "/tmp/claude-0/-home-user-sutekh/82533bc6-e6ca-564a-ba43-39dd3091bafa/scratchpad/harness"
+    ],
+    "path": "tests/harness/run_m0.py",
+    "python": "3.13.16",
+    "reference_eval_sha256": "b9919314fd9ee2526d163e27f5a698bf8e086d3b9497e0824fd421790eec04dc",
+    "sha256": "43f3e71e133486d319f925441c8d350158a56738242f997330f07084b458de27"
+  },
+  "note": "passed means every check ran and matched independently derived expectations; no engine-provided flag was trusted.",
+  "probe": {
+    "capabilities": [
+      "candidate.evaluate",
+      "candidate.install",
+      "candidate.status",
+      "capsule.submit",
+      "engine.info",
+      "world.create",
+      "world.inspect",
+      "world.restore",
+      "world.snapshot",
+      "world.step"
+    ],
+    "info": {
+      "abi_version": 1,
+      "active_worker": {
+        "pid": 0
+      },
+      "artifact_format": 1,
+      "capabilities": [
+        "engine.info",
+        "capsule.submit",
+        "candidate.status",
+        "candidate.evaluate",
+        "candidate.install",
+        "world.create",
+        "world.inspect",
+        "world.step",
+        "world.snapshot",
+        "world.restore"
+      ],
+      "engine_version": "0.1.0",
+      "ir_version": "0.1",
+      "numeric_profile": "u32_mod_v1",
+      "process": {
+        "pid": 11756,
+        "role": "supervisor"
+      },
+      "protocol": "0.1",
+      "runtime_mode": "headless-m0-posix",
+      "transport": "stdio"
+    },
+    "reason": "",
+    "reply": "{\"protocol\":\"0.1\",\"id\":\"m0-probe-1\",\"ok\":true,\"result\":{\"engine_version\":\"0.1.0\",\"protocol\":\"0.1\",\"ir_version\":\"0.1\",\"abi_version\":1,\"artifact_format\":1,\"numeric_profile\":\"u32_mod_v1\",\"runtime_mode\":\"headless-m0-posix\",\"transport\":\"stdio\",\"process\":{\"role\":\"supervisor\",\"pid\":11756},\"active_worker\":{\"pid\":0},\"capabilities\":[\"engine.info\",\"capsule.submit\",\"candidate.status\",\"candidate.evaluate\",\"candidate.install\",\"world.create\",\"world.inspect\",\"world.step\",\"world.snapshot\",\"world.restore\"]}}",
+    "request": "{\"protocol\":\"0.1\",\"id\":\"m0-probe-1\",\"method\":\"engine.info\",\"params\":{}}",
+    "serve_returncode": 0,
+    "state": "present"
+  },
+  "repo_head": "b7958792ba6bba6013db3bb6ae4b07d4c8ab3102",
+  "report_format": "m0-harness/0.1",
+  "summary": {
+    "failed": 0,
+    "not_run": 0,
+    "passed": 15,
+    "unavailable": 1
+  },
+  "tests": [
+    {
+      "checks": [
+        {
+          "actual": 0,
+          "expected": 0,
+          "name": "documented build command returncode",
+          "ok": true
+        },
+        {
+          "actual": 0,
+          "expected": 0,
+          "name": "--version returncode",
+          "ok": true
+        },
+        {
+          "actual": "1",
+          "expected": "1",
+          "name": "abi_version equals include/sutekh/abi.h",
+          "ok": true
+        },
+        {
+          "actual": "0.1",
+          "expected": "0.1",
+          "name": "ir_version equals include/sutekh/ir.h",
+          "ok": true
+        },
+        {
+          "actual": "1",
+          "expected": "1",
+          "name": "artifact_format equals include/sutekh/ir.h",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "sutekh version line present",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/usr/bin/python3",
+            "tools/dev.py",
+            "build"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "command",
+          "output_tail": "tool versions:\n  python: 3.13.16\n  cmake: cmake version 3.28.3\n  ninja: 1.11.1\n  compiler: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\n+ cmake -S /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe -B /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build -DCMAKE_BUILD_TYPE=Debug -G Ninja\n-- Configuring done (0.0s)\n-- Generating done (0.0s)\n-- Build files have been written to: /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build\n+ cmake --build /home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build --parallel\n[0/2] Re-checking globbed directories...\nninja: no work to do.\n",
+          "returncode": 0,
+          "stdout_sha256": "92e1fad671c5cab3abdfd3bc1adee6740c39666f9e262ba1f15eb1612c60e8e6"
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "--version"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "command",
+          "output_tail": "sutekh 0.1.0\nabi_version 1\nir_version 0.1\nartifact_format 1\nbuild_type Debug\ncompiler GNU 13.3.0\npid 11755\n",
+          "returncode": 0,
+          "stdout_sha256": "a8ef01f1c41eff99b764adefad2c19efa1ce5a76d96616f90a3df0ad09b536d0"
+        }
+      ],
+      "details": {
+        "binary": {
+          "path": "build/sutekh",
+          "sha256": "f00aa1fe3a41b005b76a6d62cd2e416f610e16b0699772e6a77263b6a803d37a"
+        },
+        "tool_versions": {
+          "cmake": "cmake version 3.28.3",
+          "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+          "ninja": "1.11.1",
+          "python": "3.13.16"
+        },
+        "version_output": "sutekh 0.1.0\nabi_version 1\nir_version 0.1\nartifact_format 1\nbuild_type Debug\ncompiler GNU 13.3.0\npid 11755"
+      },
+      "id": "T00",
+      "inputs": {
+        "CMakeLists.txt": "3c69b47d1ebdcf678a146dd09172ab3eb5672bf79bd41ff645443cd842906f6c",
+        "build/sutekh": "f00aa1fe3a41b005b76a6d62cd2e416f610e16b0699772e6a77263b6a803d37a",
+        "tools/dev.py": "a8e88985c125a3b92d6367e83d08ed87966b8d52536be484c2d547dfe5697da6"
+      },
+      "name": "Clean bootstrap",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "mismatches": [],
+          "name": "fixture expectation identity_zero_ticks agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation one_tick_including_wrap agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation three_ticks_from_original agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T01 movement tick 0",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T01 movement tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T01 movement tick 3",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T01 serve",
+          "pid": 11760,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {},
+      "id": "T01",
+      "inputs": {
+        "examples/movement.capsule.json": "0530f651ebd04c326d16d46b711a347ef00e756bc629f30c53a19790add995f6",
+        "examples/movement.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "examples/movement.test.json": "b25c93d1d3a3b0d89d6292db283e86e17d7456197af78c8363ae8545603f93ad",
+        "examples/world.json": "945f773de8f0e460a2243a1fac99e74725bd5c74d2ec9d95ad722452003a4e15"
+      },
+      "name": "Reference movement",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "mismatches": [],
+          "name": "fixture expectation n0_ticks1 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n0_ticks1 tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n0_ticks3 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n0_ticks3 tick 3",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n1_ticks1 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n1_ticks1 tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n1_ticks3 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n1_ticks3 tick 3",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n7_ticks1 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n7_ticks1 tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n7_ticks3 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n7_ticks3 tick 3",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n8_ticks1 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n8_ticks1 tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n8_ticks3 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n8_ticks3 tick 3",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n9_ticks1 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n9_ticks1 tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n9_ticks3 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n9_ticks3 tick 3",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n1024_ticks1 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n1024_ticks1 tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation n1024_ticks3 agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "n1024_ticks3 tick 3",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T02 serve world_0",
+          "pid": 11770,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T02 serve world_1",
+          "pid": 11780,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T02 serve world_7",
+          "pid": 11790,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T02 serve world_8",
+          "pid": 11800,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T02 serve world_9",
+          "pid": 11810,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T02 serve world_1024",
+          "pid": 11820,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {
+        "row_counts_checked_all_rows": {
+          "0": [
+            1,
+            3
+          ],
+          "1": [
+            1,
+            3
+          ],
+          "7": [
+            1,
+            3
+          ],
+          "8": [
+            1,
+            3
+          ],
+          "9": [
+            1,
+            3
+          ],
+          "1024": [
+            1,
+            3
+          ]
+        }
+      },
+      "id": "T02",
+      "inputs": {
+        "tests/fixtures/t02/movement.capsule.json": "2c4d71d1db3fd916ea701b11c8507eeabe40dafc5624370f2e3cb97396bb5266",
+        "tests/fixtures/t02/movement.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/t02/movement_0.test.json": "25685f8a78ba257281bf6c4c70379f16760adb751a5299ac6a6c1fd59c103e72",
+        "tests/fixtures/t02/movement_1.test.json": "37afa5d1e430ad45cc45023b3ac46b2090c8e4355b688b11612efebc5c27f903",
+        "tests/fixtures/t02/movement_1024.test.json": "a8a932a6952312faae0ad3c8f5c57156c382aba822f1abeba14add25480d8a4d",
+        "tests/fixtures/t02/movement_7.test.json": "815703b184b5b2712430822484627843818bc7c970d9f78d841804ba61a9fc53",
+        "tests/fixtures/t02/movement_8.test.json": "1a49e8759597f46fa1d863990f8ff4c9357189589d69f6b78f6284818d4346d8",
+        "tests/fixtures/t02/movement_9.test.json": "860aece93882a1824c96e7938024e7acb10dae59ad07446812bb3c6b7b23a4bc",
+        "tests/fixtures/t02/world_0.json": "05827fd1706b61725c95a3497a74d6396ffc5180bf542ae8daa1d78859b3ff15",
+        "tests/fixtures/t02/world_1.json": "77d79c3cc5c8197c839eb2364d0c08b40ca5d2baafb24305fa33a314f5395da0",
+        "tests/fixtures/t02/world_1024.json": "ffa79a6632dea33af7078b816e4bfd20b06e029f28672b5667dcd60c81a4c0ee",
+        "tests/fixtures/t02/world_7.json": "90d8f03330c0d9e1b77e39779b947ad7b1aedf5707963cca1a1f9e5cb2b1b513",
+        "tests/fixtures/t02/world_8.json": "8453e12fe6b145194a8a4a405f33998ad4695c7f3cef55c8052f8fe5e14fb092",
+        "tests/fixtures/t02/world_9.json": "4da950aa51f6dce37ada53cea5daed0c90a11f506e0717ecef8c3fcf2d418b0e"
+      },
+      "name": "Empty and awkward counts",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "mismatches": [],
+          "name": "fixture expectation eq_edges_one_tick agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "eq_edges_one_tick tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation lt_edges_one_tick agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "lt_edges_one_tick tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation mul_overflow_one_tick agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "mul_overflow_one_tick tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation select_min_one_tick agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "select_min_one_tick tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation sub_underflow_one_tick agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "sub_underflow_one_tick tick 1",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "fixture expectation wrap_add_one_tick agrees with reference evaluator",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "wrap_add_one_tick tick 1",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T03 serve eq_edges",
+          "pid": 11836,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T03 serve lt_edges",
+          "pid": 11843,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T03 serve mul_overflow",
+          "pid": 11850,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T03 serve select_min",
+          "pid": 11857,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T03 serve sub_underflow",
+          "pid": 11864,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T03 serve wrap_add",
+          "pid": 11871,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {
+        "cases_checked": [
+          "eq_edges",
+          "lt_edges",
+          "mul_overflow",
+          "select_min",
+          "sub_underflow",
+          "wrap_add"
+        ]
+      },
+      "id": "T03",
+      "inputs": {
+        "tests/fixtures/t03/eq_edges/capsule.json": "6e43dfb521482e984c285bb9b5e463987f83a0d62030b381c40927e34efa13a6",
+        "tests/fixtures/t03/eq_edges/program.lir.json": "cbe2be32a9e24a7fe27e486f5e35b288ee56db55e55b45d3b955e85b1efb54c5",
+        "tests/fixtures/t03/eq_edges/test.json": "adebde7401b5ae5be5b5b7f6d265be3f7293d6765d5450f8be71d72ab4af07ea",
+        "tests/fixtures/t03/eq_edges/world.json": "602fc9710918f907f2f9f5eaafe9140b35b8596680e7c07f35c22056a640b150",
+        "tests/fixtures/t03/lt_edges/capsule.json": "6e43dfb521482e984c285bb9b5e463987f83a0d62030b381c40927e34efa13a6",
+        "tests/fixtures/t03/lt_edges/program.lir.json": "7ddd41217b2860ac1d5117b460e33798d5772ea84f96c5531e6a8d8edbdbffb7",
+        "tests/fixtures/t03/lt_edges/test.json": "53530f634018bbcc884c581c69905411a0fd33f260454630876d48a08c0d2c12",
+        "tests/fixtures/t03/lt_edges/world.json": "602fc9710918f907f2f9f5eaafe9140b35b8596680e7c07f35c22056a640b150",
+        "tests/fixtures/t03/mul_overflow/capsule.json": "6e43dfb521482e984c285bb9b5e463987f83a0d62030b381c40927e34efa13a6",
+        "tests/fixtures/t03/mul_overflow/program.lir.json": "6414593a83ceb88b8cec1feb624dcadda83dca22702cc9cd71f1010ce2984713",
+        "tests/fixtures/t03/mul_overflow/test.json": "d87b510c2660df81f374221e1fe85c5a6fad874e0cb128cdc5c7896eacc2f4eb",
+        "tests/fixtures/t03/mul_overflow/world.json": "0d1425157808470d33204263bb8a5b92b0c07a0d3a896421a9db3cebae48ee5f",
+        "tests/fixtures/t03/select_min/capsule.json": "6e43dfb521482e984c285bb9b5e463987f83a0d62030b381c40927e34efa13a6",
+        "tests/fixtures/t03/select_min/program.lir.json": "e2c1676bbddf663e98a7035f977d2a02c7b8ad94ebfca00edaf1604756bdf927",
+        "tests/fixtures/t03/select_min/test.json": "bc8dafd62555672e8130778c0d93e19f6a62657b1f37ff4436479d77cdd28f13",
+        "tests/fixtures/t03/select_min/world.json": "e1d11c69b0ec6cf28fd8fc9b4111fbedaebb6758383b4100da4636b651e19a96",
+        "tests/fixtures/t03/sub_underflow/capsule.json": "6e43dfb521482e984c285bb9b5e463987f83a0d62030b381c40927e34efa13a6",
+        "tests/fixtures/t03/sub_underflow/program.lir.json": "7e1dca8bcada34b9af40046cb73555463f2d8742f5d5d41deba090c2bc874a33",
+        "tests/fixtures/t03/sub_underflow/test.json": "9df931bf7df5b0909e99d7c57408fd888270bc097973e6a0734645ba6c3d609f",
+        "tests/fixtures/t03/sub_underflow/world.json": "12f54cd74267a2ded27d703705aa09bc7159aee14d66c4799e011ad93a6f92ba",
+        "tests/fixtures/t03/wrap_add/capsule.json": "6e43dfb521482e984c285bb9b5e463987f83a0d62030b381c40927e34efa13a6",
+        "tests/fixtures/t03/wrap_add/program.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/t03/wrap_add/test.json": "537477b86c5ab934130e5f941c8066ef34bdb4a2ee78f0395bb0c6ca20430661",
+        "tests/fixtures/t03/wrap_add/world.json": "cc9fae782e9cd099e5fc8e8c183206d929a71e298f485a546680861af6550c81"
+      },
+      "name": "Numeric edges",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "actual": true,
+          "expected": true,
+          "name": "control: valid movement candidate accepted",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "negative tests/fixtures/invalid/too_many_instructions.lir.json -> SU_E_RESOURCE_LIMIT",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "negative tests/fixtures/invalid/nested_depth_33.lir.json -> SU_E_RESOURCE_LIMIT",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "negative tests/fixtures/invalid/store_same_field_twice.lir.json -> SU_E_UNDECLARED_WRITE",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "negative tests/fixtures/invalid/denied_read.lir.json -> SU_E_UNDECLARED_READ",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "negative tests/fixtures/invalid/bool_as_u32.lir.json -> SU_E_TYPE",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "negative tests/fixtures/invalid/fractional_constant.lir.json -> SU_E_TYPE",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "negative tests/fixtures/invalid/constant_4294967296.lir.json -> SU_E_TYPE",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T04 serve",
+          "pid": 11878,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {
+        "negative_cases": [
+          {
+            "actual": "SU_E_RESOURCE_LIMIT",
+            "expected": "SU_E_RESOURCE_LIMIT",
+            "ok": true,
+            "source": "tests/fixtures/invalid/too_many_instructions.lir.json"
+          },
+          {
+            "actual": "SU_E_RESOURCE_LIMIT",
+            "expected": "SU_E_RESOURCE_LIMIT",
+            "ok": true,
+            "source": "tests/fixtures/invalid/nested_depth_33.lir.json"
+          },
+          {
+            "actual": "SU_E_UNDECLARED_WRITE",
+            "expected": "SU_E_UNDECLARED_WRITE",
+            "ok": true,
+            "source": "tests/fixtures/invalid/store_same_field_twice.lir.json"
+          },
+          {
+            "actual": "SU_E_UNDECLARED_READ",
+            "expected": "SU_E_UNDECLARED_READ",
+            "ok": true,
+            "source": "tests/fixtures/invalid/denied_read.lir.json"
+          },
+          {
+            "actual": "SU_E_TYPE",
+            "expected": "SU_E_TYPE",
+            "ok": true,
+            "source": "tests/fixtures/invalid/bool_as_u32.lir.json"
+          },
+          {
+            "actual": "SU_E_TYPE",
+            "expected": "SU_E_TYPE",
+            "ok": true,
+            "source": "tests/fixtures/invalid/fractional_constant.lir.json"
+          },
+          {
+            "actual": "SU_E_TYPE",
+            "expected": "SU_E_TYPE",
+            "ok": true,
+            "source": "tests/fixtures/invalid/constant_4294967296.lir.json"
+          }
+        ],
+        "not_expressible": [
+          "examples/invalid/unknown_opcode.lir.json (capsule examples/movement.capsule.json binds examples/movement.lir.json)",
+          "examples/invalid/undefined_register.lir.json (capsule examples/movement.capsule.json binds examples/movement.lir.json)",
+          "examples/invalid/duplicate_register.lir.json (capsule examples/movement.capsule.json binds examples/movement.lir.json)",
+          "examples/invalid/undeclared_write.lir.json (capsule examples/movement.capsule.json binds examples/movement.lir.json)",
+          "examples/invalid/negative_u32.lir.json (capsule examples/movement.capsule.json binds examples/movement.lir.json)",
+          "examples/invalid/wrong_store_type.lir.json (capsule examples/movement.capsule.json binds examples/movement.lir.json)",
+          "examples/invalid/duplicate_key.lir.json (capsule examples/movement.capsule.json binds examples/movement.lir.json)"
+        ]
+      },
+      "id": "T04",
+      "inputs": {
+        "examples/invalid/duplicate_key.lir.json": "57ce69de5dcf79bef4c1a19c314baeb00cd3af6da3e995e99dcd57ccd8ed15fc",
+        "examples/invalid/duplicate_register.lir.json": "376ab377f184d62ffbf6fc3cd01006fe4928d274820de9d508c3ecb7ba0df4f3",
+        "examples/invalid/negative_u32.lir.json": "7ffac23bf403f9189a38d0e365fd664b9764120d37615026c0ace1c6f36ab3e9",
+        "examples/invalid/undeclared_write.lir.json": "f0253dc52d35f2b8af974e7115c4902cf4e5655931e27280142bf7a667294e7b",
+        "examples/invalid/undefined_register.lir.json": "1075a22f637737611341db006886c541c9cb4c676fd7fa678351301994e20f53",
+        "examples/invalid/unknown_opcode.lir.json": "6d60eb453460d20c96fb8436f86c326414721fb28022cdd609c0a9e48981679d",
+        "examples/invalid/wrong_store_type.lir.json": "7d6de74d15b4c1353bc656815a621bdda9070014a6171559efeeba374bb73262",
+        "examples/movement.capsule.json": "0530f651ebd04c326d16d46b711a347ef00e756bc629f30c53a19790add995f6",
+        "examples/negative_cases.json": "bfe56086818448ca39ab7e75e2447f7559f5a823239cc5a3b972bb3a0f6b99f8",
+        "tests/fixtures/invalid/bool_as_u32.lir.json": "db7a39d828dcf8df63d0101e7a3caa02fa847c6cdff543ff5483d6e8e625ef6f",
+        "tests/fixtures/invalid/bound_bool_as_u32.capsule.json": "6702425f3fb2f94564599dd997e77089287c2062ac343f844aae18eaf262eb7d",
+        "tests/fixtures/invalid/bound_constant_4294967296.capsule.json": "f28ef57143c63ce6544362b6d790d6c4556fd193b2b433299f50a105cd74a4a9",
+        "tests/fixtures/invalid/bound_fractional_constant.capsule.json": "629e61fc9ae4f255e56716a41b24cd3af4757acda6b3cac1f2514b90ec71849f",
+        "tests/fixtures/invalid/bound_manifest.json": "cb9d443d2a4cc73bb5ccc6d0869f37950e8779495fa484a607e1f750fb60eefb",
+        "tests/fixtures/invalid/bound_nested_depth_33.capsule.json": "7a4413aaa90c0e7cebd789c3abd3f902314e7981f347bbecae6221dc68c12e55",
+        "tests/fixtures/invalid/bound_store_same_field_twice.capsule.json": "da592d38d4110784a1ca56973065c0bec8a0a59f15e5034be8e0d1028ea67204",
+        "tests/fixtures/invalid/bound_too_many_instructions.capsule.json": "2312884e0a60b94284812cbf1779426ce0a1bfbffc7eeb8eaf67d69cd0f45463",
+        "tests/fixtures/invalid/constant_4294967296.lir.json": "c8551c42bd2bf0d3db94ada1d7c4542c9e462080d4eca9fb3a41bfa5b9a95a5f",
+        "tests/fixtures/invalid/denied_read.capsule.json": "c9f5528ada4c11d65be9c722165a724a739f7bd386d35f259d1aa601c1b096ed",
+        "tests/fixtures/invalid/denied_read.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/invalid/fractional_constant.lir.json": "65c3369d8eac13ce95ec952dd7f34f8a6e4629cd7c0b34151fa71243292230b2",
+        "tests/fixtures/invalid/movement.capsule.json": "af95a1502e587f13fc4c980902c004b3584f48c5efe34f7bdc7be028762947d8",
+        "tests/fixtures/invalid/nested_depth_33.lir.json": "435c17ccd848f1a756bae1bbb3ca56063ecb3b7aad74432140fee50c29dca6d4",
+        "tests/fixtures/invalid/store_same_field_twice.lir.json": "e519129b628fa69841a0fe574e4a340a9f5a0497ceac566e503bc4e04dc37523",
+        "tests/fixtures/invalid/too_many_instructions.lir.json": "958f39c489e6c94f8aab5a190ec196808beda3b9938eed88eeb21752bf2e9503",
+        "tests/fixtures/negative_cases.json": "0fda186a3c1dd83e862aebeede3260e68ad655fe2d8982e26611af09b9ee4203"
+      },
+      "name": "Invalid input matrix",
+      "reason": "7 of 14 negative cases cannot be expressed: capsule.submit takes only capsule_path and the engine binds each capsule to its own source field; the other cases were checked and all rejected as expected",
+      "status": "unavailable"
+    },
+    {
+      "checks": [
+        {
+          "actual": 11899,
+          "expected": 11899,
+          "name": "engine.info pid is the serve process",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T05 tick 0",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T05 v1 at effective tick 2",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "worker pid reported before install",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "evaluation of candidate-1 passed",
+          "ok": true
+        },
+        {
+          "actual": 4,
+          "expected": 4,
+          "name": "evaluation of candidate-1 ran every case",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T05 install does not step or change the world",
+          "ok": true
+        },
+        {
+          "actual": {
+            "position_x": [
+              2,
+              5,
+              1,
+              7
+            ],
+            "velocity_x": [
+              1,
+              2,
+              1,
+              0
+            ]
+          },
+          "expected": {
+            "position_x": [
+              2,
+              5,
+              1,
+              7
+            ],
+            "velocity_x": [
+              1,
+              2,
+              1,
+              0
+            ]
+          },
+          "name": "T05 install leaves every column unchanged",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "T05 semantic manifest changes at install",
+          "ok": true
+        },
+        {
+          "actual": 11904,
+          "expected": 11904,
+          "name": "T05 worker pid unchanged by install",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "T05 v1 and v2 differ at the first post-swap tick",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T05 tick 3 (v2 from effective tick 2)",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T05 tick 4 (v2 from effective tick 2)",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T05 fixture tick 3 equals v2 applied to tick 2",
+          "ok": true
+        },
+        {
+          "actual": 11899,
+          "expected": 11899,
+          "name": "engine.info pid is the serve process",
+          "ok": true
+        },
+        {
+          "actual": 11899,
+          "expected": 11899,
+          "name": "T05 supervisor pid preserved",
+          "ok": true
+        },
+        {
+          "actual": 11904,
+          "expected": 11904,
+          "name": "T05 worker pid preserved",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T05 serve",
+          "pid": 11899,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {},
+      "id": "T05",
+      "inputs": {
+        "tests/fixtures/edit/movement.capsule.json": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+        "tests/fixtures/edit/movement.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/edit/movement_v2.capsule.json": "0e624066189ca11fef79ed3079cf260e770d5947fa43b19145042db899923f0c",
+        "tests/fixtures/edit/movement_v2.lir.json": "b6e89eb57a098c50c3a3f5f5332af762b275675f6fef218edb87372b5720e5d5",
+        "tests/fixtures/edit/swap_schedule.json": "ff390f1d28059ce3ff6614614818d7ab60c50c28b628dbd8ead242ae52f23353"
+      },
+      "name": "Successful code-only swap",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "actual": "failed",
+          "expected": "failed",
+          "name": "evaluation with a wrong expectation reports failed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "install refused with SU_E_CANDIDATE_FAILED",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "failed candidate is not installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "failed swap leaves committed state unchanged",
+          "ok": true
+        },
+        {
+          "actual": [
+            {
+              "capsule_hash": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+              "installed_tick": 0,
+              "semantic_hash": "b9e6bd62b4c9aff3e27c114b14f64f02c074c3ba529c3729bef42f15955065b6",
+              "source_hash": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+              "system_id": "demo.movement",
+              "system_revision": 1,
+              "txid": 1
+            }
+          ],
+          "expected": [
+            {
+              "capsule_hash": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+              "installed_tick": 0,
+              "semantic_hash": "b9e6bd62b4c9aff3e27c114b14f64f02c074c3ba529c3729bef42f15955065b6",
+              "source_hash": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+              "system_id": "demo.movement",
+              "system_revision": 1,
+              "txid": 1
+            }
+          ],
+          "name": "active semantic manifest unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "active code is still v1 after failed swap",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T06 serve",
+          "pid": 11919,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {},
+      "id": "T06",
+      "inputs": {
+        "tests/fixtures/edit/candidates/manifest.json": "cc37f36d10415337fdd2d34a5947347b65743746258b1916e1f68729b0dfb7d3",
+        "tests/fixtures/edit/candidates/wrong_permission/capsule.json": "2f8c210ca2cd95ee5c84f187cb71a2dd2058cb111fa4378153c3675b088a566e",
+        "tests/fixtures/edit/candidates/wrong_permission/program.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/edit/movement.capsule.json": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+        "tests/fixtures/edit/movement.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/edit/movement_v2.capsule.json": "0e624066189ca11fef79ed3079cf260e770d5947fa43b19145042db899923f0c",
+        "tests/fixtures/edit/swap_schedule.json": "ff390f1d28059ce3ff6614614818d7ab60c50c28b628dbd8ead242ae52f23353"
+      },
+      "name": "Failed swap",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "evaluation of candidate-1 passed",
+          "ok": true
+        },
+        {
+          "actual": 4,
+          "expected": 4,
+          "name": "evaluation of candidate-1 ran every case",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "install refused with SU_E_STALE_REVISION",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "actual": [
+            {
+              "capsule_hash": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+              "installed_tick": 0,
+              "semantic_hash": "b9e6bd62b4c9aff3e27c114b14f64f02c074c3ba529c3729bef42f15955065b6",
+              "source_hash": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+              "system_id": "demo.movement",
+              "system_revision": 1,
+              "txid": 1
+            }
+          ],
+          "expected": [
+            {
+              "capsule_hash": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+              "installed_tick": 0,
+              "semantic_hash": "b9e6bd62b4c9aff3e27c114b14f64f02c074c3ba529c3729bef42f15955065b6",
+              "source_hash": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+              "system_id": "demo.movement",
+              "system_revision": 1,
+              "txid": 1
+            }
+          ],
+          "name": "stale rejection leaves semantic manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": 1,
+          "expected": 1,
+          "name": "control install at current revision leaves tick unchanged",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T07 serve",
+          "pid": 11935,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {},
+      "id": "T07",
+      "inputs": {
+        "tests/fixtures/edit/candidates/manifest.json": "cc37f36d10415337fdd2d34a5947347b65743746258b1916e1f68729b0dfb7d3",
+        "tests/fixtures/edit/movement_v2.capsule.json": "0e624066189ca11fef79ed3079cf260e770d5947fa43b19145042db899923f0c",
+        "tests/fixtures/edit/movement_v2.lir.json": "b6e89eb57a098c50c3a3f5f5332af762b275675f6fef218edb87372b5720e5d5"
+      },
+      "name": "Stale candidate",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "mismatches": [],
+          "name": "T08 state at tick 2",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T08 state at tick 4 before restore",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "restore assigns a new revision",
+          "ok": true
+        },
+        {
+          "actual": "f623d7d29431e96ac977e87462723571b2a981fbbc428a288f927e0b02bef281",
+          "expected": "f623d7d29431e96ac977e87462723571b2a981fbbc428a288f927e0b02bef281",
+          "name": "restored_from names the snapshot",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T08 restored tick and columns",
+          "ok": true
+        },
+        {
+          "actual": [
+            {
+              "capsule_hash": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+              "installed_tick": 0,
+              "semantic_hash": "b9e6bd62b4c9aff3e27c114b14f64f02c074c3ba529c3729bef42f15955065b6",
+              "source_hash": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+              "system_id": "demo.movement",
+              "system_revision": 1,
+              "txid": 1
+            }
+          ],
+          "expected": [
+            {
+              "capsule_hash": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+              "installed_tick": 0,
+              "semantic_hash": "b9e6bd62b4c9aff3e27c114b14f64f02c074c3ba529c3729bef42f15955065b6",
+              "source_hash": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+              "system_id": "demo.movement",
+              "system_revision": 1,
+              "txid": 1
+            }
+          ],
+          "name": "T08 semantic manifest identical to snapshot-time manifest",
+          "ok": true
+        },
+        {
+          "actual": "world-1.r6",
+          "expected": "world-1.r6",
+          "name": "restored revision matches restore result",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T08 serve",
+          "pid": 11949,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {},
+      "id": "T08",
+      "inputs": {
+        "tests/fixtures/edit/movement.capsule.json": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+        "tests/fixtures/edit/movement.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/edit/swap_schedule.json": "ff390f1d28059ce3ff6614614818d7ab60c50c28b628dbd8ead242ae52f23353"
+      },
+      "name": "Snapshot round trip",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "mismatches": [],
+          "name": "multi-system admission refuses a failing second system",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "session answers after refused multi-system create",
+          "ok": true
+        },
+        {
+          "actual": 0,
+          "expected": 0,
+          "name": "T09 starts at tick 0",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "failing second system makes world.step fail",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "step failure code",
+          "ok": true
+        },
+        {
+          "actual": 0,
+          "expected": 0,
+          "name": "tick not published",
+          "ok": true
+        },
+        {
+          "actual": [
+            0,
+            1,
+            4294967295,
+            7
+          ],
+          "expected": [
+            0,
+            1,
+            4294967295,
+            7
+          ],
+          "name": "committed position_x unchanged by A's staged write",
+          "ok": true
+        },
+        {
+          "actual": [
+            1,
+            2,
+            1,
+            0
+          ],
+          "expected": [
+            1,
+            2,
+            1,
+            0
+          ],
+          "name": "committed velocity_x unchanged",
+          "ok": true
+        },
+        {
+          "actual": {
+            "position_x": [
+              0,
+              1,
+              4294967295,
+              7
+            ],
+            "velocity_x": [
+              1,
+              2,
+              1,
+              0
+            ]
+          },
+          "expected": {
+            "position_x": [
+              0,
+              1,
+              4294967295,
+              7
+            ],
+            "velocity_x": [
+              1,
+              2,
+              1,
+              0
+            ]
+          },
+          "name": "columns identical to pre-step inspection",
+          "ok": true
+        },
+        {
+          "actual": "world-1.r1",
+          "expected": "world-1.r1",
+          "name": "world_revision unchanged",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "session still answers",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T09 serve",
+          "pid": 11961,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {},
+      "id": "T09",
+      "inputs": {
+        "tests/fixtures/edit/candidates/manifest.json": "cc37f36d10415337fdd2d34a5947347b65743746258b1916e1f68729b0dfb7d3",
+        "tests/fixtures/edit/candidates/wrong_permission/capsule.json": "2f8c210ca2cd95ee5c84f187cb71a2dd2058cb111fa4378153c3675b088a566e",
+        "tests/fixtures/edit/candidates/wrong_permission/program.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/t09/manifest.json": "9fd1f2a0815f905bf9464c117745652819ebd3200e6a0fab83f0d1c3d6e21db4",
+        "tests/fixtures/t09/movement_a.capsule.json": "1bd01e1cbd3e042db0a6023ab4ebc689ff718f294dac0b9811a50c229aa81884",
+        "tests/fixtures/t09/movement_b.capsule.json": "54472e86f09af876c9d7669aa4f97786d8b48e1239153923b139a972dece54af",
+        "tests/fixtures/t09/world.json": "945f773de8f0e460a2243a1fac99e74725bd5c74d2ec9d95ad722452003a4e15"
+      },
+      "name": "Working-root failure",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "actual": 11972,
+          "expected": 11972,
+          "name": "engine.info pid is the serve process",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "evaluation after worker kill is SU_E_WORKER_FAILED",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "killed pid is the evaluation worker reported by candidate.status",
+          "ok": true
+        },
+        {
+          "actual": "worker_failed",
+          "expected": "worker_failed",
+          "name": "evaluation state after kill is worker_failed",
+          "ok": true
+        },
+        {
+          "actual": 11972,
+          "expected": 11972,
+          "name": "engine.info pid is the serve process",
+          "ok": true
+        },
+        {
+          "actual": 11972,
+          "expected": 11972,
+          "name": "supervisor answers after kill",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "active world state unchanged by evaluation kill",
+          "ok": true
+        },
+        {
+          "actual": 11977,
+          "expected": 11977,
+          "name": "active worker pid unchanged by evaluation kill",
+          "ok": true
+        },
+        {
+          "actual": [
+            {
+              "capsule_hash": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+              "installed_tick": 0,
+              "semantic_hash": "b9e6bd62b4c9aff3e27c114b14f64f02c074c3ba529c3729bef42f15955065b6",
+              "source_hash": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+              "system_id": "demo.movement",
+              "system_revision": 1,
+              "txid": 1
+            }
+          ],
+          "expected": [
+            {
+              "capsule_hash": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+              "installed_tick": 0,
+              "semantic_hash": "b9e6bd62b4c9aff3e27c114b14f64f02c074c3ba529c3729bef42f15955065b6",
+              "source_hash": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+              "system_id": "demo.movement",
+              "system_revision": 1,
+              "txid": 1
+            }
+          ],
+          "name": "active semantic manifest unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "world still steps with v1 after the kill",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T10 serve attempt 0",
+          "pid": 11972,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {
+        "attempts": [
+          {
+            "attempt": 0,
+            "killed": [
+              11983
+            ],
+            "reply_code": "SU_E_WORKER_FAILED",
+            "reply_ok": false
+          }
+        ],
+        "kill_observation": {
+          "active_worker_pid": 11977,
+          "killed": [
+            11983
+          ],
+          "supervisor_pid": 11972
+        }
+      },
+      "id": "T10",
+      "inputs": {
+        "tests/fixtures/edit/movement.capsule.json": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+        "tests/fixtures/edit/movement.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/edit/movement_v2.capsule.json": "0e624066189ca11fef79ed3079cf260e770d5947fa43b19145042db899923f0c"
+      },
+      "name": "Candidate isolation",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "actual": 11989,
+          "expected": 11989,
+          "name": "engine.info pid is the serve process",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "evaluation of candidate-1 passed",
+          "ok": true
+        },
+        {
+          "actual": 4,
+          "expected": 4,
+          "name": "evaluation of candidate-1 ran every case",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "evaluation of candidate-2 passed",
+          "ok": true
+        },
+        {
+          "actual": 4,
+          "expected": 4,
+          "name": "evaluation of candidate-2 ran every case",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 0 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 0 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 0 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 0 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 0 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 0 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 1 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 1 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 1 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 1 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 1 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 1 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 2 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 2 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 2 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 2 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 2 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 2 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 3 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 3 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 3 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 3 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 3 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 3 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 4 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 4 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 4 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 4 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 4 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 4 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 5 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 5 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 5 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 5 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 5 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 5 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 6 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 6 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 6 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 6 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 6 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 6 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 7 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 7 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 7 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 7 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 7 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 7 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 8 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 8 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 8 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 8 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 8 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 8 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 9 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 9 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 9 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 9 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 9 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 9 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 10 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 10 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 10 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 10 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 10 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 10 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 11 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 11 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 11 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 11 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 11 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 11 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 12 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 12 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 12 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 12 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 12 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 12 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 13 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 13 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 13 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 13 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 13 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 13 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 14 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 14 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 14 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 14 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 14 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 14 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 15 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 15 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 15 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 15 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 15 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 15 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 16 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 16 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 16 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 16 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 16 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 16 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 17 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 17 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 17 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 17 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 17 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 17 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 18 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 18 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 18 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 18 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 18 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 18 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 19 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 19 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 19 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 19 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 19 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 19 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 20 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 20 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 20 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 20 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 20 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 20 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 21 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 21 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 21 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 21 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 21 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 21 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 22 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 22 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 22 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 22 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 22 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 22 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 23 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 23 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 23 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 23 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 23 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 23 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 24 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 24 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 24 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 24 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 24 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 24 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 25 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 25 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 25 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 25 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 25 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 25 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 26 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 26 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 26 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 26 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 26 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 26 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 27 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 27 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 27 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 27 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 27 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 27 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 28 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 28 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 28 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 28 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 28 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 28 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 29 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 29 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 29 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 29 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 29 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 29 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 30 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 30 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 30 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 30 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 30 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 30 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 31 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 31 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 31 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 31 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 31 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 31 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 32 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 32 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 32 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 32 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 32 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 32 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 33 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 33 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 33 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 33 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 33 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 33 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 34 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 34 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 34 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 34 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 34 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 34 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 35 v1 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 35 v1 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 35 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 35 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 35 stale rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 35 stale rejection leaves manifest unchanged",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 36 v2 columns",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 36 v2 manifest",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "rejection SU_E_UNDECLARED_WRITE for tests/fixtures/edit/candidates/wrong_permission/capsule.json",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 36 invalid rejection leaves state unchanged",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 36 stale install",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "iteration 36 stale rejection leaves state unchanged",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T11 serve",
+          "pid": 11989,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {
+        "counts": {
+          "invalid_rejected": 200,
+          "stale_rejected": 200,
+          "valid_install": 200
+        },
+        "iterations": 200,
+        "rss_bound_kib_harness_chosen": 8192,
+        "rss_kib": {
+          "baseline": {
+            "supervisor": 2144,
+            "worker": 2100
+          },
+          "end": {
+            "supervisor": 2144,
+            "worker": 2108
+          },
+          "start": {
+            "supervisor": 2132,
+            "worker": 2080
+          }
+        },
+        "rss_measured_after_warm_up_iteration": 10
+      },
+      "id": "T11",
+      "inputs": {
+        "tests/fixtures/edit/candidates/manifest.json": "cc37f36d10415337fdd2d34a5947347b65743746258b1916e1f68729b0dfb7d3",
+        "tests/fixtures/edit/candidates/wrong_permission/capsule.json": "2f8c210ca2cd95ee5c84f187cb71a2dd2058cb111fa4378153c3675b088a566e",
+        "tests/fixtures/edit/candidates/wrong_permission/program.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/edit/movement.capsule.json": "945583fb895f5fd1ba93b8720ce23808790bc2e559a1be1633cf3aa243a9e1be",
+        "tests/fixtures/edit/movement.lir.json": "aa285029ab13564a2a8f679a474bc9c4692ab7a2db5f8334b99c7089016521c4",
+        "tests/fixtures/edit/movement_v2.capsule.json": "0e624066189ca11fef79ed3079cf260e770d5947fa43b19145042db899923f0c",
+        "tests/fixtures/edit/movement_v2.lir.json": "b6e89eb57a098c50c3a3f5f5332af762b275675f6fef218edb87372b5720e5d5",
+        "tests/fixtures/edit/world.json": "945f773de8f0e460a2243a1fac99e74725bd5c74d2ec9d95ad722452003a4e15"
+      },
+      "name": "Repeated reload",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "actual": true,
+          "expected": true,
+          "name": "instrumentation control records a compiler invocation",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "evaluation of candidate-1 passed",
+          "ok": true
+        },
+        {
+          "actual": 4,
+          "expected": 4,
+          "name": "evaluation of candidate-1 ran every case",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "capsule-only swap produces the v2 state at tick 4",
+          "ok": true
+        },
+        {
+          "actual": 0,
+          "expected": 0,
+          "name": "no compiler, assembler, linker or build tool invoked during capsule-only swap",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T12 serve (instrumented PATH)",
+          "pid": 13605,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {
+        "sampled_build_processes_in_swap_window": [],
+        "sampling": {
+          "limitation": "polling can miss processes shorter than the interval; shims see only invocations by bare name through PATH, not absolute-path execs",
+          "method": "PATH shims for named tools plus /proc/<pid>/task/*/children tree polling (about every 0.5 ms)",
+          "samples": 13
+        },
+        "shim_invocations_in_swap_window": [],
+        "shim_invocations_total": 0,
+        "shimmed_tools": [
+          "as",
+          "c++",
+          "cc",
+          "clang",
+          "cmake",
+          "g++",
+          "gcc",
+          "ld",
+          "make",
+          "ninja"
+        ]
+      },
+      "id": "T12",
+      "inputs": {
+        "tests/fixtures/edit/movement_v2.capsule.json": "0e624066189ca11fef79ed3079cf260e770d5947fa43b19145042db899923f0c",
+        "tests/fixtures/edit/swap_schedule.json": "ff390f1d28059ce3ff6614614818d7ab60c50c28b628dbd8ead242ae52f23353"
+      },
+      "name": "No native gameplay build",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 0 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 1 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 2 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 3 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 4 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 5 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 6 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 7 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 8 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 9 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 10 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 11 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 12 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 13 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 14 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 15 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 16 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 17 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 18 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 19 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 20 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 21 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 22 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 23 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 24 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 25 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 26 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 27 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 28 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "T13 sample 29 evaluation passed",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 0",
+          "pid": 13619,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 1",
+          "pid": 13631,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 2",
+          "pid": 13643,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 3",
+          "pid": 13655,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 4",
+          "pid": 13667,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 5",
+          "pid": 13679,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 6",
+          "pid": 13691,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 7",
+          "pid": 13703,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 8",
+          "pid": 13715,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 9",
+          "pid": 13727,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 10",
+          "pid": 13739,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 11",
+          "pid": 13751,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 12",
+          "pid": 13763,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 13",
+          "pid": 13775,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 14",
+          "pid": 13787,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 15",
+          "pid": 13799,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 16",
+          "pid": 13811,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 17",
+          "pid": 13823,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 18",
+          "pid": 13835,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 19",
+          "pid": 13847,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 20",
+          "pid": 13859,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 21",
+          "pid": 13871,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 22",
+          "pid": 13883,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 23",
+          "pid": 13895,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 24",
+          "pid": 13907,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 25",
+          "pid": 13919,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 26",
+          "pid": 13931,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 27",
+          "pid": 13943,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 28",
+          "pid": 13955,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T13 serve sample 29",
+          "pid": 13967,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {
+        "decomposition_limits": "candidate.install is synchronous: queue, boundary and publish happen inside one RPC, so they cannot be separated from the host clock. The install figure includes queue, boundary and publish; the step figure is the first tick that runs the new code.",
+        "latency_ms": {
+          "first_step_after_install": {
+            "max": 1.132,
+            "median": 0.599,
+            "min": 0.464,
+            "n": 30,
+            "p95": 0.81,
+            "units": "ms"
+          },
+          "install_call_round_trip": {
+            "max": 1.797,
+            "median": 1.074,
+            "min": 0.793,
+            "n": 30,
+            "p95": 1.388,
+            "units": "ms"
+          },
+          "prepare_submit_and_evaluate": {
+            "max": 10.185,
+            "median": 9.298,
+            "min": 8.588,
+            "n": 30,
+            "p95": 10.05,
+            "units": "ms"
+          }
+        },
+        "machine": {
+          "clock": "time.monotonic (host)",
+          "cpu_count": 4,
+          "cpu_model": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+          "machine": "x86_64",
+          "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+          "python": "3.13.16"
+        },
+        "status_meaning": "passed = measurement collected. No latency target is declared in TEST_SPEC; comparison with targets is a separate step and is not claimed here."
+      },
+      "id": "T13",
+      "inputs": {
+        "tests/fixtures/edit/movement_v2.capsule.json": "0e624066189ca11fef79ed3079cf260e770d5947fa43b19145042db899923f0c",
+        "tests/fixtures/edit/swap_schedule.json": "ff390f1d28059ce3ff6614614818d7ab60c50c28b628dbd8ead242ae52f23353"
+      },
+      "name": "Latency decomposition",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "evaluation of candidate-1 passed",
+          "ok": true
+        },
+        {
+          "actual": 4,
+          "expected": 4,
+          "name": "evaluation of candidate-1 ran every case",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": "passed",
+          "expected": "passed",
+          "name": "evaluation of candidate-1 passed",
+          "ok": true
+        },
+        {
+          "actual": 4,
+          "expected": 4,
+          "name": "evaluation of candidate-1 ran every case",
+          "ok": true
+        },
+        {
+          "actual": "installed",
+          "expected": "installed",
+          "name": "install state is installed",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "T14 canonical state byte-identical across fresh sessions",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "T14 final state equals reference",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T14 run A",
+          "pid": 13980,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T14 run B",
+          "pid": 13993,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {
+        "canonical_state_sha256": {
+          "run_A": "1a0739eeb537de34e48b31c15f49bd7081316a075cca8561fea26c18b644ab22",
+          "run_B": "1a0739eeb537de34e48b31c15f49bd7081316a075cca8561fea26c18b644ab22"
+        }
+      },
+      "id": "T14",
+      "inputs": {
+        "tests/fixtures/edit/movement_v2.capsule.json": "0e624066189ca11fef79ed3079cf260e770d5947fa43b19145042db899923f0c",
+        "tests/fixtures/edit/swap_schedule.json": "ff390f1d28059ce3ff6614614818d7ab60c50c28b628dbd8ead242ae52f23353"
+      },
+      "name": "Deterministic fixture repeat",
+      "reason": "",
+      "status": "passed"
+    },
+    {
+      "checks": [
+        {
+          "mismatches": [],
+          "name": "duplicate_key rejection code",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "duplicate_key session survives",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "invalid_utf8 rejection code",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "invalid_utf8 session survives",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "wrong_protocol rejection code",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "wrong_protocol session survives",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "unknown_method rejection code",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "unknown_method session survives",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "path_traversal rejection code",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "path_traversal session survives",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "absolute_path rejection code",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "absolute_path session survives",
+          "ok": true
+        },
+        {
+          "actual": 1048577,
+          "expected": 1048577,
+          "name": "oversize line is one byte over the limit",
+          "ok": true
+        },
+        {
+          "mismatches": [],
+          "name": "oversize_1mib rejection code",
+          "ok": true
+        },
+        {
+          "actual": true,
+          "expected": true,
+          "name": "oversize_1mib session survives",
+          "ok": true
+        }
+      ],
+      "commands": [
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T15 duplicate_key",
+          "pid": 14006,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T15 invalid_utf8",
+          "pid": 14011,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T15 wrong_protocol",
+          "pid": 14016,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T15 unknown_method",
+          "pid": 14021,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T15 path_traversal",
+          "pid": 14026,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T15 absolute_path",
+          "pid": 14031,
+          "returncode": 0,
+          "stderr_tail": ""
+        },
+        {
+          "argv": [
+            "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe/build/sutekh",
+            "serve"
+          ],
+          "cwd": "/home/user/sutekh/.claude/worktrees/agent-a2f7681b6e9648bfe",
+          "label": "T15 oversize_1mib",
+          "pid": 14036,
+          "returncode": 0,
+          "stderr_tail": ""
+        }
+      ],
+      "details": {
+        "cases": [
+          {
+            "case": "duplicate_key",
+            "expected": "SU_E_DUPLICATE_KEY",
+            "sha256": "1e6b88c235a0169fda26a796119d301401d1c442a300c38b57bd3cf325475a62"
+          },
+          {
+            "case": "invalid_utf8",
+            "expected": "SU_E_PARSE",
+            "sha256": "58b5d0c3086e18cca8dcfe88bef2d22502197fa5d0b72737f3cec164c82b72f7"
+          },
+          {
+            "case": "wrong_protocol",
+            "expected": "SU_E_TYPE",
+            "sha256": "4f698d8b77631d8e61ddfdb76699b0770c9cff04a78cf2145fd371e0e01d0ad3"
+          },
+          {
+            "case": "unknown_method",
+            "expected": "SU_E_UNSUPPORTED_METHOD",
+            "sha256": "57debb1d6391e5c61b51e8660e74ce9061a88a69db90288f77382af87f879f95"
+          },
+          {
+            "case": "path_traversal",
+            "expected": "SU_E_CAPABILITY_DENIED",
+            "sha256": "68f1b2fd81e1912c48f6c093d2e9ec706bf49c85e0d6dd56b5001544a6d71c70"
+          },
+          {
+            "case": "absolute_path",
+            "expected": "SU_E_CAPABILITY_DENIED",
+            "sha256": "8828c7e3abfdf4af4ca9fde889a7688e276e80e93e9c9775d61860df583976cc"
+          },
+          {
+            "case": "oversize_1mib",
+            "expected": "SU_E_RESOURCE_LIMIT",
+            "sha256": "93dee664a71e6ef7cc2e06a5487285fad6f2f3f0a9c42e03cead63c3f0b81247"
+          }
+        ]
+      },
+      "id": "T15",
+      "inputs": {
+        "tests/fixtures/protocol/absolute_path.jsonl": "8828c7e3abfdf4af4ca9fde889a7688e276e80e93e9c9775d61860df583976cc",
+        "tests/fixtures/protocol/cases.json": "ecda9aad916b6005f32ed3886322a2a31c0e160f97589a57546a3a3280001179",
+        "tests/fixtures/protocol/duplicate_key.jsonl": "1e6b88c235a0169fda26a796119d301401d1c442a300c38b57bd3cf325475a62",
+        "tests/fixtures/protocol/invalid_utf8.jsonl": "58b5d0c3086e18cca8dcfe88bef2d22502197fa5d0b72737f3cec164c82b72f7",
+        "tests/fixtures/protocol/path_traversal.jsonl": "68f1b2fd81e1912c48f6c093d2e9ec706bf49c85e0d6dd56b5001544a6d71c70",
+        "tests/fixtures/protocol/unknown_method.jsonl": "57debb1d6391e5c61b51e8660e74ce9061a88a69db90288f77382af87f879f95",
+        "tests/fixtures/protocol/wrong_protocol.jsonl": "4f698d8b77631d8e61ddfdb76699b0770c9cff04a78cf2145fd371e0e01d0ad3"
+      },
+      "name": "Structured protocol",
+      "reason": "",
+      "status": "passed"
+    }
+  ]
+}

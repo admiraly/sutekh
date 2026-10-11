@@ -1,0 +1,184 @@
+{
+ "artifact_hash": "sha256:f00aa1fe3a41b005b76a6d62cd2e416f610e16b0699772e6a77263b6a803d37a",
+ "checks": [
+  {
+   "name": "every warm and cold edit verified against the reference model after its timed window",
+   "reason": null,
+   "status": "passed"
+  },
+  {
+   "name": "every failed candidate refused and never published",
+   "reason": null,
+   "status": "passed"
+  },
+  {
+   "name": "stress run (1000000 rows)",
+   "reason": "engine refused world.create of 1000000 rows: SU_E_RESOURCE_LIMIT: cannot read world fixture (fixture 27833861 bytes; src/runtime/worker.c WORKER_FIXTURE_MAX)",
+   "status": "not_run"
+  },
+  {
+   "name": "stress run (250000 rows)",
+   "reason": null,
+   "status": "passed"
+  }
+ ],
+ "commands": [
+  "python3 -I bench/reload/bench_reload.py live --binary build/sutekh --profile-label dev --epochs 60 --per-epoch 12 --cold-trials 60 --stress-rows 1000000,250000",
+  "build/sutekh serve  (JSON lines over stdio, one process per epoch and per cold trial)"
+ ],
+ "hardware": {
+  "cmake_build_type": "Debug",
+  "container": {
+   "container_detected": false,
+   "evidence": []
+  },
+  "cpu": {
+   "hypervisor_flag": true,
+   "logical_processors": 4,
+   "model": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+   "physical_cores": 4
+  },
+  "kernel": {
+   "release": "6.18.44-fc-v114",
+   "version": "#1 SMP PREEMPT_DYNAMIC @0"
+  },
+  "memory_kB": {
+   "MemAvailable": 15923164,
+   "MemTotal": 16479424
+  },
+  "profile_label": "dev"
+ },
+ "kind": "runtime_evidence",
+ "measurements": {
+  "cold.first_edit_total_ms.p95": {
+   "reason": "new process, first edit, 1024 rows, n=60, min=6.387, median=9.291, max=15.532; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 11.028797
+  },
+  "cold.process_first_request_ms.p95": {
+   "reason": "engine.info as first request of a new serve process, n=60; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 1.895325
+  },
+  "cold.world_create_ms.p95": {
+   "reason": "world.create (spawns worker) in a new process, n=60; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 4.208488
+  },
+  "failed_candidate_publications": {
+   "reason": "120 failed-candidate trials; each refused by candidate.install and verified unchanged after a following tick; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "count",
+   "value": 0
+  },
+  "pmu.cycles_per_entity": {
+   "reason": "no PMU counters collected (PERFORMANCE.md section 5 optional; not part of this bench)",
+   "status": "unavailable",
+   "unit": "cycles/entity",
+   "value": null
+  },
+  "stress_1000000.restore_host_ms": {
+   "reason": "stress refused: engine refused world.create of 1000000 rows: SU_E_RESOURCE_LIMIT: cannot read world fixture (fixture 27833861 bytes; src/runtime/worker.c WORKER_FIXTURE_MAX)",
+   "status": "not_run",
+   "unit": "ms",
+   "value": null
+  },
+  "stress_1000000.snapshot_capture_host_ms": {
+   "reason": "stress refused: engine refused world.create of 1000000 rows: SU_E_RESOURCE_LIMIT: cannot read world fixture (fixture 27833861 bytes; src/runtime/worker.c WORKER_FIXTURE_MAX)",
+   "status": "not_run",
+   "unit": "ms",
+   "value": null
+  },
+  "stress_1000000.world_step_ms.p95": {
+   "reason": "stress refused: engine refused world.create of 1000000 rows: SU_E_RESOURCE_LIMIT: cannot read world fixture (fixture 27833861 bytes; src/runtime/worker.c WORKER_FIXTURE_MAX)",
+   "status": "not_run",
+   "unit": "ms",
+   "value": null
+  },
+  "stress_250000.nominal_column_bytes": {
+   "reason": "derived: 2 u32 columns x 4 bytes x rows; excludes entity_ids and runtime overhead",
+   "status": "measured",
+   "unit": "bytes",
+   "value": 2000000
+  },
+  "stress_250000.restore_host_ms": {
+   "reason": "world.restore host round trip, 1 sample; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 259.424385
+  },
+  "stress_250000.snapshot_bytes": {
+   "reason": "canonical snapshot size reported by the engine",
+   "status": "measured",
+   "unit": "bytes",
+   "value": 6940752
+  },
+  "stress_250000.snapshot_capture_host_ms": {
+   "reason": "world.snapshot host round trip, 1 sample; engine capture_ns=304556064; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 305.351965
+  },
+  "stress_250000.worker_VmHWM_KiB": {
+   "reason": "worker VmHWM at end of the stress run",
+   "status": "measured",
+   "unit": "KiB",
+   "value": 68796
+  },
+  "stress_250000.world_create_ms": {
+   "reason": "world.create host round trip, 1 sample; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 260.888158
+  },
+  "stress_250000.world_step_ms.p95": {
+   "reason": "250000-row stress diagnostic (not a game-scale claim), n=20, median=18.056, max=22.217; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 21.029557
+  },
+  "warm.candidate_evaluate_ms.p95": {
+   "reason": "warm, 1024 rows, n=720, min=2.780, median=7.977, p99=11.705, max=17.154; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 9.022868
+  },
+  "warm.candidate_install_rpc_ms.p95": {
+   "reason": "warm, 1024 rows, n=720, min=0.342, median=0.605, p99=1.947, max=4.454; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 1.013905
+  },
+  "warm.capsule_submit_ms.p95": {
+   "reason": "warm, 1024 rows, n=720, min=0.218, median=0.397, p99=1.036, max=3.868; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 0.633499
+  },
+  "warm.tick_boundary_wait_ms": {
+   "reason": "candidate.install is synchronous in M0: queue, tick-boundary wait and publish happen inside the install RPC, and the host cannot separate them. The install RPC time is reported instead.",
+   "status": "unavailable",
+   "unit": "ms",
+   "value": null
+  },
+  "warm.total_edit_to_first_effect_ms.p95": {
+   "reason": "warm, 1024 rows, n=720, min=4.100, median=9.757, p99=13.951, max=19.781; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 11.759114
+  },
+  "warm.world_step_first_effect_ms.p95": {
+   "reason": "warm, 1024 rows, n=720, min=0.187, median=0.374, p99=1.749, max=3.548; raw samples and full statistics: planning/evidence/m0-latency-dev-raw.json",
+   "status": "measured",
+   "unit": "ms",
+   "value": 0.639992
+  }
+ },
+ "notes": "Summary of planning/evidence/m0-latency-dev.json; schema-conforming subset. Full distributions, raw samples, per-epoch RSS and the environment are in m0-latency-dev-raw.json. Shared 4-vCPU VM: this is observation, not performance qualification (ENGINE_CONSTITUTION C10). Schema deviation: the schema forbids extra top-level keys and a measurement's percentile table, so the full statistics live in the raw file.",
+ "report_format": "0.1",
+ "source_tree_hash": "git HEAD a678b871a46b663934b04810e516bf62b8e29bf8; tree src ac7b061d0bd91480fa04e3ea9783be081d49102a; tree include bb3fc5c4cbee749218a1e9143cfca497060c059b",
+ "status": "passed"
+}
