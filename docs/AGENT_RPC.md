@@ -463,3 +463,35 @@ recorded in the supervisor's replay log where they mutate state (section 8).
   despawn_self and emit_event), `guard` (second system ordered after movement; its despawn of an already
   despawned row is refused), `emit_then_despawn` (the emit precedes the despawn in one row).
 
+## 16. Default caps and 1,000,000-row worlds (M2-00 audit, decision record; defaults unchanged)
+
+The defaults of `world.create` (`max_struct_per_tick` 4096, `max_events_per_tick` 4096, section 15) are kept.
+What they mean for a 1,000,000-row entity world with the fixture system `despawn_move` (one `despawn_self`
+and one `emit_event` per row, declared per-row caps 4 and 4):
+
+- **Creation succeeds.** Admission sums the buffers one tick would allocate: 4 x 1,000,000 = 4,000,000
+  entries per class, within `SU_CMDQ_MAX_ENTRIES` (4,194,304). Two such systems (8,000,000) are refused at
+  `world.create` with `SU_E_RESOURCE_LIMIT`; with per-row caps 4 that is every world above 524,288 rows.
+- **A despawn-heavy tick fails.** In the first tick of the benchmark fixture (generator seed 8) about 272,700
+  rows despawn, so the tick
+  needs about 272,000 structure records and about 272,000 events. Against the default cap of 4096 the tick
+  fails with `SU_E_RESOURCE_LIMIT` ("tick discarded, committed state unchanged"). The world then reports the
+  full 1,000,000 alive rows: the failed tick changes nothing (columns, entity table, event log, revision).
+- **How to run it.** Raise the caps when the world is created, for example
+  `world.create {"fixture_path": ..., "capsule_paths": [...], "max_struct_per_tick": 1048576,
+  "max_events_per_tick": 1048576}`. The maximum is 1,048,576, which covers one `despawn_self` and one
+  `emit_event` for every one of the 1,000,000 rows. A system declaring more than one of either per row can
+  produce up to rows x declared-cap records in one tick, so the caps must cover the records the tick
+  actually produces, and the worst case must still fit 1,048,576 (otherwise the tick is refused).
+  `event_log_max` (default 65536) only bounds the retained events: older records are dropped and counted,
+  which is not a failure. The benchmark `bench/ir02_entities_bench.py` creates the world this way.
+- **Buffer memory.** Buffers are preallocated at creation, per (system, storage chunk of 1024 rows):
+  entries = min(chunk rows x declared per-row cap, per-tick cap), for each class. Structure entries are
+  32 bytes and event entries 40 bytes. The total is
+  `bytes = sum over systems and chunks of (min(rows_c x struct_cap_row, max_struct_per_tick) x 32
+  + min(rows_c x event_cap_row, max_events_per_tick) x 40)`. For 1,000,000 rows, one system with per-row
+  caps 4 and 4 and caps 1,048,576: 4,000,000 x (32 + 40) = 288,000,000 bytes (about 288 MB, measured as
+  VmHWM 294 MB of the worker). The default caps do not reduce this memory for the fixture: a full chunk
+  needs min(1024 x 4, 4096) = 4096 entries either way. The defaults only bound the number of records a tick
+  may produce, which is what makes the despawn-heavy first tick fail.
+

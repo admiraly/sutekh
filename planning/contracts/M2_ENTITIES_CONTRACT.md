@@ -47,6 +47,7 @@ Entity churn (>= 100,000 spawn/despawn operations against a reference model, low
 - Native lowering refuses **every** 0.2 module (`SU_E_CAPABILITY_DENIED`, reason `ir_0_2_not_lowered`), not only modules that use a 0.2 op.
 - Rows are contiguous in a buffer: the reference VM emits a row's records together; a slot reappearing non-consecutively is repaired by the stable-sort fallback of the merge.
 - A cursor ahead of `next_seq` in `events.read` is `SU_E_INVALID_ARGUMENT`. The VM trusts the caller for the lengths of the alive/generation arrays.
+- **r2.2 (M2-00 fixes, section 6 wording):** the "regenerated v2 canonical dumps for the M0/M1 fixtures" item is met by changed expectations in the C tests (`tests/entities/test_world_ents.c`, `test_canonical_v2`), not by a changed fixture file. No file under `tests/fixtures/` holds a v2 dump. The c3b handoff and the M2-00 fixes handoff (`planning/handoffs/2026-10-12-m2-00-fixes.md`) name the exact expectations that changed. Section 6 is otherwise unchanged.
 
 ## 7. Open points for the owner
 Event consumption by systems, entity-typed registers, spawn from IR, template/relationship tables, dynamic growth, native lowering of 0.2 ops, and the numeric profile for any future float: deferred; none required by M2-00 acceptance.
