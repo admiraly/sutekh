@@ -1,0 +1,18 @@
+{
+  "ir_version": "0.1",
+  "system_id": "demo.movement",
+  "numeric_profile": "u32_mod_v1",
+  "query": "demo.actor",
+  "instructions": [
+    {
+      "op": "load_u32",
+      "dst": "p",
+      "field": "position_x"
+    },
+    {
+      "op": "store_u32",
+      "field": "position_x",
+      "src": "p"
+    }
+  ]
+}

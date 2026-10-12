@@ -875,6 +875,519 @@ static void test_defensive(void) {
 
 /* ---------- main ---------- */
 
+/* ---------- IR 0.2 (M2-00c2): entity view, emitter, new ops ---------- */
+
+/* Capsule: in_x (read), out_a and out_b (write). Caps 8/8. */
+static const char V2_CAP[] =
+    "{\"capsule_format\":\"0.1\",\"system_id\":\"vm02\",\"source\":\"x\","
+    "\"schema\":{\"id\":\"vm02.row\",\"version\":1,\"layout_generation\":1},"
+    "\"numeric_profile\":\"u32_mod_v1\",\"fields\":["
+    "{\"id\":1,\"name\":\"in_x\",\"type\":\"u32\",\"read\":true,\"write\":false},"
+    "{\"id\":2,\"name\":\"out_a\",\"type\":\"u32\",\"read\":false,\"write\":true},"
+    "{\"id\":3,\"name\":\"out_b\",\"type\":\"u32\",\"read\":false,\"write\":true}],"
+    "\"schedule\":{\"phase\":\"simulate\",\"after\":[],\"before\":[],\"parallel\":\"serial\"},"
+    "\"limits\":{\"max_instructions\":4096,\"max_rows\":1000000,\"allocation\":\"forbidden\","
+    "\"max_struct_per_row\":8,\"max_events_per_row\":8},"
+    "\"ir_version\":\"0.2\",\"tests\":[\"t.json\"]}";
+
+#define V2_HEAD "{\"ir_version\":\"0.2\",\"system_id\":\"vm02\",\"numeric_profile\":\"u32_mod_v1\"," \
+                "\"query\":\"vm02.row\",\"instructions\":["
+#define V2_LOADX "{\"op\":\"load_u32\",\"dst\":\"x\",\"field\":\"in_x\"},"
+#define V2_TAIL "]}"
+
+/* out_a = slot + gen, out_b = tick. */
+static const char V2_IR_KA[] =
+    V2_HEAD V2_LOADX
+    "{\"op\":\"slot_u32\",\"dst\":\"s\"},"
+    "{\"op\":\"gen_u32\",\"dst\":\"g\"},"
+    "{\"op\":\"tick_u32\",\"dst\":\"t\"},"
+    "{\"op\":\"add_u32\",\"dst\":\"sg\",\"a\":\"s\",\"b\":\"g\"},"
+    "{\"op\":\"store_u32\",\"field\":\"out_a\",\"src\":\"sg\"},"
+    "{\"op\":\"store_u32\",\"field\":\"out_b\",\"src\":\"t\"}" V2_TAIL;
+
+/* Instructions: 0 load x, 1 const k=2, 2 c = x<k, 3 despawn_self c, 4 slot s, 5 emit c (kind 42, s, x),
+ * 6 store out_a = x, 7 store out_b = s. */
+static const char V2_IR_DESPAWN[] =
+    V2_HEAD V2_LOADX
+    "{\"op\":\"const_u32\",\"dst\":\"k\",\"value\":2},"
+    "{\"op\":\"lt_u32\",\"dst\":\"c\",\"a\":\"x\",\"b\":\"k\"},"
+    "{\"op\":\"despawn_self\",\"cond\":\"c\"},"
+    "{\"op\":\"slot_u32\",\"dst\":\"s\"},"
+    "{\"op\":\"emit_event\",\"cond\":\"c\",\"kind\":42,\"a\":\"s\",\"b\":\"x\"},"
+    "{\"op\":\"store_u32\",\"field\":\"out_a\",\"src\":\"x\"},"
+    "{\"op\":\"store_u32\",\"field\":\"out_b\",\"src\":\"s\"}" V2_TAIL;
+
+/* Per row, instruction order: emit(e) [seq 0 if e], despawn(c), emit(c). */
+static const char V2_IR_SEQ[] =
+    V2_HEAD V2_LOADX
+    "{\"op\":\"const_u32\",\"dst\":\"k\",\"value\":2},"
+    "{\"op\":\"const_u32\",\"dst\":\"z\",\"value\":0},"
+    "{\"op\":\"lt_u32\",\"dst\":\"c\",\"a\":\"x\",\"b\":\"k\"},"
+    "{\"op\":\"eq_u32\",\"dst\":\"e\",\"a\":\"x\",\"b\":\"z\"},"
+    "{\"op\":\"emit_event\",\"cond\":\"e\",\"kind\":5,\"a\":\"x\",\"b\":\"x\"},"
+    "{\"op\":\"despawn_self\",\"cond\":\"c\"},"
+    "{\"op\":\"emit_event\",\"cond\":\"c\",\"kind\":6,\"a\":\"x\",\"b\":\"x\"},"
+    "{\"op\":\"store_u32\",\"field\":\"out_a\",\"src\":\"x\"},"
+    "{\"op\":\"store_u32\",\"field\":\"out_b\",\"src\":\"x\"}" V2_TAIL;
+
+#define V2_ROWS_MAX 8u
+#define V2_LOG_MAX 64u
+
+typedef struct V2Rec {
+    char type;      /* 'D' despawn, 'E' event */
+    uint32_t slot;
+    uint32_t seq;
+    uint32_t kind;  /* events only */
+    uint32_t a;
+    uint32_t b;
+    uint64_t h;     /* despawn only */
+} V2Rec;
+
+typedef struct V2Log {
+    V2Rec r[V2_LOG_MAX];
+    uint32_t n;
+    long fail_at;   /* index of the record whose callback reports overflow; -1 never */
+} V2Log;
+
+static int v2_em_despawn(void *u, uint32_t slot, uint32_t seq, uint64_t h) {
+    V2Log *l = (V2Log *)u;
+    if (l->fail_at >= 0 && (long)l->n == l->fail_at) {
+        return 1;
+    }
+    if (l->n >= V2_LOG_MAX) {
+        return 1;
+    }
+    l->r[l->n].type = 'D';
+    l->r[l->n].slot = slot;
+    l->r[l->n].seq = seq;
+    l->r[l->n].h = h;
+    l->n++;
+    return 0;
+}
+
+static int v2_em_event(void *u, uint32_t slot, uint32_t seq, uint32_t kind, uint32_t a, uint32_t b) {
+    V2Log *l = (V2Log *)u;
+    if (l->fail_at >= 0 && (long)l->n == l->fail_at) {
+        return 1;
+    }
+    if (l->n >= V2_LOG_MAX) {
+        return 1;
+    }
+    l->r[l->n].type = 'E';
+    l->r[l->n].slot = slot;
+    l->r[l->n].seq = seq;
+    l->r[l->n].kind = kind;
+    l->r[l->n].a = a;
+    l->r[l->n].b = b;
+    l->r[l->n].h = 0;
+    l->n++;
+    return 0;
+}
+
+static void v2_log_init(V2Log *l, long fail_at) {
+    memset(l, 0, sizeof *l);
+    l->fail_at = fail_at;
+}
+
+static int v2_rec_eq(const V2Rec *x, const V2Rec *y) {
+    if (x->type != y->type || x->slot != y->slot || x->seq != y->seq) {
+        return 0;
+    }
+    if (x->type == 'E') {
+        return x->kind == y->kind && x->a == y->a && x->b == y->b;
+    }
+    return x->h == y->h;
+}
+
+/* Compares the log with the expected records. */
+static void v2_expect_log(const char *label, const V2Log *l, const V2Rec *want, uint32_t n) {
+    uint32_t i;
+    CHECK(l->n == n);
+    if (l->n != n) {
+        fprintf(stderr, "%s: %u records, want %u\n", label, (unsigned)l->n, (unsigned)n);
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        if (!v2_rec_eq(&l->r[i], &want[i])) {
+            g_failures++;
+            fprintf(stderr, "%s: record %u differs\n", label, (unsigned)i);
+        }
+        g_checks++;
+    }
+}
+
+static int v2_load(const char *ir, SuLirModule *m) {
+    SuDiag d;
+    uint32_t rc = su_lir_verify((const uint8_t *)V2_CAP, strlen(V2_CAP), (const uint8_t *)ir, strlen(ir), m, &d);
+    if (rc != SU_OK) {
+        fprintf(stderr, "v2 verify: %s (%s)\n", su_status_name(rc), d.message);
+    }
+    return rc == SU_OK;
+}
+
+/* One invocation over the V2 capsule. Returns the status and the failed instruction. */
+static uint32_t v2_invoke(SuExecContext *ctx, uint64_t rows, const uint32_t *in, uint32_t *oa,
+                          uint32_t *ob, uint32_t *failed) {
+    SuColumnBinding ib[1];
+    SuColumnBinding ob2[2];
+    SuInvocation inv;
+    SuOutputs outs;
+    uint32_t st;
+
+    memset(ib, 0, sizeof ib);
+    memset(ob2, 0, sizeof ob2);
+    ib[0].struct_size = (uint32_t)sizeof(SuColumnBinding);
+    ib[0].field_id = 1u;
+    ib[0].elem_type = SU_TYPE_U32;
+    ib[0].access = SU_ACCESS_READ;
+    ib[0].layout_generation = 1u;
+    ib[0].stride_bytes = 4u;
+    ib[0].row_count = rows;
+    ib[0].data = (void *)in;
+
+    ob2[0] = ib[0];
+    ob2[0].field_id = 2u;
+    ob2[0].access = SU_ACCESS_WRITE;
+    ob2[0].data = oa;
+    ob2[1] = ob2[0];
+    ob2[1].field_id = 3u;
+    ob2[1].data = ob;
+
+    inv.struct_size = (uint32_t)sizeof(SuInvocation);
+    inv.abi_version = SU_ABI_VERSION;
+    inv.layout_generation = 1u;
+    inv.binding_count = 1u;
+    inv.row_count = rows;
+    inv.bindings = ib;
+
+    outs.struct_size = (uint32_t)sizeof(SuOutputs);
+    outs.binding_count = 2u;
+    outs.failed_insn = UINT32_MAX;
+    outs.reserved = 0u;
+    outs.bindings = ob2;
+
+    st = su_vm_invoke_v1(ctx, &inv, &outs);
+    *failed = outs.failed_insn;
+    return st;
+}
+
+static void test_v2_known_answers(void) {
+    SuLirModule m;
+    SuExecContext *ctx = NULL;
+    static const uint32_t in[4] = {10u, 20u, 30u, 40u};
+    uint32_t oa[4], ob[4], failed;
+    uint32_t gens[4] = {1u, 2u, 3u, 0xFFFFFFFEu};
+    uint32_t i;
+
+    CHECK(v2_load(V2_IR_KA, &m));
+    CHECK_ST(su_vm_context_create(&m, 1u, &ctx), SU_OK);
+    if (ctx == NULL) {
+        return;
+    }
+
+    /* Defaults without a view: slot = row index, gen 1, tick 0. */
+    memset(oa, 0, sizeof oa);
+    memset(ob, 0xAB, sizeof ob);
+    CHECK_ST(v2_invoke(ctx, 4u, in, oa, ob, &failed), SU_OK);
+    for (i = 0; i < 4u; i++) {
+        CHECK(oa[i] == i + 1u);
+        CHECK(ob[i] == 0u);
+    }
+
+    /* Generations wrap (0xFFFFFFFE + 3 mod 2^32 = 1), tick_low 0 = committed 0xFFFFFFFF + 1 wrapped. */
+    CHECK_ST(su_vm_context_set_entity_view(ctx, NULL, gens, 0u, 0u, NULL), SU_OK);
+    CHECK_ST(v2_invoke(ctx, 4u, in, oa, ob, &failed), SU_OK);
+    CHECK(oa[0] == 1u && oa[1] == 3u && oa[2] == 5u && oa[3] == 1u);
+    CHECK(ob[0] == 0u && ob[1] == 0u && ob[2] == 0u && ob[3] == 0u);
+
+    /* Chunk offset: slot = base + row; tick value passed through. */
+    CHECK_ST(su_vm_context_set_entity_view(ctx, NULL, NULL, 1024u, 7u, NULL), SU_OK);
+    CHECK_ST(v2_invoke(ctx, 3u, in, oa, ob, &failed), SU_OK);
+    CHECK(oa[0] == 1025u && oa[1] == 1026u && oa[2] == 1027u);
+    CHECK(ob[0] == 7u && ob[1] == 7u && ob[2] == 7u);
+
+    su_vm_context_destroy(ctx);
+    su_lir_module_free(&m);
+}
+
+static void test_v2_despawn_emit(void) {
+    SuLirModule m;
+    SuExecContext *ctx = NULL;
+    static const uint32_t in[4] = {1u, 5u, 0u, 2u};
+    static const uint32_t gens[4] = {1u, 2u, 3u, 4u};
+    uint32_t oa[4], ob[4], failed;
+    V2Log log;
+    SuVmEmitter em;
+    /* x<2 is true in rows 0 (x=1) and 2 (x=0). Row 3 has x=2, not below 2. */
+    static const V2Rec want[4] = {
+        {'D', 0u, 0u, 0u, 0u, 0u, (UINT64_C(1) << 32) | 0u},
+        {'E', 0u, 1u, 42u, 0u, 1u, 0u},
+        {'D', 2u, 0u, 0u, 0u, 0u, (UINT64_C(3) << 32) | 2u},
+        {'E', 2u, 1u, 42u, 2u, 0u, 0u},
+    };
+
+    CHECK(v2_load(V2_IR_DESPAWN, &m));
+    CHECK_ST(su_vm_context_create(&m, 1u, &ctx), SU_OK);
+    if (ctx == NULL) {
+        return;
+    }
+    /* The module has despawn_self and emit_event: an emitter is required. */
+    v2_log_init(&log, -1L);
+    em.user = &log;
+    em.emit_despawn = v2_em_despawn;
+    em.emit_event = v2_em_event;
+    CHECK_ST(su_vm_context_set_entity_view(ctx, NULL, gens, 0u, 9u, &em), SU_OK);
+    memset(oa, 0, sizeof oa);
+    memset(ob, 0, sizeof ob);
+    CHECK_ST(v2_invoke(ctx, 4u, in, oa, ob, &failed), SU_OK);
+    v2_expect_log("despawn_emit", &log, want, 4u);
+    CHECK(oa[0] == 1u && oa[1] == 5u && oa[2] == 0u && oa[3] == 2u);  /* out_a = x */
+    CHECK(ob[0] == 0u && ob[1] == 1u && ob[2] == 2u && ob[3] == 3u);  /* out_b = slot */
+
+    su_vm_context_destroy(ctx);
+    su_lir_module_free(&m);
+}
+
+static void test_v2_seq_order(void) {
+    SuLirModule m;
+    SuExecContext *ctx = NULL;
+    static const uint32_t in[4] = {0u, 1u, 5u, 0u};
+    uint32_t oa[4], ob[4], failed;
+    V2Log log;
+    SuVmEmitter em;
+    /* Row 0 (x=0): e and c true -> E seq0, D seq1, E seq2. Row 1 (x=1): c only -> D seq0, E seq1.
+     * Row 2: nothing. Row 3 repeats row 0. A false condition consumes no seq. */
+    static const V2Rec want[8] = {
+        {'E', 0u, 0u, 5u, 0u, 0u, 0u},
+        {'D', 0u, 1u, 0u, 0u, 0u, (UINT64_C(1) << 32) | 0u},
+        {'E', 0u, 2u, 6u, 0u, 0u, 0u},
+        {'D', 1u, 0u, 0u, 0u, 0u, (UINT64_C(1) << 32) | 1u},
+        {'E', 1u, 1u, 6u, 1u, 1u, 0u},
+        {'E', 3u, 0u, 5u, 0u, 0u, 0u},
+        {'D', 3u, 1u, 0u, 0u, 0u, (UINT64_C(1) << 32) | 3u},
+        {'E', 3u, 2u, 6u, 0u, 0u, 0u},
+    };
+
+    CHECK(v2_load(V2_IR_SEQ, &m));
+    CHECK_ST(su_vm_context_create(&m, 1u, &ctx), SU_OK);
+    if (ctx == NULL) {
+        return;
+    }
+    v2_log_init(&log, -1L);
+    em.user = &log;
+    em.emit_despawn = v2_em_despawn;
+    em.emit_event = v2_em_event;
+    CHECK_ST(su_vm_context_set_entity_view(ctx, NULL, NULL, 0u, 0u, &em), SU_OK);
+    CHECK_ST(v2_invoke(ctx, 4u, in, oa, ob, &failed), SU_OK);
+    v2_expect_log("seq_order", &log, want, 8u);
+
+    su_vm_context_destroy(ctx);
+    su_lir_module_free(&m);
+}
+
+static void test_v2_dead_rows(void) {
+    SuLirModule m;
+    SuExecContext *ctx = NULL;
+    /* Dead rows 1 (x=0) and 3 (x=1) MATCH the condition, so only the skip keeps them silent. */
+    static const uint32_t in[4] = {1u, 0u, 0u, 1u};
+    static const uint8_t alive[4] = {1u, 0u, 1u, 0u};
+    uint32_t oa[4], ob[4], failed;
+    V2Log log;
+    SuVmEmitter em;
+    static const V2Rec want[4] = {
+        {'D', 0u, 0u, 0u, 0u, 0u, (UINT64_C(1) << 32) | 0u},
+        {'E', 0u, 1u, 42u, 0u, 1u, 0u},
+        {'D', 2u, 0u, 0u, 0u, 0u, (UINT64_C(1) << 32) | 2u},
+        {'E', 2u, 1u, 42u, 2u, 0u, 0u},
+    };
+
+    CHECK(v2_load(V2_IR_DESPAWN, &m));
+    CHECK_ST(su_vm_context_create(&m, 1u, &ctx), SU_OK);
+    if (ctx == NULL) {
+        return;
+    }
+    v2_log_init(&log, -1L);
+    em.user = &log;
+    em.emit_despawn = v2_em_despawn;
+    em.emit_event = v2_em_event;
+    CHECK_ST(su_vm_context_set_entity_view(ctx, alive, NULL, 0u, 0u, &em), SU_OK);
+    memset(oa, 0xEE, sizeof oa);
+    memset(ob, 0xEE, sizeof ob);
+    CHECK_ST(v2_invoke(ctx, 4u, in, oa, ob, &failed), SU_OK);
+    v2_expect_log("dead_rows", &log, want, 4u);
+    CHECK(oa[1] == 0xEEEEEEEEu && oa[3] == 0xEEEEEEEEu);  /* dead rows: staging untouched */
+    CHECK(ob[1] == 0xEEEEEEEEu && ob[3] == 0xEEEEEEEEu);
+    CHECK(oa[0] == 1u && oa[2] == 0u && ob[0] == 0u && ob[2] == 2u);
+
+    su_vm_context_destroy(ctx);
+    su_lir_module_free(&m);
+}
+
+static void test_v2_overflow(void) {
+    SuLirModule m;
+    SuExecContext *ctx = NULL;
+    static const uint32_t in[4] = {1u, 5u, 0u, 2u};
+    uint32_t oa[4], ob[4], failed;
+    V2Log log;
+    SuVmEmitter em;
+
+    CHECK(v2_load(V2_IR_DESPAWN, &m));
+    CHECK_ST(su_vm_context_create(&m, 1u, &ctx), SU_OK);
+    if (ctx == NULL) {
+        return;
+    }
+    /* Third record (row 2 despawn, instruction 3) reports overflow: the call fails with
+     * SU_E_RESOURCE_LIMIT and failed_insn names the emitting instruction. */
+    v2_log_init(&log, 2L);
+    em.user = &log;
+    em.emit_despawn = v2_em_despawn;
+    em.emit_event = v2_em_event;
+    CHECK_ST(su_vm_context_set_entity_view(ctx, NULL, NULL, 0u, 0u, &em), SU_OK);
+    CHECK_ST(v2_invoke(ctx, 4u, in, oa, ob, &failed), SU_E_RESOURCE_LIMIT);
+    CHECK(failed == 3u);
+    CHECK(su_vm_context_last_failed_insn(ctx) == 3u);
+    CHECK(log.n == 2u);
+
+    /* Same call with room succeeds. */
+    v2_log_init(&log, -1L);
+    em.user = &log;
+    CHECK_ST(su_vm_context_set_entity_view(ctx, NULL, NULL, 0u, 0u, &em), SU_OK);
+    CHECK_ST(v2_invoke(ctx, 4u, in, oa, ob, &failed), SU_OK);
+    CHECK(log.n == 4u);
+
+    su_vm_context_destroy(ctx);
+    su_lir_module_free(&m);
+}
+
+static void test_v2_emitter_rules(void) {
+    SuLirModule m;
+    SuExecContext *ctx = NULL;
+    static const uint32_t in[4] = {1u, 5u, 0u, 2u};
+    uint32_t oa[4], ob[4], failed;
+    SuVmEmitter bad;
+    V2Log log;
+    SuVmEmitter em;
+
+    CHECK(v2_load(V2_IR_DESPAWN, &m));
+    CHECK_ST(su_vm_context_create(&m, 1u, &ctx), SU_OK);
+    if (ctx == NULL) {
+        return;
+    }
+    /* No emitter: the module needs one. Columns stay untouched. */
+    memset(oa, 0x5A, sizeof oa);
+    memset(ob, 0x5A, sizeof ob);
+    CHECK_ST(v2_invoke(ctx, 4u, in, oa, ob, &failed), SU_E_INVALID_ARGUMENT);
+    CHECK(failed == UINT32_MAX);
+    CHECK(oa[0] == 0x5A5A5A5Au && ob[3] == 0x5A5A5A5Au);
+
+    /* An incomplete emitter is refused by the setter. */
+    memset(&bad, 0, sizeof bad);
+    bad.emit_despawn = v2_em_despawn;
+    CHECK_ST(su_vm_context_set_entity_view(ctx, NULL, NULL, 0u, 0u, &bad), SU_E_INVALID_ARGUMENT);
+    CHECK_ST(su_vm_context_set_entity_view(NULL, NULL, NULL, 0u, 0u, NULL), SU_E_INVALID_ARGUMENT);
+
+    /* A 0.2 module without emit/despawn needs no emitter. */
+    su_vm_context_destroy(ctx);
+    su_lir_module_free(&m);
+    CHECK(v2_load(V2_IR_KA, &m));
+    CHECK_ST(su_vm_context_create(&m, 1u, &ctx), SU_OK);
+    if (ctx != NULL) {
+        v2_log_init(&log, -1L);
+        em.user = &log;
+        em.emit_despawn = v2_em_despawn;
+        em.emit_event = v2_em_event;
+        CHECK_ST(su_vm_context_set_entity_view(ctx, NULL, NULL, 0u, 0u, &em), SU_OK);
+        CHECK_ST(v2_invoke(ctx, 4u, in, oa, ob, &failed), SU_OK);
+        CHECK(log.n == 0u);
+        su_vm_context_destroy(ctx);
+    }
+    su_lir_module_free(&m);
+}
+
+/* A 0.1 module (the movement example) skips dead rows too, with no emitter. */
+static void test_v2_dead_rows_01(void) {
+    SuLirModule m;
+    uint32_t gen = 0;
+    SuExecContext *ctx = NULL;
+    static const uint32_t pos[4] = {10u, 20u, 30u, 40u};
+    static const uint32_t vel[4] = {1u, 2u, 3u, 4u};
+    static const uint8_t alive[4] = {1u, 0u, 1u, 1u};
+    uint32_t stage[4];
+    SuColumnBinding ib[2], ob[1];
+    SuInvocation inv;
+    SuOutputs outs;
+    uint32_t failed;
+    uint32_t st;
+
+    CHECK(load_module("examples/movement.capsule.json", NULL, &m, &gen));
+    if (m.field_count != 2u) {
+        su_lir_module_free(&m);
+        return;
+    }
+    CHECK_ST(su_vm_context_create(&m, gen, &ctx), SU_OK);
+    if (ctx == NULL) {
+        su_lir_module_free(&m);
+        return;
+    }
+    memset(ib, 0, sizeof ib);
+    memset(ob, 0, sizeof ob);
+    ib[0].struct_size = (uint32_t)sizeof(SuColumnBinding);
+    ib[0].field_id = 1u;
+    ib[0].elem_type = SU_TYPE_U32;
+    ib[0].access = SU_ACCESS_READ;
+    ib[0].layout_generation = 1u;
+    ib[0].stride_bytes = 4u;
+    ib[0].row_count = 4u;
+    ib[0].data = (void *)pos;
+    ib[1] = ib[0];
+    ib[1].field_id = 2u;
+    ib[1].data = (void *)vel;
+    ob[0] = ib[0];
+    ob[0].access = SU_ACCESS_WRITE;
+    ob[0].data = stage;
+    memset(stage, 0xCD, sizeof stage);
+    inv.struct_size = (uint32_t)sizeof(SuInvocation);
+    inv.abi_version = SU_ABI_VERSION;
+    inv.layout_generation = 1u;
+    inv.binding_count = 2u;
+    inv.row_count = 4u;
+    inv.bindings = ib;
+    outs.struct_size = (uint32_t)sizeof(SuOutputs);
+    outs.binding_count = 1u;
+    outs.failed_insn = UINT32_MAX;
+    outs.reserved = 0u;
+    outs.bindings = ob;
+    CHECK_ST(su_vm_context_set_entity_view(ctx, alive, NULL, 0u, 0u, NULL), SU_OK);
+    st = su_vm_invoke_v1(ctx, &inv, &outs);
+    failed = outs.failed_insn;
+    CHECK_ST(st, SU_OK);
+    CHECK(failed == UINT32_MAX);
+    CHECK(stage[0] == 11u && stage[2] == 33u && stage[3] == 44u);
+    CHECK(stage[1] == 0xCDCDCDCDu);
+
+    su_vm_context_destroy(ctx);
+    su_lir_module_free(&m);
+}
+
+static void test_v2_hand_modules(void) {
+    SuInsn insn;
+    SuLirModule m;
+    SuExecContext *ctx = NULL;
+
+    /* A 0.2 opcode in a module that is not 0.2 is refused by the context builder. */
+    memset(&insn, 0, sizeof insn);
+    insn.op = SU_OP_SLOT_U32;
+    insn.dst = 0u;
+    insn.a = insn.b = insn.c = SU_OPERAND_NONE;
+    hand_module(&m, &insn, 1u, 1u);
+    m.ir_version_minor = 1u;
+    CHECK_ST(su_vm_context_create(&m, 1u, &ctx), SU_E_INVALID_ARGUMENT);
+    CHECK(ctx == NULL);
+    m.ir_version_minor = 2u;
+    CHECK_ST(su_vm_context_create(&m, 1u, &ctx), SU_OK);
+    su_vm_context_destroy(ctx);
+}
+
 int main(void) {
     static const char *const k_fixtures[] = {
         "examples/movement.test.json",
@@ -907,6 +1420,14 @@ int main(void) {
     test_wrapper_rejections();
     test_run_system_phase();
     test_defensive();
+    test_v2_known_answers();
+    test_v2_despawn_emit();
+    test_v2_seq_order();
+    test_v2_dead_rows();
+    test_v2_overflow();
+    test_v2_emitter_rules();
+    test_v2_dead_rows_01();
+    test_v2_hand_modules();
 
     printf("test_vm: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

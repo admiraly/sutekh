@@ -896,6 +896,39 @@ static int perms_at(uintptr_t addr, char perms[8], int *any_rwx) {
     return found;
 }
 
+/* M2-00c2: a verified IR 0.2 module is refused by every native capability set with
+ * SU_E_CAPABILITY_DENIED (reason ir_0_2_not_lowered); the 0.1 movement module still compiles. */
+static int run_ir02_refusal(void) {
+    SuLirModule m02;
+    SuLirModule m01;
+    SuNativeArtifact *art = NULL;
+    SuNativeDiag d;
+    int ok = 1;
+    uint32_t st;
+
+    if (!verify_pair("tests/fixtures/ir02/ok_valid.capsule.json", "tests/fixtures/ir02/ok_valid.lir.json", &m02)) {
+        return 0;
+    }
+    st = su_native_compile(&m02, 1u, SU_NCAP_X86_64_SCALAR, &art, &d);
+    if (st != SU_E_CAPABILITY_DENIED || art != NULL || strcmp(d.message, "ir_0_2_not_lowered") != 0) {
+        fprintf(stderr, "ir02 scalar: got %s, want SU_E_CAPABILITY_DENIED\n", su_status_name(st));
+        ok = 0;
+    }
+    su_lir_module_free(&m02);
+
+    if (!verify_pair("examples/movement.capsule.json", "examples/movement.lir.json", &m01)) {
+        return 0;
+    }
+    st = su_native_compile(&m01, 1u, SU_NCAP_X86_64_SCALAR, &art, &d);
+    if (st != SU_OK) {
+        fprintf(stderr, "0.1 movement scalar: got %s, want SU_OK\n", su_status_name(st));
+        ok = 0;
+    }
+    su_native_artifact_free(art);
+    su_lir_module_free(&m01);
+    return ok;
+}
+
 static int run_wx(void) {
     SuLirField f[2];
     SuInsn ins[2];
@@ -1331,6 +1364,7 @@ int main(int argc, char **argv) {
     run_wrapper_rejections();
     ok &= run_abi_clobber();
     ok &= run_wx();
+    ok &= run_ir02_refusal();
     ok &= run_failure_injection();
     ok &= run_metadata();
     ok &= run_large_frame();

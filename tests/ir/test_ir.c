@@ -604,6 +604,67 @@ static void test_targeted(void) {
                SU_E_TYPE, "/instructions/0/value");
 }
 
+/* ---------- IR 0.2 (M2-00c2): negatives by stage, positives, hashes ---------- */
+
+static void test_ir02_negatives(void) {
+    run_negative_manifest("tests/fixtures/ir02/manifest.json", "tests/fixtures/ir02/", 25u);
+}
+
+static void test_ir02_positives(void) {
+    static const char *const ok[] = {"ok_valid", "ok_kind_max", "ok_cap_exact", "ok_cap_64"};
+    static const uint32_t smax[] = {4u, 4u, 1u, 64u};
+    size_t i;
+    for (i = 0; i < sizeof ok / sizeof ok[0]; i++) {
+        char cap[256], lir[256];
+        SuLirModule m;
+        SuDiag d;
+        uint32_t rc;
+        snprintf(cap, sizeof cap, "tests/fixtures/ir02/%s.capsule.json", ok[i]);
+        snprintf(lir, sizeof lir, "tests/fixtures/ir02/%s.lir.json", ok[i]);
+        rc = verify_files(cap, lir, &m, &d);
+        CHECK_CODE(rc, SU_OK);
+        if (rc == SU_OK) {
+            CHECK(m.ir_version_minor == 2u);
+            CHECK(m.artifact_format == SU_ARTIFACT_FORMAT_VERSION_0_2);
+            CHECK(m.uses_entity_ops == 1u);
+            CHECK(m.max_struct_per_row == smax[i]);
+            CHECK(m.max_events_per_row == smax[i]);
+            su_lir_module_free(&m);
+        } else {
+            fprintf(stderr, "  %s: %s\n", ok[i], d.message);
+        }
+    }
+}
+
+/* Movement (0.1) semantic hash: identical to the M0 value recorded before IR 0.2 (M2-00c2 proof). */
+static void test_ir02_hashes(void) {
+    static const char M0_MOVEMENT_SEMANTIC[] =
+        "b9e6bd62b4c9aff3e27c114b14f64f02c074c3ba529c3729bef42f15955065b6";
+    SuLirModule a, b, c;
+    SuDiag d;
+    CHECK_CODE(verify_files("examples/movement.capsule.json", "examples/movement.lir.json", &a, &d), SU_OK);
+    CHECK_STR(a.semantic_hash_hex, M0_MOVEMENT_SEMANTIC);
+    CHECK(a.artifact_format == SU_ARTIFACT_FORMAT_VERSION);
+    CHECK(a.ir_version_minor == 1u);
+    CHECK(a.uses_entity_ops == 0u);
+    su_lir_module_free(&a);
+
+    /* 0.2: caps are part of the hash (same body, different max_struct_per_row). */
+    CHECK_CODE(verify_files("tests/fixtures/ir02/ok_cap_exact.capsule.json",
+                            "tests/fixtures/ir02/ok_cap_exact.lir.json", &b, &d), SU_OK);
+    CHECK_CODE(verify_files("tests/fixtures/ir02/ok_cap_64.capsule.json",
+                            "tests/fixtures/ir02/ok_cap_64.lir.json", &c, &d), SU_OK);
+    CHECK(memcmp(b.semantic_hash, c.semantic_hash, 32) != 0);
+    su_lir_module_free(&b);
+    su_lir_module_free(&c);
+
+    /* Regression pin of the 0.2 encoding (value produced by this encoding, not an external vector). */
+    CHECK_CODE(verify_files("tests/fixtures/ir02/ok_valid.capsule.json",
+                            "tests/fixtures/ir02/ok_valid.lir.json", &b, &d), SU_OK);
+    CHECK_STR(b.semantic_hash_hex, "cbd6d237363cd208b71c02de59f03ecd7f6d0e0c0b4b609bee002964e4db682d");
+    su_lir_module_free(&b);
+}
+
 int main(void) {
     test_sha256();
     test_json();
@@ -611,6 +672,9 @@ int main(void) {
     test_negative_manifests();
     test_hash_identity();
     test_targeted();
+    test_ir02_negatives();
+    test_ir02_positives();
+    test_ir02_hashes();
 
     printf("test_ir: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

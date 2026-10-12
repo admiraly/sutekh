@@ -111,3 +111,31 @@ After M0, add only operations required by an accepted task: bounded conditional 
 Control-flow graphs, a broad optimizing SSA compiler, automatic layout exploration, and CPU/GPU multi-target synthesis are later capabilities. They are not prerequisites for the first executable capsule.
 
 Fixtures: [movement IR](examples/movement.lir.json), [contract](examples/movement.capsule.json), [world](examples/world.json), [test](examples/movement.test.json). Sources: [SOURCE_NOTES.md](docs/SOURCE_NOTES.md).
+
+## IR 0.2 (M2)
+
+Status: implemented in the reference verifier and VM (M2-00c2). Contract: `planning/contracts/M2_ENTITIES_CONTRACT.md` sections 2, 3 and 6. The 0.1 rules above are unchanged; a 0.1 module keeps its semantic hash byte-for-byte.
+
+**Versions.** `ir_version` is `"0.1"` or `"0.2"`; any other value is `SU_E_TYPE` (stage 4). The capsule may declare an optional top-level `ir_version`; absent means `"0.1"`. The IR and capsule versions must agree, else `SU_E_SCHEMA_MISMATCH` (stage 5).
+
+**Operations** (JSON keys; `SuInsn` mapping from `include/sutekh/ir.h`):
+
+| op | JSON keys | dst | a | b | c |
+|---|---|---|---|---|---|
+| `slot_u32` (10) | `op`, `dst` | u32 reg (row slot) | NONE | NONE | NONE |
+| `gen_u32` (11) | `op`, `dst` | u32 reg (row generation) | NONE | NONE | NONE |
+| `tick_u32` (12) | `op`, `dst` | u32 reg ((committed+1) mod 2^32) | NONE | NONE | NONE |
+| `despawn_self` (13) | `op`, `cond` | cond bool reg (source) | NONE | NONE | NONE |
+| `emit_event` (14) | `op`, `cond`, `kind`, `a`, `b` | cond bool reg (source) | kind constant | payload reg A (u32) | payload reg B (u32) |
+
+Only `"0.2"` modules may contain these; in a 0.1 module they are `SU_E_UNKNOWN_OPCODE` (stage 6). `emit_event` `kind` must be below `SU_EVENT_KIND_RESERVED_MIN` (`0xFFFFFF00`), else `SU_E_TYPE` (stage 6).
+
+**Capsule limits** (optional, integers 0..64, default 0): `limits.max_struct_per_row`, `limits.max_events_per_row`. A 0.1 module that declares either is `SU_E_TYPE` (stage 4). In stage 5 (after `max_instructions`), a 0.2 module whose count of `despawn_self` exceeds `max_struct_per_row`, or whose count of `emit_event` exceeds `max_events_per_row`, is `SU_E_RESOURCE_LIMIT`. Undeclared caps are 0, so any despawn or emit in such a module is refused. Conditions are ignored in the count (straight-line worst case).
+
+**Hash.** The 0.1 encoding is unchanged. For 0.2 the artifact format is 2 (`SU_ARTIFACT_FORMAT_VERSION_0_2`), passed as a parameter of the encoding. After the field table, the encoding adds the `ir_version` string (u32 length + bytes, `"0.2"`), `max_struct_per_row` (u32) and `max_events_per_row` (u32), then the instruction count and words as before.
+
+**VM semantics.** `su_vm_context_set_entity_view` sets, for subsequent invocations: `alive` (NULL = all alive; a dead row is skipped entirely, with no staged writes, no emissions and no store check, in 0.1 modules too), `generations` (NULL = 1), `base_slot` (`slot_u32` = base + row index), `tick_low` (value of `tick_u32`) and the emitter. Emission callbacks receive a per-row `seq` (0-based, shared by `despawn_self` and `emit_event`, advanced only when the op fires). A callback returning nonzero fails the call with `SU_E_RESOURCE_LIMIT` and sets `failed_insn`; records already emitted are not retracted. A module containing `despawn_self` or `emit_event` requires an emitter (`SU_E_INVALID_ARGUMENT` otherwise). Without a view, slot = row index, generation = 1, tick = 0.
+
+**Native.** Any 0.2 module is refused by `su_native_compile` with `SU_E_CAPABILITY_DENIED` (reason `ir_0_2_not_lowered`). 0.1 modules are unaffected.
+
+**Not in 0.2:** spawn from IR, entity-typed registers, event consumption by systems, native lowering of 0.2 ops, dynamic growth. The world integration that builds the entity view for `su_vm_run_system` is not part of this section.
