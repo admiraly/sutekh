@@ -42,7 +42,7 @@ Builds, each after `python3 tools/dev.py clean` (`planning/evidence/m0-dev-clean
 
 ctest: 7 of 7 passed in both profiles (`planning/evidence/m0-ctest-dev.log`, `planning/evidence/m0-ctest-release.log`): world, ir, vm, control, snapshot, reload, snapshot_cp.
 
-Harness self-test (`planning/evidence/m0-harness-self-test.log`): 150 checks, 0 failures.
+Harness self-test (`planning/evidence/m0-harness-self-test.log`, recorded at M0 closure): 150 checks, 0 failures. The current self-test has 198 checks (see the M1 sections).
 
 Harness, `python3 -I tests/harness/run_m0.py --binary build/sutekh --report-dir <dir>` (T00 included; the report records `repo_head`, binary SHA-256 and the harness SHA-256):
 

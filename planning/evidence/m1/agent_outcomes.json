@@ -190,6 +190,16 @@
     "a564d896d74db497b": {
       "task": "M1 closure B chunked tick workers, TX5/TX6",
       "kind": "impl",
+      "outcome": "accepted_as_is"
+    },
+    "a4ab65f18b0c4d289": {
+      "task": "M1 re-audit",
+      "kind": "review",
+      "outcome": "review_found_issues"
+    },
+    "ace71702b76ae7c02": {
+      "task": "M1 closure C containment, retirement tests, chunked native",
+      "kind": "impl",
       "outcome": "in_progress"
     }
   }
