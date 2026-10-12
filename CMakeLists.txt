@@ -328,3 +328,15 @@ target_compile_definitions(test_hardening PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_hardening)
 add_test(NAME hardening COMMAND test_hardening "${CMAKE_BINARY_DIR}/hardening_scratch"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# M2-00b: bounded structural/event queues with canonical merge
+add_library(su_cmdq STATIC src/world/entities/su_cmdq.c)
+target_include_directories(su_cmdq PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
+target_compile_definitions(su_cmdq PRIVATE _POSIX_C_SOURCE=200809L)
+target_link_libraries(su_cmdq PUBLIC Threads::Threads)
+sutekh_apply_warnings(su_cmdq)
+add_executable(test_cmdq tests/entities/test_cmdq.c)
+target_link_libraries(test_cmdq PRIVATE su_cmdq Threads::Threads)
+target_compile_definitions(test_cmdq PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_cmdq)
+add_test(NAME cmdq COMMAND test_cmdq WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
