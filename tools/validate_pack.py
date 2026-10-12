@@ -7,6 +7,7 @@ Standard-library checks always run. Draft 2020-12 checks also run when the
 optional jsonschema package is installed. No native compiler is invoked.
 """
 from __future__ import annotations
+import argparse
 import copy
 import hashlib
 import json
@@ -121,6 +122,8 @@ def validate_program(program: dict[str, Any], capsule: dict[str, Any]) -> None:
         op = ins["op"]
         exact_keys(ins, OPS[op], f"instruction {index}")
         dst = ins.get("dst")
+        if op != "store_u32" and dst is None:
+            fail("SU_E_TYPE", f"instruction {index}: {op} requires a destination register")
         if dst is not None:
             if not isinstance(dst, str) or not NAME.fullmatch(dst):
                 fail("SU_E_TYPE", "bad register name")
@@ -173,6 +176,8 @@ def evaluate(program: dict[str, Any], capsule: dict[str, Any], world: dict[str, 
         fail("SU_E_RESOURCE_LIMIT", "row limit")
     if len(set(world["entity_ids"])) != count:
         fail("SU_E_SCHEMA_MISMATCH", "duplicate entity identity")
+    if not all(type(e) is int and 1 <= e <= MASK for e in world["entity_ids"]):
+        fail("SU_E_TYPE", "entity IDs must be integers from 1 to 2^32-1")
     required = {f["name"] for f in capsule["fields"]}
     if set(world["columns"]) != required:
         fail("SU_E_SCHEMA_MISMATCH", "world fields")
@@ -304,37 +309,53 @@ def schema_checks() -> dict[str, Any]:
         jsonschema.Draft202012Validator(schemas[schema_name]).validate(load(ROOT / path))
     return {"status":"passed", "schemas_checked":len(schemas), "instances_checked":len(mapping)}
 
-def main() -> int:
+def build_report() -> dict[str, Any]:
+    json_count = 0
+    for path in (p for p in pack_files() if p.suffix == '.json'):
+        # Intentionally invalid/negative engine fixtures (malformed JSON, duplicate keys, ...) are
+        # exercised by the engine harness, not by this specification checker.
+        if ({"invalid", "m0_neg"} & set(path.parts)
+                or path.name in ("PACK_VALIDATION.json", "PACK_INDEX.json")):
+            continue
+        load(path)
+        json_count += 1
+    tasks = check_task_graph()
+    positive, negative, opcode_cases = check_examples()
+    schemas = schema_checks()
+    links = check_links()
+    return {
+        "scope":"specification_pack_and_python_example_model_only",
+        "status":"passed",
+        "strict_json_files_checked":json_count,
+        "task_dag_nodes_checked":tasks,
+        "positive_fixture_checks":positive,
+        "negative_ir_checks":negative,
+        "additional_opcode_known_answer_checks":opcode_cases,
+        "internal_markdown_links_checked":links,
+        "json_schema":schemas,
+        "native_engine_compilation":"not_run",
+        "native_runtime_tests":"not_run",
+        "engine_performance":"not_run",
+        "original_bfme_fidelity":"not_run",
+    }
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--write-report", action="store_true",
+                      help="regenerate the committed PACK_VALIDATION.json")
+    mode.add_argument("--check-report", action="store_true",
+                      help="fail if the committed PACK_VALIDATION.json is stale")
+    args = parser.parse_args(argv)
     try:
-        json_count = 0
-        for path in (p for p in pack_files() if p.suffix == '.json'):
-            # Intentionally invalid/negative engine fixtures (malformed JSON, duplicate keys, ...) are
-            # exercised by the engine harness, not by this specification checker.
-            if ({"invalid", "m0_neg"} & set(path.parts)
-                    or path.name in ("PACK_VALIDATION.json", "PACK_INDEX.json")):
-                continue
-            load(path)
-            json_count += 1
-        tasks = check_task_graph()
-        positive, negative, opcode_cases = check_examples()
-        schemas = schema_checks()
-        links = check_links()
-        result = {
-            "scope":"specification_pack_and_python_example_model_only",
-            "status":"passed",
-            "strict_json_files_checked":json_count,
-            "task_dag_nodes_checked":tasks,
-            "positive_fixture_checks":positive,
-            "negative_ir_checks":negative,
-            "additional_opcode_known_answer_checks":opcode_cases,
-            "internal_markdown_links_checked":links,
-            "json_schema":schemas,
-            "native_engine_compilation":"not_run",
-            "native_runtime_tests":"not_run",
-            "engine_performance":"not_run",
-            "original_bfme_fidelity":"not_run",
-        }
-        (ROOT / "PACK_VALIDATION.json").write_bytes((json.dumps(result, indent=2)+"\n").encode("utf-8"))
+        result = build_report()
+        text = json.dumps(result, indent=2)+"\n"
+        report = ROOT / "PACK_VALIDATION.json"
+        if args.write_report:
+            report.write_bytes(text.encode("utf-8"))
+        elif args.check_report:
+            if report.read_bytes().decode("utf-8") != text:
+                fail("PACK_CHECK_FAILED", "PACK_VALIDATION.json is stale; run tools/validate_pack.py --write-report")
         print(json.dumps(result, indent=2))
         return 0
     except (SpecError, OSError, KeyError, TypeError, ValueError) as exc:
