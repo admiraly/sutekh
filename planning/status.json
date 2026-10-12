@@ -50,5 +50,29 @@
       "Multi-agent experiment: tokens, tool calls and integration latency are null; outcome classes are orchestrator judgement.",
       "Unrun audit mutants: INSTALL-REV, DIGEST-TICK-RERUN, QUAR-FIND."
     ]
+  },
+  "m2": {
+    "state": "implemented_audited_pending_owner_acceptance",
+    "audits": [
+      "planning/audit/M2-00-audit.md",
+      "planning/audit/M2-audit.md",
+      "planning/audit/M2-reaudit.md"
+    ],
+    "fix_handoffs": [
+      "planning/handoffs/2026-10-12-m2-00-fixes.md",
+      "planning/handoffs/2026-10-12-m2-01-fixes.md",
+      "planning/handoffs/2026-10-12-m2-01-fixes2.md"
+    ],
+    "verified_by_orchestrator": "default release ctest 21/21, native ctest 33/33, harness default 23 passed/0 failed (3 native-only unavailable), harness native 26/0 per fix agent and orchestrator at prior head",
+    "open": [
+      "no independent re-check of fixes2 (BLK-3 iii, N1, N2, N3) yet",
+      "N5 id reuse after undone commit: owner decision",
+      "N4 recovery exhaustion inside undo documented not unified",
+      "gap c rollback digest needs contract-level digest change",
+      "no harness case for native in-flight migration",
+      "docs/AGENT_RPC.md not updated for fixes2",
+      "TSan not run on specialize_inflight"
+    ],
+    "note": "M2 closure not declared; owner acceptance not given."
   }
 }
