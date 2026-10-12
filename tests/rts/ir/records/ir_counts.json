@@ -1,0 +1,55 @@
+{
+  "build_dir_note": "release build of this worktree",
+  "format": "rts-ir-counts/0.1",
+  "measure": "static: instructions of the verified LIR (su_lir insn_count)",
+  "systems": {
+    "combat": {
+      "capsule_hash": "3ffe7ed09257edab8bfdc2d86953a15ba2f77d07a1d7d80773977adb1265ae7d",
+      "fields": 16,
+      "instructions": 58,
+      "ir_version": "0.1",
+      "max_events_per_row": 0,
+      "max_struct_per_row": 0,
+      "registers": 48,
+      "semantic_hash": "0447156f83c1ad8119388a059971cd496a920482f9c6a4cab07eff43c7543c99",
+      "source_hash": "2ffa3d0e15921ec64aa2bb1dbaaa3a2d7610a0978a952bffbc041e95bea858cb",
+      "uses_entity_ops": 0
+    },
+    "damage": {
+      "capsule_hash": "8d4686aa2131de21690d39dccf11b8eba9e7819a7da400380d12daaa8908c100",
+      "fields": 2,
+      "instructions": 14,
+      "ir_version": "0.2",
+      "max_events_per_row": 0,
+      "max_struct_per_row": 1,
+      "registers": 12,
+      "semantic_hash": "dae3bda2ae81bf6f1c4a2dc25c49c466f6def1f6520b0de95b4df7ea316892bf",
+      "source_hash": "8a5a54dad0521048e152fae040d8cae2aaf2737665dc9d2993e7e0b443bdacbc",
+      "uses_entity_ops": 1
+    },
+    "goal": {
+      "capsule_hash": "146e423d02d1dab66695e1963256d0ec0fd43a61bf5399c41c181ea2efc2c338",
+      "fields": 12,
+      "instructions": 37,
+      "ir_version": "0.1",
+      "max_events_per_row": 0,
+      "max_struct_per_row": 0,
+      "registers": 35,
+      "semantic_hash": "1ab0d3ececbcbc5ae170fdb8dbcbada6c230a4f362536f8de69ad98a089d0631",
+      "source_hash": "6c5328ae7d4daa0e24cfda6511234f6dc16fa04c7cdacac05cb48a0b43184fc1",
+      "uses_entity_ops": 0
+    },
+    "move": {
+      "capsule_hash": "384d989013b08f928acdcff104ece18ba2b62a912cb00ef38dfbb0b3beb61d32",
+      "fields": 7,
+      "instructions": 40,
+      "ir_version": "0.1",
+      "max_events_per_row": 0,
+      "max_struct_per_row": 0,
+      "registers": 38,
+      "semantic_hash": "429d5326d250c5dc807124a66c0ec68176858a6edc10cbe82a8f2567c94f66b3",
+      "source_hash": "b833926ef960233185721412ab14e72d6645dba6ee964b3365c9d4587a2b58dd",
+      "uses_entity_ops": 0
+    }
+  }
+}

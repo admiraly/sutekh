@@ -1,0 +1,94 @@
+{
+  "format": "rts-ir-negatives/0.1",
+  "cases": [
+    {
+      "name": "missing_store_goal_y",
+      "status": "run",
+      "expected_code": "SU_E_MISSING_STORE",
+      "capsule": "missing_store_goal_y.capsule.json",
+      "source": "missing_store_goal_y.lir.json"
+    },
+    {
+      "name": "undeclared_write_pos_x",
+      "status": "run",
+      "expected_code": "SU_E_UNDECLARED_WRITE",
+      "capsule": "undeclared_write_pos_x.capsule.json",
+      "source": "undeclared_write_pos_x.lir.json"
+    },
+    {
+      "name": "undeclared_read_hp",
+      "status": "run",
+      "expected_code": "SU_E_UNDECLARED_READ",
+      "capsule": "undeclared_read_hp.capsule.json",
+      "source": "undeclared_read_hp.lir.json"
+    },
+    {
+      "name": "ir_0_2_despawn_in_0_1_module",
+      "status": "run",
+      "expected_code": "SU_E_UNKNOWN_OPCODE",
+      "capsule": "ir_0_2_despawn_in_0_1_module.capsule.json",
+      "source": "ir_0_2_despawn_in_0_1_module.lir.json"
+    },
+    {
+      "name": "despawn_above_max_struct",
+      "status": "run",
+      "expected_code": "SU_E_RESOURCE_LIMIT",
+      "capsule": "despawn_above_max_struct.capsule.json",
+      "source": "despawn_above_max_struct.lir.json"
+    },
+    {
+      "name": "emit_event_without_event_cap",
+      "status": "run",
+      "expected_code": "SU_E_RESOURCE_LIMIT",
+      "capsule": "emit_event_without_event_cap.capsule.json",
+      "source": "emit_event_without_event_cap.lir.json"
+    },
+    {
+      "name": "ir_version_mismatch",
+      "status": "run",
+      "expected_code": "SU_E_SCHEMA_MISMATCH",
+      "capsule": "ir_version_mismatch.capsule.json",
+      "source": "ir_version_mismatch.lir.json"
+    },
+    {
+      "name": "duplicate_register",
+      "status": "run",
+      "expected_code": "SU_E_DUPLICATE_REGISTER",
+      "capsule": "duplicate_register.capsule.json",
+      "source": "duplicate_register.lir.json"
+    },
+    {
+      "name": "undefined_register",
+      "status": "run",
+      "expected_code": "SU_E_UNDEFINED_REGISTER",
+      "capsule": "undefined_register.capsule.json",
+      "source": "undefined_register.lir.json"
+    },
+    {
+      "name": "select_raw_u32_condition",
+      "status": "run",
+      "expected_code": "SU_E_TYPE",
+      "capsule": "select_raw_u32_condition.capsule.json",
+      "source": "select_raw_u32_condition.lir.json"
+    },
+    {
+      "name": "unknown_opcode_in_0_2",
+      "status": "run",
+      "expected_code": "SU_E_UNKNOWN_OPCODE",
+      "capsule": "unknown_opcode_in_0_2.capsule.json",
+      "source": "unknown_opcode_in_0_2.lir.json"
+    },
+    {
+      "name": "native_lowering_refused_0_2",
+      "status": "not_run",
+      "expected_code": "SU_E_CAPABILITY_DENIED",
+      "reason": "native lane needs SUTEKH_NATIVE=ON and the asmjit sources, which are not vendored (third_party holds only asmjit.lock.json) and are not fetched offline"
+    },
+    {
+      "name": "schedule_after_later_or_unknown_system",
+      "status": "not_run",
+      "expected_code": "SU_E_SCHEMA_MISMATCH",
+      "reason": "the schedule-order check is in src/runtime/worker.c and needs a world.create with a manifest; the IR verifier does not read after lists"
+    }
+  ]
+}

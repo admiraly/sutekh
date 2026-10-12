@@ -1,0 +1,217 @@
+{
+  "ir_version": "0.1",
+  "system_id": "rts.goal",
+  "numeric_profile": "u32_mod_v1",
+  "query": "rts",
+  "instructions": [
+    {
+      "op": "const_u32",
+      "dst": "k1",
+      "value": 0
+    },
+    {
+      "op": "const_u32",
+      "dst": "k2",
+      "value": 1
+    },
+    {
+      "op": "const_u32",
+      "dst": "k3",
+      "value": 16384
+    },
+    {
+      "op": "const_u32",
+      "dst": "k4",
+      "value": 2147483647
+    },
+    {
+      "op": "const_u32",
+      "dst": "k5",
+      "value": 32767
+    },
+    {
+      "op": "load_u32",
+      "dst": "v6",
+      "field": "order_mode"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t7",
+      "a": "v6",
+      "b": "k1"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s8",
+      "cond": "t7",
+      "on_true": "k1",
+      "on_false": "k2"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t9",
+      "a": "s8",
+      "b": "k2"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v10",
+      "field": "anchor_valid"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t11",
+      "a": "v10",
+      "b": "k2"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v12",
+      "field": "anchor_x"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v13",
+      "field": "formation_ox"
+    },
+    {
+      "op": "add_u32",
+      "dst": "t14",
+      "a": "v12",
+      "b": "v13"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t15",
+      "a": "t14",
+      "b": "k3"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v16",
+      "field": "order_x"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v17",
+      "field": "pos_x"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s18",
+      "cond": "t11",
+      "on_true": "t15",
+      "on_false": "v17"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s19",
+      "cond": "t9",
+      "on_true": "v16",
+      "on_false": "s18"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t20",
+      "a": "k4",
+      "b": "s19"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t21",
+      "a": "k5",
+      "b": "s19"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s22",
+      "cond": "t21",
+      "on_true": "k5",
+      "on_false": "s19"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s23",
+      "cond": "t20",
+      "on_true": "k1",
+      "on_false": "s22"
+    },
+    {
+      "op": "store_u32",
+      "field": "goal_x",
+      "src": "s23"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v24",
+      "field": "anchor_y"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v25",
+      "field": "formation_oy"
+    },
+    {
+      "op": "add_u32",
+      "dst": "t26",
+      "a": "v24",
+      "b": "v25"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t27",
+      "a": "t26",
+      "b": "k3"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v28",
+      "field": "order_y"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v29",
+      "field": "pos_y"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s30",
+      "cond": "t11",
+      "on_true": "t27",
+      "on_false": "v29"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s31",
+      "cond": "t9",
+      "on_true": "v28",
+      "on_false": "s30"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t32",
+      "a": "k4",
+      "b": "s31"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t33",
+      "a": "k5",
+      "b": "s31"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s34",
+      "cond": "t33",
+      "on_true": "k5",
+      "on_false": "s31"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s35",
+      "cond": "t32",
+      "on_true": "k1",
+      "on_false": "s34"
+    }
+  ]
+}

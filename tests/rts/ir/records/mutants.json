@@ -1,0 +1,1675 @@
+{
+  "format": "rts-ir-mutants/0.1",
+  "named": {
+    "as_expected": 21,
+    "killed": 21,
+    "records": [
+      {
+        "as_expected": true,
+        "description": "goal_x stored without clamp_domain",
+        "detectors": [
+          "differential:domain",
+          "differential:any"
+        ],
+        "expected": "differential",
+        "id": "N01",
+        "killed": true,
+        "system": "goal"
+      },
+      {
+        "as_expected": true,
+        "description": "BIAS constant 16384 replaced by 0",
+        "detectors": [
+          "differential:domain",
+          "differential:any",
+          "differential:scene"
+        ],
+        "expected": "differential",
+        "id": "N02",
+        "killed": true,
+        "system": "goal"
+      },
+      {
+        "as_expected": true,
+        "description": "clamp bound 32767 replaced by 32768",
+        "detectors": [
+          "differential:domain",
+          "differential:any"
+        ],
+        "expected": "differential",
+        "id": "N21",
+        "killed": true,
+        "system": "goal"
+      },
+      {
+        "as_expected": true,
+        "description": "goal declares an extra read (hp) it never loads",
+        "detectors": [
+          "structural",
+          "differential:domain:status18",
+          "differential:any:status18",
+          "differential:scene:status18"
+        ],
+        "expected": "structural",
+        "id": "N14",
+        "killed": true,
+        "system": "goal"
+      },
+      {
+        "as_expected": true,
+        "description": "system_rev missing from the record",
+        "detectors": [
+          "structural"
+        ],
+        "expected": "structural",
+        "id": "N13",
+        "killed": true,
+        "system": "goal"
+      },
+      {
+        "as_expected": true,
+        "description": "incoming not zeroed (stored dmg_out value)",
+        "detectors": [
+          "differential:domain",
+          "differential:any",
+          "differential:scene"
+        ],
+        "expected": "differential",
+        "id": "N03",
+        "killed": true,
+        "system": "combat"
+      },
+      {
+        "as_expected": true,
+        "description": "dmg_out written every tick",
+        "detectors": [
+          "differential:domain",
+          "differential:any",
+          "differential:scene"
+        ],
+        "expected": "differential",
+        "id": "N04",
+        "killed": true,
+        "system": "combat"
+      },
+      {
+        "as_expected": true,
+        "description": "incoming never stored",
+        "detectors": [
+          "structural",
+          "verify:SU_E_MISSING_STORE"
+        ],
+        "expected": "verify:SU_E_MISSING_STORE",
+        "id": "N10",
+        "killed": true,
+        "system": "combat"
+      },
+      {
+        "as_expected": true,
+        "description": "fire allowed while a projectile is in flight",
+        "detectors": [
+          "differential:domain",
+          "differential:any",
+          "differential:scene"
+        ],
+        "expected": "differential",
+        "id": "N22",
+        "killed": true,
+        "system": "combat"
+      },
+      {
+        "as_expected": true,
+        "description": "combat in another phase",
+        "detectors": [
+          "structural"
+        ],
+        "expected": "structural",
+        "id": "N17",
+        "killed": true,
+        "system": "combat"
+      },
+      {
+        "as_expected": true,
+        "description": "step length is max(distance, speed)",
+        "detectors": [
+          "differential:domain",
+          "differential:any",
+          "differential:scene"
+        ],
+        "expected": "differential",
+        "id": "N05",
+        "killed": true,
+        "system": "move"
+      },
+      {
+        "as_expected": true,
+        "description": "valid target does not stop a mode-0/2 unit",
+        "detectors": [
+          "differential:domain",
+          "differential:any",
+          "differential:scene"
+        ],
+        "expected": "differential",
+        "id": "N06",
+        "killed": true,
+        "system": "move"
+      },
+      {
+        "as_expected": true,
+        "description": "capsule drops target_valid from fields",
+        "detectors": [
+          "structural",
+          "verify:SU_E_UNDECLARED_READ"
+        ],
+        "expected": "verify:SU_E_UNDECLARED_READ",
+        "id": "N11",
+        "killed": true,
+        "system": "move"
+      },
+      {
+        "as_expected": true,
+        "description": "move after list drops rts.combat",
+        "detectors": [
+          "structural"
+        ],
+        "expected": "structural",
+        "id": "N12",
+        "killed": true,
+        "system": "move"
+      },
+      {
+        "as_expected": true,
+        "description": "pos_x store without declared write",
+        "detectors": [
+          "structural",
+          "verify:SU_E_UNDECLARED_WRITE"
+        ],
+        "expected": "verify:SU_E_UNDECLARED_WRITE",
+        "id": "N19",
+        "killed": true,
+        "system": "move"
+      },
+      {
+        "as_expected": true,
+        "description": "anchors (hp 0) are killed",
+        "detectors": [
+          "differential:domain",
+          "differential:any",
+          "differential:scene"
+        ],
+        "expected": "differential",
+        "id": "N07",
+        "killed": true,
+        "system": "damage"
+      },
+      {
+        "as_expected": true,
+        "description": "kill never emits despawn_self",
+        "detectors": [
+          "differential:domain",
+          "differential:any",
+          "differential:scene"
+        ],
+        "expected": "differential",
+        "id": "N08",
+        "killed": true,
+        "system": "damage"
+      },
+      {
+        "as_expected": true,
+        "description": "hp' = hp + min(incoming, hp)",
+        "detectors": [
+          "differential:domain",
+          "differential:any",
+          "differential:scene"
+        ],
+        "expected": "differential",
+        "id": "N09",
+        "killed": true,
+        "system": "damage"
+      },
+      {
+        "as_expected": true,
+        "description": "despawn_self above max_struct_per_row",
+        "detectors": [
+          "structural",
+          "verify:SU_E_RESOURCE_LIMIT"
+        ],
+        "expected": "verify:SU_E_RESOURCE_LIMIT",
+        "id": "N16",
+        "killed": true,
+        "system": "damage"
+      },
+      {
+        "as_expected": true,
+        "description": "despawn_self not declared as a capability",
+        "detectors": [
+          "structural"
+        ],
+        "expected": "structural",
+        "id": "N15",
+        "killed": true,
+        "system": "damage"
+      },
+      {
+        "as_expected": true,
+        "description": "damage after list drops rts.scatter",
+        "detectors": [
+          "structural"
+        ],
+        "expected": "structural",
+        "id": "N18",
+        "killed": true,
+        "system": "damage"
+      }
+    ],
+    "total": 21
+  },
+  "systematic": {
+    "killed": 128,
+    "survivors": [
+      {
+        "class": "equivalent: the zero constant feeds only select(has_tgt, zero, one) into mv_flag, which is consumed as eq(mv_flag, 1); every value other than 1 gives the same bool",
+        "id": "S-move-const@0-1"
+      },
+      {
+        "class": "equivalent: the one constant is both the kill flag value (select(lt(0, hp), one, zero)) and the comparison constant in eq(kill_flag, one); changing it shifts both consistently",
+        "id": "S-damage-const@1+1"
+      }
+    ],
+    "total": 130
+  },
+  "systematic_records": [
+    {
+      "description": "const 0 +1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-const@0+1",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "const 0 -1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-const@0-1",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "const 1 +1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-const@1+1",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "const 1 -1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-const@1-1",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "const 16384 +1",
+      "detectors": [
+        "differential:domain",
+        "differential:scene"
+      ],
+      "id": "S-goal-const@2+1",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "const 16384 -1",
+      "detectors": [
+        "differential:domain",
+        "differential:scene"
+      ],
+      "id": "S-goal-const@2-1",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "const 2147483647 +1",
+      "detectors": [
+        "differential:any"
+      ],
+      "id": "S-goal-const@3+1",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "const 2147483647 -1",
+      "detectors": [
+        "differential:any"
+      ],
+      "id": "S-goal-const@3-1",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "const 32767 +1",
+      "detectors": [
+        "differential:domain",
+        "differential:any"
+      ],
+      "id": "S-goal-const@4+1",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "const 32767 -1",
+      "detectors": [
+        "differential:domain",
+        "differential:any"
+      ],
+      "id": "S-goal-const@4-1",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-op@6",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-swap_select@7",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-op@8",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-op@10",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "add_u32 -> sub_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-op@13",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-op@14",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-swap_select@17",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-swap_select@18",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any"
+      ],
+      "id": "S-goal-op@19",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any"
+      ],
+      "id": "S-goal-op@20",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-swap_select@21",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-swap_select@22",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "drop store to goal_x",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-goal-drop_store@23",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "add_u32 -> sub_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-op@26",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-op@27",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-swap_select@30",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-swap_select@31",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any"
+      ],
+      "id": "S-goal-op@32",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any"
+      ],
+      "id": "S-goal-op@33",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-swap_select@34",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-goal-swap_select@35",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "drop store to goal_y",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-goal-drop_store@36",
+      "killed": true,
+      "system": "goal"
+    },
+    {
+      "description": "const 0 +1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-const@0+1",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "const 0 -1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-const@0-1",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "const 1 +1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-const@1+1",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "const 1 -1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-const@1-1",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "const 4294967295 +1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-const@2+1",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "const 4294967295 -1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-const@2-1",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@4",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@6",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@8",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@9",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@10",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@11",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@12",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@13",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@15",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@16",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@17",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@18",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@20",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@21",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@22",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@23",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@24",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@25",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@26",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@27",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-op@28",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@29",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@31",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@32",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@35",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@36",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@39",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@40",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@43",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@44",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@45",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@46",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-combat-swap_select@47",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "drop store to cooldown",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-combat-drop_store@48",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "drop store to proj_active",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-combat-drop_store@49",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "drop store to proj_left",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-combat-drop_store@50",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "drop store to proj_target",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-combat-drop_store@51",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "drop store to proj_target_gen",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-combat-drop_store@52",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "drop store to proj_damage",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-combat-drop_store@53",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "drop store to dmg_out",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-combat-drop_store@54",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "drop store to dmg_target",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-combat-drop_store@55",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "drop store to dmg_target_gen",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-combat-drop_store@56",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "drop store to incoming",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-combat-drop_store@57",
+      "killed": true,
+      "system": "combat"
+    },
+    {
+      "description": "const 0 +1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-const@0+1",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "const 0 -1",
+      "detectors": [],
+      "id": "S-move-const@0-1",
+      "killed": false,
+      "system": "move"
+    },
+    {
+      "description": "const 1 +1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-const@1+1",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "const 1 -1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-const@1-1",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@3",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@5",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@6",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@7",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@8",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@12",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@13",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@14",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@15",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@16",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@17",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@18",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "add_u32 -> sub_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@19",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@20",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@21",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@22",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@23",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "drop store to pos_x",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-move-drop_store@24",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@27",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@28",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@29",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@30",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@31",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@32",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@33",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "add_u32 -> sub_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@34",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-op@35",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@36",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@37",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-move-swap_select@38",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "drop store to pos_y",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-move-drop_store@39",
+      "killed": true,
+      "system": "move"
+    },
+    {
+      "description": "const 0 +1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-const@0+1",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "const 0 -1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-const@0-1",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "const 1 +1",
+      "detectors": [],
+      "id": "S-damage-const@1+1",
+      "killed": false,
+      "system": "damage"
+    },
+    {
+      "description": "const 1 -1",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-const@1-1",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-op@4",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-swap_select@5",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "sub_u32 -> add_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-op@6",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-op@7",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "lt_u32 -> eq_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-op@8",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-swap_select@9",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "swap select branches",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-swap_select@10",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "drop store to hp",
+      "detectors": [
+        "structural",
+        "verify:SU_E_MISSING_STORE"
+      ],
+      "id": "S-damage-drop_store@11",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "eq_u32 -> lt_u32",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-op@12",
+      "killed": true,
+      "system": "damage"
+    },
+    {
+      "description": "drop despawn_self",
+      "detectors": [
+        "differential:domain",
+        "differential:any",
+        "differential:scene"
+      ],
+      "id": "S-damage-drop_despawn@13",
+      "killed": true,
+      "system": "damage"
+    }
+  ]
+}

@@ -1,0 +1,194 @@
+{
+  "any_u32": {
+    "combat": {
+      "authorings_equal": true,
+      "engine_mismatches": 0,
+      "rows": 2048
+    },
+    "damage": {
+      "authorings_equal": true,
+      "engine_mismatches": 0,
+      "rows": 2048
+    },
+    "goal": {
+      "authorings_equal": true,
+      "engine_mismatches": 0,
+      "rows": 2048
+    },
+    "move": {
+      "authorings_equal": true,
+      "engine_mismatches": 0,
+      "rows": 2048
+    }
+  },
+  "domain": {
+    "combat": {
+      "coverage": {},
+      "engine_mismatches": 0,
+      "evaluator_vs_model_mismatches": 0,
+      "rows": 512
+    },
+    "damage": {
+      "coverage": {
+        "hp_kills": 187
+      },
+      "engine_mismatches": 0,
+      "evaluator_vs_model_mismatches": 0,
+      "rows": 512
+    },
+    "goal": {
+      "coverage": {},
+      "engine_mismatches": 0,
+      "evaluator_vs_model_mismatches": 0,
+      "rows": 512
+    },
+    "move": {
+      "coverage": {},
+      "engine_mismatches": 0,
+      "evaluator_vs_model_mismatches": 0,
+      "rows": 512
+    }
+  },
+  "scenes": [
+    {
+      "calls": 24,
+      "coverage": {
+        "arrivals": 6,
+        "fires": 6,
+        "goal_nonhold": 8,
+        "hp_changed": 5,
+        "kills": 1,
+        "moved_rows": 8
+      },
+      "deaths_engine": 1,
+      "deaths_model": 1,
+      "mismatches": [],
+      "model_vs_ref_ir_mismatches": 0,
+      "row_outputs": 372,
+      "rows": 16,
+      "scene": "duel16",
+      "scene_digest": "2fbc8d26e724cb185917d0c4c8995041c2c771d3d63f60b586cf8fdff4d2aee4",
+      "ticks": 6
+    },
+    {
+      "calls": 880,
+      "coverage": {
+        "arrivals": 42,
+        "fires": 43,
+        "goal_nonhold": 12438,
+        "hp_changed": 39,
+        "kills": 5,
+        "moved_rows": 12215
+      },
+      "deaths_engine": 5,
+      "deaths_model": 5,
+      "mismatches": [],
+      "model_vs_ref_ir_mismatches": 0,
+      "row_outputs": 54936,
+      "rows": 64,
+      "scene": "mixed-64",
+      "scene_digest": "e005d082fe4451c6288b0d1e75dfdaf21cfc687bff4aa2e6d7ce2fc4ae182ad0",
+      "ticks": 220
+    },
+    {
+      "calls": 880,
+      "coverage": {
+        "arrivals": 1104,
+        "fires": 1149,
+        "goal_nonhold": 48581,
+        "hp_changed": 517,
+        "kills": 127,
+        "moved_rows": 43055
+      },
+      "deaths_engine": 127,
+      "deaths_model": 127,
+      "mismatches": [],
+      "model_vs_ref_ir_mismatches": 0,
+      "row_outputs": 194980,
+      "rows": 256,
+      "scene": "mixed-256",
+      "scene_digest": "fb54f0aa3104e1a3cbb272b6b5c7d5407c708c2bed5242a93b020f80696e0e3a",
+      "ticks": 220
+    },
+    {
+      "calls": 24,
+      "coverage": {
+        "arrivals": 0,
+        "fires": 0,
+        "goal_nonhold": 24576,
+        "hp_changed": 0,
+        "kills": 0,
+        "moved_rows": 24576
+      },
+      "deaths_engine": 0,
+      "deaths_model": 0,
+      "mismatches": [],
+      "model_vs_ref_ir_mismatches": 0,
+      "row_outputs": 98304,
+      "rows": 4096,
+      "scene": "mixed-4096",
+      "scene_digest": "f6bb66db94d2f9c98a70589ad780794db07e5f4c4a4a0277ed09ba77a633be45",
+      "ticks": 6
+    },
+    {
+      "calls": 24,
+      "coverage": {
+        "arrivals": 196,
+        "fires": 201,
+        "goal_nonhold": 1527,
+        "hp_changed": 164,
+        "kills": 14,
+        "moved_rows": 422
+      },
+      "deaths_engine": 14,
+      "deaths_model": 14,
+      "mismatches": [],
+      "model_vs_ref_ir_mismatches": 0,
+      "row_outputs": 6144,
+      "rows": 256,
+      "scene": "congested-256",
+      "scene_digest": "cf0cf1ad561a7d15c0d4cbeb26ebbcbf1e856ddd8b1df366d25786ab0a9d246f",
+      "ticks": 6
+    },
+    {
+      "calls": 16,
+      "coverage": {
+        "arrivals": 449,
+        "fires": 759,
+        "goal_nonhold": 4089,
+        "hp_changed": 365,
+        "kills": 2,
+        "moved_rows": 1327
+      },
+      "deaths_engine": 2,
+      "deaths_model": 2,
+      "mismatches": [],
+      "model_vs_ref_ir_mismatches": 0,
+      "row_outputs": 16376,
+      "rows": 1024,
+      "scene": "congested-1024",
+      "scene_digest": "0adcfc58713b59ede35ed5ce3118d907df65005eb5b6ce38259717fcde792108",
+      "ticks": 4
+    },
+    {
+      "calls": 24,
+      "coverage": {
+        "arrivals": 5,
+        "fires": 6,
+        "goal_nonhold": 1529,
+        "hp_changed": 5,
+        "kills": 0,
+        "moved_rows": 1502
+      },
+      "deaths_engine": 0,
+      "deaths_model": 0,
+      "mismatches": [],
+      "model_vs_ref_ir_mismatches": 0,
+      "row_outputs": 6144,
+      "rows": 256,
+      "scene": "sparse-256",
+      "scene_digest": "c379e8d56e6dcf9b0173a8192066031254f059c24cc2773abcaf73e934070ffe",
+      "ticks": 6
+    }
+  ]
+}
