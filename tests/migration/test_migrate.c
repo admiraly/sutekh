@@ -1046,6 +1046,7 @@ static void test_snapshot03(void) {
             CHECK_ST(su_migrate_prepare(base2, &p3, NULL, &c3, NULL), SU_OK);
             CHECK_ST(su_migrate_swap(&base2, &p3, c3, &r3), SU_OK);
             su_world_destroy(r3);
+            su_migrate_plan_free(&p3);
             live3 = base2;
             n3 = su_world_field_count(live3);
             {
@@ -1206,6 +1207,61 @@ out:
     free(cv);
 }
 
+/* Recovery digest sensitivity at one generation and one canonical state: a rename alone and a default alone
+ * each change the digest (contract section 6), and so does the schema digest. */
+static void test_digest_sensitivity(void) {
+    SuWorldFieldDesc fx;
+    SuWorldFieldDesc fy;
+    SuWorldDesc dx;
+    SuWorldDesc dy;
+    SuWorld *wx = NULL;
+    SuWorld *wy = NULL;
+    SuWorld *wd = NULL;
+    uint32_t dflt[1] = {7u};
+    SuWorldSchemaExt ext;
+    uint8_t rx[32];
+    uint8_t ry[32];
+    uint8_t rd[32];
+    uint8_t sx[32];
+    uint8_t sy[32];
+    fx.id = 1;
+    fx.type = SU_TYPE_U32;
+    fx.access = SU_ACCESS_READ;
+    fx.name = "x";
+    fy = fx;
+    fy.name = "y";
+    memset(&dx, 0, sizeof dx);
+    dx.schema_id = "dig";
+    dx.schema_version = 1;
+    dx.layout_generation = 1;
+    dx.fields = &fx;
+    dx.field_count = 1;
+    dy = dx;
+    dy.fields = &fy;
+    CHECK_ST(su_world_create(&dx, &wx), SU_OK);
+    CHECK_ST(su_world_create(&dy, &wy), SU_OK);
+    memset(&ext, 0, sizeof ext);
+    ext.defaults = dflt;
+    CHECK_ST(su_world_create_ext(&dx, 0u, &ext, &wd), SU_OK);
+    if (wx == NULL || wy == NULL || wd == NULL) {
+        su_world_destroy(wx);
+        su_world_destroy(wy);
+        su_world_destroy(wd);
+        return;
+    }
+    CHECK_ST(su_world_recovery_digest(wx, rx), SU_OK);
+    CHECK_ST(su_world_recovery_digest(wy, ry), SU_OK);
+    CHECK_ST(su_world_recovery_digest(wd, rd), SU_OK);
+    CHECK(memcmp(rx, ry, 32u) != 0);
+    CHECK(memcmp(rx, rd, 32u) != 0);
+    CHECK_ST(su_world_schema_digest(wx, sx), SU_OK);
+    CHECK_ST(su_world_schema_digest(wy, sy), SU_OK);
+    CHECK(memcmp(sx, sy, 32u) != 0);
+    su_world_destroy(wx);
+    su_world_destroy(wy);
+    su_world_destroy(wd);
+}
+
 int main(int argc, char **argv) {
     char path[512];
     size_t len = 0;
@@ -1242,6 +1298,7 @@ int main(int argc, char **argv) {
     test_zero_rows();
     test_entity_worlds();
     test_snapshot03();
+    test_digest_sensitivity();
     test_million_rows();
     printf("test_migrate: %lu checks, %lu failures\n", g_checks, g_fail);
     su_json_doc_free(&doc);

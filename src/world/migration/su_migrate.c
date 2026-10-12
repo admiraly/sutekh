@@ -1431,7 +1431,10 @@ uint32_t su_migrate_prepare(const SuWorld *old, const SuMigratePlan *p, SuMigrat
             st = SU_E_CANDIDATE_FAILED;
             goto done;
         }
-        MIG_POINT(hooks);
+        if (inject_point(hooks)) {
+            st = SU_E_RESOURCE_LIMIT;
+            goto transform_cleanup;
+        }
         st = su_vm_context_create(&mod, c->from_gen, &ctx);
         if (st != SU_OK) {
             su_lir_module_free(&mod);
@@ -1446,7 +1449,10 @@ uint32_t su_migrate_prepare(const SuWorld *old, const SuMigratePlan *p, SuMigrat
                 n_out++;
             }
         }
-        MIG_POINT(hooks);
+        if (inject_point(hooks)) {
+            st = SU_E_RESOURCE_LIMIT;
+            goto transform_cleanup;
+        }
         in_b = calloc(n_in > 0u ? n_in : 1u, sizeof *in_b);
         out_b = calloc(n_out > 0u ? n_out : 1u, sizeof *out_b);
         if (in_b == NULL || out_b == NULL) {
@@ -1535,6 +1541,18 @@ transform_cleanup:
         su_lir_module_free(&mod);
         if (st != SU_OK) {
             goto done;
+        }
+    }
+
+    /* Buffer self-check before anything is published: dead rows below high_water hold zero in every column.
+     * (The world's put also zeroes them, so this check is what makes a buffer defect visible.) */
+    for (j = 0; j < c->dst_n; j++) {
+        uint64_t rr;
+        for (rr = 0; rr < hw; rr++) {
+            if (!alive[rr] && buf[j][rr] != 0u) {
+                st = SU_E_INTERNAL;
+                goto done;
+            }
         }
     }
 
