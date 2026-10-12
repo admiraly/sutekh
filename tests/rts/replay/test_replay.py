@@ -226,6 +226,31 @@ class BatchAndSetFieldsRules(unittest.TestCase):
                 b.apply({"cmd": rr.CMD_SET_FIELDS,
                          "args": {"entities": [{"entity": handle(0), "values": {name: value}}]}})
 
+    def test_spawn_batch_external_id_must_be_u32(self):  # contract D6 / OD-3b / F4
+        b = rr.ModelBackend(CAP)
+        b.load_scene(SCENE)
+        before = b.scene_digest()
+        for bad in (-1, 2 ** 32, 2 ** 40, "7", 1.0, True):
+            row = {"values": {"kind": 1, "hp": 1, "reload": 1, "damage": 1, "flight": 1}, "external_id": bad}
+            with self.subTest(external_id=bad):
+                with self.assertRaises(ModelError) as cm:
+                    b.apply({"cmd": rr.CMD_SPAWN_BATCH, "args": {"rows": [row]}})
+                self.assertEqual(cm.exception.code, "SU_E_TYPE")
+                self.assertEqual(b.scene_digest(), before)
+        ok = {"values": {"kind": 1, "hp": 1, "reload": 1, "damage": 1, "flight": 1}, "external_id": 2 ** 32 - 1}
+        b.apply({"cmd": rr.CMD_SPAWN_BATCH, "args": {"rows": [ok]}})
+
+    def test_spawn_batch_request_size_checked_before_rows(self):  # agent protocol 1 MiB cap, step 1
+        b = rr.ModelBackend(CAP)
+        b.load_scene(SCENE)
+        before = b.scene_digest()
+        big = "x" * (limits.REQUEST_BYTES_MAX + 1)
+        row = {"values": {"kind": 1, "hp": 1, "reload": 1, "damage": 1, "flight": 1}, "pad": big}
+        with self.assertRaises(ModelError) as cm:
+            b.apply({"cmd": rr.CMD_SPAWN_BATCH, "args": {"rows": [row]}})
+        self.assertEqual(cm.exception.code, "SU_E_RESOURCE_LIMIT")
+        self.assertEqual(b.scene_digest(), before)
+
     def test_set_fields_refuses_stale_handle(self):
         b = rr.ModelBackend(CAP)
         b.load_scene(SCENE)

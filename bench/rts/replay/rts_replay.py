@@ -196,7 +196,10 @@ class ModelBackend(Backend):
             rows = args.get("rows")
             if not isinstance(rows, list):
                 raise ModelError("SU_E_TYPE", "rows")
+            # Request-size cap first (agent protocol, before row parsing). The model has no raw request
+            # line, so the canonical JSON of the command stands in for it.
             try:
+                limits.check_request_size(canonical_json({"cmd": name, "args": args}).encode("utf-8"))
                 limits.check_row_count(len(rows))
             except limits.BatchRefused as exc:
                 raise ModelError(exc.code, "rows", exc.detail)
@@ -205,6 +208,9 @@ class ModelBackend(Backend):
             for r in rows:
                 if not isinstance(r, dict) or not isinstance(r.get("values"), dict):
                     raise ModelError("SU_E_TYPE", "rows", "each row needs values")
+                ext = r.get("external_id", 0)
+                if type(ext) is not int or not (0 <= ext <= U32_MAX):
+                    raise ModelError("SU_E_TYPE", "external_id", "u32 integer")
                 specs.append(validate_spawn(r["values"], w.cap))
             try:
                 limits.check_prechecks(len(rows), w.cap, sum(w.alive), w.hw)
