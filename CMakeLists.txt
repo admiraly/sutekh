@@ -195,6 +195,12 @@ sutekh_apply_warnings(test_snapshot_cp)
 add_test(NAME snapshot_cp COMMAND test_snapshot_cp $<TARGET_FILE:worker_stub> "${CMAKE_CURRENT_SOURCE_DIR}"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Regression: su_world_create_ext rejects a retired ID that is a live field when defaults is NULL.
+add_executable(test_world_ext_retired tests/world/test_world_ext_retired.c)
+target_link_libraries(test_world_ext_retired PRIVATE su_world su_ents)
+sutekh_apply_warnings(test_world_ext_retired)
+add_test(NAME world_ext_retired COMMAND test_world_ext_retired)
+
 # Regression: su_lir_verify reports parser allocation failures instead of dereferencing NULL.
 add_executable(test_lir_oom tests/ir/test_lir_oom.c)
 target_link_libraries(test_lir_oom PRIVATE su_ir)
