@@ -53,12 +53,22 @@ mutant() {
     mkdir -p "$dir" || exit 2
     (cd "$REPO" && tar --exclude=.git --exclude=./.claude --exclude=./build -cf - .) | (cd "$dir" && tar -xf -) || exit 2
     hits=$(grep -cF -- "$anchor" "$dir/$file")
-    if [ "$hits" != "1" ]; then
-        echo "MUTANT $name: INVALID anchor occurs $hits times in $file" | tee -a "$SUMMARY"
-        rc_all=1
-        return
+    # A seventh argument "first" mutates only the first matching line (the anchor may repeat in the file).
+    if [ "${7:-}" = "first" ]; then
+        if [ "$hits" -lt 1 ]; then
+            echo "MUTANT $name: INVALID anchor not found in $file" | tee -a "$SUMMARY"
+            rc_all=1
+            return
+        fi
+        sed -i "0,/$pat/s#$pat#$rep#" "$dir/$file" || exit 2
+    else
+        if [ "$hits" != "1" ]; then
+            echo "MUTANT $name: INVALID anchor occurs $hits times in $file" | tee -a "$SUMMARY"
+            rc_all=1
+            return
+        fi
+        sed -i "s#$pat#$rep#" "$dir/$file" || exit 2
     fi
-    sed -i "s#$pat#$rep#" "$dir/$file" || exit 2
     if cmp -s "$REPO/$file" "$dir/$file"; then
         echo "MUTANT $name: INVALID substitution did not change $file" | tee -a "$SUMMARY"
         rc_all=1
@@ -128,6 +138,22 @@ mutant M-DIGEST-REV src/agent/su_agent.c \
     'strcmp(rev_got, rev_want) == 0 && tick_got == tick_want' \
     '(strcmp(rev_got, rev_want) == 0 || 1) \&\& tick_got == tick_want' \
     'hardening'
+# M-DIGEST-TICK-RERUN (closure C M06): the digest comparison ignores the tick. The replacement keeps tick_got and
+# tick_want in use, so the -Werror build still succeeds. The call at su_agent.c (quarantine rollback, sha NULL)
+# compares only the tick and revision, so this mutant is not masked by the snapshot SHA there.
+mutant M-DIGEST-TICK-RERUN src/agent/su_agent.c \
+    'strcmp(rev_got, rev_want) == 0 && tick_got == tick_want &&' \
+    'strcmp(rev_got, rev_want) == 0 && tick_got == tick_want &&' \
+    'strcmp(rev_got, rev_want) == 0 \&\& (tick_got == tick_want || 1) \&\&' \
+    'hardening'
+# M-INSTALL-REV: the install handler (su_reload_install, src/runtime/reload.c) no longer rejects a stale expected
+# world revision at its entry check (step 2, the first of the two identical lines; the step-8 admission recheck
+# on the second line is left in place). Selected by the first matching line.
+mutant M-INSTALL-REV src/runtime/reload.c \
+    'if (strcmp(req->expected_revision, req->current_revision) != 0) {' \
+    'if (strcmp(req->expected_revision, req->current_revision) != 0) {' \
+    'if (strcmp(req->expected_revision, req->current_revision) != 0 \&\& 0) {' \
+    'reload' first
 # M-SPOOL-MODE: the spool directory's group and world access check is removed.
 mutant M-SPOOL-MODE src/agent/su_spool.c \
     '|| (st.st_mode & 077) != 0) {' \

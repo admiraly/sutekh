@@ -990,6 +990,12 @@ static void test_failed_and_stale(Session *s, Ids *id) {
     install(s, id->cand_v2, id->world1, rev, before.tick, &r);
     CHECK_CODE(r, SU_E_STALE_REVISION);
     resp_free(&r);
+    /* The stale expected revision is refused at entry, before the candidate is read or evaluated: a candidate
+     * that would fail evaluation (cand_bad) reports the stale revision, not CANDIDATE_FAILED. */
+    install(s, id->cand_bad, id->world1, rev, before.tick, &r);
+    CHECK_CODE(r, SU_E_STALE_REVISION);
+    CHECK(resp_message_has(&r, "expected_world_revision"));
+    resp_free(&r);
     install(s, id->cand_v2, id->world1, before.rev, 0, &r);
     CHECK_CODE(r, SU_E_STALE_REVISION);
     CHECK(resp_message_has(&r, "allowed_effective_tick"));
