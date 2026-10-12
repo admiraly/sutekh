@@ -14,6 +14,7 @@
 #include "ir/su_lir.h"
 #include "ir/su_sha256.h"
 #include "sutekh/status.h"
+#include "vm/su_vm.h"
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -636,6 +637,88 @@ static void test_ir02_positives(void) {
     }
 }
 
+/* Minor gate: IR 0.2 opcodes must be refused in a 0.1 module by both gates. The verifier's find_op rejects
+ * them from text; the VM's su_insn_known rejects them in a hand-built module with ir_version_minor 1 (the only
+ * way to reach the VM gate without the verifier). Mutant C (su_insn_known accepting them) passed this suite
+ * before this test existed and was caught only by test_vm. The positive controls keep the negatives honest. */
+static void test_ir02_minor_gate(void) {
+    static const uint32_t ops02[] = {SU_OP_SLOT_U32, SU_OP_GEN_U32, SU_OP_TICK_U32, SU_OP_DESPAWN_SELF,
+                                     SU_OP_EMIT_EVENT};
+    static const char *const names02[] = {"slot_u32", "gen_u32", "tick_u32", "despawn_self", "emit_event"};
+    const char *cap_path = "tests/fixtures/t02/movement.capsule.json";
+    const char *lir_path = "tests/fixtures/t02/movement.lir.json";
+    SuLirModule m;
+    SuDiag d;
+    uint8_t *cb = NULL, *lb = NULL;
+    size_t cl = 0, ll = 0;
+    uint32_t rc;
+    size_t i;
+
+    /* Verifier gate (text level): the first load_u32 becomes a 0.2 opcode in a module declared 0.1. */
+    if (read_file(cap_path, &cb, &cl) && read_file(lir_path, &lb, &ll)) {
+        const char *hit = NULL;
+        size_t pos = 0;
+        for (i = 0; i + 8 <= ll; i++) {
+            if (memcmp(lb + i, "load_u32", 8) == 0) {
+                hit = (const char *)lb + i;
+                pos = i;
+                break;
+            }
+        }
+        CHECK(hit != NULL);
+        for (i = 0; i < sizeof names02 / sizeof names02[0] && hit != NULL; i++) {
+            size_t nl = strlen(names02[i]);
+            uint8_t *mut = malloc(ll - 8 + nl + 1);
+            if (mut == NULL) {
+                g_fail++;
+                break;
+            }
+            memcpy(mut, lb, pos);
+            memcpy(mut + pos, names02[i], nl);
+            memcpy(mut + pos + nl, lb + pos + 8, ll - pos - 8);
+            su_diag_init(&d);
+            memset(&m, 0, sizeof m);
+            rc = su_lir_verify(cb, cl, mut, ll - 8 + nl, &m, &d);
+            CHECK(rc != SU_OK);
+            su_lir_module_free(&m);
+            free(mut);
+        }
+    } else {
+        g_fail++;
+        fprintf(stderr, "cannot read %s or %s\n", cap_path, lir_path);
+    }
+    free(cb);
+    free(lb);
+
+    /* VM gate: positive control first, then each 0.2 opcode substituted into instruction 0 of the verified module. */
+    rc = verify_files(cap_path, lir_path, &m, &d);
+    CHECK_CODE(rc, SU_OK);
+    if (rc == SU_OK) {
+        CHECK(m.ir_version_minor == 1u);
+        CHECK(m.insn_count > 0u);
+        {
+            SuExecContext *ctx = NULL;
+            CHECK_CODE(su_vm_context_create(&m, 0u, &ctx), SU_OK);
+            su_vm_context_destroy(ctx);
+        }
+        for (i = 0; i < sizeof ops02 / sizeof ops02[0] && m.insn_count > 0u; i++) {
+            SuInsn saved = m.insns[0];
+            SuExecContext *ctx = NULL;
+            m.insns[0].op = ops02[i];
+            m.insns[0].dst = 0u;
+            rc = su_vm_context_create(&m, 0u, &ctx);
+            if (ctx != NULL) {
+                su_vm_context_destroy(ctx);
+            }
+            CHECK_CODE(rc, SU_E_INVALID_ARGUMENT);
+            m.insns[0] = saved;
+        }
+        su_lir_module_free(&m);
+    } else {
+        fprintf(stderr, "  movement fixture did not verify: %s\n", d.message);
+    }
+}
+
 /* Movement (0.1) semantic hash: identical to the M0 value recorded before IR 0.2 (M2-00c2 proof). */
 static void test_ir02_hashes(void) {
     static const char M0_MOVEMENT_SEMANTIC[] =
@@ -675,6 +758,7 @@ int main(void) {
     test_ir02_negatives();
     test_ir02_positives();
     test_ir02_hashes();
+    test_ir02_minor_gate();
 
     printf("test_ir: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

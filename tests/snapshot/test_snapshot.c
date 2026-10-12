@@ -1120,6 +1120,32 @@ static uint32_t make_example_world_for_golden(const uint32_t *a, const uint32_t 
     return SU_OK;
 }
 
+/* Decimal emission at every digit-count boundary of a u32 column and at the u32 maximum, plus the entity ids. The
+ * text is what the canonical encoder must write; a change here changes every snapshot digest. */
+static void test_decimal_boundaries(void) {
+    static const uint32_t a[4] = {0u, 9u, 10u, 99u};
+    static const uint32_t b[4] = {100u, 999u, 1000u, 65536u};
+    static const uint32_t c[4] = {4294967295u, 4294967294u, 1000000u, 10u};
+    static const char want_cols[] =
+        "\"columns\":{\"c\":[4294967295,4294967294,1000000,10],\"a\":[0,9,10,99],\"b\":[100,999,1000,65536]}";
+    static const char want_ids[] = "\"entity_ids\":[101,102,103,104]";
+    SuWorldDesc d;
+    SuWorld *w = NULL;
+    SuSnapshot snap;
+
+    s2_desc(&d, 4u, k_s2_ids);
+    CHECK_ST(make_example_world_for_golden(a, b, c, &w), SU_OK);
+    if (w != NULL) {
+        CHECK_ST(su_snapshot_capture(w, &d, "decimal", k_manifest, 2u, &snap), SU_OK);
+        if (snap.bytes != NULL) {
+            CHECK(has_bytes(snap.bytes, snap.len, want_cols));
+            CHECK(has_bytes(snap.bytes, snap.len, want_ids));
+            su_snapshot_destroy(&snap);
+        }
+        su_world_destroy(w);
+    }
+}
+
 static void test_format01_golden(void) {
     static const uint32_t gid[3] = {101u, 102u, 103u};
     SuWorldDesc d;
@@ -1247,23 +1273,113 @@ static int test_format02_golden(const char *regen_dir) {
     return ok;
 }
 
+/* ---- cross-binary: a 0.1 document written by the baseline build (9af40cc) and a 0.2 document written by this
+ * build, both loaded here. The baseline build reads 0.1 only (SU_SNAPSHOT_FORMAT_01); it refuses 0.2, which is
+ * recorded in the handoff rather than asserted in this suite. The 0.1 fixture was produced by the baseline
+ * tests/snapshot/test_snapshot.c round trip at tick 3 on examples/world.json; regenerate 0.2 with --regen-cross. */
+#define CROSS_FIXTURE_01 "tests/fixtures/snapshot01/baseline_9af40cc_example_0_1.json"
+#define CROSS_FIXTURE_02 "tests/fixtures/snapshot02/head_example_0_2.json"
+
+/* Parses bytes against the example descriptor and restores them. The document must be the example world at
+ * tick 3 (revision rev-3), and its restored state must equal the live example world after three ticks. */
+static void check_cross_document(const Example *ex, const uint8_t *bytes, size_t len, uint32_t want_minor) {
+    SuWorldDesc d;
+    SuSnapshotData data;
+    SuSnapshotError err;
+    SuWorld *restored = NULL;
+    SuWorld *live = NULL;
+    int eq = 0;
+
+    make_desc(ex, &d);
+    memset(&data, 0, sizeof data);
+    memset(&err, 0, sizeof err);
+    CHECK_ST(su_snapshot_parse(bytes, len, &d, &data, &err), SU_OK);
+    CHECK(data.format_minor == want_minor);
+    CHECK(data.tick == 3u);
+    CHECK(strcmp(data.world_revision, "rev-3") == 0);
+    CHECK(data.row_count == ex->rows);
+    CHECK_ST(su_snapshot_restore(&d, &data, &restored, NULL, NULL), SU_OK);
+    CHECK_ST(make_example_world(ex, &live), SU_OK);
+    CHECK_ST(run_ticks(live, 3u), SU_OK);
+    if (restored != NULL && live != NULL) {
+        CHECK(su_world_tick(restored) == 3u);
+        CHECK_ST(su_world_state_equal(live, restored, &eq), SU_OK);
+        CHECK(eq == 1);
+    }
+    su_world_destroy(restored);
+    su_world_destroy(live);
+    su_snapshot_data_free(&data);
+}
+
+static void test_cross_binary(const Example *ex) {
+    static const struct {
+        const char *path;
+        uint32_t minor;
+    } docs[2] = {{CROSS_FIXTURE_01, 1u}, {CROSS_FIXTURE_02, 2u}};
+    size_t k;
+    for (k = 0; k < 2u; k++) {
+        size_t len = 0;
+        uint8_t *bytes = read_file(docs[k].path, &len);
+        CHECK(bytes != NULL);
+        if (bytes != NULL) {
+            check_cross_document(ex, bytes, len, docs[k].minor);
+            free(bytes);
+        }
+    }
+}
+
+/* Maintenance: writes this build's 0.2 document of the example world at tick 3 into path. Not run by ctest. */
+static int regen_cross_02(const Example *ex, const char *path) {
+    SuWorld *w = NULL;
+    SuWorldDesc d;
+    SuSnapshot snap;
+    FILE *f;
+    int ok = 0;
+
+    make_desc(ex, &d);
+    if (make_example_world(ex, &w) != SU_OK || run_ticks(w, 3u) != SU_OK) {
+        su_world_destroy(w);
+        return 0;
+    }
+    if (su_snapshot_capture(w, &d, "rev-3", k_manifest, 2u, &snap) == SU_OK) {
+        f = fopen(path, "wb");
+        if (f != NULL) {
+            ok = fwrite(snap.bytes, 1, snap.len, f) == snap.len;
+            if (fclose(f) != 0) {
+                ok = 0;
+            }
+        }
+        su_snapshot_destroy(&snap);
+    }
+    su_world_destroy(w);
+    return ok;
+}
+
 int main(int argc, char **argv) {
     const char *path = argc > 1 ? argv[1] : "examples/world.json";
     Example ex;
 
     init_manifest();
+    if (argc > 2 && strcmp(argv[1], "--regen-cross") == 0) {
+        Example rx;
+        int ok = load_example("examples/world.json", &rx) && regen_cross_02(&rx, argv[2]);
+        example_free(&rx);
+        return ok ? 0 : 1;
+    }
     if (argc > 2 && strcmp(argv[1], "--regen-02") == 0) {
         /* Maintenance mode: rewrite the worked 0.2 fixture into argv[2]. Not run by ctest. */
         return test_format02_golden(argv[2]) ? 0 : 1;
     }
     test_format02_history();
     test_format01_golden();
+    test_decimal_boundaries();
     test_format02_golden(NULL);
     if (!load_example(path, &ex)) {
         fprintf(stderr, "cannot load example world %s\n", path);
         return 1;
     }
     test_round_trip(&ex);
+    test_cross_binary(&ex);
     test_determinism_and_format(&ex);
     test_capture_refusals(&ex);
     test_corruption(&ex);

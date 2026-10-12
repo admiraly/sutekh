@@ -1266,7 +1266,9 @@ static void run_alloc_faults(const Outcome *ctl) {
         CHECK(token_gone(tok));
         CHECK(digest(&s, st.wid, rev, sha, NULL) && strcmp(sha, ctl->pre_digest) == 0);
         if (n == 1u) {
-            /* No commit was acknowledged, so there is no rollback target. */
+            /* No commit was acknowledged, so there is no rollback target. The failed commit's reply is still held
+             * in r; release it before call() overwrites r, or its text and parsed document leak. */
+            resp_free(&r);
             snprintf(line, sizeof line,
                      "{\"protocol\":\"0.1\",\"id\":\"rb\",\"method\":\"world.migrate_rollback\",\"params\":{\"world_id\":"
                      "\"%s\",\"expected_world_revision\":\"%s\"}}",

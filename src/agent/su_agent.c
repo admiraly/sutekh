@@ -20,6 +20,7 @@
 #include "ir/su_json.h"
 #include "ir/su_lir.h"
 #include "ir/su_sha256.h"
+#include "su_platform.h"
 #include "sutekh/abi.h"
 #include "sutekh/ir.h"
 #include "sutekh/status.h"
@@ -3422,31 +3423,45 @@ static uint32_t h_world_snapshot(SuAgent *a, const SuJsonValue *params, SuBuf *r
     if (strcmp(expect, rev) != 0) {
         return call_fail(c, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
     }
-    rc = checkpoint_world(a, w, 0);
-    if (rc == CK_DIED) {
-        memset(&op, 0, sizeof op);
-        op.kind = OPK_READ;
-        return worker_died(a, c, &op);
-    }
-    if (rc != CK_OK) {
-        return call_fail(c, rc == CK_NOROOM ? SU_E_RESOURCE_LIMIT : SU_E_INTERNAL,
-                         rc == CK_NOROOM ? "snapshot does not fit the spool budget" : "snapshot disagreed with the acknowledged state");
-    }
-    w->ck[w->ck_count - 1].client = 1;
+    /* capture_ns: monotonic time of checkpoint_world (the worker round trip, its canonical capture and the spool
+     * write). It is null only when the clock is unavailable or runs backwards, as the baseline contract allows. */
     {
-        const Ckpt *ck = &w->ck[w->ck_count - 1];
-        su_buf_str(res, "{\"snapshot_id\":");
-        su_buf_quoted(res, ck->sha, strlen(ck->sha));
-        su_buf_str(res, ",\"world_revision\":");
-        wrev(w, ck->rev, rev, sizeof rev);
-        su_buf_quoted(res, rev, strlen(rev));
-        su_buf_str(res, ",\"tick\":");
-        su_buf_u64(res, ck->tick);
-        su_buf_str(res, ",\"bytes\":");
-        su_buf_u64(res, ck->bytes);
-        su_buf_str(res, ",\"sha256\":");
-        su_buf_quoted(res, ck->sha, strlen(ck->sha));
-        su_buf_str(res, ",\"capture_ns\":null}");
+        uint64_t t0 = 0;
+        uint64_t t1 = 0;
+        int t0_ok = su_platform_monotonic_ns(&t0);
+        rc = checkpoint_world(a, w, 0);
+        int t1_ok = su_platform_monotonic_ns(&t1);
+        if (rc == CK_DIED) {
+            memset(&op, 0, sizeof op);
+            op.kind = OPK_READ;
+            return worker_died(a, c, &op);
+        }
+        if (rc != CK_OK) {
+            return call_fail(c, rc == CK_NOROOM ? SU_E_RESOURCE_LIMIT : SU_E_INTERNAL,
+                             rc == CK_NOROOM ? "snapshot does not fit the spool budget" : "snapshot disagreed with the acknowledged state");
+        }
+        w->ck[w->ck_count - 1].client = 1;
+        {
+            const Ckpt *ck = &w->ck[w->ck_count - 1];
+            su_buf_str(res, "{\"snapshot_id\":");
+            su_buf_quoted(res, ck->sha, strlen(ck->sha));
+            su_buf_str(res, ",\"world_revision\":");
+            wrev(w, ck->rev, rev, sizeof rev);
+            su_buf_quoted(res, rev, strlen(rev));
+            su_buf_str(res, ",\"tick\":");
+            su_buf_u64(res, ck->tick);
+            su_buf_str(res, ",\"bytes\":");
+            su_buf_u64(res, ck->bytes);
+            su_buf_str(res, ",\"sha256\":");
+            su_buf_quoted(res, ck->sha, strlen(ck->sha));
+            su_buf_str(res, ",\"capture_ns\":");
+            if (t0_ok && t1_ok && t1 >= t0) {
+                su_buf_u64(res, t1 - t0);
+            } else {
+                su_buf_str(res, "null");
+            }
+            su_buf_str(res, "}");
+        }
     }
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
