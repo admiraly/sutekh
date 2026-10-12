@@ -317,20 +317,70 @@ static uint32_t buf_lit(SnapBuf *b, const char *s) {
     return buf_bytes(b, s, strlen(s));
 }
 
-static uint32_t buf_dec(SnapBuf *b, uint64_t v) {
-    char t[24];
-    size_t n = 0;
-    size_t i;
-    do {
-        t[n++] = (char)('0' + (char)(v % 10u));
-        v /= 10u;
-    } while (v != 0u);
-    for (i = 0; i < n / 2u; i++) {
-        char c = t[i];
-        t[i] = t[n - 1u - i];
-        t[n - 1u - i] = c;
+/* Appends one byte. The hot emitter writes single punctuation bytes through here, not buf_lit. */
+static inline uint32_t buf_ch(SnapBuf *b, char c) {
+    if (b->len < b->cap) {
+        b->p[b->len++] = (uint8_t)c;
+        return SU_OK;
     }
-    return buf_bytes(b, t, n);
+    {
+        uint32_t st = buf_reserve(b, 1u);
+        if (st != SU_OK) {
+            return st;
+        }
+        b->p[b->len++] = (uint8_t)c;
+    }
+    return SU_OK;
+}
+
+/* Decimal text of v, identical to "%llu". The u32 path (every column value and entity id) counts the digits,
+ * then writes them in place from the end two at a time through a table: no temporary and no per-byte copy.
+ * Values above 32 bits take the plain division loop through a stack tail. */
+static uint32_t buf_dec(SnapBuf *b, uint64_t v) {
+    static const char dig2[] =
+        "00010203040506070809101112131415161718192021222324252627282930313233343536373839"
+        "4041424344454647484950515253545556575859606162636465666768697071727374757677787980"
+        "81828384858687888990919293949596979899";
+    static const uint32_t p10[9] = {10u, 100u, 1000u, 10000u, 100000u, 1000000u, 10000000u, 100000000u,
+                                    1000000000u};
+    uint32_t u;
+    size_t n = 1;
+    uint8_t *q;
+    uint32_t st;
+
+    if (v > UINT32_MAX) {
+        char t[24];
+        char *e = t + sizeof t;
+        char *p = e;
+        do {
+            *--p = (char)('0' + (char)(v % 10u));
+            v /= 10u;
+        } while (v != 0u);
+        return buf_bytes(b, p, (size_t)(e - p));
+    }
+    u = (uint32_t)v;
+    st = buf_reserve(b, 10u);
+    if (st != SU_OK) {
+        return st;
+    }
+    while (n < 10u && u >= p10[n - 1u]) {
+        n++;
+    }
+    q = b->p + b->len + n;
+    while (u >= 100u) {
+        uint32_t r = (u % 100u) * 2u;
+        u /= 100u;
+        *--q = (uint8_t)dig2[r + 1u];
+        *--q = (uint8_t)dig2[r];
+    }
+    if (u >= 10u) {
+        *--q = (uint8_t)dig2[u * 2u + 1u];
+        *--q = (uint8_t)dig2[u * 2u];
+    } else {
+        *--q = (uint8_t)('0' + u);
+    }
+    b->len += n;
+    return SU_OK;
 }
 
 /* JSON string with the escapes this format needs: quote, backslash, and
@@ -406,7 +456,7 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
     SNAP_W(buf_lit(o, ",\"fields\":["));
     for (i = 0; i < s->field_count; i++) {
         if (i > 0u) {
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
         }
         SNAP_W(buf_lit(o, "{\"id\":"));
         SNAP_W(buf_dec(o, s->fields[i].id));
@@ -417,12 +467,12 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
             SNAP_W(buf_lit(o, ",\"default\":"));
             SNAP_W(buf_dec(o, s->defaults[i]));
         }
-        SNAP_W(buf_lit(o, "}"));
+        SNAP_W(buf_ch(o, '}'));
     }
     SNAP_W(buf_lit(o, "],\"semantic_manifest\":["));
     for (i = 0; i < s->manifest_count; i++) {
         if (i > 0u) {
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
         }
         SNAP_W(buf_lit(o, "{\"system_id\":"));
         SNAP_W(buf_jstr(o, s->manifest[i].system_id));
@@ -434,7 +484,7 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
     for (r = 0; r < s->row_count; r++) {
         uint32_t id = 0;
         if (r > 0u) {
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
         }
         if (s->format_minor == 1u) {
             id = s->entity_ids[r];
@@ -446,19 +496,19 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
     SNAP_W(buf_lit(o, "],\"columns\":{"));
     for (i = 0; i < s->field_count; i++) {
         if (i > 0u) {
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
         }
         SNAP_W(buf_jstr(o, s->fields[i].name));
         SNAP_W(buf_lit(o, ":["));
         for (k = 0; k < s->row_count; k++) {
             if (k > 0u) {
-                SNAP_W(buf_lit(o, ","));
+                SNAP_W(buf_ch(o, ','));
             }
             SNAP_W(buf_dec(o, s->columns[i][k]));
         }
-        SNAP_W(buf_lit(o, "]"));
+        SNAP_W(buf_ch(o, ']'));
     }
-    SNAP_W(buf_lit(o, "}"));
+    SNAP_W(buf_ch(o, '}'));
     if (s->format_minor >= 2u) {
         uint32_t hw = su_ents_high_water(s->ents);
         if (hw != s->row_count) {
@@ -476,15 +526,15 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
             uint32_t gen = 0;
             uint32_t ext = 0;
             if (i > 0u) {
-                SNAP_W(buf_lit(o, ","));
+                SNAP_W(buf_ch(o, ','));
             }
             SNAP_W(su_ents_slot_generation(s->ents, i, &gen));
             SNAP_W(slot_external(s->ents, i, &ext));
-            SNAP_W(buf_lit(o, "["));
+            SNAP_W(buf_ch(o, '['));
             SNAP_W(buf_dec(o, gen));
             SNAP_W(buf_lit(o, su_ents_slot_alive(s->ents, i) ? ",1," : ",0,"));
             SNAP_W(buf_dec(o, ext));
-            SNAP_W(buf_lit(o, "]"));
+            SNAP_W(buf_ch(o, ']'));
         }
         SNAP_W(buf_lit(o, "],\"event_next_seq\":"));
         SNAP_W(buf_dec(o, s->event_next_seq));
@@ -496,34 +546,34 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
         for (k = 0; k < s->event_count; k++) {
             const SuEvent *ev = &s->events[k];
             if (k > 0u) {
-                SNAP_W(buf_lit(o, ","));
+                SNAP_W(buf_ch(o, ','));
             }
-            SNAP_W(buf_lit(o, "["));
+            SNAP_W(buf_ch(o, '['));
             SNAP_W(buf_dec(o, ev->event_seq));
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
             SNAP_W(buf_dec(o, ev->tick));
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
             SNAP_W(buf_dec(o, ev->kind));
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
             SNAP_W(buf_dec(o, ev->system_index));
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
             SNAP_W(buf_dec(o, ev->slot));
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
             SNAP_W(buf_dec(o, ev->seq));
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
             SNAP_W(buf_dec(o, ev->a));
-            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_ch(o, ','));
             SNAP_W(buf_dec(o, ev->b));
-            SNAP_W(buf_lit(o, "]"));
+            SNAP_W(buf_ch(o, ']'));
         }
-        SNAP_W(buf_lit(o, "]"));
+        SNAP_W(buf_ch(o, ']'));
     }
     if (s->format_minor == 3u) {
         char hex[65];
         SNAP_W(buf_lit(o, ",\"migration_lineage\":["));
         for (i = 0; i < s->lineage_count; i++) {
             if (i > 0u) {
-                SNAP_W(buf_lit(o, ","));
+                SNAP_W(buf_ch(o, ','));
             }
             su_sha256_hex(s->lineage[i], hex);
             SNAP_W(buf_lit(o, "\""));
@@ -533,13 +583,13 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
         SNAP_W(buf_lit(o, "],\"retired_field_ids\":["));
         for (i = 0; i < s->retired_count; i++) {
             if (i > 0u) {
-                SNAP_W(buf_lit(o, ","));
+                SNAP_W(buf_ch(o, ','));
             }
             SNAP_W(buf_dec(o, s->retired[i]));
         }
-        SNAP_W(buf_lit(o, "]"));
+        SNAP_W(buf_ch(o, ']'));
     }
-    SNAP_W(buf_lit(o, "}"));
+    SNAP_W(buf_ch(o, '}'));
 #undef SNAP_W
     return SU_OK;
 }

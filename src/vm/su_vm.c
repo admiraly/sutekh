@@ -533,15 +533,21 @@ static uint32_t su_exec_insn(SuExecContext *ctx, const SuInsn *ins, size_t r) {
 
 static uint32_t su_exec_rows(SuExecContext *ctx, uint64_t rows, SuOutputs *out) {
     const SuLirModule *m = ctx->module;
+    /* NULL alive view (every M0 world): the dead-row test is skipped without a per-row load. row_seq is read only
+     * by emitter calls, so it is reset only for modules that can emit. */
+    const uint8_t *alive = ctx->alive;
+    const int emits = ctx->needs_emitter;
     uint64_t r;
     for (r = 0; r < rows; r++) {
         uint32_t i;
         uint32_t k;
         /* A dead row is skipped entirely: no staged writes, no emissions, no store check. */
-        if (ctx->alive != NULL && ctx->alive[r] == 0u) {
+        if (alive != NULL && alive[r] == 0u) {
             continue;
         }
-        ctx->row_seq = 0u;
+        if (emits) {
+            ctx->row_seq = 0u;
+        }
         for (k = 0; k < ctx->writable_count; k++) {
             ctx->stored[ctx->write_fields[k]] = 0u;
         }

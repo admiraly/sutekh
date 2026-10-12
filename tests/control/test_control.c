@@ -836,6 +836,8 @@ static void test_world_close_worker(const char *helper, const char *root) {
     CHECK(wire_call(&p, line, &r) == 0);
     CHECK_OK(r);
     CHECK(str_copy(su_json_member(resp_result(&r), "snapshot_id"), snap_a, sizeof snap_a));
+    /* R4: capture_ns is an integer (monotonic nanoseconds of the capture), not null, as in the baseline. */
+    CHECK(uint_of(resp_result(&r), "capture_ns") != UINT64_MAX);
     resp_free(&r);
     snprintf(line, sizeof line, "{\"protocol\":\"0.1\",\"id\":\"st2\",\"method\":\"world.step\",\"params\":{\"world_id\":\"world-2\",\"expected_world_revision\":\"world-2.r1\",\"ticks\":1}}");
     CHECK(wire_call(&p, line, &r) == 0);
