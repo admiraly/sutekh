@@ -690,7 +690,7 @@
       "acceptance": [
         "Generator reproducible; digests stable; PRNG and field-order mutants change digests; remainder rule 7.3; anchor idle values 7.3."
       ],
-      "status": "planned"
+      "status": "integrated"
     },
     {
       "id": "M3-02",
@@ -919,7 +919,7 @@
       "acceptance": [
         "Per-category bytes match the 9.3 table within stated tolerance; without it 9.3 figures stay estimates. Needs owner approval (OD-10)."
       ],
-      "status": "planned"
+      "status": "integrated"
     },
     {
       "id": "M3-08",

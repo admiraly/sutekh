@@ -117,8 +117,10 @@
     "integrated": [
       "M3-00",
       "M3-03a",
-      "M3-04a"
+      "M3-04a",
+      "M3-01",
+      "M3-08a"
     ],
-    "note": "M3-01, M3-02, M3-08a in progress"
+    "note": "M3-02 in progress; audits (spec conformance, regression) running"
   }
 }
