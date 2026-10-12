@@ -518,19 +518,29 @@ checked, and it is copied into the supervisor spool):
   logged (`LOG_MIGRATE`, which stores the document hashes, the replacement capsule hashes, the drops and the
   budget); (5) the post-commit checkpoint is taken and the reply is sent only after it is durable. Result:
   `{world_revision, tick, layout_generation, migration_hash, plan_id, rollback_available: true, timings:
-  {prepare_ns, transform_ns, checkpoint_ns}, systems}`. Timings are migration timings, not reload latency.
+  {plan_ns, prepare_ns, transform_ns, swap_ns, checkpoint_ns, total_ns}, bytes: {new_columns, peak}, systems}`.
+  `plan_ns` is the worker time of the plan the commit uses; `bytes` are the plan's estimates. Timings are migration
+  timings, not reload latency.
 - **`world.migrate_rollback`** `{world_id, expected_world_revision}` -> `{world_revision, tick, restored_from,
   changes_lost: true, discarded_ticks, lineage: "retained"}`. Restores the pinned pre-migration checkpoint as a
   NEW revision (`LOG_ROLLBACK`). Changes made after the pin are lost, and the reply says how many ticks were
-  discarded. Without a pin: `SU_E_STALE_REVISION` with `rollback_unavailable`.
+  discarded. `lineage` is "retained" only when the worker confirms that the IDs of the undone schema are retired
+  (otherwise the rollback is refused and the world is marked unrecoverable). Without a pin: `SU_E_STALE_REVISION`
+  with `rollback_unavailable`.
 
 Failures: a stale plan or revision is `SU_E_STALE_REVISION`; an invalid plan or unresolved systems is
-`SU_E_UNSUPPORTED_MIGRATION`; an unknown plan is `SU_E_INVALID_ARGUMENT`. If the post-commit checkpoint has no
-room, the migration is rolled back to the pin and the answer is `SU_E_RESOURCE_LIMIT` with
-`error.detail.reason = "post_commit_checkpoint"`. If the worker dies before the commit is acknowledged,
-the answer is `SU_E_WORKER_FAILED` with a recovery object and the world is the pre-migration state (retry the
-commit). If the worker dies while the post-commit checkpoint is being taken, the recovery replays the logged
-migration, the checkpoint is taken again, and the commit is answered as a success with the recovery object.
+`SU_E_UNSUPPORTED_MIGRATION`; an unknown plan is `SU_E_INVALID_ARGUMENT`; a missing migration document is
+`SU_E_IO`. An unvalidated candidate is `SU_E_UNSUPPORTED_MIGRATION`. If the post-commit checkpoint has no
+room, the commit is undone: the logged migration is removed from the replay log, the world is rebuilt by a
+replacement worker from the pinned pre-migration checkpoint, and the answer is `SU_E_RESOURCE_LIMIT` with
+`error.detail = {reason: "post_commit_checkpoint", rolled_back_to: "pinned_pre_migration_checkpoint"}`. The
+world keeps its pre-commit revision and digest; the pin is then no longer a rollback target. If the worker dies
+before the commit is acknowledged, the answer is `SU_E_WORKER_FAILED` with a recovery object and the world is
+the pre-migration state (retry the commit). If the worker dies while the post-commit checkpoint is being taken,
+the recovery replays the logged migration, the checkpoint is taken again, and the commit is answered as a success
+with the recovery object. If the checkpoint dies a second time, the commit is undone the same way as the no-room
+case, and the answer is `SU_E_WORKER_FAILED` with `error.detail.reason = "post_commit_checkpoint_failed"` (a
+retry is allowed; the migration is not in the replay log).
 
 Recovery: a world whose newest checkpoint was taken after a migration or rollback (`migrated` flag) is rebuilt
 with `internal.world.create_from_snapshot` (schema from the snapshot header, schedule from the checkpointed
@@ -547,9 +557,12 @@ except those that are live in the restored schema. A replacement system may not 
 not grant (access does not grow in a migration). Migration documents are limited to 256 KiB; transform and IR
 documents to 64 KiB. At most four plans are kept per world (the oldest is replaced).
 
-Test seams (test workers only, `SU_TEST_FAULT_HOOKS`): `SUTEKH_TEST_KILL_STAGE` (`migrate.prepare`,
-`migrate.swap`, `migrate.capture`, `migrate.step`, `migrate.rollback`) kills the worker at that stage once when
-`SUTEKH_TEST_KILL_TOKEN` names a file (it is unlinked first); `SUTEKH_TEST_KILL_MODE=abort` aborts instead.
+Test seams (test workers and the test supervisor only, `SU_TEST_FAULT_HOOKS`): `SUTEKH_TEST_KILL_STAGE`
+(`migrate.prepare`, `migrate.swap`, `migrate.capture`, `migrate.step`, `migrate.rollback`) kills the worker at that
+stage when `SUTEKH_TEST_KILL_TOKEN` names a file: the file is unlinked first (one kill), or, when its first byte
+is a digit n >= 2, it is rewritten with n-1 and the kill happens (n kills in total, the later ones in replacement
+workers); `SUTEKH_TEST_KILL_MODE=abort` aborts instead. `SUTEKH_TEST_POST_CK_NOROOM_TOKEN` names a file that
+makes the next post-commit checkpoint report no room (the file is unlinked; read by the supervisor).
 
 Not in this section (deviations, see the M2-01b handoff): inline migration documents (paths only); native
 kernels admitted but not yet installed are not tracked per world (installed kernels of the old schedule are

@@ -377,7 +377,9 @@ static void world_drop(WorkerWorld *ww) {
 /* Test-only crash seam for the migration stages (contract section 4, B9). SUTEKH_TEST_KILL_STAGE=<name>
  * kills this worker at that stage (SIGKILL; abort with SUTEKH_TEST_KILL_MODE=abort). When
  * SUTEKH_TEST_KILL_TOKEN names a file it is unlinked first and the kill happens only if that succeeds,
- * so a replacement worker that inherits the environment does not die again. */
+ * so a replacement worker that inherits the environment does not die again. A token file whose first
+ * byte is a digit n >= 2 counts the kills: it is rewritten with n-1 and the kill happens (n = 2 kills twice,
+ * the second in a replacement worker). */
 #ifdef SU_TEST_FAULT_HOOKS
 static void mig_stage(const char *name) {
     const char *want = getenv("SUTEKH_TEST_KILL_STAGE");
@@ -386,8 +388,22 @@ static void mig_stage(const char *name) {
     if (want == NULL || strcmp(want, name) != 0) {
         return;
     }
-    if (tok != NULL && tok[0] != '\0' && unlink(tok) != 0) {
-        return;
+    if (tok != NULL && tok[0] != '\0') {
+        FILE *f = fopen(tok, "rb");
+        int c = f != NULL ? fgetc(f) : EOF;
+        if (f != NULL) {
+            fclose(f);
+        }
+        if (c >= '2' && c <= '9') {
+            f = fopen(tok, "wb");
+            if (f == NULL) {
+                return;
+            }
+            fputc(c - 1, f);
+            fclose(f);
+        } else if (unlink(tok) != 0) {
+            return;
+        }
     }
     if (mode != NULL && strcmp(mode, "abort") == 0) {
         abort();
@@ -4434,7 +4450,14 @@ static uint32_t h_internal_world_migrate_swap(WorkerState *s, const SuJsonValue 
         ns->sys[i].system_rev = ww->sched.sys[old].system_rev + 1u;
         ns->sys[i].installed_tick = tick;
     }
-    /* 2: the entity runtime moves to the replacement schedule and SU_EVENT_MIGRATED is appended there. */
+    /* 2: every refusal check of the swap runs before any side effect, so a refused swap leaves no event behind
+     * (the publication in step 3 repeats the same checks and cannot then fail). */
+    st = su_migrate_swap_check(ww->inst.w, &ww->mig.plan, ww->mig.world);
+    if (st != SU_OK) {
+        fail(f, st, "migration swap refused: the world changed since the plan");
+        goto abort_regs;
+    }
+    /* the entity runtime moves to the replacement schedule and SU_EVENT_MIGRATED is appended there. */
     ns->ent = ww->sched.ent;
     ww->sched.ent = NULL;
     if (ns->ent != NULL) {
@@ -4610,6 +4633,7 @@ static uint32_t snapshot_build(const CkptRec *rec, const uint8_t *bytes, size_t 
         const uint32_t *cur = NULL;
         uint32_t ncur = 0;
         uint32_t total = data->retired_count;
+        uint32_t nsf = su_world_field_count(retire_src);
         uint32_t *merged;
         uint32_t n = 0;
         if (su_world_retired_ids(retire_src, &cur, &ncur) != SU_OK) {
@@ -4617,7 +4641,7 @@ static uint32_t snapshot_build(const CkptRec *rec, const uint8_t *bytes, size_t 
             fail(f, st, "current retired IDs are unavailable");
             goto out;
         }
-        merged = malloc((total + ncur > 0u ? total + ncur : 1u) * sizeof *merged);
+        merged = malloc((total + ncur + nsf > 0u ? total + ncur + nsf : 1u) * sizeof *merged);
         if (merged == NULL) {
             st = SU_E_RESOURCE_LIMIT;
             fail(f, st, "allocation failed");
@@ -4628,6 +4652,19 @@ static uint32_t snapshot_build(const CkptRec *rec, const uint8_t *bytes, size_t 
         }
         for (i = 0; i < ncur; i++) {
             merged[n++] = cur[i];
+        }
+        /* Field IDs of the schema being undone (the IDs a rolled-back add_field introduced) join the retired
+         * list: an ID used in a lineage is never reissued, even when the migration that used it is rolled back
+         * (contract B5, section 5). The restored schema's live IDs are removed below. */
+        for (j = 0; j < nsf; j++) {
+            SuWorldFieldDesc fd;
+            if (su_world_field_at(retire_src, j, &fd, &(uint32_t){0}) != SU_OK) {
+                st = SU_E_INTERNAL;
+                fail(f, st, "current field IDs are unavailable");
+                free(merged);
+                goto out;
+            }
+            merged[n++] = fd.id;
         }
         qsort(merged, n, sizeof *merged, cmp_u32);
         {
@@ -4880,6 +4917,35 @@ static uint32_t h_internal_world_create_from_snapshot(WorkerState *s, const SuJs
     return st;
 }
 
+/* Every field ID of the undone schema is live in the restored schema or in the restored retired list (contract
+ * B5, section 5: a rolled-back lineage keeps the IDs it used). data->retired is the merged list built by
+ * snapshot_build. SU_E_INTERNAL names a violation; nothing has changed when it is returned. */
+static uint32_t undone_ids_retired(const SuWorld *undone, const SuWorld *restored, const SuSnapshotData *data) {
+    uint32_t j;
+    uint32_t k;
+    for (j = 0; j < su_world_field_count(undone); j++) {
+        SuWorldFieldDesc fd;
+        int live = 0;
+        int ret = 0;
+        if (su_world_field_at(undone, j, &fd, &(uint32_t){0}) != SU_OK) {
+            return SU_E_INTERNAL;
+        }
+        for (k = 0; k < su_world_field_count(restored) && !live; k++) {
+            SuWorldFieldDesc rd;
+            if (su_world_field_at(restored, k, &rd, &(uint32_t){0}) == SU_OK && rd.id == fd.id) {
+                live = 1;
+            }
+        }
+        for (k = 0; k < data->retired_count && !ret; k++) {
+            ret = data->retired[k] == fd.id;
+        }
+        if (!live && !ret) {
+            return SU_E_INTERNAL;
+        }
+    }
+    return SU_OK;
+}
+
 /* internal.world.restore_schema {world_id, expected_world_revision, snapshot_path, snapshot_sha256,
  * capsules, mode: "advance" | "exact", world_revision?}. Rollback: the world takes the snapshot's schema and
  * state; the replaced schedule is released; retired IDs of the current lineage are kept. */
@@ -4941,6 +5007,12 @@ static uint32_t h_internal_world_restore_schema(WorkerState *s, const SuJsonValu
     st = snapshot_build(rec, bytes, len, ww->inst.w, &nsched, &neww, &data, &ids, &rows, f);
     if (st == SU_OK) {
         have_data = 1;
+        st = undone_ids_retired(ww->inst.w, neww, &data);
+        if (st != SU_OK) {
+            fail(f, st, "field IDs of the undone migration are not retired; world unchanged");
+        }
+    }
+    if (st == SU_OK) {
         (void)su_ent_rt_caps(ww->sched.ent, &ms, &me, &lm);
         st = restored_entities(&nsched, &data, ms, me, lm);
         if (st != SU_OK) {
@@ -5019,6 +5091,7 @@ static uint32_t h_internal_world_restore_schema(WorkerState *s, const SuJsonValu
     su_buf_u64(res, su_world_tick(ww->inst.w));
     su_buf_str(res, ",\"layout_generation\":");
     su_buf_u64(res, su_world_layout_generation(ww->inst.w));
+    su_buf_str(res, ",\"retired_field_ids_retained\":true");
     su_buf_str(res, ",\"worker_pid\":");
     su_buf_u64(res, (uint64_t)getpid());
     su_buf_str(res, ",\"semantic_manifest\":");

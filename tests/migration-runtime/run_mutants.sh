@@ -89,6 +89,18 @@ run_mutant "M09 swap does not arm the capture seam" "$WRK" sed \
     's/    ww->post_swap = 1;/    ww->post_swap = 0;/'
 run_mutant "M10 migrated flag set after the checkpoint" "$SUPER" perl \
     's/    w->migrated = 1;\n    t0 = mono_ns\(\);/    t0 = mono_ns();/'
+run_mutant "M11 no-room after commit: migration not undone" "$SUPER" perl \
+    's/    if \(rc == CK_NOROOM\) \{\n        return undo_migration\(/    if (rc == CK_NOROOM) {\n        return call_fail(c, SU_E_RESOURCE_LIMIT, "mutant");\n        return undo_migration(/'
+run_mutant "M12 double fault: migration not undone" "$SUPER" perl \
+    's/            return undo_migration\(a, w, c, &inop, &pre, SU_E_WORKER_FAILED,/            return call_fail(c, SU_E_WORKER_FAILED, "mutant"); (void)undo_migration(a, w, c, &inop, &pre, SU_E_WORKER_FAILED,/'
+run_mutant "M13 rollback does not retire the undone schema IDs (B5)" "$WRK" sed \
+    's/    for (j = 0; j < nsf; j++) {/    for (j = 0; j < nsf * 0u; j++) {/'
+run_mutant "M14 rollback leaves the migrated flag clear (B1)" "$SUPER" perl \
+    's/w->count = w->pin.count;\n    w->migrated = 1;/w->count = w->pin.count;\n    w->migrated = 0;/'
+run_mutant "M15 unevaluated candidate accepted at commit" "$SUPER" sed \
+    's/        if (strcmp(cd->eval_status, "passed") != 0) {/        if (0) {/'
+run_mutant "M16 replacement of the old generation accepted (C3)" "$WRK" sed \
+    's/        if (gen != (uint32_t)to64 || sv != ww->sched.schema_version || strcmp(mod->system_id, sid) != 0) {/        if (sv != ww->sched.schema_version || strcmp(mod->system_id, sid) != 0) {/'
 
 restore_all
 echo "mutants: $total run, $kills killed, $fails not killed or not run"

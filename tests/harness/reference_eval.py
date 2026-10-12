@@ -585,6 +585,18 @@ def movement_ticks(position: list, velocity: list, ticks: int) -> list:
     return [(p + ticks * v) & MASK for p, v in zip(position, velocity)]
 
 
+def retired_after_rollback(retired: list, undone_ids: list, restored_live_ids: list) -> list:
+    """Retired field IDs after a rollback (contract B5, section 5): the IDs already retired, plus every ID of the
+    schema the rollback undoes that the restored schema does not use. Ascending, without repeats."""
+    live = set(restored_live_ids)
+    return sorted({int(i) for i in retired} | {int(i) for i in undone_ids if int(i) not in live})
+
+
+def id_reuse_refused(field_id: int, retired: list, live_ids: list) -> bool:
+    """A new add_field may not reuse an ID that is live or retired in the lineage (contract section 2)."""
+    return field_id in set(retired) or field_id in set(live_ids)
+
+
 def migration_plan_expectation(gen_from: int, gen_to: int, fields_before: int, fields_after: int,
                                added: int) -> dict:
     """The plan fields TX11 checks for an add_field-only migration (no removal, no rename, no transform)."""

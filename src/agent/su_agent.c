@@ -160,6 +160,9 @@ typedef struct PlanRec {
     uint32_t valid;
     uint32_t from_gen;
     uint32_t to_gen;
+    uint64_t plan_ns;          /* time the worker spent on world.migrate_plan (reported with the commit) */
+    uint64_t bytes_new_columns;
+    uint64_t bytes_peak;
     MigOp doc;             /* documents and budget (sys, pin and log fields unused) */
 } PlanRec;
 
@@ -4665,6 +4668,9 @@ static uint32_t spool_doc(SuAgent *a, const char *rel, const char *ext, uint32_t
     uint8_t *bytes = NULL;
     size_t len = 0;
     uint32_t st = su_path_resolve(a->root, rel, real, SU_PATH_BUF);
+    if (st == SU_E_IO) {
+        return call_fail(c, st, "migration document does not exist or cannot be opened");
+    }
     if (st != SU_OK) {
         return call_fail(c, st, "migration document path rejected by the project path policy");
     }
@@ -4699,7 +4705,7 @@ static PlanRec *plan_find(AgentWorld *w, const char *id) {
 
 /* Restores the pinned pre-migration checkpoint as the next revision (LOG_ROLLBACK). Changes made after the pin are
  * lost. Returns SU_OK, or the failure status with the client message set (the worker died: recovered). */
-static uint32_t rollback_pinned(SuAgent *a, AgentWorld *w, AgentCall *c, const InFlight *op) {
+static uint32_t rollback_pinned(SuAgent *a, AgentWorld *w, AgentCall *c, const InFlight *op, int *retained) {
     char snap[SU_PATH_BUF];
     char cur[AGENT_REV_CAP];
     SuBuf req;
@@ -4751,8 +4757,17 @@ static uint32_t rollback_pinned(SuAgent *a, AgentWorld *w, AgentCall *c, const I
         su_buf_free(&resp);
         return call_fail(c, code != 0 ? code : SU_E_INTERNAL, msg);
     }
+    *retained = 0;
+    {
+        const SuJsonValue *rv = jf(r.result, "retired_field_ids_retained");
+        *retained = rv != NULL && rv->type == SU_JSON_BOOL && rv->u.boolean != 0;
+    }
     reply_free(&r);
     su_buf_free(&resp);
+    if (!*retained) {
+        mark_unrecoverable(w, "the rolled-back lineage did not keep its retired field IDs");
+        return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: rollback did not retain the retired field IDs");
+    }
     memset(&lop, 0, sizeof lop);
     lop.mig.pin = w->pin;
     snprintf(lop.mig.plan_hash, sizeof lop.mig.plan_hash, "%s", w->pin_mig);
@@ -4767,6 +4782,67 @@ static uint32_t rollback_pinned(SuAgent *a, AgentWorld *w, AgentCall *c, const I
         return call_fail(c, SU_E_INTERNAL, "rolled-back state diverged from the worker; world is unrecoverable");
     }
     return SU_OK;
+}
+
+/* Supervisor records of a world taken before a migration commit (contract section 4 (5), B9). */
+typedef struct PreMig {
+    uint64_t rev;
+    uint64_t tick;
+    char hash[65];
+    uint64_t ticks_since_ck;
+    uint32_t log_count;
+    uint32_t ck_count;
+    uint32_t count;
+    int migrated;
+    SysRef sys[AGENT_MAX_SYSTEMS];
+} PreMig;
+
+#ifdef SU_TEST_FAULT_HOOKS
+/* Test-only: when SUTEKH_TEST_POST_CK_NOROOM_TOKEN names an existing file, the file is unlinked and the next
+ * post-commit checkpoint reports no room (the migration is then undone). Compiled only into test supervisors. */
+static int test_post_ck_noroom(void) {
+    const char *tok = getenv("SUTEKH_TEST_POST_CK_NOROOM_TOKEN");
+    return tok != NULL && tok[0] != '\0' && unlink(tok) == 0;
+}
+#define POST_CK_NOROOM() test_post_ck_noroom()
+#else
+#define POST_CK_NOROOM() 0
+#endif
+
+/* Undoes a migration commit whose post-commit checkpoint could not be made durable. The LOG_MIGRATE entry that
+ * sync_after appended is removed and the supervisor records return to the pre-migration values, so the replacement
+ * worker rebuilds the pinned pre-migration checkpoint and the replay log ends before the migration. Nothing is
+ * acknowledged: the revision is the one before the commit and the world is the old world (contract section 1).
+ * The pin no longer names a committed migration, so rollback is unavailable until the next commit. */
+static uint32_t undo_migration(SuAgent *a, AgentWorld *w, AgentCall *c, const InFlight *op, const PreMig *pre,
+                               uint32_t code, const char *msg, const char *reason) {
+    const LogOp *last;
+    if (w->log_count == 0u || w->ck_count != pre->ck_count) {
+        mark_unrecoverable(w, "a migration could not be undone: the log or checkpoints changed during the commit");
+        return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: the migration could not be undone");
+    }
+    last = &w->log[w->log_count - 1u];
+    if (last->kind != LOG_MIGRATE) {
+        mark_unrecoverable(w, "a migration could not be undone: the logged entry is not the migration");
+        return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: the migration could not be undone");
+    }
+    w->log_count--;
+    w->rev = pre->rev;
+    w->tick = pre->tick;
+    snprintf(w->hash, sizeof w->hash, "%s", pre->hash);
+    w->ticks_since_ck = pre->ticks_since_ck;
+    w->count = pre->count;
+    memcpy(w->sys, pre->sys, sizeof w->sys);
+    w->migrated = pre->migrated;
+    w->pin_has = 0;
+    w->pin_mig[0] = '\0';
+    recover(a, c, op);
+    if (w->unrecoverable) {
+        return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: the pre-migration state could not be rebuilt");
+    }
+    snprintf(c->detail, sizeof c->detail, "{\"reason\":\"%s\",\"rolled_back_to\":\"pinned_pre_migration_checkpoint\"}",
+             reason);
+    return call_fail(c, code, msg);
 }
 
 /* Adds the replacement systems, drops, documents and budget of op to a prepare request (the same request the
@@ -4826,11 +4902,18 @@ static uint32_t migrate_prepare_request(SuAgent *a, const AgentWorld *w, const M
     return req->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
+static uint64_t mono_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
+}
+
 /* world.migrate_plan {world_id, expected_world_revision, migration_path, transform_path?, lir_path?, drop_systems?}.
  * Estimates and validity; stores the plan (plan_id) bound to the current revision. Changes no state. */
 static uint32_t h_world_migrate_plan(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"world_id", "expected_world_revision", "migration_path", "transform_path",
                                           "lir_path", "drop_systems"};
+    uint64_t t_plan = 0;
     const char *world_id = NULL;
     const char *expect = NULL;
     const char *mp = NULL;
@@ -4951,7 +5034,9 @@ static uint32_t h_world_migrate_plan(SuAgent *a, const SuJsonValue *params, SuBu
         return call_fail(c, SU_E_RESOURCE_LIMIT, "world.migrate_plan request too large");
     }
     su_buf_init(&resp);
+    t_plan = mono_ns();
     st = roundtrip(a, c->id, &req, &resp);
+    t_plan = mono_ns() - t_plan;
     su_buf_free(&req);
     if (st != SU_OK) {
         su_buf_free(&resp);
@@ -4972,9 +5057,15 @@ static uint32_t h_world_migrate_plan(SuAgent *a, const SuJsonValue *params, SuBu
     pr->rev = w->rev;
     pr->tick = w->tick;
     pr->doc = doc;
+    pr->plan_ns = t_plan;
     plan = jf(r.result, "plan");
     if (plan != NULL) {
         uint64_t g = 0;
+        const SuJsonValue *rsc = jf(plan, "resource");
+        if (rsc != NULL) {
+            ju64(rsc, "bytes_new_columns", &pr->bytes_new_columns);
+            ju64(rsc, "bytes_peak", &pr->bytes_peak);
+        }
         const SuJsonValue *vv = jf(plan, "valid");
         pr->valid = vv != NULL && vv->type == SU_JSON_BOOL && vv->u.boolean != 0;
         jstr(plan, "plan_hash", pr->plan_hash, sizeof pr->plan_hash);
@@ -4989,12 +5080,6 @@ static uint32_t h_world_migrate_plan(SuAgent *a, const SuJsonValue *params, SuBu
     relay(res, &resp, c);
     su_buf_free(&resp);
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
-}
-
-static uint64_t mono_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
 }
 
 /* Turns a worker refusal into the client's error (the worker's status and message). */
@@ -5037,6 +5122,9 @@ static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, Su
     char mig_hash[65];
     SysRef ordered[AGENT_MAX_SYSTEMS];
     LogOp lop;
+    PreMig pre;
+    uint64_t total_t0 = mono_ns();
+    uint64_t swap_ns = 0;
     uint32_t st;
     uint32_t k;
     uint32_t j;
@@ -5168,7 +5256,9 @@ static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, Su
     su_buf_quoted(&req, pr->plan_hash, strlen(pr->plan_hash));
     req_end(&req);
     su_buf_init(&resp);
+    swap_ns = mono_ns();
     st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    swap_ns = mono_ns() - swap_ns;
     su_buf_free(&req);
     if (st != SU_OK) {
         su_buf_free(&resp);
@@ -5233,6 +5323,15 @@ static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, Su
     memcpy(w->sys, ordered, sizeof ordered);
     w->count = op.n;
     snprintf(op.plan_hash, sizeof op.plan_hash, "%s", pr->plan_hash);
+    pre.rev = w->rev;
+    pre.tick = w->tick;
+    snprintf(pre.hash, sizeof pre.hash, "%s", w->hash);
+    pre.ticks_since_ck = w->ticks_since_ck;
+    pre.log_count = w->log_count;
+    pre.ck_count = w->ck_count;
+    pre.count = oldcount;
+    pre.migrated = w->migrated;
+    memcpy(pre.sys, oldsys, sizeof pre.sys);
 
     /* Log the migration: the worker's digest after it must equal the acknowledged state. */
     memset(&lop, 0, sizeof lop);
@@ -5248,26 +5347,30 @@ static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, Su
     }
 
     /* Post-commit checkpoint: it must be durable before the reply (contract section 4, B9). It records the
-     * migrated flag, so recovery builds the world from it rather than from the fixture. */
+     * migrated flag, so recovery builds the world from it rather than from the fixture. A failure of the
+     * checkpoint leaves the migration undone: the world is the pre-commit world (contract section 1). */
     w->migrated = 1;
     t0 = mono_ns();
-    rc = checkpoint_world(a, w, 0);
+    rc = POST_CK_NOROOM() ? CK_NOROOM : checkpoint_world(a, w, 0);
     if (rc == CK_DIED) {
-        /* Recovery replays LOG_MIGRATE from the pinned checkpoint; the checkpoint is then taken again. */
+        /* The first death: recovery replays LOG_MIGRATE from the pinned checkpoint; the checkpoint is taken again. */
         recover(a, c, &inop);
-        rc = w->unrecoverable ? CK_BAD : checkpoint_world(a, w, 0);
-        if (rc != CK_OK) {
-            return call_fail(c, SU_E_WORKER_FAILED, "post-migration checkpoint failed after recovery; the migration stays in the replay log");
+        if (w->unrecoverable) {
+            return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: the post-migration state could not be rebuilt");
+        }
+        rc = checkpoint_world(a, w, 0);
+        if (rc == CK_DIED) {
+            /* The second death: the migration is undone, so the log and the world agree on the old state. */
+            return undo_migration(a, w, c, &inop, &pre, SU_E_WORKER_FAILED,
+                                  "post-migration checkpoint failed twice; the migration was rolled back to the pinned "
+                                  "pre-migration checkpoint; retry the commit",
+                                  "post_commit_checkpoint_failed");
         }
     }
     if (rc == CK_NOROOM) {
-        uint32_t rb = rollback_pinned(a, w, c, &inop);
-        if (rb != SU_OK) {
-            return rb;
-        }
-        snprintf(c->detail, sizeof c->detail, "%s",
-                 "{\"reason\":\"post_commit_checkpoint\",\"rolled_back_to\":\"pinned_pre_migration_checkpoint\"}");
-        return call_fail(c, SU_E_RESOURCE_LIMIT, "post-commit checkpoint has no room; the migration was rolled back");
+        return undo_migration(a, w, c, &inop, &pre, SU_E_RESOURCE_LIMIT,
+                              "post-commit checkpoint has no room; the migration was rolled back",
+                              "post_commit_checkpoint");
     }
     if (rc != CK_OK) {
         return call_fail(c, SU_E_INTERNAL, "post-migration checkpoint disagreed with the acknowledged state; world is unrecoverable");
@@ -5288,12 +5391,22 @@ static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, Su
     su_buf_quoted(res, mig_hash, strlen(mig_hash));
     su_buf_str(res, ",\"plan_id\":");
     su_buf_quoted(res, plan_id, strlen(plan_id));
-    su_buf_str(res, ",\"rollback_available\":true,\"timings\":{\"prepare_ns\":");
+    su_buf_str(res, ",\"rollback_available\":true,\"timings\":{\"plan_ns\":");
+    su_buf_u64(res, pr->plan_ns);
+    su_buf_str(res, ",\"prepare_ns\":");
     su_buf_u64(res, prep_ns);
     su_buf_str(res, ",\"transform_ns\":");
     su_buf_u64(res, trans_ns);
+    su_buf_str(res, ",\"swap_ns\":");
+    su_buf_u64(res, swap_ns);
     su_buf_str(res, ",\"checkpoint_ns\":");
     su_buf_u64(res, ck_ns);
+    su_buf_str(res, ",\"total_ns\":");
+    su_buf_u64(res, mono_ns() - total_t0);
+    su_buf_str(res, "},\"bytes\":{\"new_columns\":");
+    su_buf_u64(res, pr->bytes_new_columns);
+    su_buf_str(res, ",\"peak\":");
+    su_buf_u64(res, pr->bytes_peak);
     su_buf_str(res, "},\"systems\":[");
     for (k = 0; k < op.n; k++) {
         if (k > 0) {
@@ -5321,6 +5434,7 @@ static uint32_t h_world_migrate_rollback(SuAgent *a, const SuJsonValue *params, 
     char rv[AGENT_REV_CAP];
     uint64_t tick_before;
     uint64_t discarded;
+    int retained = 0;
     uint32_t st;
 
     if (check_keys(params, allowed, 2, c) != SU_OK || param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
@@ -5348,7 +5462,7 @@ static uint32_t h_world_migrate_rollback(SuAgent *a, const SuJsonValue *params, 
     op.kind = OPK_ROLLBACK;
     op.w = w;
     op.tick = w->tick;
-    st = rollback_pinned(a, w, c, &op);
+    st = rollback_pinned(a, w, c, &op, &retained);
     if (st != SU_OK) {
         return st;
     }
@@ -5363,7 +5477,7 @@ static uint32_t h_world_migrate_rollback(SuAgent *a, const SuJsonValue *params, 
     su_buf_quoted(res, w->pin_mig, strlen(w->pin_mig));
     su_buf_str(res, ",\"changes_lost\":true,\"discarded_ticks\":");
     su_buf_u64(res, discarded);
-    su_buf_str(res, ",\"lineage\":\"retained\"}");
+    su_buf_str(res, retained ? ",\"lineage\":\"retained\"}" : ",\"lineage\":\"lost\"}");
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 

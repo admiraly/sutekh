@@ -647,6 +647,351 @@ static void run_rollback(void) {
     session_stop(&s);
 }
 
+/* ---------- M2-01 fixes: undone commits, retired field IDs ---------- */
+
+/* The active worker's pid, from engine.info, or 0. */
+static uint64_t active_worker_pid(Session *s) {
+    Resp r;
+    uint64_t pid = 0;
+    call(s, "{\"protocol\":\"0.1\",\"id\":\"ei\",\"method\":\"engine.info\",\"params\":{}}", &r);
+    if (resp_ok(&r)) {
+        pid = uint_of(su_json_member(resp_result(&r), "active_worker"), "pid");
+    }
+    resp_free(&r);
+    return pid;
+}
+
+/* Kills the active worker from outside (SIGKILL). The next request finds the dead worker, recovers it and is
+ * answered with SU_E_WORKER_FAILED; the request after that runs on the replacement. */
+static void kill_active_worker(Session *s, const char *wid, const char *rev) {
+    uint64_t pid = active_worker_pid(s);
+    char sha[65];
+    CHECK(pid > 0);
+    if (pid > 0) {
+        kill((pid_t)pid, SIGKILL);
+    }
+    (void)digest(s, wid, rev, sha, NULL);
+    CHECK(active_worker_pid(s) != pid);
+}
+
+/* Writes a stage kill token: the seam kills the worker count times (see mig_stage in worker.c). The env is
+ * inherited by the supervisor at fork, so it is set before session_start. */
+static void arm_kill_count(const char *stage, const char *count) {
+    char tok[2200];
+    FILE *f;
+    snprintf(tok, sizeof tok, "%s/token-%s-%s", g_scratch, stage, count);
+    f = fopen(tok, "wb");
+    if (f == NULL) {
+        perror(tok);
+        exit(2);
+    }
+    fputs(count, f);
+    fputc('\n', f);
+    fclose(f);
+    setenv("SUTEKH_TEST_KILL_STAGE", stage, 1);
+    setenv("SUTEKH_TEST_KILL_TOKEN", tok, 1);
+}
+
+/* Arms the supervisor's no-room seam (one post-commit checkpoint). Read by the supervisor at fork. */
+static void arm_post_noroom(void) {
+    char tok[2200];
+    FILE *f;
+    snprintf(tok, sizeof tok, "%s/token-post-noroom", g_scratch);
+    f = fopen(tok, "wb");
+    if (f == NULL) {
+        perror(tok);
+        exit(2);
+    }
+    fputs("armed\n", f);
+    fclose(f);
+    setenv("SUTEKH_TEST_POST_CK_NOROOM_TOKEN", tok, 1);
+}
+
+static int error_code(const Resp *r, char *code, size_t cap) {
+    return str_of(su_json_member(r->root, "error"), "code", code, cap);
+}
+
+/* Post-commit failure, undone (contract section 1, B9). mode "double": the post-migration checkpoint dies in the
+ * worker twice (the commit's capture, then the capture of the replacement worker). mode "noroom": the post-commit
+ * checkpoint reports no room (supervisor test seam). In both cases the failed commit must leave the world at the
+ * pre-commit digest, a kill and recovery must rebuild that state, and the retry must reach the control digest. */
+static void run_undo(const char *mode, const Outcome *ctl) {
+    Session s;
+    Setup st;
+    Resp r;
+    char rev[48];
+    char pid[32];
+    char phash[65];
+    char code[64];
+    char sha[65];
+    char spool[64];
+    int valid = 0;
+    int double_fault = strcmp(mode, "double") == 0;
+
+    snprintf(spool, sizeof spool, "spool-undo-%s", mode);
+    if (double_fault) {
+        arm_kill_count("migrate.capture", "2");
+    } else {
+        arm_post_noroom();
+    }
+    s = session_start(spool);
+    disarm_stage();
+    unsetenv("SUTEKH_TEST_POST_CK_NOROOM_TOKEN");
+    CHECK(setup_world(&s, &st));
+    snprintf(rev, sizeof rev, "%s", st.rev);
+    CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(valid == 1);
+    resp_free(&r);
+
+    /* The first commit attempt: the post-commit checkpoint fails and the migration is undone. */
+    CHECK(!commit(&s, st.wid, pid, rev, st.cand, &r));
+    CHECK(error_code(&r, code, sizeof code));
+    if (double_fault) {
+        CHECK(strcmp(code, "SU_E_WORKER_FAILED") == 0);
+        CHECK(strstr((const char *)r.text, "post_commit_checkpoint_failed") != NULL);
+        CHECK(resp_has_recovery(&r));
+    } else {
+        CHECK(strcmp(code, "SU_E_RESOURCE_LIMIT") == 0);
+        CHECK(strstr((const char *)r.text, "\"reason\":\"post_commit_checkpoint\"") != NULL);
+    }
+    CHECK(strstr((const char *)r.text, "rolled_back_to") != NULL);
+    resp_free(&r);
+
+    /* The world is the old world at the old revision: the digest equals the control's pre-migration digest. */
+    CHECK(digest(&s, st.wid, rev, sha, NULL));
+    CHECK(strcmp(sha, ctl->pre_digest) == 0);
+
+    /* Kill and recovery: the replacement rebuilds the same state from the pin and the replay log. */
+    kill_active_worker(&s, st.wid, rev);
+    CHECK(digest(&s, st.wid, rev, sha, NULL));
+    CHECK(strcmp(sha, ctl->pre_digest) == 0);
+
+    /* The retry commits (the kill count is spent) and the run reaches the control digest after two ticks. */
+    CHECK(commit(&s, st.wid, pid, rev, st.cand, &r));
+    CHECK(resp_ok(&r));
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+    CHECK(step(&s, st.wid, rev, sizeof rev, 2, &r));
+    resp_free(&r);
+    CHECK(digest(&s, st.wid, rev, sha, NULL));
+    CHECK(strcmp(sha, ctl->final_digest) == 0);
+    session_stop(&s);
+}
+
+/* Field IDs of a rolled-back lineage stay retired (contract B5, section 5): after a commit that adds id 3 and its
+ * rollback, the id is refused by a new plan, also after a kill and recovery, and an unused id is still accepted. */
+static void run_id_retirement(void) {
+    Session s;
+    Setup st;
+    Resp r;
+    char rev[48];
+    char pid[32];
+    char phash[65];
+    char code[64];
+    int valid = 0;
+    char line[512];
+
+    overwrite_file("m_add_shield.json",
+                   "{\"migration_format\":\"0.1\",\"id\":\"m-add-shield\",\"from_layout_generation\":1,"
+                   "\"to_layout_generation\":2,\"ops\":[{\"op\":\"add_field\",\"field\":{\"id\":4,\"name\":\"shield\","
+                   "\"type\":\"u32\",\"default\":7}}]}");
+    s = session_start("spool-id-retire");
+    CHECK(setup_world(&s, &st));
+    snprintf(rev, sizeof rev, "%s", st.rev);
+    CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    resp_free(&r);
+    CHECK(commit(&s, st.wid, pid, rev, st.cand, &r));
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"rb\",\"method\":\"world.migrate_rollback\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\"}}",
+             st.wid, rev);
+    call(&s, line, &r);
+    CHECK(resp_ok(&r));
+    {
+        char lin[16];
+        CHECK(str_of(resp_result(&r), "lineage", lin, sizeof lin) && strcmp(lin, "retained") == 0);
+    }
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+
+    /* id 3 was used by the rolled-back lineage: a new add_field is refused as retired. */
+    CHECK(!plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_SCHEMA_MISMATCH") == 0);
+    resp_free(&r);
+    /* An id never used is still accepted. */
+    CHECK(plan(&s, st.wid, rev, "m_add_shield.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(valid == 1);
+    resp_free(&r);
+
+    kill_active_worker(&s, st.wid, rev);
+    CHECK(!plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_SCHEMA_MISMATCH") == 0);
+    resp_free(&r);
+    session_stop(&s);
+}
+
+/* A checkpoint taken after the rollback (64 ticks, the test interval) must carry the retired IDs: recovery from it
+ * keeps the refusal. This is what the migrated flag after a rollback protects (contract section 6). */
+static void run_id_retirement_after_checkpoint(void) {
+    Session s;
+    Setup st;
+    Resp r;
+    char rev[48];
+    char pid[32];
+    char phash[65];
+    char code[64];
+    char line[512];
+    int valid = 0;
+
+    s = session_start("spool-id-retire-ck");
+    CHECK(setup_world(&s, &st));
+    snprintf(rev, sizeof rev, "%s", st.rev);
+    CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    resp_free(&r);
+    CHECK(commit(&s, st.wid, pid, rev, st.cand, &r));
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"rb\",\"method\":\"world.migrate_rollback\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\"}}",
+             st.wid, rev);
+    call(&s, line, &r);
+    CHECK(resp_ok(&r));
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+    /* 64 ticks: the interval checkpoint is taken after the rollback. */
+    CHECK(step(&s, st.wid, rev, sizeof rev, 64, &r));
+    resp_free(&r);
+    kill_active_worker(&s, st.wid, rev);
+    CHECK(!plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_SCHEMA_MISMATCH") == 0);
+    resp_free(&r);
+    session_stop(&s);
+}
+
+/* Commit admission of candidates (contract section 4): a candidate that has not passed evaluation is refused,
+ * and so is a candidate of the old generation. The world is unchanged in both cases. */
+static void run_candidate_refusals(void) {
+    Session s;
+    Setup st;
+    Resp r;
+    char rev[48];
+    char pid[32];
+    char phash[65];
+    char code[64];
+    char cand[32];
+    char pre_sha[65];
+    char post_sha[65];
+    int valid = 0;
+
+    s = session_start("spool-cand-refuse");
+    CHECK(setup_world(&s, &st));
+    snprintf(rev, sizeof rev, "%s", st.rev);
+    CHECK(digest(&s, st.wid, rev, pre_sha, NULL));
+    /* A missing document is an I/O refusal naming the file, not a path-policy refusal. */
+    CHECK(!plan(&s, st.wid, rev, "no_such_migration.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_IO") == 0);
+    CHECK(strstr((const char *)r.text, "does not exist") != NULL);
+    resp_free(&r);
+    CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    resp_free(&r);
+
+    /* Submitted, not evaluated. */
+    CHECK(submit(&s, "sys_a_gen2.capsule.json", cand, sizeof cand));
+    CHECK(!commit(&s, st.wid, pid, rev, cand, &r));
+    CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_UNSUPPORTED_MIGRATION") == 0);
+    resp_free(&r);
+
+    /* Evaluated, but generation 1: it cannot replace the system of a generation-2 world. */
+    CHECK(submit(&s, "sys_a.capsule.json", cand, sizeof cand));
+    CHECK(evaluate(&s, cand, "sys_a.test.json"));
+    CHECK(!commit(&s, st.wid, pid, rev, cand, &r));
+    CHECK(error_code(&r, code, sizeof code));
+    CHECK(strcmp(code, "SU_E_SCHEMA_MISMATCH") == 0 || strcmp(code, "SU_E_UNSUPPORTED_MIGRATION") == 0);
+    resp_free(&r);
+
+    CHECK(digest(&s, st.wid, rev, post_sha, NULL));
+    CHECK(strcmp(pre_sha, post_sha) == 0);
+    session_stop(&s);
+}
+
+/* Two committed migrations (1 -> 2 adds health, 2 -> 3 adds shield), then a rollback to the pin taken before the
+ * second one. The restored schema differs from the fixture, so recovery after the rollback must rebuild from the
+ * checkpoint's schema (contract section 6): a checkpoint taken after the rollback, a kill, and recovery must
+ * reproduce the same digest, keep health live, and keep the ID of the undone migration (4) retired. */
+static void run_rollback_two_migrations(void) {
+    Session s;
+    Setup st;
+    Resp r;
+    char rev[48];
+    char pid[32];
+    char phash[65];
+    char cand3[32];
+    char code[64];
+    char sha_back[65];
+    char sha_ck[65];
+    char line[512];
+    int valid = 0;
+
+    s = session_start("spool-two-mig");
+    CHECK(setup_world(&s, &st));
+    snprintf(rev, sizeof rev, "%s", st.rev);
+    CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    resp_free(&r);
+    CHECK(commit(&s, st.wid, pid, rev, st.cand, &r));
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+
+    CHECK(submit(&s, "sys_a_gen3.capsule.json", cand3, sizeof cand3));
+    CHECK(evaluate(&s, cand3, "sys_a_gen3.test.json"));
+    CHECK(plan(&s, st.wid, rev, "m_shield3.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(valid == 1);
+    resp_free(&r);
+    CHECK(commit(&s, st.wid, pid, rev, cand3, &r));
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+
+    /* Rolls back to the pin of the second commit: the schema with health, layout generation 2. */
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"rb\",\"method\":\"world.migrate_rollback\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\"}}",
+             st.wid, rev);
+    call(&s, line, &r);
+    CHECK(resp_ok(&r));
+    {
+        char lin[16];
+        CHECK(str_of(resp_result(&r), "lineage", lin, sizeof lin) && strcmp(lin, "retained") == 0);
+    }
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+    CHECK(digest(&s, st.wid, rev, sha_back, NULL));
+
+    /* A checkpoint after the rollback (64 ticks), then a kill and recovery from it: the same digest. */
+    CHECK(step(&s, st.wid, rev, sizeof rev, 64, &r));
+    resp_free(&r);
+    CHECK(digest(&s, st.wid, rev, sha_ck, NULL));
+    kill_active_worker(&s, st.wid, rev);
+    CHECK(digest(&s, st.wid, rev, sha_back, NULL));
+    CHECK(strcmp(sha_back, sha_ck) == 0);
+
+    /* The restored schema still has health (3) and not shield (4); 4 is retired, so the second migration is refused. */
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"wi\",\"method\":\"world.inspect\",\"params\":{\"world_id\":\"%s\","
+             "\"fields\":[\"position_x\"],\"limit\":1}}",
+             st.wid);
+    call(&s, line, &r);
+    CHECK(resp_ok(&r) && strstr((const char *)r.text, "\"name\":\"health\"") != NULL);
+    CHECK(resp_ok(&r) && strstr((const char *)r.text, "\"name\":\"shield\"") == NULL);
+    resp_free(&r);
+    CHECK(!plan(&s, st.wid, rev, "m_shield3.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_SCHEMA_MISMATCH") == 0);
+    resp_free(&r);
+    session_stop(&s);
+}
+
 int main(int argc, char **argv) {
     Outcome ctl;
     Outcome o1;
@@ -670,6 +1015,8 @@ int main(int argc, char **argv) {
     copy_from("tests/reload", "sys_a_gen2.lir.json");
     copy_from("tests/reload", "sys_a_gen2.test.json");
     copy_from("tests/reload", "world4.json");
+    copy_from("tests/reload", "sys_a_gen3.capsule.json");
+    copy_from("tests/reload", "sys_a_gen3.test.json");
     overwrite_file("m_add.json",
                    "{\"migration_format\":\"0.1\",\"id\":\"m-add-health\",\"from_layout_generation\":1,"
                    "\"to_layout_generation\":2,\"ops\":[{\"op\":\"add_field\",\"field\":{\"id\":3,\"name\":\"health\","
@@ -703,6 +1050,16 @@ int main(int argc, char **argv) {
     run_refusals();
     run_rollback();
     run_rollback_crash();
+    overwrite_file("m_shield3.json",
+                   "{\"migration_format\":\"0.1\",\"id\":\"m-shield3\",\"from_layout_generation\":2,"
+                   "\"to_layout_generation\":3,\"ops\":[{\"op\":\"add_field\",\"field\":{\"id\":4,\"name\":\"shield\","
+                   "\"type\":\"u32\",\"default\":7}}]}");
+    run_undo("double", &ctl);
+    run_undo("noroom", &ctl);
+    run_id_retirement();
+    run_id_retirement_after_checkpoint();
+    run_rollback_two_migrations();
+    run_candidate_refusals();
 
     printf("migrate_runtime: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

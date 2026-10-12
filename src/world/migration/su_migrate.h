@@ -159,4 +159,8 @@ uint32_t su_migrate_prepare(const SuWorld *old, const SuMigratePlan *p, SuMigrat
  * candidate. On failure nothing changes. The caller destroys *retired after its reply. */
 uint32_t su_migrate_swap(SuWorld **live, const SuMigratePlan *p, SuWorld *candidate, SuWorld **retired);
 
+/* The checks of su_migrate_swap without the publication: SU_OK when a swap of live for candidate would succeed now.
+ * The worker runs it before any side effect (a refused swap must leave no event behind). */
+uint32_t su_migrate_swap_check(const SuWorld *live, const SuMigratePlan *p, const SuWorld *candidate);
+
 #endif

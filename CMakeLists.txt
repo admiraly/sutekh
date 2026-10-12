@@ -383,8 +383,14 @@ set_tests_properties(migration PROPERTIES DEPENDS migration_model)
 
 # ---- BEGIN M2-01b migration runtime (commit, rollback, recovery, crash stages; contract sections 3-6) ----
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/migration_runtime_scratch")
+# The supervisor under test is built with the test seams (post-commit no-room); sutekh itself is not.
+add_library(su_agent_hooks STATIC ${SU_AGENT_SOURCES})
+target_include_directories(su_agent_hooks PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
+target_link_libraries(su_agent_hooks PUBLIC su_vm su_world su_ir su_platform su_snapshot su_jobs su_cmdq su_migrate)
+target_compile_definitions(su_agent_hooks PRIVATE _POSIX_C_SOURCE=200809L SU_TEST_FAULT_HOOKS)
+sutekh_apply_warnings(su_agent_hooks)
 add_executable(test_migrate_runtime tests/migration-runtime/test_migrate_runtime.c)
-target_link_libraries(test_migrate_runtime PRIVATE su_agent)
+target_link_libraries(test_migrate_runtime PRIVATE su_agent_hooks)
 target_compile_definitions(test_migrate_runtime PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_migrate_runtime)
 add_dependencies(test_migrate_runtime recovery_worker)

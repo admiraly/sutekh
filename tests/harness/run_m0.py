@@ -3668,6 +3668,11 @@ MIG_ADD_HEALTH = {"migration_format": "0.1", "id": "m-tx11-add-health", "from_la
                                                        "default": MIG_HEALTH_DEFAULT}}]}
 MIG_REMOVE_VELOCITY = {"migration_format": "0.1", "id": "m-tx11-remove-velocity", "from_layout_generation": 1,
                        "to_layout_generation": 2, "ops": [{"op": "remove_field", "id": 2}]}
+# An ID never used by the lineage: accepted after the rollback of the health migration (id 3 stays retired).
+MIG_ADD_SHIELD = {"migration_format": "0.1", "id": "m-tx11-add-shield", "from_layout_generation": 1,
+                  "to_layout_generation": 2,
+                  "ops": [{"op": "add_field", "field": {"id": 4, "name": "shield", "type": "u32", "default": 7}}]}
+MIG_COMMIT_TIMINGS = ("plan_ns", "prepare_ns", "transform_ns", "swap_ns", "checkpoint_ns", "total_ns")
 
 
 def migration_plan_mismatches(plan: dict, want: dict, impact_system: str, impact: str) -> list:
@@ -3713,6 +3718,9 @@ def tx11(t: TestCtx):
         json.dump(MIG_ADD_HEALTH, fh)
     with open(os.path.join(scratch, "m_remove.json"), "w", encoding="utf-8") as fh:
         json.dump(MIG_REMOVE_VELOCITY, fh)
+    with open(os.path.join(scratch, "m_add_shield.json"), "w", encoding="utf-8") as fh:
+        json.dump(MIG_ADD_SHIELD, fh)
+    shield_rel = os.path.relpath(os.path.join(scratch, "m_add_shield.json"), REPO)
     sess = t.session("TX11 serve")
     res = call(t, sess, "world.create", {"fixture_path": MIG_FIXTURE, "capsule_path": MIG_CAP_OLD})
     wid, rev = res["world_id"], res["world_revision"]
@@ -3743,6 +3751,9 @@ def tx11(t: TestCtx):
     t.check("TX11 commit: layout generation 2", 2, com.get("layout_generation"))
     t.check("TX11 commit: the reply names the plan's migration hash", pl["migration_hash"], com.get("migration_hash"))
     t.check("TX11 commit: rollback is available", True, com.get("rollback_available"))
+    timings = com.get("timings", {})
+    t.check("TX11 commit: timings and bytes reported as contract section 4 lists them", True,
+            all(k in timings for k in MIG_COMMIT_TIMINGS) and set(com.get("bytes", {})) == {"new_columns", "peak"})
     rev = com["world_revision"]
     sch = _migration_schema(t, sess, wid)
     t.check("TX11 schema after commit: layout generation 2, one lineage entry", (2, 1),
@@ -3775,6 +3786,17 @@ def tx11(t: TestCtx):
                                     inspect(t, sess, wid)))
     t.check("TX11 rollback restores the pre-migration schema (no health)", False,
             "health" in _migration_schema(t, sess, wid)["schema"])
+    # B5: the rolled-back lineage keeps the ID the undone migration used (3, health); the restored schema has IDs 1, 2.
+    t.check("TX11 rollback reports the lineage retained", "retained", rb.get("lineage"))
+    retired_want = ref.retired_after_rollback([], [1, 2, 3], [1, 2])
+    t.check("TX11 rollback retires exactly the rolled-back ID 3", [3], retired_want)
+    reuse = sess.request("world.migrate_plan", {"world_id": wid, "expected_world_revision": rev,
+                                                "migration_path": add_rel})
+    t.check_mismatches("TX11 a rolled-back field ID cannot be reissued (plan refused as retired)",
+                       classify_error(reuse, "SU_E_SCHEMA_MISMATCH"))
+    shield = call(t, sess, "world.migrate_plan", {"world_id": wid, "expected_world_revision": rev,
+                                                "migration_path": shield_rel})
+    t.check("TX11 an ID never used by the lineage is still accepted", True, shield["plan"]["valid"])
 
     # Refusals: a plan that removes a used field is invalid; a plan made before a step is stale.
     rm_plan = call(t, sess, "world.migrate_plan", {"world_id": wid, "expected_world_revision": rev,
@@ -3786,7 +3808,7 @@ def tx11(t: TestCtx):
     t.check_mismatches("TX11 commit of an invalid plan refused with SU_E_UNSUPPORTED_MIGRATION",
                        classify_error(env, "SU_E_UNSUPPORTED_MIGRATION"))
     stale = call(t, sess, "world.migrate_plan", {"world_id": wid, "expected_world_revision": rev,
-                                               "migration_path": add_rel})
+                                               "migration_path": shield_rel})
     res = call(t, sess, "world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": 1})
     rev = res["world_revision"]
     env = sess.request("world.migrate_commit",
@@ -4721,6 +4743,12 @@ def self_test() -> int:
                  "schema_before": {"fields": 2, "digest": "x"}, "schema_after": {"fields": 3, "digest": "y"},
                  "columns_added": 1, "columns_removed": 0, "columns_renamed": 0, "transform": None,
                  "systems": [{"system_id": "demo.movement", "impact": "needs_resubmission", "reasons": []}]}
+    ok("tx11: rollback retires the undone IDs that the restored schema does not use (B5)",
+       ref.retired_after_rollback([], [1, 2, 3], [1, 2]) == [3]
+       and ref.retired_after_rollback([2], [1, 2, 3], [1]) == [2, 3])
+    ok("tx11: a retired or live field ID is refused for reuse",
+       ref.id_reuse_refused(3, [3], [1, 2]) and ref.id_reuse_refused(1, [], [1, 2])
+       and not ref.id_reuse_refused(4, [3], [1, 2]))
     _mig_want = ref.migration_plan_expectation(1, 2, 2, 3, 1)
     ok("tx11: a plan equal to the reference expectation gives no mismatch",
        migration_plan_mismatches(_mig_plan, _mig_want, "demo.movement", "needs_resubmission") == [])

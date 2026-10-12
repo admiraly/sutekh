@@ -1669,27 +1669,39 @@ done:
 
 /* ---- swap ------------------------------------------------------------------- */
 
-uint32_t su_migrate_swap(SuWorld **live, const SuMigratePlan *p, SuWorld *candidate, SuWorld **retired) {
+uint32_t su_migrate_swap_check(const SuWorld *live, const SuMigratePlan *p, const SuWorld *candidate) {
     SuMigrateCompiled *c;
     uint8_t dig[32];
     uint8_t nd[32];
-    if (live == NULL || *live == NULL || p == NULL || candidate == NULL || retired == NULL) {
+    if (live == NULL || p == NULL || candidate == NULL) {
         return SU_E_INVALID_ARGUMENT;
     }
-    *retired = NULL;
     c = p->impl;
-    if (!p->valid || c == NULL || su_world_in_tick(*live) || su_world_in_tick(candidate)) {
+    if (!p->valid || c == NULL || su_world_in_tick(live) || su_world_in_tick(candidate)) {
         return SU_E_INVALID_ARGUMENT;
     }
-    if (su_world_tick(*live) != c->pre_tick || su_world_layout_generation(*live) != c->from_gen) {
+    if (su_world_tick(live) != c->pre_tick || su_world_layout_generation(live) != c->from_gen) {
         return SU_E_STALE_REVISION;
     }
-    if (su_world_recovery_digest(*live, dig) != SU_OK || memcmp(dig, c->pre_digest, 32u) != 0) {
+    if (su_world_recovery_digest(live, dig) != SU_OK || memcmp(dig, c->pre_digest, 32u) != 0) {
         return SU_E_STALE_REVISION;
     }
     if (su_world_layout_generation(candidate) != c->to_gen || su_world_tick(candidate) != c->pre_tick ||
         su_world_schema_digest(candidate, nd) != SU_OK || memcmp(nd, c->after_digest, 32u) != 0) {
         return SU_E_SCHEMA_MISMATCH;
+    }
+    return SU_OK;
+}
+
+uint32_t su_migrate_swap(SuWorld **live, const SuMigratePlan *p, SuWorld *candidate, SuWorld **retired) {
+    uint32_t st;
+    if (live == NULL || *live == NULL || p == NULL || candidate == NULL || retired == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *retired = NULL;
+    st = su_migrate_swap_check(*live, p, candidate);
+    if (st != SU_OK) {
+        return st;
     }
     /* Publication: two pointer writes after every check. */
     *retired = *live;
