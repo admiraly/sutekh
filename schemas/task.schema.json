@@ -15,7 +15,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^M[0-5]-[0-9]{2}$"
+            "pattern": "^M[0-5]-[0-9]{2}[a-z]?$"
           },
           "milestone": {
             "enum": [
