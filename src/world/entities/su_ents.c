@@ -693,3 +693,26 @@ uint32_t su_ents_fault_set_generation(SuEnts *e, uint32_t slot, uint32_t gen) {
     e->gen[slot] = gen;
     return SU_OK;
 }
+
+/* ---- exact memory accounting (M3-08a) ----------------------------------- */
+
+uint64_t su_ents_memory_bytes(const SuEnts *e) {
+    uint64_t words;
+    uint64_t chunks;
+    uint64_t slots;
+    uint64_t n;
+    if (e == NULL) {
+        return 0u;
+    }
+    /* Same allocation sizes as su_raw_new: every array holds at least one element. */
+    slots = e->capacity > 0u ? e->capacity : 1u;
+    words = su_words_for(e->capacity);
+    words = words > 0u ? words : 1u;
+    chunks = e->chunks > 0u ? e->chunks : 1u;
+    n = (uint64_t)sizeof *e;
+    n += 2u * slots * sizeof(uint32_t);                            /* gen, ext */
+    n += 2u * words * sizeof(uint64_t);                            /* alive, avail */
+    n += 2u * chunks * sizeof(uint32_t);                           /* chunk_alive, chunk_free */
+    n += (e->summary_words > 0u ? e->summary_words : 1u) * sizeof(uint64_t); /* summary */
+    return n;
+}

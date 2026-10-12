@@ -119,4 +119,8 @@ uint32_t su_ents_state_equal(const SuEnts *a, const SuEnts *b, int *equal);
  * slot, gen 0 or 0xFFFFFFFF. An alive slot's handle changes: re-read it with su_ents_handle_for_slot. */
 uint32_t su_ents_fault_set_generation(SuEnts *e, uint32_t slot, uint32_t gen);
 
+/* Exact heap bytes of one entity table: the struct and every array it allocates, computed from the
+ * same sizes the allocator is asked for (M3-08a, contract 9.3). NULL e gives 0. */
+uint64_t su_ents_memory_bytes(const SuEnts *e);
+
 #endif

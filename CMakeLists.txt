@@ -49,6 +49,19 @@ sutekh_apply_warnings(test_entities)
 add_test(NAME entities COMMAND test_entities)
 # ---- END M2-00a generational entity table ----
 
+# ---- BEGIN M3-08a exact accounting (test only; sources compiled with the counting seam) ----
+add_library(su_world_acct_objs OBJECT src/world/su_world.c src/world/entities/su_ents.c
+    src/world/entities/su_cmdq.c)
+target_include_directories(su_world_acct_objs PRIVATE src "${SUTEKH_CONTRACT_INCLUDE}")
+target_compile_options(su_world_acct_objs PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/tests/world/acct_seam.h")
+sutekh_apply_warnings(su_world_acct_objs)
+add_executable(test_world_acct tests/world/test_world_acct.c $<TARGET_OBJECTS:su_world_acct_objs>)
+target_include_directories(test_world_acct PRIVATE src "${SUTEKH_CONTRACT_INCLUDE}")
+target_link_libraries(test_world_acct PRIVATE su_ir)
+sutekh_apply_warnings(test_world_acct)
+add_test(NAME world_acct COMMAND test_world_acct)
+# ---- END M3-08a exact accounting ----
+
 add_library(su_ir STATIC src/ir/su_sha256.c src/ir/su_json.c src/ir/su_lir.c)
 target_include_directories(su_ir PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 sutekh_apply_warnings(su_ir)

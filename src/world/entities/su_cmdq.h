@@ -176,4 +176,19 @@ uint32_t su_evlog_parse(const uint8_t *buf, uint64_t len, SuEventLog **out);
 /* Compares configuration, counters and retained events. */
 int su_evlog_equal(const SuEventLog *a, const SuEventLog *b);
 
+/* Exact heap accounting of one command queue (M3-08a, contract 9.3 and 9.5). structural: the command
+ * buffer (sbuf); events: the event buffer (ebuf); scratch: the per-tick merge and record arrays (m_cmd,
+ * t_cmd, rec, m_evt, t_evt, fin); bookkeeping: the buffer metadata, offsets, cursors, heap and the
+ * queue struct. total is the sum. NULL q or out gives SU_E_INVALID_ARGUMENT. */
+typedef struct SuCmdQMemory {
+    uint64_t structural;
+    uint64_t events;
+    uint64_t scratch;
+    uint64_t bookkeeping;
+    uint64_t total;
+} SuCmdQMemory;
+uint32_t su_cmdq_memory(const SuCmdQ *q, SuCmdQMemory *out);
+/* Exact heap bytes of one event log: the struct and its ring of capacity records. NULL gives 0. */
+uint64_t su_evlog_memory_bytes(const SuEventLog *log);
+
 #endif
