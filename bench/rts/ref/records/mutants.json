@@ -1,0 +1,499 @@
+{
+  "baseline_failing": {},
+  "baseline_ok": true,
+  "detected": 32,
+  "invalid": 0,
+  "mismatches": [],
+  "rows": [
+    {
+      "contract": "M3-M01",
+      "description": "tie-break on slot reversed (higher slot wins)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_spatial_known_answers"
+      ],
+      "id": "M3-M01",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M02",
+      "description": "cell index off by one column",
+      "expected": "detected",
+      "failing_checks": [
+        "check_duel_fixtures",
+        "check_oracle_fixtures",
+        "check_spatial_known_answers"
+      ],
+      "id": "M3-M02",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M03",
+      "description": "range check uses < instead of <=",
+      "expected": "detected",
+      "failing_checks": [
+        "check_duel_fixtures",
+        "check_spatial_known_answers"
+      ],
+      "id": "M3-M03",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M04",
+      "description": "query budget ignored (examined limit removed)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_oracle_fixtures",
+        "check_spatial_known_answers"
+      ],
+      "id": "M3-M04",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M05",
+      "description": "generation check removed from gather",
+      "expected": "detected",
+      "failing_checks": [
+        "check_gather_known_answers"
+      ],
+      "id": "M3-M05",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M24",
+      "description": "gather without the alive check (contract calls this equivalent; see handoff question Q6)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_gather_known_answers"
+      ],
+      "id": "M3-M24",
+      "module": "model",
+      "note": "contract says equivalent because despawn bumps the generation; a control command can name a dead slot's current generation (2.2 checks no liveness), so this is detectable",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M21",
+      "description": "grid indexes kind 2 (anchor) entries",
+      "expected": "detected",
+      "failing_checks": [
+        "check_spatial_known_answers"
+      ],
+      "id": "M3-M21",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M22",
+      "description": "team filter removed from target query",
+      "expected": "detected",
+      "failing_checks": [
+        "check_duel_fixtures",
+        "check_oracle_fixtures",
+        "check_spatial_known_answers"
+      ],
+      "id": "M3-M22",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M23",
+      "description": "domain-edge box clipping removed (wraps into the previous row)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_spatial_known_answers"
+      ],
+      "id": "M3-M23",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M06",
+      "description": "scatter applies to a dead target",
+      "expected": "detected",
+      "failing_checks": [
+        "check_scatter_known_answers"
+      ],
+      "id": "M3-M06",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M07",
+      "description": "scatter applies to a non-unit (kind 2) target",
+      "expected": "detected",
+      "failing_checks": [
+        "check_scatter_known_answers"
+      ],
+      "id": "M3-M07",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M08",
+      "description": "scatter uses wrapping add instead of saturating add",
+      "expected": "detected",
+      "failing_checks": [
+        "check_scatter_known_answers"
+      ],
+      "id": "M3-M08",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M09",
+      "description": "scatter applies only the first shooter per target per tick",
+      "expected": "detected",
+      "failing_checks": [
+        "check_duel_fixtures",
+        "check_scatter_known_answers"
+      ],
+      "id": "M3-M09",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M09b",
+      "description": "scatter iterates in descending slot order",
+      "expected": "survives",
+      "failing_checks": [],
+      "id": "M3-M09b",
+      "module": "model",
+      "note": "equivalent under saturating add (4.3): not detectable, recorded as equivalent",
+      "ok": true,
+      "status": "survives"
+    },
+    {
+      "contract": "M3-M10",
+      "description": "arrival off by one (proj_left == 2 instead of 1)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_combat_known_answers",
+        "check_duel_fixtures",
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture"
+      ],
+      "id": "M3-M10",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M11",
+      "description": "reload not reduced by one on fire (period off by one)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_combat_known_answers",
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture"
+      ],
+      "id": "M3-M11",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M12",
+      "description": "incoming not zeroed by combat",
+      "expected": "detected",
+      "failing_checks": [
+        "check_combat_known_answers",
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture"
+      ],
+      "id": "M3-M12",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M25",
+      "description": "dmg_out set on non-arrival ticks",
+      "expected": "detected",
+      "failing_checks": [
+        "check_combat_known_answers",
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture"
+      ],
+      "id": "M3-M25",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M13",
+      "description": "damage kill emitted for hp 0 (anchor killed)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_damage_known_answers",
+        "check_duel_fixtures",
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture",
+        "check_scatter_known_answers"
+      ],
+      "id": "M3-M13",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M14",
+      "description": "goal clamp removed for wrapped negatives",
+      "expected": "detected",
+      "failing_checks": [
+        "check_goal_known_answers",
+        "check_ir_row_differential"
+      ],
+      "id": "M3-M14",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M15",
+      "description": "move overshoots goal (no min with speed)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_move_known_answers"
+      ],
+      "id": "M3-M15",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M16",
+      "description": "move ignores the mode-2 engagement stop",
+      "expected": "detected",
+      "failing_checks": [
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture",
+        "check_move_known_answers"
+      ],
+      "id": "M3-M16",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M05 (generation)",
+      "description": "despawn does not bump the generation (M2 rule)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_duel_fixtures"
+      ],
+      "id": "M3-M05b",
+      "module": "model",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M11",
+      "description": "IR combat: cooldown set to reload (period off by one)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_combat_known_answers",
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture"
+      ],
+      "id": "IR-M3-M11",
+      "module": "ir_programs",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M12",
+      "description": "IR combat: incoming store removed",
+      "expected": "detected",
+      "failing_checks": [
+        "check_combat_known_answers",
+        "check_damage_known_answers",
+        "check_goal_known_answers",
+        "check_ir_programs_validate",
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture",
+        "check_move_known_answers"
+      ],
+      "id": "IR-M3-M12",
+      "module": "ir_programs",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M13",
+      "description": "IR damage: kill without the hp > 0 check",
+      "expected": "detected",
+      "failing_checks": [
+        "check_damage_known_answers",
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture"
+      ],
+      "id": "IR-M3-M13",
+      "module": "ir_programs",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M14",
+      "description": "IR goal: low clamp removed",
+      "expected": "detected",
+      "failing_checks": [
+        "check_goal_known_answers",
+        "check_ir_row_differential"
+      ],
+      "id": "IR-M3-M14",
+      "module": "ir_programs",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M15",
+      "description": "IR move: step not capped at speed",
+      "expected": "detected",
+      "failing_checks": [
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture",
+        "check_move_known_answers"
+      ],
+      "id": "IR-M3-M15",
+      "module": "ir_programs",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "M3-M16",
+      "description": "IR move: mode-2 engagement stop ignored",
+      "expected": "detected",
+      "failing_checks": [
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture",
+        "check_move_known_answers"
+      ],
+      "id": "IR-M3-M16",
+      "module": "ir_programs",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "evaluator",
+      "description": "evaluator select returns the false branch when true",
+      "expected": "detected",
+      "failing_checks": [
+        "check_combat_known_answers",
+        "check_damage_known_answers",
+        "check_goal_known_answers",
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture",
+        "check_move_known_answers"
+      ],
+      "id": "EVAL-select",
+      "module": "ir_eval",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "evaluator",
+      "description": "evaluator lt_u32 is <= instead of <",
+      "expected": "detected",
+      "failing_checks": [
+        "check_combat_known_answers",
+        "check_damage_known_answers",
+        "check_ir_row_differential",
+        "check_ir_tick_differential",
+        "check_ir_tick_differential_formation_fixture"
+      ],
+      "id": "EVAL-lt",
+      "module": "ir_eval",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "oracle",
+      "description": "oracle range test uses < (misses dist == range_sq)",
+      "expected": "detected",
+      "failing_checks": [
+        "check_oracle_fixtures"
+      ],
+      "id": "ORACLE-range",
+      "module": "oracle",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    },
+    {
+      "contract": "9.2",
+      "description": "state digest omits the dropped count",
+      "expected": "detected",
+      "failing_checks": [
+        "check_digest_shape_and_sensitivity"
+      ],
+      "id": "DIGEST-dropped",
+      "module": "digest",
+      "note": "",
+      "ok": true,
+      "status": "detected"
+    }
+  ],
+  "survived": 1,
+  "total": 33
+}
