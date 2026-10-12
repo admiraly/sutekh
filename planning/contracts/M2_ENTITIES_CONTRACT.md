@@ -41,5 +41,12 @@ Snapshot format `"0.2"` adds, after the 0.1 keys and in this fixed key order: `c
 ## 6. Tests required for acceptance (M2-00)
 Entity churn (>= 100,000 spawn/despawn operations against a reference model, lowest-slot reuse), stale-handle rejection (reuse, retired slot, out of range, zero, generation 0 with nonzero slot, wrong generation), generation exhaustion retirement (fault injection near the limit), canonical merge equality for worker counts 1/2/4/8 and shuffled completion orders, per-row/per-tick cap overflow aborting with unchanged state (including entity table and event log), dead slots excluded and canonically zero after native kernels staged nonzero values, snapshot 0.2 round trip incl. event log and a 0.1 restore, regenerated v2 canonical dumps for the M0/M1 fixtures, IR 0.1 semantic hashes unchanged, new-op verifier negatives with stage ordering, reference-VM known-answer cases for each new op, recovery replay of spawn/despawn, and mutation proofs for each of these.
 
+## 6a. Rulings from the IR/VM implementation (r2.1)
+- Caps are counted **per kind**: `max_struct_per_row` bounds `despawn_self` instructions and `max_events_per_row` bounds `emit_event` instructions (r2's single "sum" wording is superseded).
+- A capsule may declare an optional top-level `ir_version` (absent = "0.1"); it must equal the IR's `ir_version` (`SU_E_SCHEMA_MISMATCH`, stage 5).
+- Native lowering refuses **every** 0.2 module (`SU_E_CAPABILITY_DENIED`, reason `ir_0_2_not_lowered`), not only modules that use a 0.2 op.
+- Rows are contiguous in a buffer: the reference VM emits a row's records together; a slot reappearing non-consecutively is repaired by the stable-sort fallback of the merge.
+- A cursor ahead of `next_seq` in `events.read` is `SU_E_INVALID_ARGUMENT`. The VM trusts the caller for the lengths of the alive/generation arrays.
+
 ## 7. Open points for the owner
 Event consumption by systems, entity-typed registers, spawn from IR, template/relationship tables, dynamic growth, native lowering of 0.2 ops, and the numeric profile for any future float: deferred; none required by M2-00 acceptance.
