@@ -195,6 +195,11 @@ sutekh_apply_warnings(test_snapshot_cp)
 add_test(NAME snapshot_cp COMMAND test_snapshot_cp $<TARGET_FILE:worker_stub> "${CMAKE_CURRENT_SOURCE_DIR}"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Regression: su_path_read_file must not block on a FIFO inside the project root.
+add_executable(test_path_fifo tests/agent/test_path_fifo.c src/agent/su_path.c)
+target_include_directories(test_path_fifo PRIVATE include src)
+add_test(NAME path_fifo COMMAND test_path_fifo)
+
 # ---- BEGIN M1-01 optional native scalar backend (SUTEKH_NATIVE; default OFF) ----
 # Enable with: cmake -DSUTEKH_NATIVE=ON -S . -B <build>   (the default build is unchanged)
 option(SUTEKH_NATIVE "Build the M1 AsmJit native scalar backend and its tests" OFF)
