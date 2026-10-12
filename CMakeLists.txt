@@ -307,5 +307,14 @@ target_compile_definitions(test_containment PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_containment)
 add_dependencies(test_containment recovery_worker)
 add_test(NAME containment COMMAND test_containment $<TARGET_FILE:recovery_worker>
-         "${CMAKE_BINARY_DIR}/containment_scratch"
+         "${CMAKE_BINARY_DIR}/containment_scratch" "${CMAKE_CURRENT_SOURCE_DIR}"
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# M1 closure D: digest field comparison and spool directory mode (unit checks, no worker).
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/hardening_scratch")
+add_executable(test_hardening tests/recovery/test_hardening.c)
+target_link_libraries(test_hardening PRIVATE su_agent)
+target_compile_definitions(test_hardening PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_hardening)
+add_test(NAME hardening COMMAND test_hardening "${CMAKE_BINARY_DIR}/hardening_scratch"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

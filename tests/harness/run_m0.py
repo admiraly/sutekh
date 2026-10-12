@@ -2797,9 +2797,28 @@ def seccomp_mismatches(status: bytes, mode: int = 2) -> list:
     return ["no Seccomp line in /proc status"]
 
 
-def containment_mismatches(cont, expected_as: int, expected_fsize: int, expected_nofile: int) -> list:
+def seccomp_filters_mismatches(status: bytes, want: int) -> list:
+    """Seccomp_filters (kernel 5.11 and later) counts the filters on the process. An engine worker has two:
+    the network filter the supervisor installs before exec, and the worker self-sandbox it installs itself."""
+    for line in status.decode("utf-8", "replace").splitlines():
+        if line.startswith("Seccomp_filters:"):
+            val = line.split(":", 1)[1].strip()
+            return [] if val == str(want) else [f"Seccomp_filters is {val!r}, expected {want}"]
+    return ["no Seccomp_filters line in /proc status (kernel older than 5.11)"]
+
+
+def _has_two_filters(status) -> bool:
+    """True when a /proc status sample shows Seccomp_filters 2 (None or other values: False)."""
+    if not status:
+        return False
+    return seccomp_filters_mismatches(status, 2) == []
+
+
+def containment_mismatches(cont, expected_as: int, expected_fsize: int, expected_nofile: int,
+                           expect_fs: bool = False) -> list:
     """The containment object of a disposable worker answer (candidate.evaluate) must report the
-    limits the engine asked for, and seccomp as the enforced network denial."""
+    limits the engine asked for, and seccomp as the enforced network denial. With expect_fs, it must
+    also report Landlock as the enforced file-write denial."""
     if not isinstance(cont, dict):
         return ["containment object is missing from the answer"]
     out = []
@@ -2811,6 +2830,8 @@ def containment_mismatches(cont, expected_as: int, expected_fsize: int, expected
             out.append(f"containment {key} is {cont.get(key)!r}, expected {want!r}")
     if cont.get("no_network") != "seccomp":
         out.append(f"containment no_network is {cont.get('no_network')!r}, expected 'seccomp'")
+    if expect_fs and cont.get("fs_write_denied") != "landlock":
+        out.append(f"containment fs_write_denied is {cont.get('fs_write_denied')!r}, expected 'landlock'")
     return out
 
 
@@ -2998,6 +3019,10 @@ def tx6(t: TestCtx):
                 raise NotRun("active worker /proc status is not readable on this platform")
             t.check_mismatches("TX6 (b) active worker runs under a seccomp filter (no sockets)",
                                seccomp_mismatches(active_status))
+            # Two filters: the network filter (exec, socket and io_uring denial) and the worker self-sandbox
+            # (execve, fork, clone of processes). The self-sandbox is ON in a default build (C07).
+            t.check_mismatches("TX6 (b) active worker self-sandbox is on (Seccomp_filters 2)",
+                               seccomp_filters_mismatches(active_status, 2))
         # (c) SECRET_X is absent from the active worker's environment
         active_env = _proc_read(f"/proc/{worker_pid}/environ")
         if active_env is None:
@@ -3033,7 +3058,15 @@ def tx6(t: TestCtx):
             def poll(sup=sess.proc.pid, active=worker_pid, out=seen, stop=stop):
                 while not stop.is_set():
                     for kid in _children_fast(sup):
-                        if kid == active or kid in out:
+                        if kid == active:
+                            continue
+                        if kid in out:
+                            # The first sample can precede the worker's own self-sandbox (exec happens first):
+                            # re-read the status until it shows both filters, or the child is gone.
+                            if not _has_two_filters(out[kid].get("status")):
+                                st_b = _proc_read(f"/proc/{kid}/status")
+                                if st_b is not None:
+                                    out[kid]["status"] = st_b
                             continue
                         # A forked child carries the supervisor's environment until execve replaces
                         # it, so only a child whose argv is the worker role (`sutekh worker`) counts.
@@ -3059,9 +3092,14 @@ def tx6(t: TestCtx):
             # The engine's own record of the disposable child's containment must match what the child
             # reads back in /proc (checked per observed child above).
             if ev.get("ok") and platform.machine() == "x86_64":
+                cont_doc = (ev.get("result") or {}).get("containment")
+                # Landlock is checked when the host enforces it; a host without it is recorded, not passed.
+                fs_on = isinstance(cont_doc, dict) and cont_doc.get("fs_write_denied") == "landlock"
+                t.details["disposable_fs_write_denial"] = (
+                    "landlock" if fs_on else f"not enforced: {(cont_doc or {}).get('fs_reason')!r}")
                 t.check_mismatches("TX6 (c) candidate.evaluate reports the disposable containment",
-                                   containment_mismatches((ev.get("result") or {}).get("containment"),
-                                                          RLIMIT_AS_BOUND, 256 * 1024 * 1024, 64))
+                                   containment_mismatches(cont_doc, RLIMIT_AS_BOUND, 256 * 1024 * 1024, 64,
+                                                          expect_fs=fs_on))
         finally:
             shutil.rmtree(cap8_dir, ignore_errors=True)
         if not seen:
@@ -3082,6 +3120,8 @@ def tx6(t: TestCtx):
                 if rec.get("status") is not None and platform.machine() == "x86_64":
                     t.check_mismatches(f"TX6 (b) disposable worker {kid} runs under a seccomp filter",
                                        seccomp_mismatches(rec["status"]))
+                    t.check_mismatches(f"TX6 (b) disposable worker {kid} self-sandbox is on (Seccomp_filters 2)",
+                                       seccomp_filters_mismatches(rec["status"], 2))
         t.details["disposable_workers_observed"] = len(seen)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -3404,6 +3444,11 @@ def self_test() -> int:
     ok("exact limit: unlimited expected", exact_limit_mismatches(lim_txt, "Max cpu time", "unlimited") == [])
     ok("seccomp mode 2 passes", seccomp_mismatches(b"Name:\tx\nSeccomp:\t2\n") == [])
     ok("seccomp mode 0 fails", seccomp_mismatches(b"Name:\tx\nSeccomp:\t0\n") != [])
+    ok("two seccomp filters pass", seccomp_filters_mismatches(b"Seccomp:\t2\nSeccomp_filters:\t2\n", 2) == [])
+    ok("one seccomp filter fails (self-sandbox missing)", seccomp_filters_mismatches(b"Seccomp_filters:\t1\n", 2) != [])
+    ok("missing Seccomp_filters line fails", seccomp_filters_mismatches(b"Seccomp:\t2\n", 2) != [])
+    ok("early one-filter sample is re-read, not accepted", not _has_two_filters(b"Seccomp_filters:\t1\n"))
+    ok("two-filter sample accepted", _has_two_filters(b"Seccomp_filters:\t2\n"))
     ok("seccomp line absent fails", seccomp_mismatches(b"Name:\tx\n") != [])
     cont_ok = {"reported": True, "rlimit_as": RLIMIT_AS_BOUND, "rlimit_fsize": 268435456,
                "rlimit_nofile": 64, "no_network": "seccomp", "reason": "seccomp"}
@@ -3413,6 +3458,12 @@ def self_test() -> int:
        containment_mismatches(cont_ok, RLIMIT_AS_BOUND, 268435456, 1024) != [])
     ok("containment: network none fails",
        containment_mismatches({**cont_ok, "no_network": "none"}, RLIMIT_AS_BOUND, 268435456, 64) != [])
+    ok("landlock expected and reported passes",
+       containment_mismatches({**cont_ok, "fs_write_denied": "landlock"}, RLIMIT_AS_BOUND, 268435456, 64,
+                              expect_fs=True) == [])
+    ok("landlock expected and not reported fails",
+       containment_mismatches({**cont_ok, "fs_write_denied": "none"}, RLIMIT_AS_BOUND, 268435456, 64,
+                              expect_fs=True) != [])
     ok("containment: unreported fails",
        containment_mismatches({**cont_ok, "reported": False}, RLIMIT_AS_BOUND, 268435456, 64) != [])
     ok("containment: missing object fails", containment_mismatches(None, RLIMIT_AS_BOUND, 268435456, 64) != [])

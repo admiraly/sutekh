@@ -15,6 +15,12 @@ SEAM_STRINGS = [
     b"wrong_kernel",           # disposable admission seam
     b"wrong_world",            # disposable own-case seam
     b"SU_TEST_INTERLEAVE",     # M1-02c-3: supervisor request between admission and install (su_agent_test)
+    b"internal.test.",         # M1 closure D: every test-only worker probe method (containment, sandbox, fs, arch)
+    b"SU_TEST_CONTAINMENT_DIR",  # test probe directory (containment)
+    b"SU_TEST_FS_PROJECT",     # test probe: project-root creation (Landlock check)
+    b"SU_TEST_FS_TMP",         # test probe: /tmp creation (Landlock check)
+    b"SUTEKH_TEST_KILL",       # worker crash seam (SUTEKH_TEST_KILL_AT_TICK, _SOURCE_SHA, _TOKEN, _MODE)
+    b"SUTEKH_TEST_SKEW_EXACT", # worker skew seam
 ]
 
 
