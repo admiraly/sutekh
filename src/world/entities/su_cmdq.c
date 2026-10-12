@@ -779,6 +779,60 @@ uint32_t su_evlog_append(SuEventLog *log, const SuEvent *ev, uint64_t n) {
     return SU_OK;
 }
 
+/* Rebuilds a log with the state a snapshot recorded (contract r2 section 4): next_seq, dropped and
+ * the retained events, oldest first. The retained events must be contiguous and end at next_seq - 1,
+ * and n must not exceed the capacity. The oldest retained seq is next_seq - n and the first event
+ * ever appended was next_seq - n - dropped. */
+uint32_t su_evlog_restore(uint64_t capacity, uint64_t next_seq, uint64_t dropped, const SuEvent *ev,
+                          uint64_t n, SuEventLog **out) {
+    SuEventLog *log = NULL;
+    uint64_t oldest;
+    uint64_t i;
+    uint32_t st;
+
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    if (n > 0u && ev == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (n > capacity || next_seq > LOG_SEQ_LIMIT || n > next_seq || dropped > next_seq - n) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    oldest = next_seq - n;
+    for (i = 0u; i < n; i++) {
+        if (ev[i].event_seq != oldest + i) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    st = su_evlog_create(capacity, oldest - dropped, &log);
+    if (st != SU_OK) {
+        return st;
+    }
+    log->dropped = dropped;
+    if (n > 0u) {
+        memcpy(log->ring, ev, (size_t)n * sizeof *ev);
+    }
+    log->count = n;
+    log->head = 0u;
+    *out = log;
+    return SU_OK;
+}
+
+/* Copies the retained events, oldest first, into out (room for su_evlog_count records). */
+uint32_t su_evlog_copy_retained(const SuEventLog *log, SuEvent *out, uint64_t cap, uint64_t *n) {
+    uint64_t i;
+    if (log == NULL || n == NULL || (log->count > 0u && out == NULL) || cap < log->count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (i = 0u; i < log->count; i++) {
+        out[i] = log->ring[(log->head + i) % log->capacity];
+    }
+    *n = log->count;
+    return SU_OK;
+}
+
 uint32_t su_evlog_read(const SuEventLog *log, uint64_t cursor, uint64_t max, SuEvent *out,
                        uint64_t *n_out, uint64_t *next_cursor, uint64_t *skipped, uint64_t *dropped) {
     uint64_t oldest;

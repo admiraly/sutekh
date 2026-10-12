@@ -1,0 +1,7 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.movement",
+  "capsule": "despawn_move.capsule.json",
+  "world": "actors_3.json",
+  "cases": []
+}

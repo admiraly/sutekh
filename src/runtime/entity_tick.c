@@ -109,6 +109,49 @@ SuEventLog *su_ent_rt_log(SuEntRt *rt) {
     return rt == NULL ? NULL : rt->log;
 }
 
+uint32_t su_ent_rt_caps(const SuEntRt *rt, uint64_t *max_struct_tick, uint64_t *max_events_tick,
+                        uint64_t *event_log_max) {
+    if (rt == NULL || max_struct_tick == NULL || max_events_tick == NULL || event_log_max == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *max_struct_tick = rt->max_struct_tick;
+    *max_events_tick = rt->max_events_tick;
+    *event_log_max = su_evlog_capacity(rt->log);
+    return SU_OK;
+}
+
+/* Restored runtime (snapshot 0.2): caps and the log state as recorded. */
+uint32_t su_ent_rt_create_restored(uint64_t max_struct_tick, uint64_t max_events_tick, uint64_t event_log_max,
+                                   uint64_t next_seq, uint64_t dropped, const SuEvent *ev, uint64_t n,
+                                   SuEntRt **out) {
+    SuEntRt *rt;
+    SuEventLog *log = NULL;
+    uint32_t st;
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    if (max_struct_tick == 0u || max_struct_tick > SU_CMDQ_MAX_TICK_CAP || max_events_tick == 0u ||
+        max_events_tick > SU_CMDQ_MAX_TICK_CAP || event_log_max == 0u ||
+        event_log_max > SU_CMDQ_MAX_LOG_CAPACITY) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    st = su_evlog_restore(event_log_max, next_seq, dropped, ev, n, &log);
+    if (st != SU_OK) {
+        return st;
+    }
+    rt = calloc(1u, sizeof *rt);
+    if (rt == NULL) {
+        su_evlog_destroy(log);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    rt->max_struct_tick = max_struct_tick;
+    rt->max_events_tick = max_events_tick;
+    rt->log = log;
+    *out = rt;
+    return SU_OK;
+}
+
 /* ---- per-system chunk execution ---- */
 
 static const SuColumnBinding *find_binding(const SuColumnBinding *b, uint32_t n, uint32_t id) {

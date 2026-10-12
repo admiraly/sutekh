@@ -22,6 +22,7 @@
 #include "sutekh/abi.h"
 #include "sutekh/ir.h"
 #include "sutekh/status.h"
+#include "world/entities/su_cmdq.h"
 
 #ifndef SUTEKH_VERSION_STRING
 #define SUTEKH_VERSION_STRING "0.1.0"
@@ -40,6 +41,13 @@
 #define AGENT_MAX_FIELD_ARGS 64u
 #define AGENT_MAX_SYSTEMS 8u
 #define AGENT_MAX_OFFSET (UINT64_C(1) << 40)
+/* Canonical values object of one world.spawn kept in the replay log (bytes, NUL-terminated). */
+#define AGENT_SPAWN_VALUES_CAP 1024u
+/* Limits of the entity-world configuration accepted by world.create (contract r2 section 5). */
+#define AGENT_MAX_ENTITIES 1000000u
+#define AGENT_MAX_TICK_CAP 1048576u
+#define AGENT_MAX_LOG_CAP 1048576u
+#define AGENT_EVENTS_MAX 256u
 #define AGENT_MAX_WORLDS 4u
 #define AGENT_WORLD_ID_CAP 16u
 #define AGENT_REV_CAP 48u
@@ -95,7 +103,7 @@ typedef struct Ckpt {
     SysRef sys[AGENT_MAX_SYSTEMS];
 } Ckpt;
 
-enum { LOG_NONE = 0, LOG_STEP = 1, LOG_INSTALL = 2 };
+enum { LOG_NONE = 0, LOG_STEP = 1, LOG_INSTALL = 2, LOG_SPAWN = 3, LOG_DESPAWN = 4 };
 
 /* One accepted mutating operation. hash_after is the canonical digest after it. */
 typedef struct LogOp {
@@ -107,6 +115,12 @@ typedef struct LogOp {
     char cand_id[32];      /* install */
     SysRef sys;            /* install: the revision it made live */
     uint64_t effective_tick;
+    /* spawn: the canonical values object text (u32 field values) and the optional external id;
+     * despawn: the entity handle. Replayed verbatim (M2-00c3b). */
+    char spawn_values[AGENT_SPAWN_VALUES_CAP];
+    uint32_t has_ext;
+    uint32_t ext_id;
+    uint64_t handle;
 } LogOp;
 
 /* A native kernel installed in the active worker for one system (not canonical state). */
@@ -131,6 +145,9 @@ typedef struct AgentWorld {
     char fixture_path[SU_PATH_BUF];
     char fixture_sha[65];
     uint32_t creation_count;
+    /* Entity configuration as given to world.create (replayed on recreation): max_entities,
+     * max_struct_per_tick, max_events_per_tick, event_log_max. */
+    uint64_t cfg[4];
     SysRef creation[AGENT_MAX_SYSTEMS];
     PathPair creation_paths[AGENT_MAX_SYSTEMS];
     uint32_t count;
@@ -242,7 +259,7 @@ typedef struct AgentCall {
 } AgentCall;
 
 /* What the worker was doing when it died, for crash bookkeeping and quarantine. */
-enum { OPK_READ = 0, OPK_STEP, OPK_INSTALL, OPK_CREATE, OPK_RESTORE, OPK_CLOSE };
+enum { OPK_READ = 0, OPK_STEP, OPK_INSTALL, OPK_CREATE, OPK_RESTORE, OPK_CLOSE, OPK_SPAWN, OPK_DESPAWN };
 typedef struct InFlight {
     int kind;
     AgentWorld *w;     /* NULL for reads and creation */
@@ -255,7 +272,7 @@ typedef struct InFlight {
 static const char *const k_capabilities[] = {
     "engine.info",   "capsule.submit", "candidate.status", "candidate.evaluate",
     "candidate.install", "world.create", "world.inspect", "world.step",
-    "world.snapshot", "world.restore", "world.close",
+    "world.snapshot", "world.restore", "world.close", "world.spawn", "world.despawn", "events.read",
 #ifdef SU_HAVE_NATIVE
     "world.specialize",
 #endif
@@ -1059,6 +1076,13 @@ static int sync_after(SuAgent *a, AgentWorld *w, int log_kind, const LogOp *tmpl
         return CK_OK;
     }
     if (log_kind != LOG_NONE) {
+        if (log_kind == LOG_SPAWN || log_kind == LOG_DESPAWN) {
+            /* A control-plane mutation: one new revision, the tick unchanged. */
+            if (tick_new != w->tick || rev_new != w->rev + 1u) {
+                mark_unrecoverable(w, "entity mutation changed the revision or tick inconsistently");
+                return CK_BAD;
+            }
+        }
         if (log_kind == LOG_STEP) {
             if (tick_new < w->tick || rev_new < w->rev || rev_new - w->rev != tick_new - w->tick) {
                 mark_unrecoverable(w, "step changed revision and tick inconsistently");
@@ -1163,6 +1187,14 @@ static int rebuild_world(SuAgent *a, AgentWorld *w, RecStats *s) {
     su_buf_quoted(&req, w->fixture_sha, strlen(w->fixture_sha));
     su_buf_str(&req, ",\"world_id\":");
     su_buf_quoted(&req, w->id, strlen(w->id));
+    su_buf_str(&req, ",\"max_entities\":");
+    su_buf_u64(&req, w->cfg[0]);
+    su_buf_str(&req, ",\"max_struct_per_tick\":");
+    su_buf_u64(&req, w->cfg[1]);
+    su_buf_str(&req, ",\"max_events_per_tick\":");
+    su_buf_u64(&req, w->cfg[2]);
+    su_buf_str(&req, ",\"event_log_max\":");
+    su_buf_u64(&req, w->cfg[3]);
     st = write_capsules(a, &req, "capsules", w->creation, w->creation_count);
     if (st != SU_OK) {
         su_buf_free(&req);
@@ -1260,6 +1292,28 @@ static int rebuild_world(SuAgent *a, AgentWorld *w, RecStats *s) {
             su_buf_str(&req, ",\"ticks\":");
             su_buf_u64(&req, op->ticks);
             append_tick_opts(&req, a);
+            req_end(&req);
+        } else if (op->kind == LOG_SPAWN) {
+            req_begin(&req, AGENT_INTERNAL_ID, "world.spawn");
+            su_buf_str(&req, "\"world_id\":");
+            su_buf_quoted(&req, w->id, strlen(w->id));
+            su_buf_str(&req, ",\"expected_world_revision\":");
+            su_buf_quoted(&req, cur, strlen(cur));
+            su_buf_str(&req, ",\"values\":");
+            su_buf_str(&req, op->spawn_values);
+            if (op->has_ext) {
+                su_buf_str(&req, ",\"external_id\":");
+                su_buf_u64(&req, op->ext_id);
+            }
+            req_end(&req);
+        } else if (op->kind == LOG_DESPAWN) {
+            req_begin(&req, AGENT_INTERNAL_ID, "world.despawn");
+            su_buf_str(&req, "\"world_id\":");
+            su_buf_quoted(&req, w->id, strlen(w->id));
+            su_buf_str(&req, ",\"expected_world_revision\":");
+            su_buf_quoted(&req, cur, strlen(cur));
+            su_buf_str(&req, ",\"entity\":");
+            su_buf_u64(&req, op->handle);
             req_end(&req);
         } else {
             char cap[SU_PATH_BUF];
@@ -2470,10 +2524,13 @@ static uint32_t log_room(SuAgent *a, AgentCall *c, AgentWorld *w) {
 /* world.create takes exactly one of capsule_path (one system) or capsule_paths (an ordered array of
  * 1..8 systems, run in that order every tick). */
 static uint32_t h_world_create(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
-    static const char *const allowed[] = {"fixture_path", "capsule_path", "capsule_paths"};
+    static const char *const allowed[] = {"fixture_path", "capsule_path", "capsule_paths", "max_entities",
+                                          "max_struct_per_tick", "max_events_per_tick", "event_log_max"};
     const char *fixture = NULL;
     const char *one = NULL;
     const SuJsonValue *many = su_json_member(params, "capsule_paths");
+    uint64_t cfgv[4] = {0, SU_CMDQ_DEFAULT_PER_TICK_CAP, SU_CMDQ_DEFAULT_PER_TICK_CAP,
+                        SU_CMDQ_DEFAULT_EVENT_LOG_MAX};
     char fx_real[SU_PATH_BUF];
     char fx_sha[65];
     AgentSystemPaths *sys = NULL;
@@ -2491,9 +2548,17 @@ static uint32_t h_world_create(SuAgent *a, const SuJsonValue *params, SuBuf *res
     char rv[AGENT_REV_CAP];
     char wid[AGENT_WORLD_ID_CAP];
 
-    if (check_keys(params, allowed, 3, c) != SU_OK ||
+    if (check_keys(params, allowed, 7, c) != SU_OK ||
         param_str(params, "fixture_path", 1, &fixture, c) != SU_OK ||
-        param_str(params, "capsule_path", 0, &one, c) != SU_OK) {
+        param_str(params, "capsule_path", 0, &one, c) != SU_OK ||
+        /* Integer type only here; the worker owns the range checks (SU_E_RESOURCE_LIMIT). */
+        param_uint(params, "max_entities", 0, 0, UINT64_MAX, 0, &cfgv[0], c) != SU_OK ||
+        param_uint(params, "max_struct_per_tick", 0, 0, UINT64_MAX, SU_CMDQ_DEFAULT_PER_TICK_CAP, &cfgv[1],
+                   c) != SU_OK ||
+        param_uint(params, "max_events_per_tick", 0, 0, UINT64_MAX, SU_CMDQ_DEFAULT_PER_TICK_CAP, &cfgv[2],
+                   c) != SU_OK ||
+        param_uint(params, "event_log_max", 0, 0, UINT64_MAX, SU_CMDQ_DEFAULT_EVENT_LOG_MAX, &cfgv[3], c) !=
+            SU_OK) {
         return SU_E_TYPE;
     }
     if ((one != NULL) == (many != NULL)) {
@@ -2586,6 +2651,7 @@ static uint32_t h_world_create(SuAgent *a, const SuJsonValue *params, SuBuf *res
     snprintf(slot->fixture_path, sizeof slot->fixture_path, "%s", fx_real);
     snprintf(slot->fixture_sha, sizeof slot->fixture_sha, "%s", fx_sha);
     slot->creation_count = (uint32_t)n;
+    memcpy(slot->cfg, cfgv, sizeof cfgv);
     memcpy(slot->creation, refs, n * sizeof refs[0]);
     for (i = 0; i < n; i++) {
         snprintf(slot->creation_paths[i].capsule, sizeof slot->creation_paths[i].capsule, "%s", sys[i].capsule);
@@ -2605,6 +2671,14 @@ static uint32_t h_world_create(SuAgent *a, const SuJsonValue *params, SuBuf *res
     su_buf_quoted(&req, fx_real, strlen(fx_real));
     su_buf_str(&req, ",\"fixture_sha256\":");
     su_buf_quoted(&req, fx_sha, strlen(fx_sha));
+    su_buf_str(&req, ",\"max_entities\":");
+    su_buf_u64(&req, cfgv[0]);
+    su_buf_str(&req, ",\"max_struct_per_tick\":");
+    su_buf_u64(&req, cfgv[1]);
+    su_buf_str(&req, ",\"max_events_per_tick\":");
+    su_buf_u64(&req, cfgv[2]);
+    su_buf_str(&req, ",\"event_log_max\":");
+    su_buf_u64(&req, cfgv[3]);
     st = write_capsules(a, &req, "capsules", refs, (uint32_t)n);
     req_end(&req);
     if (st != SU_OK || req.failed) {
@@ -2777,11 +2851,13 @@ static void attach_spec_status(SuAgent *a, const AgentWorld *w, SuBuf *res) {
 }
 
 static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
-    static const char *const allowed[] = {"world_id", "fields", "limit", "offset"};
+    static const char *const allowed[] = {"world_id", "fields", "limit", "offset", "entity"};
     const char *world_id = NULL;
     uint64_t limit = 16;
     uint64_t offset = 0;
+    uint64_t entity = 0;
     const SuJsonValue *fields = su_json_member(params, "fields");
+    const SuJsonValue *ent_h = su_json_member(params, "entity");
     SuBuf req;
     SuBuf resp;
     AgentWorld *w = NULL;
@@ -2789,11 +2865,14 @@ static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *re
     size_t i;
     uint32_t st;
 
-    if (check_keys(params, allowed, 4, c) != SU_OK ||
+    if (check_keys(params, allowed, 5, c) != SU_OK ||
         param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
         param_uint(params, "limit", 0, 1, 256, 16, &limit, c) != SU_OK ||
         param_uint(params, "offset", 0, 0, AGENT_MAX_OFFSET, 0, &offset, c) != SU_OK) {
         return SU_E_TYPE;
+    }
+    if (ent_h != NULL && !su_json_get_uint(ent_h, &entity)) {
+        return call_fail(c, SU_E_TYPE, "entity must be an integer handle");
     }
     if (fields != NULL && (fields->type != SU_JSON_ARRAY || fields->u.array.count > AGENT_MAX_FIELD_ARGS)) {
         return call_fail(c, SU_E_TYPE, "fields must be an array of at most 64 names");
@@ -2813,6 +2892,10 @@ static uint32_t h_world_inspect(SuAgent *a, const SuJsonValue *params, SuBuf *re
     su_buf_u64(&req, limit);
     su_buf_str(&req, ",\"offset\":");
     su_buf_u64(&req, offset);
+    if (ent_h != NULL) {
+        su_buf_str(&req, ",\"entity\":");
+        su_buf_u64(&req, entity);
+    }
     if (fields != NULL) {
         su_buf_str(&req, ",\"fields\":[");
         for (i = 0; i < fields->u.array.count; i++) {
@@ -3945,6 +4028,249 @@ static void respec_service(SuAgent *a) {
 }
 #endif /* SU_HAVE_NATIVE */
 
+/* world.spawn {world_id, expected_world_revision, values:{<field>: u32}, external_id?: u32} (M2-00c3b).
+ * The values object is kept as canonical text (ordered as received, u32 values) so recovery replays the
+ * same spawn; the entity slot is the worker's lowest free slot, so the replay yields the same handle. */
+static uint32_t h_world_spawn(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"world_id", "expected_world_revision", "values", "external_id"};
+    const char *world_id = NULL;
+    const char *expect = NULL;
+    const SuJsonValue *vals = su_json_member(params, "values");
+    const SuJsonValue *xid = su_json_member(params, "external_id");
+    uint64_t ext = 0;
+    AgentWorld *w = NULL;
+    InFlight op;
+    LogOp lop;
+    SuBuf vb;
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    uint32_t st;
+    size_t i;
+    int rc;
+
+    if (check_keys(params, allowed, 4, c) != SU_OK ||
+        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    if (vals == NULL || vals->type != SU_JSON_OBJECT) {
+        return call_fail(c, SU_E_TYPE, "values must be an object of field names to u32");
+    }
+    if (xid != NULL && (!su_json_get_uint(xid, &ext) || ext > UINT32_MAX)) {
+        return call_fail(c, SU_E_TYPE, "external_id must be a u32 integer");
+    }
+    su_buf_init(&vb);
+    su_buf_str(&vb, "{");
+    for (i = 0; i < vals->u.object.count; i++) {
+        const SuJsonMember *m = &vals->u.object.members[i];
+        uint64_t v = 0;
+        if (!su_json_get_uint(m->value, &v) || v > UINT32_MAX) {
+            su_buf_free(&vb);
+            return call_fail(c, SU_E_TYPE, "values must be u32 integers");
+        }
+        if (i > 0) {
+            su_buf_str(&vb, ",");
+        }
+        su_buf_quoted(&vb, m->key, m->key_len);
+        su_buf_str(&vb, ":");
+        su_buf_u64(&vb, v);
+    }
+    su_buf_str(&vb, "}");
+    if (vb.failed || vb.len >= AGENT_SPAWN_VALUES_CAP) {
+        su_buf_free(&vb);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "values object is too large for the replay log");
+    }
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        su_buf_free(&vb);
+        return st;
+    }
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        su_buf_free(&vb);
+        return st;
+    }
+    memset(&op, 0, sizeof op);
+    op.kind = OPK_SPAWN;
+    op.w = w;
+    op.tick = w->tick;
+    st = log_room(a, c, w);
+    if (st != SU_OK) {
+        su_buf_free(&vb);
+        return st;
+    }
+    su_buf_init(&req);
+    req_begin(&req, c->id, "world.spawn");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, world_id, strlen(world_id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, expect, strlen(expect));
+    su_buf_str(&req, ",\"values\":");
+    su_buf_put(&req, vb.data, vb.len);
+    if (xid != NULL) {
+        su_buf_str(&req, ",\"external_id\":");
+        su_buf_u64(&req, ext);
+    }
+    req_end(&req);
+    if (req.failed) {
+        su_buf_free(&req);
+        su_buf_free(&vb);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "world.spawn request too large");
+    }
+    su_buf_init(&resp);
+    st = roundtrip(a, c->id, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        su_buf_free(&vb);
+        return worker_died(a, c, &op);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    memset(&lop, 0, sizeof lop);
+    memcpy(lop.spawn_values, vb.data, vb.len);
+    lop.spawn_values[vb.len] = '\0';
+    lop.has_ext = xid != NULL;
+    lop.ext_id = (uint32_t)ext;
+    rc = sync_after(a, w, LOG_SPAWN, &lop, 0, r.ok);
+    reply_free(&r);
+    su_buf_free(&vb);
+    if (rc == CK_DIED) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    if (rc == CK_BAD) {
+        su_buf_free(&resp);
+        return call_fail(c, SU_E_INTERNAL, "world state diverged from the worker; world is unrecoverable");
+    }
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* world.despawn {world_id, expected_world_revision, entity} (M2-00c3b). */
+static uint32_t h_world_despawn(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"world_id", "expected_world_revision", "entity"};
+    const char *world_id = NULL;
+    const char *expect = NULL;
+    const SuJsonValue *eh = su_json_member(params, "entity");
+    uint64_t handle = 0;
+    AgentWorld *w = NULL;
+    InFlight op;
+    LogOp lop;
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    uint32_t st;
+    int rc;
+
+    if (check_keys(params, allowed, 3, c) != SU_OK ||
+        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    if (eh == NULL || !su_json_get_uint(eh, &handle)) {
+        return call_fail(c, SU_E_TYPE, "entity must be an integer handle");
+    }
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    memset(&op, 0, sizeof op);
+    op.kind = OPK_DESPAWN;
+    op.w = w;
+    op.tick = w->tick;
+    st = log_room(a, c, w);
+    if (st != SU_OK) {
+        return st;
+    }
+    su_buf_init(&req);
+    req_begin(&req, c->id, "world.despawn");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, world_id, strlen(world_id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, expect, strlen(expect));
+    su_buf_str(&req, ",\"entity\":");
+    su_buf_u64(&req, handle);
+    req_end(&req);
+    if (req.failed) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "world.despawn request too large");
+    }
+    su_buf_init(&resp);
+    st = roundtrip(a, c->id, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    memset(&lop, 0, sizeof lop);
+    lop.handle = handle;
+    rc = sync_after(a, w, LOG_DESPAWN, &lop, 0, r.ok);
+    reply_free(&r);
+    if (rc == CK_DIED) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    if (rc == CK_BAD) {
+        su_buf_free(&resp);
+        return call_fail(c, SU_E_INTERNAL, "world state diverged from the worker; world is unrecoverable");
+    }
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* events.read {world_id, cursor, max<=256}: read-only (M2-00c3b). */
+static uint32_t h_events_read(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"world_id", "cursor", "max"};
+    const char *world_id = NULL;
+    uint64_t cursor = 0;
+    uint64_t max = 0;
+    AgentWorld *w = NULL;
+    InFlight op;
+    SuBuf req;
+    SuBuf resp;
+    uint32_t st;
+
+    if (check_keys(params, allowed, 3, c) != SU_OK ||
+        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_uint(params, "cursor", 1, 0, UINT64_MAX, 0, &cursor, c) != SU_OK ||
+        param_uint(params, "max", 1, 1, AGENT_EVENTS_MAX, 0, &max, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    su_buf_init(&req);
+    req_begin(&req, c->id, "events.read");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, world_id, strlen(world_id));
+    su_buf_str(&req, ",\"cursor\":");
+    su_buf_u64(&req, cursor);
+    su_buf_str(&req, ",\"max\":");
+    su_buf_u64(&req, max);
+    req_end(&req);
+    su_buf_init(&resp);
+    memset(&op, 0, sizeof op);
+    op.kind = OPK_READ;
+    st = roundtrip(a, c->id, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
 static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c) {
     const SuJsonValue *p = req->params;
     if (strcmp(req->method, "engine.info") == 0) {
@@ -3967,6 +4293,15 @@ static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c
     }
     if (strcmp(req->method, "world.step") == 0) {
         return h_world_step(a, p, res, c);
+    }
+    if (strcmp(req->method, "world.spawn") == 0) {
+        return h_world_spawn(a, p, res, c);
+    }
+    if (strcmp(req->method, "world.despawn") == 0) {
+        return h_world_despawn(a, p, res, c);
+    }
+    if (strcmp(req->method, "events.read") == 0) {
+        return h_events_read(a, p, res, c);
     }
     if (strcmp(req->method, "candidate.install") == 0) {
         return h_candidate_install(a, p, res, c);

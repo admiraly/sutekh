@@ -58,6 +58,15 @@ uint32_t su_sched_enable_entities(SuSchedule *s, uint64_t max_struct_tick, uint6
     return SU_OK;
 }
 
+uint32_t su_sched_adopt_entities(SuSchedule *s, SuEntRt *rt) {
+    if (s == NULL || rt == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    su_ent_rt_destroy(s->ent);
+    s->ent = rt;
+    return SU_OK;
+}
+
 int su_sched_find(const SuSchedule *s, const char *system_id) {
     uint32_t i;
     for (i = 0; i < s->count; i++) {

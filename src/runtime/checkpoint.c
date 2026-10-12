@@ -100,6 +100,13 @@ uint32_t su_checkpoint_create(SuCheckpointStore *s, const SuWorld *w, const SuWo
                               const char *world_revision,
                               const SuSnapshotManifestEntry *manifest, uint32_t manifest_count,
                               uint64_t *out_id) {
+    return su_checkpoint_create_ex(s, w, desc, world_revision, manifest, manifest_count, NULL, out_id);
+}
+
+uint32_t su_checkpoint_create_ex(SuCheckpointStore *s, const SuWorld *w, const SuWorldDesc *desc,
+                                 const char *world_revision,
+                                 const SuSnapshotManifestEntry *manifest, uint32_t manifest_count,
+                                 const SuSnapshotEvents *events, uint64_t *out_id) {
     SuSnapshot snap;
     uint64_t t0 = 0;
     uint64_t t1 = 0;
@@ -118,7 +125,7 @@ uint32_t su_checkpoint_create(SuCheckpointStore *s, const SuWorld *w, const SuWo
     }
 
     t0_ok = su_platform_monotonic_ns(&t0);
-    st = su_snapshot_capture(w, desc, world_revision, manifest, manifest_count, &snap);
+    st = su_snapshot_capture_ex(w, desc, world_revision, manifest, manifest_count, events, &snap);
     t1_ok = su_platform_monotonic_ns(&t1);
     if (st != SU_OK) {
         return st;

@@ -114,6 +114,8 @@ uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSch
  * Replaces an existing entity runtime (its log is discarded; callers enable once at creation). */
 uint32_t su_sched_enable_entities(SuSchedule *s, uint64_t max_struct_tick, uint64_t max_events_tick,
                                   uint64_t event_log_max);
+/* Installs an entity runtime built elsewhere (snapshot restore). Takes ownership of rt. */
+uint32_t su_sched_adopt_entities(SuSchedule *s, SuEntRt *rt);
 /* Runs one system of the schedule on the serial or chunked non-entity path (M0/M1 semantics). */
 uint32_t su_sched_run_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt);
 

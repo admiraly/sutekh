@@ -34,6 +34,13 @@ uint32_t su_ent_rt_create(uint64_t max_struct_tick, uint64_t max_events_tick, ui
                           SuEntRt **out);
 void su_ent_rt_destroy(SuEntRt *rt);
 SuEventLog *su_ent_rt_log(SuEntRt *rt);
+/* Current caps and log capacity. */
+uint32_t su_ent_rt_caps(const SuEntRt *rt, uint64_t *max_struct_tick, uint64_t *max_events_tick,
+                        uint64_t *event_log_max);
+/* Runtime rebuilt from snapshot state (caps as configured by the world, log as recorded). */
+uint32_t su_ent_rt_create_restored(uint64_t max_struct_tick, uint64_t max_events_tick, uint64_t event_log_max,
+                                   uint64_t next_seq, uint64_t dropped, const SuEvent *ev, uint64_t n,
+                                   SuEntRt **out);
 
 /* Runs ticks like su_sched_run_ticks_opt for a schedule with entity state. rt must not be NULL.
  * Same done/failed_index contract as su_sched_run_ticks_opt. */

@@ -59,6 +59,11 @@ uint32_t su_checkpoint_create(SuCheckpointStore *s, const SuWorld *w, const SuWo
                               const char *world_revision,
                               const SuSnapshotManifestEntry *manifest, uint32_t manifest_count,
                               uint64_t *out_id);
+/* As su_checkpoint_create with the runtime event log (snapshot 0.2). events may be NULL. */
+uint32_t su_checkpoint_create_ex(SuCheckpointStore *s, const SuWorld *w, const SuWorldDesc *desc,
+                                 const char *world_revision,
+                                 const SuSnapshotManifestEntry *manifest, uint32_t manifest_count,
+                                 const SuSnapshotEvents *events, uint64_t *out_id);
 /* SU_E_INVALID_ARGUMENT if the id is unknown, released or evicted (*out NULL). */
 uint32_t su_checkpoint_get(const SuCheckpointStore *s, uint64_t id, const SuSnapshot **out);
 uint32_t su_checkpoint_info(const SuCheckpointStore *s, uint64_t id, SuCheckpointInfo *out);

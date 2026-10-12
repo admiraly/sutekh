@@ -172,8 +172,16 @@ static void inst_free(WorldInst *in) {
 
 /* Opens a fresh world (tick 0, columns by name) for the schedule's schema and union
  * field table. The fixture must carry every field of the table. */
+static uint32_t world_open_ex(const SuSchedule *s, const char *fixture_path, const char *fixture_sha,
+                              uint64_t max_entities, WorldInst *in, WorkerFail *f);
+
 static uint32_t world_open(const SuSchedule *s, const char *fixture_path, const char *fixture_sha,
                            WorldInst *in, WorkerFail *f) {
+    return world_open_ex(s, fixture_path, fixture_sha, 0u, in, f);
+}
+
+static uint32_t world_open_ex(const SuSchedule *s, const char *fixture_path, const char *fixture_sha,
+                              uint64_t max_entities, WorldInst *in, WorkerFail *f) {
     uint8_t *data = NULL;
     size_t len = 0;
     SuJsonLimits limits;
@@ -282,7 +290,7 @@ static uint32_t world_open(const SuSchedule *s, const char *fixture_path, const 
     desc.entity_ids = in->ids;
     desc.fields = descs;
     desc.field_count = s->field_count;
-    st = su_world_create(&desc, &in->w);
+    st = su_world_create_ex(&desc, max_entities, &in->w);
     if (st != SU_OK) {
         fail(f, st, "world creation failed");
         goto out;
@@ -642,6 +650,119 @@ static int parse_world_id(const char *id, uint64_t *n) {
     return 1;
 }
 
+/* ---------- entity control plane (M2-00c3b, contract M2_ENTITIES_CONTRACT.md sections 2, 4, 5) ----------
+ *
+ * Every world owns an entity runtime (ww->sched.ent): the bounded event log and the per-tick caps. The
+ * control plane spawns and despawns between ticks directly on the committed root (never queued, never
+ * inside a tick). Each mutating method bumps the world revision and appends one control-plane record
+ * (system_index SU_SYSTEM_INDEX_HOST) to the log. */
+#define WORKER_EVENTS_MAX 256u
+
+/* Optional unsigned integer member. Absent keeps dflt; a non-integer is SU_E_TYPE; a value outside
+ * [lo, hi] is SU_E_RESOURCE_LIMIT. */
+static uint32_t opt_uint(const SuJsonValue *params, const char *key, uint64_t dflt, uint64_t lo, uint64_t hi,
+                         uint64_t *out, WorkerFail *f) {
+    const SuJsonValue *v = su_json_member(params, key);
+    char msg[WORKER_MSG_CAP];
+    *out = dflt;
+    if (v == NULL) {
+        return SU_OK;
+    }
+    if (!su_json_get_uint(v, out)) {
+        snprintf(msg, sizeof msg, "%s must be an integer", key);
+        fail(f, SU_E_TYPE, msg);
+        *out = dflt;
+        return SU_E_TYPE;
+    }
+    if (*out < lo || *out > hi) {
+        snprintf(msg, sizeof msg, "%s is outside its range", key);
+        fail(f, SU_E_RESOURCE_LIMIT, msg);
+        *out = dflt;
+        return SU_E_RESOURCE_LIMIT;
+    }
+    return SU_OK;
+}
+
+static SuEventLog *ent_log(const WorkerWorld *ww) {
+    return ww->sched.ent == NULL ? NULL : su_ent_rt_log(ww->sched.ent);
+}
+
+/* Appends one control-plane record at the next event_seq; tick is the committed tick. */
+static uint32_t ent_log_one(WorkerWorld *ww, uint32_t kind, uint32_t slot, uint32_t a, uint32_t b) {
+    SuEventLog *log = ent_log(ww);
+    SuEvent ev;
+    if (log == NULL) {
+        return SU_E_INTERNAL;
+    }
+    memset(&ev, 0, sizeof ev);
+    ev.event_seq = su_evlog_next_seq(log);
+    ev.tick = su_world_tick(ww->inst.w);
+    ev.kind = kind;
+    ev.system_index = SU_SYSTEM_INDEX_HOST;
+    ev.slot = slot;
+    ev.seq = 0u;
+    ev.a = a;
+    ev.b = b;
+    return su_evlog_append(log, &ev, 1u);
+}
+
+/* Event log state for a snapshot. The retained events are copied into a buffer the caller frees. A
+ * world without a log snapshots an empty log with the default capacity. */
+typedef struct EntSnap {
+    SuEvent *buf;
+    SuSnapshotEvents ev;
+} EntSnap;
+
+static uint32_t ent_snap_events(const WorkerWorld *ww, EntSnap *e, WorkerFail *f) {
+    SuEventLog *log = ent_log(ww);
+    uint64_t n;
+    uint64_t got = 0u;
+
+    memset(e, 0, sizeof *e);
+    e->ev.log_max = SU_SNAPSHOT_DEFAULT_EVENT_LOG_MAX;
+    if (log == NULL) {
+        return SU_OK;
+    }
+    n = su_evlog_count(log);
+    e->buf = malloc((size_t)(n > 0u ? n : 1u) * sizeof *e->buf);
+    if (e->buf == NULL) {
+        fail(f, SU_E_RESOURCE_LIMIT, "allocation failed");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    if (su_evlog_copy_retained(log, e->buf, n, &got) != SU_OK) {
+        free(e->buf);
+        e->buf = NULL;
+        fail(f, SU_E_INTERNAL, "event log could not be read");
+        return SU_E_INTERNAL;
+    }
+    e->ev.next_seq = su_evlog_next_seq(log);
+    e->ev.dropped = su_evlog_dropped(log);
+    e->ev.log_max = su_evlog_capacity(log);
+    e->ev.entries = e->buf;
+    e->ev.count = got;
+    return SU_OK;
+}
+
+static void ent_snap_free(EntSnap *e) {
+    free(e->buf);
+    e->buf = NULL;
+}
+
+/* Stale or missing expected_world_revision. */
+static uint32_t check_expected(const WorkerWorld *ww, const char *expect, WorkerFail *f) {
+    char rev[64];
+    if (expect == NULL) {
+        fail(f, SU_E_TYPE, "expected_world_revision is required");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+    return SU_OK;
+}
+
 static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
     const char *fixture = str_of(params, "fixture_path");
     const char *want = str_of(params, "world_id");
@@ -655,9 +776,23 @@ static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf 
     uint32_t st;
     uint64_t txid;
 
+    uint64_t max_entities = 0;
+    uint64_t max_struct = 0;
+    uint64_t max_events = 0;
+    uint64_t log_max = 0;
+
     if (fixture == NULL) {
         fail(f, SU_E_TYPE, "world.create needs fixture_path and capsules");
         return SU_E_TYPE;
+    }
+    if (opt_uint(params, "max_entities", 0u, 0u, SU_LIMIT_ROWS, &max_entities, f) != SU_OK ||
+        opt_uint(params, "max_struct_per_tick", SU_CMDQ_DEFAULT_PER_TICK_CAP, 1u, SU_CMDQ_MAX_TICK_CAP,
+                 &max_struct, f) != SU_OK ||
+        opt_uint(params, "max_events_per_tick", SU_CMDQ_DEFAULT_PER_TICK_CAP, 1u, SU_CMDQ_MAX_TICK_CAP,
+                 &max_events, f) != SU_OK ||
+        opt_uint(params, "event_log_max", SU_CMDQ_DEFAULT_EVENT_LOG_MAX, 1u, SU_CMDQ_MAX_LOG_CAPACITY,
+                 &log_max, f) != SU_OK) {
+        return f->code;
     }
     if (want != NULL && (!parse_world_id(want, &want_n) || find_world(s, want) != NULL)) {
         fail(f, SU_E_INVALID_ARGUMENT, "world_id is malformed or already in use");
@@ -680,7 +815,13 @@ static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf 
         su_sched_free(&sched);
         return st;
     }
-    st = world_open(&sched, fixture, str_of(params, "fixture_sha256"), &inst, f);
+    st = su_sched_enable_entities(&sched, max_struct, max_events, log_max);
+    if (st != SU_OK) {
+        su_sched_free(&sched);
+        fail(f, st, "entity runtime could not be configured");
+        return st;
+    }
+    st = world_open_ex(&sched, fixture, str_of(params, "fixture_sha256"), max_entities, &inst, f);
     if (st != SU_OK) {
         su_sched_free(&sched);
         return st;
@@ -755,6 +896,212 @@ static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf 
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
+/* world.spawn {world_id, expected_world_revision, values:{<field>: u32}, external_id?: u32}. */
+static uint32_t h_world_spawn(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const SuJsonValue *vals = su_json_member(params, "values");
+    const SuJsonValue *xid = su_json_member(params, "external_id");
+    SuWorldSpawnValue sv[SU_LIMIT_FIELDS];
+    uint64_t ext = 0;
+    uint64_t v = 0;
+    SuEntity h = SU_ENTITY_INVALID;
+    uint32_t n = 0;
+    uint32_t i;
+    uint32_t st = SU_OK;
+    char rev[64];
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = check_expected(ww, expect, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (vals == NULL || vals->type != SU_JSON_OBJECT || ent_log(ww) == NULL) {
+        fail(f, SU_E_TYPE, "world.spawn needs values as an object of field names to u32");
+        return SU_E_TYPE;
+    }
+    if (xid != NULL && (!su_json_get_uint(xid, &ext) || ext > UINT32_MAX)) {
+        fail(f, SU_E_TYPE, "external_id must be a u32 integer");
+        return SU_E_TYPE;
+    }
+    if (vals->u.object.count > SU_LIMIT_FIELDS) {
+        fail(f, SU_E_SCHEMA_MISMATCH, "values names an unknown field");
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    for (i = 0; i < vals->u.object.count; i++) {
+        const SuJsonMember *m = &vals->u.object.members[i];
+        int found = -1;
+        uint32_t k;
+        for (k = 0; k < ww->sched.field_count; k++) {
+            const char *nm = ww->sched.fields[k].name;
+            if (strlen(nm) == m->key_len && memcmp(nm, m->key, m->key_len) == 0) {
+                found = (int)k;
+                break;
+            }
+        }
+        if (found < 0) {
+            fail(f, SU_E_SCHEMA_MISMATCH, "values names an unknown field");
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        if (!su_json_get_uint(m->value, &v) || v > UINT32_MAX) {
+            fail(f, SU_E_TYPE, "field values must be u32 integers");
+            return SU_E_TYPE;
+        }
+        sv[n].field_id = ww->sched.fields[found].id;
+        sv[n].value = (uint32_t)v;
+        n++;
+    }
+    st = su_world_spawn(ww->inst.w, sv, n, (uint32_t)ext, &h);
+    if (st != SU_OK) {
+        fail(f, st, "spawn refused; world unchanged");
+        return st;
+    }
+    st = ent_log_one(ww, SU_EVENT_SPAWNED, SU_ENTITY_SLOT(h), SU_ENTITY_SLOT(h), SU_ENTITY_GEN(h));
+    if (st != SU_OK) {
+        fail(f, SU_E_INTERNAL, "spawn record could not be appended");
+        return SU_E_INTERNAL;
+    }
+    ww->revision++;
+    rev_string(ww, rev, sizeof rev);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"entity\":");
+    su_buf_u64(res, h);
+    su_buf_str(res, ",\"slot\":");
+    su_buf_u64(res, SU_ENTITY_SLOT(h));
+    su_buf_str(res, ",\"generation\":");
+    su_buf_u64(res, SU_ENTITY_GEN(h));
+    su_buf_str(res, "}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* world.despawn {world_id, expected_world_revision, entity}. Stale, dead, retired, out-of-range, zero
+ * and generation-0 handles are SU_E_STALE_HANDLE and change nothing. */
+static uint32_t h_world_despawn(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const SuJsonValue *eh = su_json_member(params, "entity");
+    uint64_t hv = 0;
+    uint32_t st = SU_OK;
+    char rev[64];
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = check_expected(ww, expect, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (eh == NULL || !su_json_get_uint(eh, &hv) || ent_log(ww) == NULL) {
+        fail(f, SU_E_TYPE, "world.despawn needs entity as an integer handle");
+        return SU_E_TYPE;
+    }
+    st = su_world_despawn(ww->inst.w, (SuEntity)hv);
+    if (st != SU_OK) {
+        if (st == SU_E_INVALID_ARGUMENT) {
+            fail(f, st, "despawn is not allowed in this state");
+        } else {
+            fail(f, SU_E_STALE_HANDLE, "entity handle is stale");
+            st = SU_E_STALE_HANDLE;
+        }
+        return st;
+    }
+    st = ent_log_one(ww, SU_EVENT_DESPAWNED, SU_ENTITY_SLOT(hv), SU_ENTITY_SLOT(hv), SU_ENTITY_GEN(hv));
+    if (st != SU_OK) {
+        fail(f, SU_E_INTERNAL, "despawn record could not be appended");
+        return SU_E_INTERNAL;
+    }
+    ww->revision++;
+    rev_string(ww, rev, sizeof rev);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"entity\":");
+    su_buf_u64(res, hv);
+    su_buf_str(res, "}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* events.read {world_id, cursor, max <= 256}: read-only, no revision. */
+static uint32_t h_events_read(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    uint64_t cursor = 0;
+    uint64_t max = 0;
+    uint64_t n = 0;
+    uint64_t next_cursor = 0;
+    uint64_t skipped = 0;
+    uint64_t dropped = 0;
+    uint64_t i;
+    uint32_t st = SU_OK;
+    SuEvent out[WORKER_EVENTS_MAX];
+    SuEventLog *log;
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (!su_json_get_uint(su_json_member(params, "cursor"), &cursor) ||
+        !su_json_get_uint(su_json_member(params, "max"), &max)) {
+        fail(f, SU_E_TYPE, "events.read needs cursor and max as integers");
+        return SU_E_TYPE;
+    }
+    if (max < 1u || max > WORKER_EVENTS_MAX) {
+        fail(f, SU_E_RESOURCE_LIMIT, "max must be 1..256");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    log = ent_log(ww);
+    if (log == NULL) {
+        fail(f, SU_E_INTERNAL, "world has no event log");
+        return SU_E_INTERNAL;
+    }
+    st = su_evlog_read(log, cursor, max, out, &n, &next_cursor, &skipped, &dropped);
+    if (st != SU_OK) {
+        fail(f, st, "cursor is ahead of the next event sequence");
+        return st;
+    }
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"events\":[");
+    for (i = 0; i < n; i++) {
+        const SuEvent *e = &out[i];
+        if (i > 0u) {
+            su_buf_str(res, ",");
+        }
+        su_buf_str(res, "{\"event_seq\":");
+        su_buf_u64(res, e->event_seq);
+        su_buf_str(res, ",\"tick\":");
+        su_buf_u64(res, e->tick);
+        su_buf_str(res, ",\"kind\":");
+        su_buf_u64(res, e->kind);
+        su_buf_str(res, ",\"system_index\":");
+        su_buf_u64(res, e->system_index);
+        su_buf_str(res, ",\"slot\":");
+        su_buf_u64(res, e->slot);
+        su_buf_str(res, ",\"seq\":");
+        su_buf_u64(res, e->seq);
+        su_buf_str(res, ",\"a\":");
+        su_buf_u64(res, e->a);
+        su_buf_str(res, ",\"b\":");
+        su_buf_u64(res, e->b);
+        su_buf_str(res, "}");
+    }
+    su_buf_str(res, "],\"next_cursor\":");
+    su_buf_u64(res, next_cursor);
+    su_buf_str(res, ",\"skipped\":");
+    su_buf_u64(res, skipped);
+    su_buf_str(res, ",\"dropped\":");
+    su_buf_u64(res, dropped);
+    su_buf_str(res, "}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
 static uint32_t h_world_inspect(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
     WorkerWorld *ww;
     uint64_t limit = WORKER_INSPECT_DEFAULT_ROWS;
@@ -762,6 +1109,8 @@ static uint32_t h_world_inspect(WorkerState *s, const SuJsonValue *params, SuBuf
     uint64_t shown;
     const SuJsonValue *fields;
     const SuJsonValue *lim;
+    const SuJsonValue *ent_h = NULL;
+    uint64_t eh_val = 0;
     const SuJsonValue *off;
     uint64_t i;
     uint32_t st = SU_OK;
@@ -772,6 +1121,11 @@ static uint32_t h_world_inspect(WorkerState *s, const SuJsonValue *params, SuBuf
     ww = world_param(s, params, f, &st);
     if (st != SU_OK) {
         return st;
+    }
+    ent_h = su_json_member(params, "entity");
+    if (ent_h != NULL && !su_json_get_uint(ent_h, &eh_val)) {
+        fail(f, SU_E_TYPE, "entity must be an integer handle");
+        return SU_E_TYPE;
     }
     lim = su_json_member(params, "limit");
     if (lim != NULL && (!su_json_get_uint(lim, &limit) || limit < 1u || limit > WORKER_INSPECT_MAX_ROWS)) {
@@ -812,7 +1166,52 @@ static uint32_t h_world_inspect(WorkerState *s, const SuJsonValue *params, SuBuf
         }
         su_buf_u64(res, ww->inst.ids[offset + i]);
     }
-    su_buf_str(res, "],\"columns\":{");
+    su_buf_str(res, "],\"entities\":{\"capacity\":");
+    su_buf_u64(res, su_ents_capacity(su_world_entities_committed(ww->inst.w)));
+    su_buf_str(res, ",\"alive\":");
+    su_buf_u64(res, su_ents_alive_count(su_world_entities_committed(ww->inst.w)));
+    su_buf_str(res, ",\"retired\":");
+    su_buf_u64(res, su_ents_retired_count(su_world_entities_committed(ww->inst.w)));
+    su_buf_str(res, ",\"high_water\":");
+    su_buf_u64(res, su_ents_high_water(su_world_entities_committed(ww->inst.w)));
+    su_buf_str(res, "}");
+    if (ent_h != NULL) {
+        const SuEnts *ents = su_world_entities_committed(ww->inst.w);
+        uint32_t ext = 0;
+        uint32_t k;
+        uint32_t slot = SU_ENTITY_SLOT(eh_val);
+        if (su_ents_validate(ents, eh_val) != SU_OK) {
+            fail(f, SU_E_STALE_HANDLE, "entity handle is stale");
+            return SU_E_STALE_HANDLE;
+        }
+        (void)su_ents_get_external(ents, eh_val, &ext);
+        su_buf_str(res, ",\"entity\":{\"handle\":");
+        su_buf_u64(res, eh_val);
+        su_buf_str(res, ",\"slot\":");
+        su_buf_u64(res, slot);
+        su_buf_str(res, ",\"generation\":");
+        su_buf_u64(res, SU_ENTITY_GEN(eh_val));
+        su_buf_str(res, ",\"external_id\":");
+        su_buf_u64(res, ext);
+        su_buf_str(res, ",\"values\":{");
+        for (k = 0; k < ww->sched.field_count; k++) {
+            const uint32_t *data = NULL;
+            uint64_t rc = 0;
+            const char *nm = ww->sched.fields[k].name;
+            if (su_world_read_committed_by_name(ww->inst.w, nm, &data, &rc) != SU_OK || slot >= rc) {
+                fail(f, SU_E_INTERNAL, "entity row could not be read");
+                return SU_E_INTERNAL;
+            }
+            if (k > 0u) {
+                su_buf_str(res, ",");
+            }
+            su_buf_quoted(res, nm, strlen(nm));
+            su_buf_str(res, ":");
+            su_buf_u64(res, data[slot]);
+        }
+        su_buf_str(res, "}}");
+    }
+    su_buf_str(res, ",\"columns\":{");
 
     fields = su_json_member(params, "fields");
     if (fields != NULL && fields->type != SU_JSON_ARRAY) {
@@ -1512,6 +1911,7 @@ static uint32_t h_world_snapshot(WorkerState *s, const SuJsonValue *params, SuBu
     SuWorldDesc desc;
     SuWorldFieldDesc *descs = NULL;
     SuCheckpointInfo info;
+    EntSnap es;
     char rev[64];
     uint64_t id = 0;
     uint32_t st = SU_OK;
@@ -1535,7 +1935,11 @@ static uint32_t h_world_snapshot(WorkerState *s, const SuJsonValue *params, SuBu
         fail(f, st, "allocation failed");
         return st;
     }
-    st = su_checkpoint_create(s->store, ww->inst.w, &desc, rev, man, ww->sched.count, &id);
+    st = ent_snap_events(ww, &es, f);
+    if (st == SU_OK) {
+        st = su_checkpoint_create_ex(s->store, ww->inst.w, &desc, rev, man, ww->sched.count, &es.ev, &id);
+    }
+    ent_snap_free(&es);
     free(descs);
     if (st != SU_OK) {
         fail(f, st, "snapshot could not be captured; nothing was stored");
@@ -1638,6 +2042,7 @@ static uint32_t restore_core(WorkerState *s, WorkerWorld *ww, const CkptRec *rec
     SuSnapshotError perr;
     SuSchedule nsched;
     SuWorld *neww = NULL;
+    SuEntRt *nrt = NULL;
     uint64_t txids[SU_SCHED_MAX_SYSTEMS];
     uint32_t nbegun = 0;
     int parsed = 0;
@@ -1693,6 +2098,37 @@ static uint32_t restore_core(WorkerState *s, WorkerWorld *ww, const CkptRec *rec
     if (st != SU_OK) {
         fail(f, st, "snapshot does not restore into this world; world unchanged");
         goto out;
+    }
+    /* Entity runtime: the per-tick caps stay those of the world being restored; the event log is
+     * rebuilt from the snapshot (snapshot 0.2). A 0.1 snapshot carries no log: it restores empty with
+     * the current capacity. */
+    {
+        uint64_t ms = 0;
+        uint64_t me = 0;
+        uint64_t lm = 0;
+        if (su_ent_rt_caps(ww->sched.ent, &ms, &me, &lm) != SU_OK) {
+            st = SU_E_INTERNAL;
+            fail(f, st, "entity runtime is missing");
+            goto out;
+        }
+        if (data.format_minor == 2) {
+            st = su_ent_rt_create_restored(ms, me, data.event_log_max, data.event_next_seq, data.event_dropped,
+                                           data.events, data.event_count, &nrt);
+        } else {
+            st = su_ent_rt_create_restored(ms, me, lm, 0u, 0u, NULL, 0u, &nrt);
+        }
+        if (st != SU_OK) {
+            fail(f, st, "event log could not be restored; world unchanged");
+            goto out;
+        }
+        st = su_sched_adopt_entities(&nsched, nrt);
+        if (st != SU_OK) {
+            su_ent_rt_destroy(nrt);
+            nrt = NULL;
+            fail(f, st, "event log could not be restored; world unchanged");
+            goto out;
+        }
+        nrt = NULL;
     }
 
     /* Registry: a system whose semantic hash changed gets a new INSTALLED revision at the
@@ -1777,6 +2213,7 @@ out:
     if (neww != NULL) {
         su_world_destroy(neww);
     }
+    su_ent_rt_destroy(nrt);
     su_sched_free(&nsched);
     if (parsed) {
         su_snapshot_data_free(&data);
@@ -1858,6 +2295,7 @@ static uint32_t world_capture(const WorkerWorld *ww, SuSnapshot *snap, WorkerFai
     SuSnapshotManifestEntry man[SU_SCHED_MAX_SYSTEMS];
     SuWorldDesc desc;
     SuWorldFieldDesc *descs = NULL;
+    EntSnap es;
     char rev[64];
     uint32_t st;
 
@@ -1868,7 +2306,11 @@ static uint32_t world_capture(const WorkerWorld *ww, SuSnapshot *snap, WorkerFai
         fail(f, st, "allocation failed");
         return st;
     }
-    st = su_snapshot_capture(ww->inst.w, &desc, rev, man, ww->sched.count, snap);
+    st = ent_snap_events(ww, &es, f);
+    if (st == SU_OK) {
+        st = su_snapshot_capture_ex(ww->inst.w, &desc, rev, man, ww->sched.count, &es.ev, snap);
+    }
+    ent_snap_free(&es);
     free(descs);
     if (st != SU_OK) {
         fail(f, st, "canonical state could not be captured");
@@ -3169,6 +3611,12 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
         st = h_world_inspect(s, req.params, &res, &f);
     } else if (strcmp(req.method, "world.step") == 0) {
         st = h_world_step(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "world.spawn") == 0) {
+        st = h_world_spawn(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "world.despawn") == 0) {
+        st = h_world_despawn(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "events.read") == 0) {
+        st = h_events_read(s, req.params, &res, &f);
     } else if (strcmp(req.method, "internal.candidate.evaluate") == 0) {
         st = h_candidate_evaluate(s, req.params, &res, &f);
     } else if (strcmp(req.method, "internal.candidate.install") == 0) {

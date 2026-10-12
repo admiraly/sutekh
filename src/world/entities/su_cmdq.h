@@ -152,6 +152,12 @@ uint64_t su_evlog_count(const SuEventLog *log);
 uint64_t su_evlog_dropped(const SuEventLog *log);
 uint64_t su_evlog_oldest_seq(const SuEventLog *log);
 uint64_t su_evlog_next_seq(const SuEventLog *log);
+/* Rebuilds a log from snapshot state: capacity, next_seq, dropped and the retained events (oldest
+ * first, contiguous, ending at next_seq - 1). SU_E_INVALID_ARGUMENT for any inconsistent state. */
+uint32_t su_evlog_restore(uint64_t capacity, uint64_t next_seq, uint64_t dropped, const SuEvent *ev,
+                          uint64_t n, SuEventLog **out);
+/* Copies the retained events oldest first. cap must be at least su_evlog_count. */
+uint32_t su_evlog_copy_retained(const SuEventLog *log, SuEvent *out, uint64_t cap, uint64_t *n);
 /* events.read semantics (contract r2 section 2). Returns events with seq >= cursor, at most max
  * (out must hold max entries). If cursor is below the oldest retained seq, reading starts at the
  * oldest retained record and *skipped is the number of events lost before it; otherwise *skipped
