@@ -121,7 +121,7 @@ uint32_t su_path_read_file(const char *path, size_t max_bytes, uint8_t **data, s
 
     *data = NULL;
     *len = 0;
-    fd = open(path, O_RDONLY);
+    fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         return SU_E_IO;
     }

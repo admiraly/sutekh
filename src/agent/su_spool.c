@@ -93,6 +93,12 @@ uint32_t su_spool_open(const char *dir, uint64_t max_bytes, SuSpool **out) {
             free(sp);
             return SU_E_IO;
         }
+        /* The spool holds captured capsules and checkpoints: it must be ours and not group/world
+         * accessible (the private mkdtemp directory below is created 0700). */
+        if (st.st_uid != geteuid() || (st.st_mode & 077) != 0) {
+            free(sp);
+            return SU_E_CAPABILITY_DENIED;
+        }
         snprintf(sp->dir, sizeof sp->dir, "%s", dir);
         sp->owns_dir = 0;
     } else {
