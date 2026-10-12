@@ -196,7 +196,10 @@ class ModelBackend(Backend):
             rows = args.get("rows")
             if not isinstance(rows, list):
                 raise ModelError("SU_E_TYPE", "rows")
+            # Request-size cap first (agent protocol, before row parsing). The model has no raw request
+            # line, so the canonical JSON of the command stands in for it.
             try:
+                limits.check_request_size(canonical_json({"cmd": name, "args": args}).encode("utf-8"))
                 limits.check_row_count(len(rows))
             except limits.BatchRefused as exc:
                 raise ModelError(exc.code, "rows", exc.detail)
@@ -205,6 +208,9 @@ class ModelBackend(Backend):
             for r in rows:
                 if not isinstance(r, dict) or not isinstance(r.get("values"), dict):
                     raise ModelError("SU_E_TYPE", "rows", "each row needs values")
+                ext = r.get("external_id", 0)
+                if type(ext) is not int or not (0 <= ext <= U32_MAX):
+                    raise ModelError("SU_E_TYPE", "external_id", "u32 integer")
                 specs.append(validate_spawn(r["values"], w.cap))
             try:
                 limits.check_prechecks(len(rows), w.cap, sum(w.alive), w.hw)
@@ -232,6 +238,19 @@ def _handle(v) -> int:
     return v
 
 
+# rts_u32_v1 value domains (contract 2.2); mirrors su_rts_ctl_check_value in src/runtime/rts/control_domains.c.
+# formation_slot's capacity bound and the formation/kind rules are resulting-row checks, not per-field.
+FIELD_DOMAINS = {
+    **{n: (lambda v: v <= 32767) for n in ("pos_x", "pos_y", "order_x", "order_y", "formation_ox", "formation_oy")},
+    "speed": lambda v: v <= 1024,
+    "range_sq": lambda v: v == 0 or 1 <= v <= 262144,
+    "reload": lambda v: 1 <= v <= 1024,
+    "damage": lambda v: 1 <= v <= 65535,
+    "flight": lambda v: 1 <= v <= 64,
+    "order_mode": lambda v: v <= 2,
+}
+
+
 def _set_fields(w: World, args: dict) -> None:
     ents = args.get("entities")
     if not isinstance(ents, list) or not (1 <= len(ents) <= limits.ROWS_MAX):
@@ -256,6 +275,8 @@ def _set_fields(w: World, args: dict) -> None:
                 raise ModelError("SU_E_TYPE", name, "not writable by set_fields")
             if type(v) is not int or not (0 <= v <= U32_MAX):
                 raise ModelError("SU_E_TYPE", name, "u32 integer")
+            if name in FIELD_DOMAINS and not FIELD_DOMAINS[name](v):
+                raise ModelError("SU_E_TYPE", name, "outside the rts_u32_v1 domain (2.2)")
             row[name] = v
         # Resulting-row rules (D2), on the committed row with the payload applied.
         if (row["formation_slot"] == NONE) != (row["formation_gen"] == 0):

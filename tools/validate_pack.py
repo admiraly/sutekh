@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+REPORT_PATH = ROOT / "PACK_VALIDATION.json"
 MASK = (1 << 32) - 1
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -350,11 +351,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = build_report()
         text = json.dumps(result, indent=2)+"\n"
-        report = ROOT / "PACK_VALIDATION.json"
+        report = REPORT_PATH
+        schema_skipped = result["json_schema"]["status"] != "passed"
         if args.write_report:
+            if schema_skipped:
+                fail("PACK_CHECK_FAILED", "jsonschema is not installed; refusing to commit a skipped schema result")
             report.write_bytes(text.encode("utf-8"))
         elif args.check_report:
-            if report.read_bytes().decode("utf-8") != text:
+            if schema_skipped:
+                # Without jsonschema the schema section cannot be produced here, so it is not compared.
+                # The rest of the report still decides, and the schema result is printed as skipped.
+                committed = json.loads(report.read_bytes().decode("utf-8"))
+                committed.pop("json_schema", None)
+                current = dict(result)
+                current.pop("json_schema", None)
+                if committed != current:
+                    fail("PACK_CHECK_FAILED", "PACK_VALIDATION.json is stale; run tools/validate_pack.py --write-report")
+            elif report.read_bytes().decode("utf-8") != text:
                 fail("PACK_CHECK_FAILED", "PACK_VALIDATION.json is stale; run tools/validate_pack.py --write-report")
         print(json.dumps(result, indent=2))
         return 0

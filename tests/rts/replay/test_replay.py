@@ -19,6 +19,7 @@ if _REF not in sys.path:
 
 import rts_replay as rr  # noqa: E402
 import spawn_batch_limits as limits  # noqa: E402
+import model  # noqa: E402
 from model import ModelError  # noqa: E402
 
 CAP = 64
@@ -199,6 +200,58 @@ class BatchAndSetFieldsRules(unittest.TestCase):
                      "args": {"entities": [{"entity": handle(0), "values": {"hp": 3}}]}})
         self.assertEqual(cm.exception.code, "SU_E_TYPE")
 
+    def test_set_fields_enforces_rts_u32_v1_domains(self):  # contract 2.2 / T-RTS-CTRL-1
+        # Same bounds as spawn (src/runtime/rts/control_domains.c). Each case must be refused.
+        refused = [("flight", 0), ("flight", 65), ("reload", 0), ("reload", 1025), ("damage", 0),
+                   ("damage", 65536), ("order_mode", 3), ("pos_x", 32768), ("pos_y", 40000),
+                   ("order_x", 32768), ("speed", 1025), ("range_sq", 262145), ("formation_ox", 32768)]
+        for name, value in refused:
+            b = rr.ModelBackend(CAP)
+            b.load_scene(SCENE)
+            before = b.scene_digest()
+            with self.subTest(field=name, value=value):
+                with self.assertRaises(ModelError) as cm:
+                    b.apply({"cmd": rr.CMD_SET_FIELDS,
+                             "args": {"entities": [{"entity": handle(0), "values": {name: value}}]}})
+                self.assertEqual(cm.exception.code, "SU_E_TYPE")
+                self.assertEqual(b.scene_digest(), before)
+
+    def test_set_fields_accepts_domain_edges(self):
+        accepted = [("flight", 1), ("flight", 64), ("reload", 1), ("reload", 1024), ("damage", 1),
+                    ("damage", 65535), ("order_mode", 2), ("pos_x", 32767), ("speed", 1024),
+                    ("range_sq", 0), ("range_sq", 262144)]
+        for name, value in accepted:
+            b = rr.ModelBackend(CAP)
+            b.load_scene(SCENE)
+            with self.subTest(field=name, value=value):
+                b.apply({"cmd": rr.CMD_SET_FIELDS,
+                         "args": {"entities": [{"entity": handle(0), "values": {name: value}}]}})
+
+    def test_spawn_batch_external_id_must_be_u32(self):  # contract D6 / OD-3b / F4
+        b = rr.ModelBackend(CAP)
+        b.load_scene(SCENE)
+        before = b.scene_digest()
+        for bad in (-1, 2 ** 32, 2 ** 40, "7", 1.0, True):
+            row = {"values": {"kind": 1, "hp": 1, "reload": 1, "damage": 1, "flight": 1}, "external_id": bad}
+            with self.subTest(external_id=bad):
+                with self.assertRaises(ModelError) as cm:
+                    b.apply({"cmd": rr.CMD_SPAWN_BATCH, "args": {"rows": [row]}})
+                self.assertEqual(cm.exception.code, "SU_E_TYPE")
+                self.assertEqual(b.scene_digest(), before)
+        ok = {"values": {"kind": 1, "hp": 1, "reload": 1, "damage": 1, "flight": 1}, "external_id": 2 ** 32 - 1}
+        b.apply({"cmd": rr.CMD_SPAWN_BATCH, "args": {"rows": [ok]}})
+
+    def test_spawn_batch_request_size_checked_before_rows(self):  # agent protocol 1 MiB cap, step 1
+        b = rr.ModelBackend(CAP)
+        b.load_scene(SCENE)
+        before = b.scene_digest()
+        big = "x" * (limits.REQUEST_BYTES_MAX + 1)
+        row = {"values": {"kind": 1, "hp": 1, "reload": 1, "damage": 1, "flight": 1}, "pad": big}
+        with self.assertRaises(ModelError) as cm:
+            b.apply({"cmd": rr.CMD_SPAWN_BATCH, "args": {"rows": [row]}})
+        self.assertEqual(cm.exception.code, "SU_E_RESOURCE_LIMIT")
+        self.assertEqual(b.scene_digest(), before)
+
     def test_set_fields_refuses_stale_handle(self):
         b = rr.ModelBackend(CAP)
         b.load_scene(SCENE)
@@ -231,15 +284,28 @@ class BatchLimits(unittest.TestCase):
                                    high_water=limits.HW_MAX - 1)
 
     def test_worst_case_request_fits_the_cap(self):
-        # D6 / C (F4): 1,024 rows with every field and external_id at 10 digits, compact JSON,
-        # is 948,225 bytes, under the 1 MiB cap. Rebuilt here from the field names and widths.
-        row_fields = ("kind", "team", "hp", "pos_x", "pos_y", "speed", "range_sq", "reload",
-                      "damage", "flight", "order_mode", "order_x", "order_y", "formation_slot",
-                      "formation_gen", "formation_ox", "formation_oy")
-        row = {"values": {name: 4294967295 for name in row_fields}, "external_id": 4294967295}
-        size = len(rr.canonical_json(row).encode("ascii"))
-        self.assertLessEqual(size * limits.ROWS_MAX, 948225 + 1024)
-        self.assertLess(size * limits.ROWS_MAX, limits.REQUEST_BYTES_MAX)
+        # D6 / C (F4): 1,024 rows, every one of the 39 model fields plus external_id at 10 digits,
+        # wrapped as the model sees it (canonical JSON of the whole command), must pass the cap.
+        names = model.FIELD_NAMES
+        self.assertEqual(len(names), 39)
+        row = {"values": {name: 4294967295 for name in names}, "external_id": 4294967295}
+        request = rr.canonical_json({"cmd": rr.CMD_SPAWN_BATCH, "args": {"rows": [row] * limits.ROWS_MAX}})
+        size = len(request.encode("ascii"))
+        self.assertLessEqual(size, limits.REQUEST_BYTES_MAX)
+        limits.check_request_size(request.encode("ascii"))
+
+    def test_request_size_boundary_is_exact(self):
+        limits.check_request_size(b"x" * limits.REQUEST_BYTES_MAX)
+        with self.assertRaises(limits.BatchRefused):
+            limits.check_request_size(b"x" * (limits.REQUEST_BYTES_MAX + 1))
+
+    def test_high_water_exact_boundary_is_accepted(self):
+        limits.check_prechecks(rows=2, capacity=1000000, alive=0, high_water=limits.HW_MAX - 2)
+        with self.assertRaises(limits.BatchRefused):
+            limits.check_prechecks(rows=3, capacity=1000000, alive=0, high_water=limits.HW_MAX - 2)
+
+    def test_full_capacity_batch_is_accepted(self):
+        limits.check_prechecks(rows=4, capacity=10, alive=6, high_water=10)
 
 
 if __name__ == "__main__":

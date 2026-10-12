@@ -59,5 +59,57 @@ class ReportIsNotRewrittenByChecks(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
+class ReportModeGates(unittest.TestCase):
+    """--check-report must fail on a stale report, and must not depend on whether jsonschema is installed."""
+
+    def _run_main(self, argv, report_text, schema_status=None):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "PACK_VALIDATION.json"
+            report.write_bytes(report_text.encode("utf-8"))
+            patches = [mock.patch.object(vp, "REPORT_PATH", report)]
+            if schema_status is not None:
+                skipped = {"status": schema_status, "reason": "test: jsonschema absent"}
+                patches.append(mock.patch.object(vp, "schema_checks", lambda: skipped))
+            for patch in patches:
+                patch.start()
+            try:
+                rc = vp.main(argv)
+            finally:
+                for patch in patches:
+                    patch.stop()
+            return rc, report.read_bytes().decode("utf-8")
+
+    def test_stale_report_fails_check(self):
+        import contextlib, io
+        stale = COMMITTED_REPORT.decode("utf-8").replace('"status": "passed"', '"status": "passed", "x": 1', 1)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc, _ = self._run_main(["--check-report"], stale)
+        self.assertEqual(rc, 1)
+
+    def test_matching_report_passes_check(self):
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc, _ = self._run_main(["--check-report"], COMMITTED_REPORT.decode("utf-8"))
+        self.assertEqual(rc, 0)
+
+    def test_missing_jsonschema_does_not_make_the_committed_report_stale(self):
+        # A host without jsonschema reports json_schema as skipped. The rest of the report must still
+        # decide the check, so the result does not depend on the host's installed packages.
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc, _ = self._run_main(["--check-report"], COMMITTED_REPORT.decode("utf-8"), schema_status="skipped")
+        self.assertEqual(rc, 0)
+
+    def test_write_refuses_to_commit_a_skipped_schema_result(self):
+        # --write-report must not store a host-dependent "skipped" result as the committed report.
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc, after = self._run_main(["--write-report"], COMMITTED_REPORT.decode("utf-8"), schema_status="skipped")
+        self.assertEqual(rc, 1)
+        self.assertEqual(after, COMMITTED_REPORT.decode("utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

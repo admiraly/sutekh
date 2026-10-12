@@ -24,6 +24,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifdef SUTEKH_NATIVE_BUILD
+#define SU_MODE_NAME "dev_native"
+#else
+#define SU_MODE_NAME "dev_checked"
+#endif
+
 #include "agent/su_agent.h"
 #include "agent/su_path.h"
 #include "agent/su_proc.h"
@@ -276,6 +282,19 @@ static void test_protocol_errors(Session *s) {
     /* Still serving after every rejection. */
     CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"info-after\",\"method\":\"engine.info\",\"params\":{}}", &r) == 0);
     CHECK_OK(r);
+    /* runtime_mode names the build (ARCHITECTURE section 7): dev_native for SUTEKH_NATIVE, else dev_checked. */
+    {
+        const char *want = "\"runtime_mode\":\"" SU_MODE_NAME "\"";
+        size_t wl = strlen(want);
+        int found = 0;
+        for (size_t i = 0; r.len >= wl && i + wl <= r.len; i++) {
+            if (memcmp(r.text + i, want, wl) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        CHECK(found);
+    }
     resp_free(&r);
 }
 
