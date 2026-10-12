@@ -96,6 +96,11 @@ typedef struct SuCommitReport {
 uint32_t su_cmdq_create(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots,
                         uint32_t per_row_struct_cap, uint32_t per_row_event_cap,
                         uint64_t per_tick_struct_cap, uint64_t per_tick_event_cap, SuCmdQ **out);
+/* Per-system caps (OD-20): per_row_*_cap has nsystems entries, each 0..64. A system whose cap is 0 gets
+ * no buffer capacity, so appends from it overflow. su_cmdq_create is the uniform-cap form of this. */
+uint32_t su_cmdq_create_ex(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots,
+                           const uint32_t *per_row_struct_cap, const uint32_t *per_row_event_cap,
+                           uint64_t per_tick_struct_cap, uint64_t per_tick_event_cap, SuCmdQ **out);
 void su_cmdq_destroy(SuCmdQ *q);
 uint64_t su_cmdq_chunk_count(const SuCmdQ *q);
 /* Clears counts and the overflow flag. Allocates nothing. */

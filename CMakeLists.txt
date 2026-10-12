@@ -179,6 +179,8 @@ add_test(NAME rts_native_diff COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/te
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # M3-04/M3-05 detectors for contract mutants M3-M20, M3-M30, M3-M35 (Python reference; M3-M18 and M3-M26 are skipped).
 add_test(NAME rts_ref_m3_mutants COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/ref/m3_control_mutants.py")
+# M3-05 replay recorder and replayer on the semantic model (T-RTS-REPLAY-1, -2 model side; -3 needs the engine).
+add_test(NAME rts_replay COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/replay/test_replay.py")
 
 add_executable(test_reload tests/reload/test_reload.c)
 target_link_libraries(test_reload PRIVATE su_agent)
@@ -410,6 +412,12 @@ target_include_directories(su_rts_control PUBLIC src include)
 add_executable(test_control_domains tests/rts/control/test_control_domains.c)
 target_link_libraries(test_control_domains PRIVATE su_rts_control)
 add_test(NAME rts_control_domains COMMAND test_control_domains WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# M3-05 (OD-20): per-system structural and event caps.
+add_executable(test_cmdq_percap tests/entities/test_cmdq_percap.c)
+target_link_libraries(test_cmdq_percap PRIVATE su_cmdq)
+target_compile_definitions(test_cmdq_percap PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_cmdq_percap)
+add_test(NAME cmdq_percap COMMAND test_cmdq_percap WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ---- BEGIN M2-00c1 world integration (entity table in su_world; snapshot 0.2) ----
 target_link_libraries(su_world PUBLIC su_ents su_ir)

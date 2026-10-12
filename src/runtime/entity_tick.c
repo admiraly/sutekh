@@ -109,12 +109,24 @@ SuEventLog *su_ent_rt_log(SuEntRt *rt) {
     return rt == NULL ? NULL : rt->log;
 }
 
+/* Per-system structural and event caps per row (OD-20, M3 contract 9.5). Only systems that use entity
+ * operations have a cap; every other system's buffers are empty. ps and pe hold s->count entries. */
+static void sys_row_caps(const SuSchedule *s, uint32_t *ps, uint32_t *pe) {
+    uint32_t i;
+
+    for (i = 0; i < s->count; i++) {
+        const SuLirModule *m = s->sys[i].mod;
+        ps[i] = m->uses_entity_ops ? m->max_struct_per_row : 0u;
+        pe[i] = m->uses_entity_ops ? m->max_events_per_row : 0u;
+    }
+}
+
 /* Admission check (contract B8): the command and event buffers a tick over rows slots would allocate, summed
- * over every (system, chunk) exactly as su_cmdq_create sizes them, must fit SU_CMDQ_MAX_ENTRIES per class.
+ * over every (system, chunk) exactly as su_cmdq_create_ex sizes them, must fit SU_CMDQ_MAX_ENTRIES per class.
  * Returns SU_E_RESOURCE_LIMIT otherwise; nothing is allocated. */
 uint32_t su_ent_budget(const SuSchedule *s, uint64_t rows, uint64_t max_struct_tick, uint64_t max_events_tick) {
-    uint64_t per_s = 0;
-    uint64_t per_e = 0;
+    uint32_t ps[SU_SCHED_MAX_SYSTEMS];
+    uint32_t pe[SU_SCHED_MAX_SYSTEMS];
     uint64_t nchunks;
     uint64_t c;
     uint64_t total_s = 0;
@@ -124,30 +136,20 @@ uint32_t su_ent_budget(const SuSchedule *s, uint64_t rows, uint64_t max_struct_t
     if (s == NULL) {
         return SU_E_INVALID_ARGUMENT;
     }
-    for (i = 0; i < s->count; i++) {
-        const SuLirModule *m = s->sys[i].mod;
-        if (m->uses_entity_ops) {
-            if (m->max_struct_per_row > per_s) {
-                per_s = m->max_struct_per_row;
-            }
-            if (m->max_events_per_row > per_e) {
-                per_e = m->max_events_per_row;
-            }
-        }
-    }
     if (s->count == 0u || rows == 0u) {
         return SU_OK;
     }
+    sys_row_caps(s, ps, pe);
     nchunks = (rows + SU_CHUNK_SLOTS - 1u) / SU_CHUNK_SLOTS;
-    for (c = 0; c < nchunks; c++) {
-        uint64_t size = rows - c * SU_CHUNK_SLOTS < SU_CHUNK_SLOTS ? rows - c * SU_CHUNK_SLOTS : SU_CHUNK_SLOTS;
-        uint64_t cs = size * per_s < max_struct_tick ? size * per_s : max_struct_tick;
-        uint64_t ce = size * per_e < max_events_tick ? size * per_e : max_events_tick;
-        total_s += cs;
-        total_e += ce;
+    for (i = 0; i < s->count; i++) {
+        for (c = 0; c < nchunks; c++) {
+            uint64_t size = rows - c * SU_CHUNK_SLOTS < SU_CHUNK_SLOTS ? rows - c * SU_CHUNK_SLOTS : SU_CHUNK_SLOTS;
+            uint64_t cs = size * ps[i] < max_struct_tick ? size * ps[i] : max_struct_tick;
+            uint64_t ce = size * pe[i] < max_events_tick ? size * pe[i] : max_events_tick;
+            total_s += cs;
+            total_e += ce;
+        }
     }
-    total_s *= s->count;
-    total_e *= s->count;
     if (total_s > SU_CMDQ_MAX_ENTRIES || total_e > SU_CMDQ_MAX_ENTRIES) {
         return SU_E_RESOURCE_LIMIT;
     }
@@ -458,8 +460,8 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
     uint64_t rows;
     uint64_t chunks;
     uint64_t t;
-    uint32_t per_s = 0u;
-    uint32_t per_e = 0u;
+    uint32_t ps[SU_SCHED_MAX_SYSTEMS];
+    uint32_t pe[SU_SCHED_MAX_SYSTEMS];
     uint32_t wk = 1u;
     uint32_t i;
     uint32_t st = SU_OK;
@@ -480,19 +482,9 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
     if (ticks == 0u) {
         return SU_OK;
     }
-    for (i = 0; i < s->count; i++) {
-        const SuLirModule *m = s->sys[i].mod;
-        if (m->uses_entity_ops) {
-            if (m->max_struct_per_row > per_s) {
-                per_s = m->max_struct_per_row;
-            }
-            if (m->max_events_per_row > per_e) {
-                per_e = m->max_events_per_row;
-            }
-        }
-    }
-    st = su_cmdq_create(s->count, rows, SU_CHUNK_SLOTS, per_s, per_e, rt->max_struct_tick,
-                        rt->max_events_tick, &q);
+    sys_row_caps(s, ps, pe);
+    st = su_cmdq_create_ex(s->count, rows, SU_CHUNK_SLOTS, ps, pe, rt->max_struct_tick,
+                           rt->max_events_tick, &q);
     if (st != SU_OK) {
         return st;
     }
