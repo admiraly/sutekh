@@ -19,6 +19,7 @@ if _REF not in sys.path:
 
 import rts_replay as rr  # noqa: E402
 import spawn_batch_limits as limits  # noqa: E402
+import model  # noqa: E402
 from model import ModelError  # noqa: E402
 
 CAP = 64
@@ -283,15 +284,28 @@ class BatchLimits(unittest.TestCase):
                                    high_water=limits.HW_MAX - 1)
 
     def test_worst_case_request_fits_the_cap(self):
-        # D6 / C (F4): 1,024 rows with every field and external_id at 10 digits, compact JSON,
-        # is 948,225 bytes, under the 1 MiB cap. Rebuilt here from the field names and widths.
-        row_fields = ("kind", "team", "hp", "pos_x", "pos_y", "speed", "range_sq", "reload",
-                      "damage", "flight", "order_mode", "order_x", "order_y", "formation_slot",
-                      "formation_gen", "formation_ox", "formation_oy")
-        row = {"values": {name: 4294967295 for name in row_fields}, "external_id": 4294967295}
-        size = len(rr.canonical_json(row).encode("ascii"))
-        self.assertLessEqual(size * limits.ROWS_MAX, 948225 + 1024)
-        self.assertLess(size * limits.ROWS_MAX, limits.REQUEST_BYTES_MAX)
+        # D6 / C (F4): 1,024 rows, every one of the 39 model fields plus external_id at 10 digits,
+        # wrapped as the model sees it (canonical JSON of the whole command), must pass the cap.
+        names = model.FIELD_NAMES
+        self.assertEqual(len(names), 39)
+        row = {"values": {name: 4294967295 for name in names}, "external_id": 4294967295}
+        request = rr.canonical_json({"cmd": rr.CMD_SPAWN_BATCH, "args": {"rows": [row] * limits.ROWS_MAX}})
+        size = len(request.encode("ascii"))
+        self.assertLessEqual(size, limits.REQUEST_BYTES_MAX)
+        limits.check_request_size(request.encode("ascii"))
+
+    def test_request_size_boundary_is_exact(self):
+        limits.check_request_size(b"x" * limits.REQUEST_BYTES_MAX)
+        with self.assertRaises(limits.BatchRefused):
+            limits.check_request_size(b"x" * (limits.REQUEST_BYTES_MAX + 1))
+
+    def test_high_water_exact_boundary_is_accepted(self):
+        limits.check_prechecks(rows=2, capacity=1000000, alive=0, high_water=limits.HW_MAX - 2)
+        with self.assertRaises(limits.BatchRefused):
+            limits.check_prechecks(rows=3, capacity=1000000, alive=0, high_water=limits.HW_MAX - 2)
+
+    def test_full_capacity_batch_is_accepted(self):
+        limits.check_prechecks(rows=4, capacity=10, alive=6, high_water=10)
 
 
 if __name__ == "__main__":
