@@ -13,6 +13,7 @@
 #endif
 
 #include "backends/native/su_native.h"
+#include "runtime/jobs/su_jobs.h"
 #include "sutekh/abi.h"
 #include "sutekh/native/abi.h"
 #include "sutekh/status.h"
@@ -43,6 +44,21 @@ struct SuNvArtifact {
     uint32_t cur_offset;
 };
 static SuNvArtifact *find(uint64_t seq);
+
+/* What the RELEASE_IN_CALL seam saw right after its release (test introspection, always compiled). */
+static struct {
+    uint32_t fired;
+    uint32_t state;
+    uint32_t inflight;
+    uint32_t live;
+} g_obs;
+
+void su_nv_test_release_observation(uint32_t *fired, uint32_t *state, uint32_t *inflight, uint32_t *live) {
+    *fired = g_obs.fired;
+    *state = g_obs.state;
+    *inflight = g_obs.inflight;
+    *live = g_obs.live;
+}
 
 #ifdef SU_TEST_FAULT_HOOKS
 static uint32_t g_fault_mode = SU_NV_FAULT_NONE;
@@ -562,6 +578,19 @@ static uint32_t run_bound(SuNvArtifact *a, SuWorld *w) {
     outs.reserved = 0u;
     outs.bindings = a->scr_out;
 
+#ifdef SU_TEST_FAULT_HOOKS
+    if (g_fault_mode == SU_NV_FAULT_RELEASE_IN_CALL) {
+        /* One shot: retire this artifact from inside its own kernel call (su_nv_run_system has already
+         * counted this call in flight). The observation is read through the handle API, so it stays
+         * valid even if a broken release freed the artifact. */
+        g_fault_mode = SU_NV_FAULT_NONE;
+        su_nv_release(a->seq);
+        g_obs.fired = 1u;
+        g_obs.state = su_nv_state(a->seq);
+        g_obs.inflight = su_nv_inflight(a->seq);
+        g_obs.live = su_nv_live_count();
+    }
+#endif
     NV_FAULT_BEFORE();
     st = su_native_run_checked(a->art, &inv, &outs);
 #ifdef SU_TEST_FAULT_HOOKS
@@ -591,6 +620,202 @@ uint32_t su_nv_run_system(uint64_t seq, SuWorld *w) {
     a->inflight++;
     st = run_bound(a, w);
     a->inflight--;
+    if (a->state == SU_NV_STATE_RETIRING && a->inflight == 0u) {
+        unregister_and_free(a);
+    }
+    return st;
+}
+
+/* ---- chunked native execution (M1 closure C) ----------------------------------------------------
+ * A system is row-independent (row r reads row r of its working columns and writes row r of its
+ * staging columns), so the rows split into the canonical chunks of su_jobs (boundaries depend only on
+ * the row count). Each chunk runs the same native kernel over SLICED column views: every binding data
+ * pointer advances by the chunk's first row and row_count is the chunk length. Chunks write disjoint
+ * staging ranges and read only working columns, so they may run concurrently on one artifact (the
+ * kernel keeps all state in its arguments and its frame). The commit happens once, after every chunk
+ * returned SU_OK; a failure leaves the committed state untouched (the caller aborts the tick). */
+typedef struct NvChunkJob {
+    const SuNvArtifact *a;
+    uint64_t rows;
+    uint64_t chunk_rows;
+    uint32_t layout_generation;
+    uint32_t nin;
+    uint32_t nout;
+    const SuColumnBinding *base_in;  /* nin whole-table views */
+    const SuColumnBinding *base_out; /* nout whole-table views */
+    SuColumnBinding *scr_in;         /* workers * nin slice entries */
+    SuColumnBinding *scr_out;        /* workers * nout slice entries */
+    uint32_t *status;                /* one per chunk */
+    SuJobsFault fault;
+    void *fault_ctx;
+} NvChunkJob;
+
+static void nv_slice(const SuColumnBinding *src, SuColumnBinding *dst, uint64_t begin, uint64_t len) {
+    *dst = *src;
+    dst->data = (uint8_t *)src->data + begin * sizeof(uint32_t);
+    dst->row_count = len;
+}
+
+static void nv_chunk_task(uint32_t chunk, uint32_t worker, void *argp) {
+    NvChunkJob *j = argp;
+    SuColumnBinding *si = j->scr_in + (size_t)worker * j->nin;
+    SuColumnBinding *so = j->scr_out + (size_t)worker * j->nout;
+    SuInvocation inv;
+    SuOutputs outs;
+    uint64_t begin = 0;
+    uint64_t len = 0;
+    uint32_t i;
+
+    if (j->fault != NULL && j->fault(chunk, j->fault_ctx) != 0) {
+        j->status[chunk] = SU_E_CANDIDATE_FAILED;
+        return;
+    }
+    (void)su_jobs_chunk_bounds(j->rows, j->chunk_rows, chunk, &begin, &len);
+    for (i = 0; i < j->nin; i++) {
+        nv_slice(&j->base_in[i], &si[i], begin, len);
+    }
+    for (i = 0; i < j->nout; i++) {
+        nv_slice(&j->base_out[i], &so[i], begin, len);
+    }
+    inv.struct_size = (uint32_t)sizeof inv;
+    inv.abi_version = SU_ABI_VERSION;
+    inv.layout_generation = j->layout_generation;
+    inv.binding_count = j->nin;
+    inv.row_count = len;
+    inv.bindings = si;
+    outs.struct_size = (uint32_t)sizeof outs;
+    outs.binding_count = j->nout;
+    outs.failed_insn = UINT32_MAX;
+    outs.reserved = 0u;
+    outs.bindings = so;
+    NV_FAULT_BEFORE();
+    j->status[chunk] = su_native_run_checked(j->a->art, &inv, &outs);
+}
+
+uint32_t su_nv_run_system_chunked(uint64_t seq, SuWorld *w, uint32_t workers, SuJobsFault fault, void *fault_ctx) {
+    SuNvArtifact *a = find(seq);
+    SuInvocation wi;
+    SuOutputs wo;
+    NvChunkJob job;
+    SuJobPool *pool = NULL;
+    SuColumnBinding *base_in = NULL;
+    SuColumnBinding *base_out = NULL;
+    SuColumnBinding *scr_in = NULL;
+    SuColumnBinding *scr_out = NULL;
+    uint32_t *status = NULL;
+    uint64_t rows;
+    uint64_t n_chunks;
+    uint64_t k;
+    uint32_t nin = 0;
+    uint32_t nout = 0;
+    uint32_t i;
+    uint32_t st;
+    uint32_t pst;
+
+    if (a == NULL || w == NULL || a->state != SU_NV_STATE_INSTALLED || workers == 0u || workers > SU_JOBS_MAX_WORKERS) {
+        return a == NULL || a->state != SU_NV_STATE_INSTALLED ? SU_E_INTERNAL : SU_E_INVALID_ARGUMENT;
+    }
+    if (workers == 1u) {
+        return su_nv_run_system(seq, w);
+    }
+#ifdef SU_TEST_FAULT_HOOKS
+    if (g_native_crash_tick != 0u && su_world_tick(w) + 1u == g_native_crash_tick &&
+        (g_native_crash_backend == 0u || g_native_crash_backend == a->backend_id)) {
+        signal(SIGSEGV, SIG_DFL);
+        raise(SIGSEGV);
+    }
+#endif
+    st = su_world_build_invocation(w, &wi);
+    if (st == SU_OK) {
+        st = su_world_build_outputs(w, &wo);
+    }
+    if (st != SU_OK) {
+        return st;
+    }
+    rows = wi.row_count;
+    base_in = calloc(a->mod->field_count > 0u ? a->mod->field_count : 1u, sizeof *base_in);
+    base_out = calloc(a->mod->field_count > 0u ? a->mod->field_count : 1u, sizeof *base_out);
+    if (base_in == NULL || base_out == NULL) {
+        st = SU_E_RESOURCE_LIMIT;
+        goto done;
+    }
+    /* Same field selection as run_bound: read fields in table order, then write fields. */
+    for (i = 0; i < a->mod->field_count && st == SU_OK; i++) {
+        uint32_t acc = a->mod->fields[i].access;
+        uint32_t id = a->mod->fields[i].id;
+        uint32_t j2;
+        int found = 0;
+        if ((acc & SU_ACCESS_READ) != 0u) {
+            for (j2 = 0; j2 < wi.binding_count && !found; j2++) {
+                if (wi.bindings[j2].field_id == id) {
+                    base_in[nin++] = wi.bindings[j2];
+                    found = 1;
+                }
+            }
+            st = found ? SU_OK : SU_E_SCHEMA_MISMATCH;
+        }
+        found = 0;
+        if (st == SU_OK && (acc & SU_ACCESS_WRITE) != 0u) {
+            for (j2 = 0; j2 < wo.binding_count && !found; j2++) {
+                if (wo.bindings[j2].field_id == id) {
+                    base_out[nout++] = wo.bindings[j2];
+                    found = 1;
+                }
+            }
+            st = found ? SU_OK : SU_E_SCHEMA_MISMATCH;
+        }
+    }
+    if (st != SU_OK) {
+        goto done;
+    }
+    job.a = a;
+    job.rows = rows;
+    job.chunk_rows = su_jobs_effective_chunk_rows(rows, 0u);
+    job.layout_generation = wi.layout_generation;
+    job.nin = nin;
+    job.nout = nout;
+    job.base_in = base_in;
+    job.base_out = base_out;
+    job.fault = fault;
+    job.fault_ctx = fault_ctx;
+    n_chunks = su_jobs_chunk_count(rows, job.chunk_rows);
+    if (n_chunks == 0u || n_chunks > UINT32_MAX) {
+        st = n_chunks == 0u ? SU_OK : SU_E_RESOURCE_LIMIT;
+        goto done;
+    }
+    status = calloc((size_t)n_chunks, sizeof *status);
+    scr_in = calloc((size_t)workers * (nin > 0u ? nin : 1u), sizeof *scr_in);
+    scr_out = calloc((size_t)workers * (nout > 0u ? nout : 1u), sizeof *scr_out);
+    if (status == NULL || scr_in == NULL || scr_out == NULL) {
+        st = SU_E_RESOURCE_LIMIT;
+        goto done;
+    }
+    job.status = status;
+    job.scr_in = scr_in;
+    job.scr_out = scr_out;
+    st = su_jobs_pool_create(workers, &pool);
+    if (st != SU_OK) {
+        goto done;
+    }
+    a->inflight++;
+    su_jobs_pool_run(pool, (uint32_t)n_chunks, nv_chunk_task, &job, NULL, NULL);
+    a->inflight--;
+    su_jobs_pool_destroy(pool);
+    /* Lowest failing chunk decides the status (independent of completion order). Nothing commits. */
+    pst = SU_OK;
+    for (k = 0; k < n_chunks && pst == SU_OK; k++) {
+        pst = status[k];
+    }
+    st = pst;
+    if (st == SU_OK) {
+        st = su_world_commit_staging(w, a->write_ids, nout);
+    }
+done:
+    free(base_in);
+    free(base_out);
+    free(scr_in);
+    free(scr_out);
+    free(status);
     if (a->state == SU_NV_STATE_RETIRING && a->inflight == 0u) {
         unregister_and_free(a);
     }

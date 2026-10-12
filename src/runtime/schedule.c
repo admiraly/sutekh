@@ -218,7 +218,9 @@ uint32_t su_sched_check_candidate(const SuSchedule *s, const SuLirModule *m, uin
 static uint32_t run_one_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt) {
 #ifdef SU_HAVE_NATIVE
     if (s->sys[i].native_seq != 0u) {
-        /* Native kernels run as one call over the whole range (see SuSchedTickOpts). */
+        if (opt != NULL && opt->workers > 1u && su_world_row_count(w) >= opt->chunk_min_rows) {
+            return su_nv_run_system_chunked(s->sys[i].native_seq, w, opt->workers, opt->chunk_fault, opt->chunk_ctx);
+        }
         return su_nv_run_system(s->sys[i].native_seq, w);
     }
 #endif

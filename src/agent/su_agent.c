@@ -1526,6 +1526,18 @@ static QRec *quar_find(SuAgent *a, const char *hash) {
     return NULL;
 }
 
+#ifdef SU_TEST_FAULT_HOOKS
+/* Test-only (M1 closure C): 1 when a table holding one record for record_hash finds query_hash. Two
+ * distinct artifact hashes must never match, however long their common prefix. */
+int su_agent_test_quar_hit(const char *record_hash, const char *query_hash) {
+    static SuAgent a;
+    memset(&a, 0, sizeof a);
+    a.quar[0].used = 1;
+    snprintf(a.quar[0].artifact_hash, sizeof a.quar[0].artifact_hash, "%s", record_hash);
+    return quar_find(&a, query_hash) != NULL;
+}
+#endif
+
 /* Records one attributed crash of n's artifact. 0 when the table is full: then the artifact cannot be
  * recorded, and quar_overflow refuses every native specialization (no crash loop is possible). */
 static int quar_note(SuAgent *a, const AgentWorld *w, const NatRec *n, uint64_t old_pid, uint64_t tick,
@@ -2384,6 +2396,7 @@ static void relay(SuBuf *res, const SuBuf *resp, AgentCall *c) {
 /* Relays a successful worker envelope {"protocol":..,"id":..,"ok":true,"result":{..}} with a
  * "containment" member added to its result object. The result object is the envelope's last member,
  * so the envelope ends in "}}"; those two closing braces are replaced. Other answers relay unchanged. */
+#ifdef SU_HAVE_NATIVE
 static void relay_with_containment(SuBuf *res, const SuBuf *resp, int ok, const SuProcContainment *ct,
                                    AgentCall *c) {
     if (!ok || resp->len < 3u || resp->data[resp->len - 1u] != '}' || resp->data[resp->len - 2u] != '}') {
@@ -2396,6 +2409,7 @@ static void relay_with_containment(SuBuf *res, const SuBuf *resp, int ok, const 
     su_buf_str(res, "}}");
     c->relay = 1;
 }
+#endif
 
 /* A call that must find its world: unknown ids and unrecoverable worlds are answered here. */
 static uint32_t world_for_call(SuAgent *a, const char *id, AgentWorld **out, AgentCall *c) {
