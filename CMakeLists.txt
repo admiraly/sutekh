@@ -352,6 +352,13 @@ sutekh_apply_warnings(test_world_ents)
 add_test(NAME world_entities COMMAND test_world_ents WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # ---- END M2-00c1 world integration ----
 
+# ---- BEGIN M2-00c3b world churn (100,000 spawn/despawn operations against a model) ----
+add_executable(test_churn tests/entities/test_churn.c)
+target_link_libraries(test_churn PRIVATE su_world)
+sutekh_apply_warnings(test_churn)
+add_test(NAME churn COMMAND test_churn WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# ---- END M2-00c3b world churn ----
+
 # ---- BEGIN M2-00c3 entity tick integration (runtime/entity_tick.c over runtime/schedule.c) ----
 add_executable(test_entity_tick tests/entities/test_entity_tick.c)
 target_link_libraries(test_entity_tick PRIVATE su_agent su_world su_cmdq su_ents)

@@ -416,3 +416,50 @@ core files, and for disposable children CPU time.
 - Non-x86-64 Linux: no seccomp filters and no self-sandbox (the network namespace fallback applies to networking only).
 - Windows: not implemented.
 
+## 15. Entity control plane (M2-00c3b; contract `planning/contracts/M2_ENTITIES_CONTRACT.md` r2, r2.1)
+
+Every world created by `world.create` owns an entity table and a bounded event log. The methods below are
+advertised in `engine.info` (`capabilities`) and are the only entity methods implemented. All of them are
+recorded in the supervisor's replay log where they mutate state (section 8).
+
+- **Handles.** An entity handle is the JSON integer `(generation << 32) | slot`, a u64. The engine reads
+  integers exactly up to u64 (`su_json_get_uint`), so a handle round-trips without loss. Clients whose JSON
+  numbers are IEEE doubles lose precision above 2^53 (generation 2^21 and up) and must parse integers as
+  big integers. Generation 0 is always stale, and so is any handle whose slot is out of range, dead, retired
+  or whose generation differs from the stored one. Stale handles are `SU_E_STALE_HANDLE` (21).
+- **`world.create`** accepts, in addition to the M0 keys, optional `max_entities` (0..1,000,000, default 0:
+  capacity = fixture rows), `max_struct_per_tick` (1..1,048,576, default 4096), `max_events_per_tick`
+  (1..1,048,576, default 4096) and `event_log_max` (1..1,048,576, default 65536). Non-integers are
+  `SU_E_TYPE` (the supervisor checks the type, the worker the range: `SU_E_RESOURCE_LIMIT`). The capacity is
+  `max(rows, max_entities)`.
+- **`world.spawn`** `{world_id, expected_world_revision, values: {<field>: u32}, external_id?: u32}` ->
+  `{world_id, world_revision, entity, slot, generation}`. The slot is the lowest free slot (not alive, not
+  retired); unset fields are 0. Unknown field: `SU_E_SCHEMA_MISMATCH`. No free slot: `SU_E_RESOURCE_LIMIT`.
+  Emits an `SU_EVENT_SPAWNED` record (`a` = slot, `b` = generation). The values object of a spawn is kept
+  in the replay log (1 KiB limit: larger objects are `SU_E_RESOURCE_LIMIT`).
+- **`world.despawn`** `{world_id, expected_world_revision, entity}` -> `{world_id, world_revision, entity}`.
+  Emits `SU_EVENT_DESPAWNED` (`a` = slot, `b` = old generation). The stored generation advances; at
+  generation 0xFFFFFFFE the slot is retired and never reissued.
+- **`events.read`** `{world_id, cursor, max: 1..256}` -> `{world_id, events: [{event_seq, tick, kind,
+  system_index, slot, seq, a, b}], next_cursor, skipped, dropped}`. `cursor` is an `event_seq`. A cursor below
+  the oldest retained record starts at the oldest one and reports `skipped`. A cursor above the next sequence
+  is `SU_E_INVALID_ARGUMENT`. `max` outside 1..256 is `SU_E_TYPE` at the supervisor. Control-plane records
+  have `system_index` 4294967295 (`SU_SYSTEM_INDEX_HOST`), `seq` 0. IR records use the VM's per-row sequence,
+  shared by `despawn_self` and `emit_event`; a row's records follow instruction order. Refused IR despawns are
+  `SU_EVENT_REJECTED` (`a` = struct kind 1, `b` = status).
+- **`world.inspect`** always adds `entities: {capacity, alive, retired, high_water}`. With `entity` (a handle)
+  it adds `entity: {handle, slot, generation, external_id, values{field: u32}}` for a live entity; a stale
+  handle is `SU_E_STALE_HANDLE`. Columns and `entity_ids` still cover the fixture's initial rows (`row_count`);
+  a spawned row is read with `entity`.
+- **`world.snapshot` / `world.restore`** use snapshot format 0.2: the entity table and the event log (next
+  sequence, dropped count, retained records) are part of the canonical bytes and the restore rebuilds both.
+  The per-tick caps stay those of the world being restored.
+- **`world.step`** on an entity world runs IR 0.2 systems with despawn and event records. A tick whose
+  records exceed a cap (per-tick structs, per-tick events, per-row or buffer) fails with
+  `SU_E_RESOURCE_LIMIT` and changes nothing (columns, entity table, log, revision).
+- **Worker counts.** `SUTEKH_TICK_WORKERS=N` (section 12) does not change any output: the canonical state
+  (`world.snapshot` `sha256`) is equal for every N.
+- **Fixtures.** `tests/fixtures/entities/`: `actors_3.json` (world), `despawn_move` (IR 0.2 movement with
+  despawn_self and emit_event), `guard` (second system ordered after movement; its despawn of an already
+  despawned row is refused), `emit_then_despawn` (the emit precedes the despawn in one row).
+

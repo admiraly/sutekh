@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import copy
 import datetime
 import hashlib
 import importlib.util
@@ -765,6 +766,25 @@ ENGINE_METHODS["world.close"] = {
               "world_id: SU_E_INVALID_ARGUMENT)",
     "result": "world_id, closed (true), released{snapshots, systems}",
     "source": "src/agent/su_agent.c h_world_close, src/runtime/worker.c h_world_close",
+}
+
+# M2-00c3b entity control plane (src/agent/su_agent.c h_world_spawn/h_world_despawn/h_events_read; worker.c).
+# Handles are JSON integers (u64, exact in the engine reader); entity = (generation << 32) | slot.
+ENGINE_METHODS["world.spawn"] = {
+    "params": "{world_id, expected_world_revision, values: {field: u32}, external_id?: u32}",
+    "result": "world_id, world_revision, entity, slot, generation",
+    "source": "src/agent/su_agent.c h_world_spawn, src/runtime/worker.c h_world_spawn",
+}
+ENGINE_METHODS["world.despawn"] = {
+    "params": "{world_id, expected_world_revision, entity}  (stale handle: SU_E_STALE_HANDLE)",
+    "result": "world_id, world_revision, entity",
+    "source": "src/agent/su_agent.c h_world_despawn, src/runtime/worker.c h_world_despawn",
+}
+ENGINE_METHODS["events.read"] = {
+    "params": "{world_id, cursor, max: 1..256}  (cursor above next_seq: SU_E_INVALID_ARGUMENT)",
+    "result": "world_id, events[{event_seq, tick, kind, system_index, slot, seq, a, b}], next_cursor, skipped, "
+              "dropped",
+    "source": "src/agent/su_agent.c h_events_read, src/runtime/worker.c h_events_read",
 }
 
 INSPECT_PAGE = 256            # engine maximum for world.inspect limit
@@ -3127,6 +3147,352 @@ def tx6(t: TestCtx):
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+# ---- M2-00c3b entities: TX7 (spawn/despawn/stale handles/events vs model) and TX8 (IR 0.2 tick-worker
+# equality at N=1,2,4 vs model). Expected values come only from tests/harness/reference_eval.py
+# (EntityWorld), derived from the contract; the engine is never used to produce them.
+ENT_DIR = "tests/fixtures/entities"
+ENT_CAP_MOVE = f"{ENT_DIR}/despawn_move.capsule.json"
+ENT_CAP_GUARD = f"{ENT_DIR}/guard.capsule.json"
+ENT_CAP_EMIT = f"{ENT_DIR}/emit_then_despawn.capsule.json"
+ENT_ACTORS = f"{ENT_DIR}/actors_3.json"
+ENT_EVENT_KEYS = ("event_seq", "tick", "kind", "system_index", "slot", "seq", "a", "b")
+ENT_TX8_ROWS = 3000              # spans three storage chunks (1024 slots each)
+ENT_TX8_CAPACITY = 4096
+ENT_TX8_TICKS = 4
+ENT_TX8_WORKERS = (1, 2, 4)
+
+
+def ent_systems(t: "TestCtx", rels) -> list:
+    """(program, capsule) pairs in schedule order, from the capsule files and their sources."""
+    out = []
+    for rel in rels:
+        cap, lir, _src = t.load_system(rel)
+        out.append((lir, cap))
+    return out
+
+
+def write_entity_fixture(path: str, ids, pos, vel) -> None:
+    doc = {"fixture_format": "0.1", "schema_id": "demo.actor", "schema_version": 1, "tick": 0,
+           "entity_ids": list(ids), "columns": {"position_x": list(pos), "velocity_x": list(vel)}}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, separators=(",", ":"))
+
+
+def ent_event_mismatches(engine_events, model_events) -> list:
+    """Engine events.read records against the model's retained records, field by field."""
+    out = []
+    if not isinstance(engine_events, list) or len(engine_events) != len(model_events):
+        n = len(engine_events) if isinstance(engine_events, list) else repr(engine_events)
+        return [f"event count: expected {len(model_events)} actual {n}"]
+    for i, (got, want) in enumerate(zip(engine_events, model_events)):
+        for key in ENT_EVENT_KEYS:
+            if got.get(key) != want.get(key):
+                out.append(f"event[{i}].{key}: expected {want.get(key)} actual {got.get(key)}")
+                if len(out) >= 20:
+                    return out
+    return out
+
+
+def ent_seq_continuity_mismatches(events) -> list:
+    """event_seq must count up by one with no gap or repeat (a page or a whole log)."""
+    seqs = [e.get("event_seq") for e in events]
+    for i in range(1, len(seqs)):
+        if seqs[i] != seqs[i - 1] + 1:
+            return [f"event_seq gap or repeat at index {i}: {seqs[i - 1]} -> {seqs[i]}"]
+    return []
+
+
+def ent_columns_mismatches(model_cols: dict, rows: int, engine_cols) -> list:
+    """Initial rows [0, rows) of every field against the model's columns."""
+    if not isinstance(engine_cols, dict):
+        return ["columns missing from world.inspect"]
+    out = []
+    for name, values in model_cols.items():
+        got = engine_cols.get(name)
+        if got != values[:rows]:
+            out.append(f"column {name}: expected {values[:rows][:8]}... actual {(got or [])[:8]}...")
+    return out
+
+
+def ent_entities_mismatches(model_table, entities) -> list:
+    """world.inspect entities object against the model's table counts."""
+    want = {"capacity": model_table.capacity, "alive": model_table.alive_count(),
+            "retired": model_table.retired_count(), "high_water": model_table.high_water}
+    if entities != want:
+        return [f"entities: expected {want} actual {entities}"]
+    return []
+
+
+def ent_inspect_all(t, sess, wid, fields, rows) -> dict:
+    """Every initial row through world.inspect paging; keeps the counts from the last page."""
+    cols = {f: [] for f in fields}
+    off = 0
+    last = None
+    while off < rows:
+        res = call(t, sess, "world.inspect", {"world_id": wid, "fields": list(fields),
+                                              "limit": INSPECT_PAGE, "offset": off})
+        n = res.get("returned_rows")
+        if type(n) is not int or n <= 0:
+            raise Failed(f"world.inspect returned no rows at offset {off}")
+        for f in fields:
+            cols[f].extend(res["columns"][f])
+        off += n
+        last = res
+    return {"columns": cols, "entities": (last or {}).get("entities"), "tick": (last or {}).get("tick"),
+            "world_revision": (last or {}).get("world_revision")}
+
+
+def ent_events_all(t, sess, wid) -> list:
+    """events.read from cursor 0 in pages of 256 until a page is empty."""
+    out = []
+    cursor = 0
+    while True:
+        res = call(t, sess, "events.read", {"world_id": wid, "cursor": cursor, "max": 256})
+        if not res.get("events"):
+            break
+        out.extend(res["events"])
+        cursor = res["next_cursor"]
+    return out
+
+
+def ent_model_events(model, start: int = 0) -> list:
+    """Every retained model record from cursor start, paged like the engine (no records are skipped here)."""
+    return model.ring.read(start, max(1, len(model.ring.records)))["events"]
+
+
+def ent_check_state(t, sess, wid, model, label: str, rows_fields=("position_x", "velocity_x")) -> None:
+    """Compares columns of the initial rows, entity counts, and the whole event log with the model."""
+    ins = ent_inspect_all(t, sess, wid, rows_fields, model.initial_rows)
+    t.check_mismatches(f"{label}: columns of the initial rows match the model",
+                       ent_columns_mismatches(model.cols, model.initial_rows, ins["columns"]))
+    t.check_mismatches(f"{label}: entity table counts match the model",
+                       ent_entities_mismatches(model.table, ins["entities"]))
+    evs = ent_events_all(t, sess, wid)
+    t.check_mismatches(f"{label}: events.read equals the model log", ent_event_mismatches(evs, ent_model_events(model)))
+    t.check_mismatches(f"{label}: events are contiguous", ent_seq_continuity_mismatches(evs))
+
+
+def _ent_probe(t, sess, method, params, label, code):
+    """A request that must be refused with exactly code; the envelope is classified."""
+    env = sess.request(method, params)
+    t.check_mismatches(label, classify_error(env, code))
+
+
+def tx7(t: TestCtx):
+    """Entities through the real binary (extra check; not a TEST_SPEC id): spawn and despawn between ticks,
+    lowest-slot reuse and generation bumps, stale handles (generation 0, out of range, wrong generation, zero),
+    IR 0.2 despawn_self and emit_event end to end, the bounded event log (wrap, skipped), a cap overflow that
+    leaves the world unchanged, a crash of the active worker with spawn and despawn history, snapshot and
+    restore across churn, and world.close. Every answer is compared with reference_eval.EntityWorld."""
+    systems_rels = [ENT_CAP_MOVE, ENT_CAP_GUARD]
+    systems = ent_systems(t, systems_rels)
+    fx = t.load(ENT_ACTORS)
+    fx_rel = ENT_ACTORS
+    cap0 = t.load(ENT_CAP_MOVE)
+    sess = t.session("TX7 serve")
+    res = call(t, sess, "world.create", {"fixture_path": fx_rel, "capsule_paths": systems_rels, "max_entities": 8})
+    wid, rev = res["world_id"], res["world_revision"]
+    model = ref.EntityWorld(cap0["fields"], fx["columns"], fx["entity_ids"], 8, 4096, 4096, 65536)
+    model.initial_rows = len(fx["entity_ids"])
+    ent_check_state(t, sess, wid, model, "TX7 initial")
+
+    # Spawn between ticks: explicit values with an external id, then defaults (zero) without one.
+    res = call(t, sess, "world.spawn", {"world_id": wid, "expected_world_revision": rev,
+                                       "values": {"position_x": 4, "velocity_x": 0}, "external_id": 7})
+    h = model.spawn({"position_x": 4, "velocity_x": 0}, 7)
+    t.check("TX7 spawn: handle equals the model", h, res["entity"])
+    t.check("TX7 spawn: slot 3, generation 1", (3, 1), (res["slot"], res["generation"]))
+    rev = res["world_revision"]
+    res = call(t, sess, "world.spawn", {"world_id": wid, "expected_world_revision": rev, "values": {}})
+    h2 = model.spawn({})
+    t.check("TX7 spawn with no values: handle equals the model", h2, res["entity"])
+    rev = res["world_revision"]
+
+    # Refusals leave the state unchanged. Handles: generation 0, out of range, wrong generation, zero.
+    before = ent_inspect_all(t, sess, wid, ("position_x",), 3)["entities"]
+    for label, handle in (("generation 0 with slot 1", 1), ("slot out of range", (1 << 32) | 99),
+                          ("wrong generation for slot 0", (2 << 32) | 0), ("zero handle", 0)):
+        _ent_probe(t, sess, "world.despawn", {"world_id": wid, "expected_world_revision": rev, "entity": handle},
+                   f"TX7 stale {label} refused with SU_E_STALE_HANDLE", "SU_E_STALE_HANDLE")
+        try:
+            model.despawn(handle)
+            raise Failed(f"model accepted stale handle {handle}")
+        except ref.EntityError as exc:
+            t.check(f"TX7 model agrees: {label} is stale", ref.STATUS_STALE, exc.status)
+    t.check_mismatches("TX7 refused despawns left the entity table unchanged",
+                       ent_entities_mismatches(model.table, ent_inspect_all(t, sess, wid, ("position_x",), 3)["entities"]))
+    t.check("TX7 refused despawns left the entity counts unchanged", before, ent_inspect_all(
+        t, sess, wid, ("position_x",), 3)["entities"])
+    ins = call(t, sess, "world.inspect", {"world_id": wid, "entity": 4294967297})
+    t.check("TX7 inspect of a live fixture row returns its handle", 4294967297, ins["entity"]["handle"])
+    t.check("TX7 inspect of a live fixture row returns its values",
+            {"position_x": model.cols["position_x"][1], "velocity_x": model.cols["velocity_x"][1]},
+            ins["entity"]["values"])
+
+    # Step: row 0 (position 0, velocity 1) despawns at tick 1 and its emit follows the despawn record.
+    res = call(t, sess, "world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": 3})
+    model.tick_systems(systems, 3)
+    rev = res["world_revision"]
+    ent_check_state(t, sess, wid, model, "TX7 after 3 ticks")
+
+    # Lowest-slot reuse and the generation bump: slot 0 died at tick 1, so the next spawn takes slot 0, gen 2.
+    res = call(t, sess, "world.spawn", {"world_id": wid, "expected_world_revision": rev,
+                                       "values": {"position_x": 1}})
+    h3 = model.spawn({"position_x": 1})
+    t.check("TX7 reuse: lowest free slot with the bumped generation", h3, res["entity"])
+    t.check("TX7 reuse: slot 0, generation 2", (0, 2), (res["slot"], res["generation"]))
+    rev = res["world_revision"]
+    _ent_probe(t, sess, "world.despawn", {"world_id": wid, "expected_world_revision": rev, "entity": 4294967296},
+               "TX7 old generation of the reused slot refused", "SU_E_STALE_HANDLE")
+    try:
+        model.despawn(4294967296)
+        raise Failed("model accepted the old generation")
+    except ref.EntityError as exc:
+        t.check("TX7 model agrees: old generation is stale", ref.STATUS_STALE, exc.status)
+
+    # Events: cursor ahead of the log is refused; max above 256 is refused.
+    _ent_probe(t, sess, "events.read", {"world_id": wid, "cursor": 10 ** 6, "max": 4},
+               "TX7 events.read cursor ahead refused", "SU_E_INVALID_ARGUMENT")
+    env = sess.request("events.read", {"world_id": wid, "cursor": 0, "max": 257})
+    t.check("TX7 events.read max 257 refused", False, env.get("ok") is True)
+    ent_check_state(t, sess, wid, model, "TX7 after reuse")
+
+    # Crash of the active worker with spawn and despawn history: the request that finds the dead worker is
+    # not executed; after recovery the world is exactly the acknowledged state and the retry succeeds.
+    pid = call(t, sess, "world.inspect", {"world_id": wid, "limit": 1})["worker_pid"]
+    os.kill(pid, signal.SIGKILL)
+    env = sess.request("world.despawn", {"world_id": wid, "expected_world_revision": rev, "entity": h3})
+    t.check_mismatches("TX7 request that found the dead worker reports SU_E_WORKER_FAILED",
+                       classify_error(env, "SU_E_WORKER_FAILED"))
+    ins = call(t, sess, "world.inspect", {"world_id": wid, "limit": 1})
+    rev = ins["world_revision"]
+    t.check("TX7 recovery: replacement worker is a different pid", True, ins["worker_pid"] != pid)
+    ent_check_state(t, sess, wid, model, "TX7 after crash recovery")
+    res = call(t, sess, "world.despawn", {"world_id": wid, "expected_world_revision": rev, "entity": h3})
+    model.despawn(h3)
+    rev = res["world_revision"]
+    ent_check_state(t, sess, wid, model, "TX7 after the retried despawn")
+
+    # Snapshot across churn, more churn, then restore: the event log and the entity table return exactly.
+    snap = call(t, sess, "world.snapshot", {"world_id": wid, "expected_world_revision": rev})
+    saved = copy.deepcopy(model)
+    rev = snap["world_revision"]
+    res = call(t, sess, "world.spawn", {"world_id": wid, "expected_world_revision": rev,
+                                       "values": {"position_x": 2, "velocity_x": 2}})
+    model.spawn({"position_x": 2, "velocity_x": 2})
+    rev = res["world_revision"]
+    call(t, sess, "world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": 1})
+    model.tick_systems(systems, 1)
+    res = call(t, sess, "world.restore", {"world_id": wid, "snapshot_id": snap["snapshot_id"],
+                                         "expected_world_revision": call(t, sess, "world.inspect", {
+                                             "world_id": wid, "limit": 1})["world_revision"]})
+    model = saved
+    t.check("TX7 restore reports the snapshot tick", model.tick, res["tick"])
+    ent_check_state(t, sess, wid, model, "TX7 after restore")
+    call(t, sess, "world.close", {"world_id": wid, "expected_world_revision": res["world_revision"]})
+
+    # Bounded log: event_log_max 2 keeps the newest two of the four records three ticks produce (two dropped).
+    sess2 = t.session("TX7 serve (small log)")
+    res = call(t, sess2, "world.create", {"fixture_path": fx_rel, "capsule_paths": systems_rels, "max_entities": 4,
+                                          "event_log_max": 2})
+    wid2, rev2 = res["world_id"], res["world_revision"]
+    small = ref.EntityWorld(cap0["fields"], fx["columns"], fx["entity_ids"], 4, 4096, 4096, 2)
+    small.initial_rows = len(fx["entity_ids"])
+    res = call(t, sess2, "world.step", {"world_id": wid2, "expected_world_revision": rev2, "ticks": 3})
+    small.tick_systems(systems, 3)
+    page = call(t, sess2, "events.read", {"world_id": wid2, "cursor": 0, "max": 256})
+    want = small.ring.read(0, 256)
+    t.check("TX7 wrap precondition: the run drops events from the bounded log", True, want["dropped"] > 0)
+    t.check("TX7 wrap: skipped equals the model", want["skipped"], page["skipped"])
+    t.check("TX7 wrap: dropped equals the model", want["dropped"], page["dropped"])
+    t.check("TX7 wrap: next_cursor equals the model", want["next_cursor"], page["next_cursor"])
+    t.check_mismatches("TX7 wrap: retained events equal the model",
+                       ent_event_mismatches(page["events"], want["events"]))
+    call(t, sess2, "world.close", {"world_id": wid2, "expected_world_revision": res["world_revision"]})
+
+    # Cap overflow: two rows despawn in one tick and the per-tick struct cap is 1. The tick is refused,
+    # and nothing changes: columns, entity table, event log and revision.
+    scratch = _write_scratch_dir(t, "m2-ent-cap-")
+    cap_path = os.path.join(scratch, "cap.json")
+    write_entity_fixture(cap_path, [1, 2, 3], [0, 1, 9], [1, 2, 3])
+    cap_rel = t.rel(cap_path)
+    sess3 = t.session("TX7 serve (cap)")
+    res = call(t, sess3, "world.create", {"fixture_path": cap_rel, "capsule_paths": systems_rels,
+                                          "max_entities": 4, "max_struct_per_tick": 1})
+    wid3, rev3 = res["world_id"], res["world_revision"]
+    capmodel = ref.EntityWorld(cap0["fields"], {"position_x": [0, 1, 9], "velocity_x": [1, 2, 3]},
+                               [1, 2, 3], 4, 1, 4096, 65536)
+    capmodel.initial_rows = 3
+    env = sess3.request("world.step", {"world_id": wid3, "expected_world_revision": rev3, "ticks": 1})
+    t.check_mismatches("TX7 cap overflow refused with SU_E_RESOURCE_LIMIT",
+                       classify_error(env, "SU_E_RESOURCE_LIMIT"))
+    try:
+        capmodel.tick_systems(systems, 1)
+        raise Failed("model accepted a tick over the struct cap")
+    except ref.EntityError as exc:
+        t.check("TX7 model agrees: struct cap overflow", ref.STATUS_RESOURCE, exc.status)
+    ent_check_state(t, sess3, wid3, capmodel, "TX7 after the refused tick")
+    t.check("TX7 refused tick left the revision unchanged", rev3,
+            call(t, sess3, "world.inspect", {"world_id": wid3, "limit": 1})["world_revision"])
+    call(t, sess3, "world.close", {"world_id": wid3, "expected_world_revision": rev3})
+
+
+def model_rev(rev: str) -> int:
+    """The N of a world revision string '<world>.r<N>'."""
+    return int(rev.rsplit(".r", 1)[1])
+
+
+def tx8(t: TestCtx):
+    """IR 0.2 programs at N=1,2,4 tick workers (extra check; not a TEST_SPEC id). A 3000-row world (three
+    storage chunks) runs the movement system (despawn_self, emit_event), the guard system ordered after it (its
+    despawn of an already-despawned row is refused with an event), for several ticks at each worker count. The
+    canonical state (world.snapshot sha256: columns, entity table and event log) is equal for every N and equal
+    to the model; a second world runs the emit-then-despawn program the same way."""
+    rows = ENT_TX8_ROWS
+    pos, vel = gen_columns(rows, 8)
+    scratch = _write_scratch_dir(t, "m2-ent-tx8-")
+    world_path = os.path.join(scratch, "world.json")
+    write_entity_fixture(world_path, list(range(1, rows + 1)), pos, vel)
+    world_rel = t.rel(world_path)
+    systems = ent_systems(t, [ENT_CAP_MOVE, ENT_CAP_GUARD])
+    emit_systems = ent_systems(t, [ENT_CAP_EMIT])
+    cap0 = t.load(ENT_CAP_MOVE)
+    shas = {}
+    for label, rels, sysm, cap_fields in (
+            ("movement+guard", [ENT_CAP_MOVE, ENT_CAP_GUARD], systems, cap0["fields"]),
+            ("emit_then_despawn", [ENT_CAP_EMIT], emit_systems, cap0["fields"])):
+        model = ref.EntityWorld(cap_fields, {"position_x": pos, "velocity_x": vel}, list(range(1, rows + 1)),
+                                ENT_TX8_CAPACITY, 65536, 65536, 100000)
+        model.initial_rows = rows
+        model.tick_systems(sysm, ENT_TX8_TICKS)
+        for n in ENT_TX8_WORKERS:
+            env = dict(t.env)
+            env["SUTEKH_TICK_WORKERS"] = str(n)
+            env["SUTEKH_TICK_CHUNK_MIN_ROWS"] = "1"
+            sess = t.session(f"TX8 {label} workers={n}", env=env)
+            res = call(t, sess, "world.create", {"fixture_path": world_rel, "capsule_paths": rels,
+                                                "max_entities": ENT_TX8_CAPACITY, "max_struct_per_tick": 65536,
+                                                "max_events_per_tick": 65536, "event_log_max": 100000})
+            wid, rev = res["world_id"], res["world_revision"]
+            tw = call(t, sess, "engine.info", {}).get("tick_workers")
+            t.check(f"TX8 {label} workers={n}: engine.info advertises the configured workers", n,
+                    (tw or {}).get("workers"))
+            res = call(t, sess, "world.step", {"world_id": wid, "expected_world_revision": rev,
+                                              "ticks": ENT_TX8_TICKS})
+            t.check(f"TX8 {label} workers={n}: all ticks completed", ENT_TX8_TICKS, res.get("ticks_completed"))
+            ent_check_state(t, sess, wid, _with_rows(model, rows), f"TX8 {label} workers={n}")
+            snap = call(t, sess, "world.snapshot", {"world_id": wid, "expected_world_revision": res["world_revision"]})
+            shas.setdefault(label, {})[n] = snap["sha256"]
+            call(t, sess, "world.close", {"world_id": wid, "expected_world_revision": res["world_revision"]})
+        t.check(f"TX8 {label}: canonical state is equal for N=1,2,4", 1,
+                len(set(shas[label].values())))
+
+
+def _with_rows(model, rows):
+    model.initial_rows = rows
+    return model
+
+
 TESTS = [
     ("T00", "Clean bootstrap", (), t00),
     ("T01", "Reference movement", ("world.create", "world.step", "world.inspect"), t01),
@@ -3157,6 +3523,12 @@ TESTS = [
                                                                           "world.snapshot", "world.restore",
                                                                           "world.close", "capsule.submit",
                                                                           "candidate.evaluate"), tx6),
+    ("TX7", "Entities: spawn/despawn/stale handles/events (real binary vs Python model, extra)",
+     ("engine.info", "world.create", "world.step", "world.inspect", "world.spawn", "world.despawn", "events.read",
+      "world.snapshot", "world.restore", "world.close"), tx7),
+    ("TX8", "IR 0.2 programs and tick-worker equality (N=1,2,4, extra)",
+     ("engine.info", "world.create", "world.step", "world.inspect", "events.read", "world.snapshot",
+      "world.close"), tx8),
 ]
 
 
@@ -3365,6 +3737,69 @@ def _cap_counts(run, cap: int, n: int) -> tuple:
         return tc.checks_total, len(tc.checks), tc.checks_dropped
     finally:
         MAX_RECORDED_CHECKS = saved
+
+
+def self_test_entities(ok) -> None:
+    """Self-test cases for the M2-00c3b entity helpers and the reference model (TX7 and TX8)."""
+    for msg in ref.self_check_entity_model():
+        ok(f"entity model: {msg}", False)
+    ok("entity model: every hand-derived entity answer holds", not ref.self_check_entity_model())
+
+    evs = [{"event_seq": 0, "tick": 1, "kind": 4294967293, "system_index": 0, "slot": 0, "seq": 0, "a": 0, "b": 1},
+           {"event_seq": 1, "tick": 1, "kind": 7, "system_index": 0, "slot": 0, "seq": 1, "a": 0, "b": 1}]
+    same = [dict(e) for e in evs]
+    ok("entity events: identical logs give no mismatch", ent_event_mismatches(same, evs) == [])
+    changed = [dict(e) for e in evs]
+    changed[1]["kind"] = 8
+    ok("entity events: a changed kind is a mismatch", ent_event_mismatches(changed, evs) != [])
+    ok("entity events: a missing record is a mismatch", ent_event_mismatches(same[:1], evs) != [])
+    ok("entity events: an extra record is a mismatch", ent_event_mismatches(same + same, evs) != [])
+    ok("entity events: a non-list is a mismatch", ent_event_mismatches(None, evs) != [])
+    ok("entity seq: 0,1,2 is contiguous", ent_seq_continuity_mismatches([{"event_seq": s} for s in (0, 1, 2)]) == [])
+    ok("entity seq: a gap is a mismatch", ent_seq_continuity_mismatches([{"event_seq": s} for s in (0, 2)]) != [])
+    ok("entity seq: a repeat is a mismatch", ent_seq_continuity_mismatches([{"event_seq": s} for s in (4, 4)]) != [])
+    cols = {"position_x": [0, 7, 12, 0], "velocity_x": [1, 2, 3, 0]}
+    model = ref.EntityWorld([{"name": "position_x", "read": True, "write": True},
+                             {"name": "velocity_x", "read": True, "write": False}],
+                            {"position_x": [0, 5, 9], "velocity_x": [1, 2, 3]}, [1, 2, 3], 4, 4096, 4096, 8)
+    model.cols = cols
+    ok("entity columns: equal prefix gives no mismatch",
+       ent_columns_mismatches(cols, 3, {"position_x": [0, 7, 12], "velocity_x": [1, 2, 3]}) == [])
+    ok("entity columns: a wrong value is a mismatch",
+       ent_columns_mismatches(cols, 3, {"position_x": [0, 7, 13], "velocity_x": [1, 2, 3]}) != [])
+    ok("entity columns: a missing field is a mismatch",
+       ent_columns_mismatches(cols, 3, {"position_x": [0, 7, 12]}) != [])
+    ok("entity columns: a missing columns object is a mismatch", ent_columns_mismatches(cols, 3, None) != [])
+    want_entities = {"capacity": 4, "alive": 3, "retired": 0, "high_water": 3}
+    ok("entity counts: equal counts give no mismatch", ent_entities_mismatches(model.table, want_entities) == [])
+    ok("entity counts: a wrong alive count is a mismatch",
+       ent_entities_mismatches(model.table, {**want_entities, "alive": 2}) != [])
+    ok("entity fixture writer: round trip through json",
+       _entity_fixture_round_trip())
+    ok("entity TX7 is registered and needs the entity methods",
+       any(tid == "TX7" and "world.spawn" in req and "events.read" in req and "world.despawn" in req
+           for tid, _n, req, _f in TESTS))
+    ok("entity TX8 is registered and needs events.read", any(tid == "TX8" and "events.read" in req
+                                                          for tid, _n, req, _f in TESTS))
+    ok("entity methods are documented in the method table",
+       all(m in ENGINE_METHODS for m in ("world.spawn", "world.despawn", "events.read")))
+    ok("entity stale refusal is classified with SU_E_STALE_HANDLE",
+       classify_error({"ok": False, "error": {"code": "SU_E_STALE_HANDLE"}}, "SU_E_STALE_HANDLE") == [])
+    ok("entity stale refusal: a different code is a mismatch",
+       classify_error({"ok": False, "error": {"code": "SU_E_TYPE"}}, "SU_E_STALE_HANDLE") != [])
+
+
+def _entity_fixture_round_trip() -> bool:
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    try:
+        write_entity_fixture(path, [1, 2], [3, 4], [5, 6])
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        return (doc["entity_ids"] == [1, 2] and doc["columns"]["position_x"] == [3, 4]
+                and doc["columns"]["velocity_x"] == [5, 6] and doc["schema_id"] == "demo.actor")
+    finally:
+        os.unlink(path)
 
 
 def self_test() -> int:
@@ -3949,6 +4384,7 @@ def self_test() -> int:
        and all(o % INSPECT_PAGE == 0 and 0 <= o < 1000000 for o in offs) and 0 in offs)
     ok("tx6: the test is registered and needs candidate.evaluate",
        any(tid == "TX6" and "candidate.evaluate" in req for tid, _n, req, _f in TESTS))
+    self_test_entities(ok)
     failed = [name for name, passed in checks if not passed]
     for name in failed:
         print(f"self-test FAILED: {name}")
