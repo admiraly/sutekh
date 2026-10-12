@@ -30,6 +30,20 @@
 #define SU_OP_LT_U32      UINT32_C(7)
 #define SU_OP_SELECT_U32  UINT32_C(8)
 #define SU_OP_STORE_U32   UINT32_C(9)
+/* IR 0.2 (M2-00 r2) opcodes. Valid only in modules with ir_version "0.2"; in a 0.1 module they are
+ * SU_E_UNKNOWN_OPCODE. Operand mapping in SuInsn (dst a b c):
+ *   SLOT_U32     dst=reg                                     current row's slot index
+ *   GEN_U32      dst=reg                                     current row's generation
+ *   TICK_U32     dst=reg                                     (committed_tick + 1) mod 2^32
+ *   DESPAWN_SELF dst=cond reg (bool, a SOURCE here)  a,b,c = NONE
+ *   EMIT_EVENT   dst=cond reg (bool, a SOURCE here)  a=kind (const u32, never an index)  b=reg A  c=reg B */
+#define SU_OP_SLOT_U32      UINT32_C(10)
+#define SU_OP_GEN_U32       UINT32_C(11)
+#define SU_OP_TICK_U32      UINT32_C(12)
+#define SU_OP_DESPAWN_SELF  UINT32_C(13)
+#define SU_OP_EMIT_EVENT    UINT32_C(14)
+#define SU_IR_VERSION_STRING_0_2        "0.2"
+#define SU_ARTIFACT_FORMAT_VERSION_0_2  UINT32_C(2) /* hashed for 0.2 modules; 0.1 modules keep format 1 */
 
 /* Register types. bool never coerces to u32. */
 #define SU_TYPE_U32   UINT32_C(1)

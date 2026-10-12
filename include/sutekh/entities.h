@@ -22,9 +22,11 @@ typedef uint64_t SuEntity;
 #define SU_GEN_FIRST                UINT32_C(1)
 #define SU_GEN_RETIRED              UINT32_C(0xFFFFFFFF)
 
-/* Storage is chunked: chunk c holds slots [c*SU_CHUNK_SLOTS, (c+1)*SU_CHUNK_SLOTS). Capacity is
- * fixed at world creation (a whole number of chunks, <= SU_LIMIT_ROWS rounded up); growth is an
- * out-of-tick transaction (later). Chunks are also the unit of parallel work (M1-04). */
+/* Storage is chunked: chunk c holds slots [c*SU_CHUNK_SLOTS, min((c+1)*SU_CHUNK_SLOTS, capacity)).
+ * Capacity is fixed at world creation, NOT rounded: capacity = max(initial entities, requested
+ * max_entities) <= SU_LIMIT_ROWS, and the last chunk may be short. Growth is an out-of-tick
+ * transaction (later). Chunks are the unit of structural/event buffering; scheduler job slicing
+ * (src/runtime/jobs chunk_rows) is independent of them. */
 #define SU_CHUNK_SLOTS              UINT32_C(1024)
 
 /* Slot allocation is deterministic: the LOWEST free slot index is reused first. Iteration order of
@@ -33,8 +35,20 @@ typedef uint64_t SuEntity;
 
 /* Structural request kinds (queued, applied at the tick boundary in canonical order). */
 #define SU_STRUCT_DESPAWN UINT32_C(1) /* arg = expected handle of the target entity */
-#define SU_STRUCT_SPAWN   UINT32_C(2) /* arg = template id; init[] = initial values for the two
-                                         template-declared init fields (others get schema defaults) */
+#define SU_STRUCT_SPAWN   UINT32_C(2) /* RESERVED: no producer in M2-00 (control-plane spawn is
+                                         applied directly between ticks; IR/template spawn is a later,
+                                         separately versioned step). arg/init[] unused. */
+
+/* Control-plane commands use this system_index and sort BEFORE every IR system in the canonical
+ * order (they are applied directly at a quiescent boundary, so they never share a tick with IR
+ * requests in M2-00; the value is reserved for event provenance). */
+#define SU_SYSTEM_INDEX_HOST UINT32_C(0xFFFFFFFF)
+
+/* Event kinds >= SU_EVENT_KIND_RESERVED_MIN are engine-generated and rejected in IR constants. */
+#define SU_EVENT_KIND_RESERVED_MIN UINT32_C(0xFFFFFF00)
+#define SU_EVENT_REJECTED          UINT32_C(0xFFFFFFFF) /* a structural request that was refused */
+#define SU_EVENT_SPAWNED           UINT32_C(0xFFFFFFFE) /* host spawn applied (a = slot, b = generation) */
+#define SU_EVENT_DESPAWNED         UINT32_C(0xFFFFFFFD) /* despawn applied (a = slot, b = old generation) */
 
 /* One queued structural request. 32 bytes, no implicit padding. Canonical commit order is the
  * lexicographic order of (system_index, slot, seq): independent of worker count, chunking and
