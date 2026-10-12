@@ -13,6 +13,7 @@
 #include "sutekh/status.h"
 #include "vm/su_vm.h"
 #include "runtime/jobs/su_jobs.h"
+#include "runtime/rts/host_decl.h"
 
 void su_sched_init(SuSchedule *s) {
     memset(s, 0, sizeof *s);
@@ -122,6 +123,64 @@ uint32_t su_sched_add(SuSchedule *s, SuLirModule *mod, uint32_t schema_version, 
     return SU_OK;
 }
 
+/* Host entry (M3-04a). The declaration must describe d exactly; no VM context is created. */
+static int decl_matches_host(const SuLirModule *decl, const SuHostOpDesc *d) {
+    uint32_t i;
+    if (decl->insn_count != 0u || decl->uses_entity_ops != 0u || decl->field_count != d->field_count ||
+        strcmp(decl->system_id, d->system_id) != 0 || strcmp(decl->query, d->schema_id) != 0) {
+        return 0;
+    }
+    for (i = 0; i < d->field_count; i++) {
+        const SuLirField *f = &decl->fields[i];
+        if (f->id != d->fields[i].id || f->type != d->fields[i].type || f->access != d->fields[i].access ||
+            strcmp(f->name, d->fields[i].name) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, uint32_t schema_version,
+                           uint32_t gen, uint64_t txid, uint64_t system_rev, uint64_t tick) {
+    SuSysEntry *e;
+    if (s == NULL || decl == NULL || su_host_desc_validate(d) != SU_OK) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (decl->insn_count != 0u || decl->fields == NULL || decl->system_id == NULL || decl->query == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (!decl_matches_host(decl, d)) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    if (s->count >= SU_SCHED_MAX_SYSTEMS) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    if (s->count == 0) {
+        snprintf(s->schema_id, sizeof s->schema_id, "%s", d->schema_id);
+        s->schema_version = schema_version;
+        s->layout_generation = gen;
+    } else if (strcmp(s->schema_id, d->schema_id) != 0 || s->schema_version != schema_version ||
+               s->layout_generation != gen) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    if (su_sched_find(s, d->system_id) >= 0) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    e = &s->sys[s->count];
+    memset(e, 0, sizeof *e);
+    snprintf(e->system_id, sizeof e->system_id, "%s", d->system_id);
+    snprintf(e->source_hash, sizeof e->source_hash, "%s", decl->source_hash_hex);
+    snprintf(e->capsule_hash, sizeof e->capsule_hash, "%s", decl->capsule_hash_hex);
+    snprintf(e->semantic_hash, sizeof e->semantic_hash, "%s", decl->semantic_hash_hex);
+    e->kind = SU_SYS_KIND_HOST;
+    e->host = d;
+    e->mod = decl;
+    e->ctx = NULL;
+    fill_entry_ids(e, txid, system_rev, tick);
+    s->count++;
+    return SU_OK;
+}
+
 /* Adds one field to the union table, or checks it against an existing row. */
 static uint32_t union_add(SuSchedField **tab, uint32_t *n, uint32_t *cap, const SuLirField *f) {
     uint32_t i;
@@ -200,6 +259,11 @@ uint32_t su_sched_finalize(SuSchedule *s) {
 uint32_t su_sched_check_candidate(const SuSchedule *s, const SuLirModule *m, uint32_t schema_version,
                                   uint32_t gen, char *why, size_t cap) {
     uint32_t i;
+    int idx = su_sched_find(s, m->system_id);
+    if (idx >= 0 && s->sys[idx].kind == SU_SYS_KIND_HOST) {
+        snprintf(why, cap, "system %s is a host entry and cannot be replaced by a candidate", m->system_id);
+        return SU_E_CAPABILITY_DENIED;
+    }
     if (strcmp(s->schema_id, m->query) != 0) {
         snprintf(why, cap, "candidate query %s does not match world schema %s", m->query, s->schema_id);
         return SU_E_SCHEMA_MISMATCH;
@@ -241,7 +305,83 @@ uint32_t su_sched_check_candidate(const SuSchedule *s, const SuLirModule *m, uin
     return SU_OK;
 }
 
+/* Host entry (M3-04a, section 3.1). The operator sees only its declared reads and writes: the bindings of
+ * other fields are dropped from the views it is given. Staging of a declared write is committed for whole
+ * columns, so the operator must store every row of each declared write (copy working to staging first).
+ * A failed run commits nothing. */
+static uint32_t run_host(SuWorld *w, const SuSysEntry *e) {
+    const SuHostOpDesc *d = e->host;
+    SuInvocation inv;
+    SuOutputs out;
+    SuColumnBinding rb[SU_LIMIT_FIELDS];
+    SuColumnBinding wb[SU_LIMIT_FIELDS];
+    uint32_t wid[SU_LIMIT_FIELDS];
+    uint32_t nr = 0;
+    uint32_t nw = 0;
+    uint32_t i;
+    uint32_t j;
+    uint32_t st;
+    SuInvocation full_inv;
+    SuOutputs full_out;
+
+    st = su_world_build_invocation(w, &full_inv);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = su_world_build_outputs(w, &full_out);
+    if (st != SU_OK) {
+        return st;
+    }
+    for (i = 0; i < d->field_count; i++) {
+        const SuHostField *f = &d->fields[i];
+        if ((f->access & SU_ACCESS_READ) != 0u) {
+            for (j = 0; j < full_inv.binding_count; j++) {
+                if (full_inv.bindings[j].field_id == f->id) {
+                    rb[nr++] = full_inv.bindings[j];
+                    break;
+                }
+            }
+        }
+        if ((f->access & SU_ACCESS_WRITE) != 0u) {
+            for (j = 0; j < full_out.binding_count; j++) {
+                if (full_out.bindings[j].field_id == f->id) {
+                    /* r4 (A4): staging is committed whole, so every row starts from its working value. Done
+                     * when the working column is visible (declared read); a write-only field has no working
+                     * view, so its operator stores every row itself (M3-04a deviation, see the handoff). */
+                    if ((f->access & SU_ACCESS_READ) != 0u) {
+                        uint32_t k;
+                        for (k = 0; k < full_inv.binding_count; k++) {
+                            if (full_inv.bindings[k].field_id == f->id) {
+                                memcpy(full_out.bindings[j].data, full_inv.bindings[k].data,
+                                       (size_t)full_inv.row_count * sizeof(uint32_t));
+                                break;
+                            }
+                        }
+                    }
+                    wb[nw] = full_out.bindings[j];
+                    wid[nw++] = f->id;
+                    break;
+                }
+            }
+        }
+    }
+    inv = full_inv;
+    inv.bindings = rb;
+    inv.binding_count = nr;
+    out = full_out;
+    out.bindings = wb;
+    out.binding_count = nw;
+    st = d->run(w, &inv, &out, d->host_ctx);
+    if (st != SU_OK) {
+        return st;
+    }
+    return su_world_commit_staging(w, wid, nw);
+}
+
 static uint32_t run_one_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt) {
+    if (s->sys[i].kind == SU_SYS_KIND_HOST) {
+        return run_host(w, &s->sys[i]);
+    }
 #ifdef SU_HAVE_NATIVE
     if (s->sys[i].native_seq != 0u) {
         if (opt != NULL && opt->workers > 1u && su_world_row_count(w) >= opt->chunk_min_rows) {

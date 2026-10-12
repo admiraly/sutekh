@@ -24,6 +24,37 @@
 
 #define SU_SCHED_MAX_SYSTEMS 8u
 
+/* Entry kinds (M3-04a, OD-1b, contract M3_RTS_CONTRACT section 3.1). IR entries are the default
+ * (kind 0, so every existing entry keeps its meaning). A host entry is an operator compiled into
+ * the engine; it has no IR, no VM context and a declaration module with no instructions. */
+#define SU_SYS_KIND_IR   0u
+#define SU_SYS_KIND_HOST 1u
+
+typedef struct SuHostField {
+    uint32_t id;
+    uint32_t type;        /* SU_TYPE_U32 */
+    uint32_t access;      /* SU_ACCESS_READ and/or SU_ACCESS_WRITE; never 0 */
+    const char *name;
+} SuHostField;
+
+/* Descriptor of one host operator. The descriptor is static (it outlives every schedule that uses
+ * it). run is called once per tick, serially, with the working columns of its declared reads
+ * (in `in`) and the staging columns of its declared writes (in `out`), and reads the entity table
+ * of the working root through w (su_world_alive_view, su_world_generation_view). It returns SU_OK
+ * after it has stored every declared write for every row, or a SU_E_* code (the tick aborts).
+ * Deviation from section 3.1, recorded in the M3-04a handoff: the w argument was added because
+ * sections 4.1 and 4.3 read alive and generation, which are not fields and are not in SuInvocation. */
+typedef struct SuHostOpDesc {
+    const char *system_id;          /* "rts.spatial", "rts.scatter"; 1..SU_DIAG_SYSTEM_BYTES-1 bytes */
+    const char *schema_id;          /* must equal the world schema ID */
+    uint32_t operator_version;      /* >= 1 */
+    uint8_t constants_hash[32];     /* sha256 of the operator constants text */
+    uint32_t field_count;           /* 1..SU_LIMIT_FIELDS */
+    const SuHostField *fields;      /* declared set, ascending id, unique, access never 0 */
+    uint32_t (*run)(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
+    void *host_ctx;                 /* operator scratch, admitted at creation, never allocated in the tick */
+} SuHostOpDesc;
+
 typedef struct SuSchedField {
     uint32_t id;
     uint32_t type;
@@ -33,8 +64,10 @@ typedef struct SuSchedField {
 
 typedef struct SuSysEntry {
     char system_id[SU_DIAG_SYSTEM_BYTES];
-    SuLirModule *mod;        /* owned, heap */
-    SuExecContext *ctx;      /* owned; borrows mod */
+    SuLirModule *mod;        /* owned, heap; for a host entry, the declaration module (no instructions) */
+    SuExecContext *ctx;      /* owned; borrows mod; NULL for a host entry */
+    uint32_t kind;           /* SU_SYS_KIND_IR or SU_SYS_KIND_HOST */
+    const SuHostOpDesc *host; /* host entries only (static, borrowed); NULL for IR entries */
     uint64_t txid;           /* registry transaction that made this module live; 0 = creation */
     uint64_t system_rev;     /* 1 at creation, +1 per installed revision */
     uint64_t installed_tick; /* effective tick of the install (0 at creation) */
@@ -88,6 +121,13 @@ void su_sched_free(SuSchedule *s);
  * SU_E_RESOURCE_LIMIT when the schedule is full or the VM context cannot be created. */
 uint32_t su_sched_add(SuSchedule *s, SuLirModule *mod, uint32_t schema_version, uint32_t gen,
                       uint64_t txid, uint64_t system_rev, uint64_t tick);
+/* Appends a host entry (M3-04a, section 3.1). decl is the declaration module built for d by
+ * su_host_decl_build (or su_host_load); it must have no instructions and must match d in system ID,
+ * query and field table, else SU_E_SCHEMA_MISMATCH (SU_E_INVALID_ARGUMENT for a malformed descriptor
+ * or declaration). Schema and duplicate checks are as su_sched_add. The entry takes ownership of
+ * decl on SU_OK only and never creates a VM context (ctx stays NULL). */
+uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, uint32_t schema_version,
+                           uint32_t gen, uint64_t txid, uint64_t system_rev, uint64_t tick);
 /* Builds the union field table from the current entries. Conflicting ID/name/type for
  * one field is SU_E_SCHEMA_MISMATCH. Call after the last su_sched_add. */
 uint32_t su_sched_finalize(SuSchedule *s);

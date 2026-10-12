@@ -251,17 +251,28 @@ uint32_t su_effects_build(const SuEffectInput *in, uint32_t n, SuEffectGraph **o
             st = SU_E_RESOURCE_LIMIT;
             break;
         }
-        st = su_effects_check_declared(e->mod, err, err_cap);
-        if (st != SU_OK) {
-            break;
+        if (e->host_declared == 0u) {
+            st = su_effects_check_declared(e->mod, err, err_cap);
+            if (st != SU_OK) {
+                break;
+            }
         }
         g->nf[i] = e->mod->field_count;
         for (k = 0; k < e->mod->field_count; k++) {
             g->fid[(size_t)i * SU_LIMIT_FIELDS + k] = e->mod->fields[k].id;
         }
-        st = su_effects_derive(e->mod, &g->rd[(size_t)i * SU_LIMIT_FIELDS], &g->wr[(size_t)i * SU_LIMIT_FIELDS]);
-        if (st != SU_OK) {
-            break;
+        if (e->host_declared != 0u) {
+            /* Host entry: the declared access is the effect (no IR to derive it from). */
+            for (k = 0; k < e->mod->field_count; k++) {
+                uint32_t acc = e->mod->fields[k].access;
+                g->rd[(size_t)i * SU_LIMIT_FIELDS + k] = (acc & SU_ACCESS_READ) != 0u ? 1u : 0u;
+                g->wr[(size_t)i * SU_LIMIT_FIELDS + k] = (acc & SU_ACCESS_WRITE) != 0u ? 1u : 0u;
+            }
+        } else {
+            st = su_effects_derive(e->mod, &g->rd[(size_t)i * SU_LIMIT_FIELDS], &g->wr[(size_t)i * SU_LIMIT_FIELDS]);
+            if (st != SU_OK) {
+                break;
+            }
         }
     }
 

@@ -1,0 +1,52 @@
+{
+  "capsule_format": "0.1",
+  "system_id": "rts.spatial",
+  "system_rev": 1,
+  "capabilities": [],
+  "schema": {
+    "id": "rts",
+    "version": 1,
+    "layout_generation": 1
+  },
+  "numeric_profile": "u32_mod_v1",
+  "host": {
+    "operator": "rts_ops_v1",
+    "operator_version": 1,
+    "constants_hash": "0d634621d4a9ab859d9d7cb5257dddf7b3051fa75f1ab1779d9c9243ea8c132e",
+    "fields": [
+      { "id": 1, "name": "kind", "type": "u32", "access": "read" },
+      { "id": 2, "name": "team", "type": "u32", "access": "read" },
+      { "id": 3, "name": "hp", "type": "u32", "access": "read" },
+      { "id": 4, "name": "pos_x", "type": "u32", "access": "read" },
+      { "id": 5, "name": "pos_y", "type": "u32", "access": "read" },
+      { "id": 7, "name": "range_sq", "type": "u32", "access": "read" },
+      { "id": 15, "name": "formation_slot", "type": "u32", "access": "read" },
+      { "id": 16, "name": "formation_gen", "type": "u32", "access": "read" },
+      { "id": 21, "name": "anchor_x", "type": "u32", "access": "write" },
+      { "id": 22, "name": "anchor_y", "type": "u32", "access": "write" },
+      { "id": 23, "name": "anchor_valid", "type": "u32", "access": "write" },
+      { "id": 24, "name": "target_slot", "type": "u32", "access": "write" },
+      { "id": 25, "name": "target_gen", "type": "u32", "access": "write" },
+      { "id": 26, "name": "target_dist_sq", "type": "u32", "access": "write" },
+      { "id": 27, "name": "target_valid", "type": "u32", "access": "write" },
+      { "id": 28, "name": "target_x", "type": "u32", "access": "write" },
+      { "id": 29, "name": "target_y", "type": "u32", "access": "write" },
+      { "id": 30, "name": "truncated", "type": "u32", "access": "write" }
+    ]
+  },
+  "schedule": {
+    "phase": "rts",
+    "after": [],
+    "before": [],
+    "parallel": "serial"
+  },
+  "limits": {
+    "max_instructions": 1,
+    "max_rows": 1000000,
+    "allocation": "forbidden"
+  },
+  "tests": [
+    "T-RTS-SPATIAL",
+    "T-HOST-05"
+  ]
+}

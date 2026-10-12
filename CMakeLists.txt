@@ -72,6 +72,9 @@ file(GLOB SU_AGENT_SOURCES CONFIGURE_DEPENDS src/agent/*.c)
 list(APPEND SU_AGENT_SOURCES src/runtime/worker.c src/runtime/registry.c src/runtime/schedule.c src/runtime/reload.c)
 # ---- BEGIN M2-00c3 entity tick (src/runtime/entity_tick.c) ----
 list(APPEND SU_AGENT_SOURCES src/runtime/entity_tick.c)
+# ---- BEGIN M3-04a host entries (src/runtime/rts/host_decl.c) ----
+list(APPEND SU_AGENT_SOURCES src/runtime/rts/host_decl.c src/runtime/rts/host_registry.c)
+# ---- END M3-04a host entries ----
 # ---- END M2-00c3 entity tick ----
 add_library(su_agent STATIC ${SU_AGENT_SOURCES})
 target_include_directories(su_agent PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
@@ -119,6 +122,21 @@ target_link_libraries(test_tick_workers PRIVATE su_agent)
 target_compile_definitions(test_tick_workers PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_tick_workers)
 add_test(NAME tick_workers COMMAND test_tick_workers WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# M3-04a: host entries (T-HOST-01..10; test-only descriptors in tests/rts/host). T-HOST-07 needs the native build.
+add_executable(test_host_entry tests/scheduler/test_host_entry.c tests/rts/host/host_test_ops.c)
+target_link_libraries(test_host_entry PRIVATE su_agent)
+target_include_directories(test_host_entry PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/host")
+target_compile_definitions(test_host_entry PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_host_entry)
+add_test(NAME host_entry COMMAND test_host_entry "${CMAKE_BINARY_DIR}/host_entry_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# M3-04a T-HOST-11: restore and the world.create host branch against the real worker.c static functions.
+add_executable(test_host_restore tests/rts/host/test_host_restore.c tests/rts/host/host_test_ops.c)
+target_link_libraries(test_host_restore PRIVATE su_agent)
+target_include_directories(test_host_restore PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/host")
+target_compile_definitions(test_host_restore PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_host_restore)
+add_test(NAME host_restore COMMAND test_host_restore "${CMAKE_BINARY_DIR}/host_restore_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(test_reload tests/reload/test_reload.c)
 target_link_libraries(test_reload PRIVATE su_agent)

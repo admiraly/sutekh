@@ -48,6 +48,9 @@ typedef struct SuEffectInput {
     uint32_t after_count;
     const char *const *before;      /* system IDs that must run after this system */
     uint32_t before_count;
+    uint32_t host_declared;         /* M3-04a: nonzero for a host entry; its read/write sets are the
+                                       declared access bits of mod->fields (no instructions to derive),
+                                       and su_effects_check_declared is not applied to it */
 } SuEffectInput;
 
 /* Derives the read/write sets from the IR. reads[i] and writes[i] (i is a field

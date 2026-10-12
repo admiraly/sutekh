@@ -24,6 +24,8 @@
 #include "runtime/jobs/su_effects.h"
 #include "runtime/jobs/su_jobs.h"
 #include "runtime/schedule.h"
+#include "runtime/rts/host_decl.h"
+#include "runtime/rts/host_registry.h"
 #ifdef SU_HAVE_NATIVE
 #include "backends/native/su_native.h"
 #include "runtime/native_versions.h"
@@ -110,6 +112,7 @@ typedef struct CkptSys {
     char semantic_hash[65];
     char source_hash[65];
     char capsule_hash[65];
+    uint32_t kind;           /* SU_SYS_KIND_IR (0, also the value of pre-M3-04a records) or SU_SYS_KIND_HOST */
     RevPaths paths;
 } CkptSys;
 
@@ -640,6 +643,7 @@ static uint32_t check_system_effects(const SuSchedule *sched, const RevPaths *pa
         in[i].after_count = after_n[i];
         in[i].before = &befores[(size_t)i * SU_SCHED_MAX_SYSTEMS];
         in[i].before_count = before_n[i];
+        in[i].host_declared = sched->sys[i].kind == SU_SYS_KIND_HOST ? 1u : 0u;
     }
     st = su_effects_build(in, n, &g, err, sizeof err);
     if (st != SU_OK) {
@@ -700,11 +704,39 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPat
         const SuJsonValue *item = caps->u.array.items[i];
         const char *cap = str_of(item, "capsule_path");
         const char *src = str_of(item, "source_path");
+        const char *hop = str_of(item, "host_operator");
         SuLirModule *mod = NULL;
         uint32_t sv = 0;
         uint32_t gen = 0;
         char msg[WORKER_MSG_CAP];
 
+        if (hop != NULL) {
+            /* Host entry (M3-04a): an operator built into the engine; the record supplies phase and fields. */
+            const SuHostOpDesc *desc;
+            if (src != NULL || cap == NULL) {
+                fail(f, SU_E_TYPE, "a host item needs capsule_path and host_operator and no source_path");
+                return SU_E_TYPE;
+            }
+            desc = su_host_find(hop);
+            if (desc == NULL) {
+                fail(f, SU_E_CAPABILITY_DENIED, "no host operator for this system is built into this engine");
+                return SU_E_CAPABILITY_DENIED;
+            }
+            st = su_host_load(cap, str_of(item, "capsule_sha256"), desc, &mod, &sv, &gen, msg, sizeof msg);
+            if (st != SU_OK) {
+                fail(f, st, msg);
+                return st;
+            }
+            st = su_sched_add_host(sched, desc, mod, sv, gen, 0, 1, 0);
+            if (st != SU_OK) {
+                su_host_decl_free(mod);
+                fail(f, st, "host system cannot join this world's schedule (schema or duplicate system_id)");
+                return st;
+            }
+            snprintf(paths[i].capsule, sizeof paths[i].capsule, "%s", cap);
+            paths[i].source[0] = '\0';
+            continue;
+        }
         if (cap == NULL || src == NULL) {
             fail(f, SU_E_TYPE, "each capsules entry needs capsule_path and source_path");
             return SU_E_TYPE;
@@ -1865,6 +1897,11 @@ static uint32_t h_candidate_evaluate(WorkerState *s, const SuJsonValue *params, 
     }
     memset(&cf, 0, sizeof cf);
     su_sched_init(&sched);
+    if (su_host_capsule_is_host(capsule)) {
+        /* A host record names a host system: host entries have no IR and are never candidates (M3-04a, r4). */
+        fail(f, SU_E_CAPABILITY_DENIED, "candidate names a host system; host entries cannot be replaced");
+        return SU_E_CAPABILITY_DENIED;
+    }
     st = su_reload_load(capsule, source, exp_src, exp_cap, &mod, &sv, &gen, msg, sizeof msg);
     if (st != SU_OK) {
         fail(f, st, msg);
@@ -2073,6 +2110,7 @@ static void ckpt_record(WorkerState *s, const WorkerWorld *ww, uint64_t id, cons
         snprintf(c->semantic_hash, sizeof c->semantic_hash, "%s", ww->sched.sys[i].semantic_hash);
         snprintf(c->source_hash, sizeof c->source_hash, "%s", ww->sched.sys[i].source_hash);
         snprintf(c->capsule_hash, sizeof c->capsule_hash, "%s", ww->sched.sys[i].capsule_hash);
+        c->kind = ww->sched.sys[i].kind;
         c->paths = ww->paths[i];
     }
 }
@@ -2189,6 +2227,33 @@ static uint32_t rebuild_schedule(const CkptRec *rec, const SuSnapshotData *data,
             strcmp(data->manifest[i].semantic_hash, c->semantic_hash) != 0) {
             fail(f, SU_E_SCHEMA_MISMATCH, "snapshot manifest does not match the recorded revisions");
             return SU_E_SCHEMA_MISMATCH;
+        }
+        if (c->kind == SU_SYS_KIND_HOST) {
+            /* Host entry (M3-04a, r4): reloaded from its host capsule record and the registered descriptor. paths.source is not read. */
+            const SuHostOpDesc *desc = su_host_find(c->system_id);
+            if (desc == NULL) {
+                /* r4 (A1): no fallback; a checkpoint whose host descriptor is no longer registered does not restore. */
+                fail(f, SU_E_SCHEMA_MISMATCH, "snapshot host system has no registered operator in this build");
+                return SU_E_SCHEMA_MISMATCH;
+            }
+            st = su_host_load(c->paths.capsule, c->capsule_hash, desc, &mod, &sv, &gen, why, sizeof why);
+            if (st != SU_OK) {
+                snprintf(f->msg, sizeof f->msg, "snapshot host revision cannot be reloaded: %.300s", why);
+                f->code = st;
+                return st;
+            }
+            if (strcmp(mod->semantic_hash_hex, c->semantic_hash) != 0) {
+                su_host_decl_free(mod);
+                fail(f, SU_E_SCHEMA_MISMATCH, "snapshot host revision differs from the recorded semantic hash");
+                return SU_E_SCHEMA_MISMATCH;
+            }
+            st = su_sched_add_host(nsched, desc, mod, sv, gen, 0, 1, 0);
+            if (st != SU_OK) {
+                su_host_decl_free(mod);
+                fail(f, SU_E_SCHEMA_MISMATCH, "snapshot host revision cannot join this world's schedule");
+                return SU_E_SCHEMA_MISMATCH;
+            }
+            continue;
         }
         st = su_reload_load(c->paths.capsule, c->paths.source, c->source_hash, c->capsule_hash, &mod,
                             &sv, &gen, why, sizeof why);
@@ -3507,6 +3572,11 @@ static uint32_t h_internal_specialize_admit(WorkerState *s, const SuJsonValue *p
     }
     SPEC_FAULT_ARM_ADMIT();
     su_sched_init(&sched);
+    if (su_host_capsule_is_host(capsule)) {
+        /* A host record names a host system: host entries have no IR and are never candidates (M3-04a, r4). */
+        fail(f, SU_E_CAPABILITY_DENIED, "candidate names a host system; host entries cannot be replaced");
+        return SU_E_CAPABILITY_DENIED;
+    }
     st = su_reload_load(capsule, source, exp_src, exp_cap, &mod, &sv, &gen, msg, sizeof msg);
     if (st != SU_OK) {
         fail(f, st, msg);
@@ -3754,6 +3824,11 @@ static uint32_t h_internal_specialize_install(WorkerState *s, const SuJsonValue 
     if (j < 0) {
         fail(f, SU_E_INVALID_ARGUMENT, "system_id is not part of this world");
         return SU_E_INVALID_ARGUMENT;
+    }
+    if (ww->sched.sys[j].kind == SU_SYS_KIND_HOST) {
+        /* A host entry has no IR and cannot be lowered (M3-04a, section 3.1). Refused before any module is read. */
+        fail(f, SU_E_CAPABILITY_DENIED, "host system cannot be lowered to native code");
+        return SU_E_CAPABILITY_DENIED;
     }
     if (strcmp(exp_sem, ww->sched.sys[j].semantic_hash) != 0) {
         fail(f, SU_E_STALE_REVISION, "expected_semantic_hash does not match the installed system revision");
@@ -4341,6 +4416,14 @@ static uint32_t h_internal_world_migrate_prepare(WorkerState *s, const SuJsonVal
         if (su_sched_find(&ww->sched, drops[k]) < 0) {
             st = SU_E_INVALID_ARGUMENT;
             fail(f, st, "drop_systems names a system that is not installed");
+            goto out;
+        }
+    }
+    /* M3 has no migration of host entries: a world with a host system refuses world.migrate (M3-04a). */
+    for (i = 0; i < ww->sched.count; i++) {
+        if (ww->sched.sys[i].kind == SU_SYS_KIND_HOST) {
+            st = SU_E_CAPABILITY_DENIED;
+            fail(f, st, "world has a host system; migration of host entries is not supported in M3");
             goto out;
         }
     }
