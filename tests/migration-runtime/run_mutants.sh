@@ -66,6 +66,25 @@ run_mutant() {
         cp "$BAK_DIR/mutant.tmp" "$file"
         return
     fi
+    if [ "$kind" = "inproc" ]; then
+        # In-process allocation sweep (test_migrate, ctest migration): the plan and prepare points of the documents.
+        if ! cmake --build "$BUILD" --target test_migrate -j4 >"$BAK_DIR/build.log" 2>&1; then
+            echo "ERROR $name: the mutant does not build (see $BAK_DIR/build.log)"
+            cp "$BAK_DIR/mutant.tmp" "$file"
+            fails=$((fails + 1))
+            return
+        fi
+        if (cd "$REPO" && timeout 900 "$BUILD/test_migrate" "$REPO/tests/fixtures" "$BUILD/migration_expected.json") \
+            >"$BAK_DIR/run.log" 2>&1; then
+            echo "SURVIVED $name: the in-process migration test still passes"
+            fails=$((fails + 1))
+        else
+            echo "KILLED $name"
+            kills=$((kills + 1))
+        fi
+        cp "$BAK_DIR/mutant.tmp" "$file"
+        return
+    fi
     if ! cmake --build "$BUILD" --target recovery_worker test_migrate_runtime -j4 >"$BAK_DIR/build.log" 2>&1; then
         echo "ERROR $name: the mutant does not build (see $BAK_DIR/build.log)"
         cp "$BAK_DIR/mutant.tmp" "$file"
@@ -128,6 +147,17 @@ run_mutant "M20 unresolved installed system accepted (C1)" "$WRK" sed \
     's/        if (name_listed(drops, nd, sid) ? found != 0 : found != 1) {/        if (name_listed(drops, nd, sid) ? found != 0 : 0) {/'
 run_mutant "M21 undo clears the committed pin (N1)" "$SUPER" perl \
     's/    w->migrated = pre->migrated;\n    recover\(a, c, op\);/    w->migrated = pre->migrated;\n    w->pin_has = 0;\n    recover(a, c, op);/'
+
+# M2-01 fixes3 mutants (N2). X7, X7b and X8 are transform-path and plan-path allocation checks that only the in-process
+# plan and prepare sweeps of test_migrate reach (kind inproc). X4 is an uncounted aligned_alloc in plan (kind static).
+run_mutant "X4 aligned_alloc in plan, not counted (N2, static check)" "$MIG" static \
+    's/    c = mig_calloc(1u, sizeof \*c);/    c = aligned_alloc(16u, sizeof *c);/'
+run_mutant "X7 transform writes allocation in plan: NULL check removed (N2)" "$MIG" inproc \
+    's/if (c->writes == NULL) {/if (c->writes == NULL \&\& 0) {/'
+run_mutant "X7b transform writes parse allocation: NULL check removed (N2)" "$MIG" inproc \
+    's/if (x->writes == NULL) {/if (x->writes == NULL \&\& 0) {/'
+run_mutant "X8 sb_put realloc: NULL check removed (N2)" "$MIG" inproc \
+    's/if (np == NULL) {/if (np == NULL \&\& 0) {/'
 
 restore_all
 echo "mutants: $total run, $kills killed, $fails not killed or not run"

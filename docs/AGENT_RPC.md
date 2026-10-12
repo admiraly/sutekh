@@ -260,8 +260,8 @@ respecialization succeeds.
 - Ordering. The supervisor does not interleave requests of clients. The install of a specialization follows its
   admission in the same call; a candidate.install or world.close that lands between them changes the world
   revision or closes the world, so the install is refused (stale revision or unknown world_id) and nothing is
-  installed for the old revision. Test-only seam, `SU_TEST_INTERLEAVE=candidate|close` (one shot per supervisor
-  process), exists only in `su_agent_test` (built with `SU_TEST_FAULT_HOOKS`); `check_release_seams.py` checks
+  installed for the old revision. Test-only seam, `SU_TEST_INTERLEAVE=candidate|close|migrate` (one shot per supervisor
+  process; `migrate` is section 17), exists only in `su_agent_test` (built with `SU_TEST_FAULT_HOOKS`); `check_release_seams.py` checks
   the production binary for it.
 - No-spawn evidence (TX4). `tests/e2e/native_spawn_probe.py --binary <sutekh>` runs a session (world.create,
   world.specialize scalar and avx2, capsule.submit, candidate.evaluate, candidate.install, world.specialize
@@ -534,7 +534,8 @@ Failures: a stale plan or revision is `SU_E_STALE_REVISION`; an invalid plan or 
 room, the commit is undone: the logged migration is removed from the replay log, the world is rebuilt by a
 replacement worker from the pinned pre-migration checkpoint, and the answer is `SU_E_RESOURCE_LIMIT` with
 `error.detail = {reason: "post_commit_checkpoint", rolled_back_to: "pinned_pre_migration_checkpoint"}`. The
-world keeps its pre-commit revision and digest; the pin is then no longer a rollback target. If the worker dies
+world keeps its pre-commit revision and digest, and the pin is unchanged: the last committed migration's pre-migration
+checkpoint stays the rollback target (see "Failed commits and the rollback target" below). If the worker dies
 before the commit is acknowledged, the answer is `SU_E_WORKER_FAILED` with a recovery object and the world is
 the pre-migration state (retry the commit). If the worker dies while the post-commit checkpoint is being taken,
 the recovery replays the logged migration, the checkpoint is taken again, and the commit is answered as a success
@@ -553,7 +554,10 @@ Inspect (`world.inspect`) adds `layout_generation`, `migration_lineage` (hex has
 `needs_resubmission` (always `[]` after a successful commit).
 
 Data rules: field IDs are never reused (retired IDs). A rollback keeps the retired IDs of the undone lineage
-except those that are live in the restored schema. A replacement system may not need access the world does
+except those that are live in the restored schema (the worker merges the retired list of the snapshot, the IDs of
+the schema being undone, and the current retired list, then removes the live IDs of the restored schema). A
+post-commit undo retires nothing, so the IDs of the undone commit can be added again by a later plan (N5, owner
+decision below). A replacement system may not need access the world does
 not grant (access does not grow in a migration). Migration documents are limited to 256 KiB; transform and IR
 documents to 64 KiB. At most four plans are kept per world (the oldest is replaced).
 
@@ -564,6 +568,67 @@ is a digit n >= 2, it is rewritten with n-1 and the kill happens (n kills in tot
 workers); `SUTEKH_TEST_KILL_MODE=abort` aborts instead. `SUTEKH_TEST_POST_CK_NOROOM_TOKEN` names a file that
 makes the next post-commit checkpoint report no room (the file is unlinked; read by the supervisor).
 
-Not in this section (deviations, see the M2-01b handoff): inline migration documents (paths only); native
-kernels admitted but not yet installed are not tracked per world (installed kernels of the old schedule are
-released when the schedule is replaced); the native build lane is not exercised by the migration tests.
+Failed commits and the rollback target (N1; M2-01 fixes2). A commit stages its pre-migration checkpoint as a
+candidate pin. The pin that `world.migrate_rollback` restores changes only when the commit succeeds. A failed commit
+at any stage (prepare refused, swap refused, post-commit checkpoint undone) leaves the last committed migration's pin
+in place, so rollback is still available after a failed commit. This reverses the M2-01b handoff deviation 2, which
+cleared the pin on a failed commit. Without any committed migration there is no pin: rollback is refused with
+`rollback_unavailable`. Tests: `run_failed_second_commit` (prepare and no-room modes) in `test_migrate_runtime`.
+
+Native records (M2-01 fixes3; SUTEKH_NATIVE builds). The supervisor keeps one record per installed native kernel
+(the source of `recovery.native` after a worker death). The records follow the worker's schedule: a successful
+commit clears them (the swap releases the kernels of the replaced schedule), a successful rollback clears them (the
+restore releases the kernels of the schedule it replaces), and an undo keeps them, as they were, the same policy as
+a worker death. Test: `scenario_migrate_step_death` and `scenario_rollback_native` in `test_specialize_inflight`.
+The registry state is read through `internal.stats` (below): one installed artifact before a commit; after the commit
+the world holds none, the process has lost that artifact (`registry_live`) and counts its release
+(`registry_released`); after a rollback the same holds for the artifact compiled for generation 2; the death that
+follows a rollback reports no `native` member.
+
+Bindings regeneration (contract section 10). A specialization made after a commit compiles against the new layout:
+the world's only artifact is then a generation-2 artifact with a new handle, and it installs and runs the native tier
+with columns equal to a VM-only control world on the unaffected data (`scenario_interleave_migrate`).
+
+Test-only additions (`SU_TEST_FAULT_HOOKS` builds only; the production binary does not contain them):
+- `internal.stats {}` on the test supervisor, forwarded to the active worker. The supervisor route exists only in
+  test builds and is not advertised; the worker method is the existing internal one (read-only, never forwarded in
+  production). The `native` object has `registry_live` and `registry_released` (process totals of the native registry), `world_artifacts`
+  (artifacts referenced by the used worlds' schedules) and `artifacts[{slot, seq, state, inflight}]`, where `state` is
+  the `SU_NV_STATE_*` value (3 = installed). It is read-only. Builds without native code report zeros.
+- `SU_TEST_INTERLEAVE=migrate` (one shot per supervisor process, added to the candidate and close seams of section 9):
+  a migration commits between the admission of a specialization and its install, so the install is refused with
+  `SU_E_STALE_REVISION`.
+- `SUTEKH_TEST_MIG_ALLOC_TOKEN=<path>` (test worker): the file holds a decimal N. The Nth allocation point of the next
+  `migrate.plan` or `migrate.prepare` request fails and the file is removed when it is read. The point count covers
+  the allocations the migration engine makes itself (the header of `su_migrate.h` lists what is not counted).
+
+Allocation-failure sweeps and the static check (N2; contract section 10). Three checks cover every allocation point
+of the engine:
+- In-process (`test_migrate`, ctest `migration`): a failure at each point of the plan and of the prepare of
+  `m_add.json`, `m_rename.json`, `m_remove.json` and `m_mixed.json` (the last has the transform, whose writes array,
+  capsule synthesis and lir copy are plan points). Each failing point leaves the world's digest unchanged, and the
+  first point past the last one succeeds.
+- Worker-level (`test_migrate_runtime`, `run_alloc_faults`): the same seam through `SUTEKH_TEST_MIG_ALLOC_TOKEN` for
+  the plan and the prepare of `m_add.json` only; a kill and recovery after the failed requests give the pre-migration
+  digest.
+- Static (`tests/migration-runtime/check_alloc_points.py`, ctest `migration_alloc_points`, and its self-test
+  `migration_alloc_points_selftest`): fails on any direct call to `malloc`, `calloc`, `realloc`, `reallocarray`,
+  `aligned_alloc`, `posix_memalign`, `memalign`, `valloc`, `pvalloc`, `strdup`, `strndup`, `asprintf` or `vasprintf` in
+  `su_migrate.c` outside the three counted wrappers (`mig_malloc`, `mig_calloc`, `mig_realloc`), and when a wrapper is
+  missing. It reads one source file and does not follow calls into other files.
+- Mutation proofs: `tests/migration-runtime/run_mutants.sh` (in place, restored from a backup) includes X4, X7, X7b and
+  X8 (kinds `static` and `inproc`); `tests/native/qualification/run_mutants.sh` (scratch copies) includes MIG-X10 (the
+  rollback keeps the native records) and MIG-X14 (the swap does not free the replaced schedule).
+
+N4 policy (documented, not unified; owner decision). If the worker dies three times during the rebuild that an undo
+performs: a death in a rebuild request marks the world unrecoverable (`SU_E_INTERNAL`); a death in `seed_worker`
+answers `SU_E_RESOURCE_LIMIT` with the pre-state, and the next request rebuilds. Both fail closed. This is the general
+M1 recovery policy. No migration test covers it. The owner decides whether to keep it or to unify it with M1.
+
+N5 retired IDs of an undone commit (owner decision, open). A post-commit undo does not retire the field IDs of the
+undone commit, so a later plan may add the same ID again. The contract (section 5, B5) read literally refuses that.
+The owner states the intended reading. Until then this is a deviation. A rollback does retire them (above).
+
+Not in this section (deviations, see the M2-01b and M2-01 fixes2/fixes3 handoffs): inline migration documents (paths
+only); native kernels admitted but not yet installed are not tracked per world (only the installed artifacts of the
+used worlds are counted); the native lane covers the commit, rollback and bindings checks above, not the undo.

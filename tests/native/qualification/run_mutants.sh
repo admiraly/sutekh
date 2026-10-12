@@ -228,6 +228,21 @@ mutant M12 src/platform/sutekh_main.c \
     'cfg.worker_address_space_bytes = UINT64_C(1) * 1024u * 1024u * 1024u;' \
     'harness:TX6'
 
+# MIG-X10 (M2-01 fixes3): the rollback does not clear the supervisor's native records (su_agent.c rollback_pinned). The
+# next worker death's recovery object then names the kernel of the rolled-back schedule (specialize_inflight).
+mutant MIG-X10 src/agent/su_agent.c \
+    'The restore replaces the schedule: the worker released the native kernels of the schedule it replaced. */' \
+    'The restore replaces the schedule: the worker released the native kernels of the schedule it replaced\. \*/' \
+    'The restore replaces the schedule (mutant X10) */ if (0)' \
+    specialize_inflight
+# MIG-X14 (M2-01 fixes3): the migration swap does not free the replaced schedule, so its kernels are never released
+# (worker.c h_internal_world_migrate_swap, step 5). The registry keeps the artifact (specialize_inflight).
+mutant MIG-X14 src/runtime/worker.c \
+    'the replacement is live. */' \
+    'the replacement is live\. \*/' \
+    'the replacement is live. (mutant X14) */ if (0)' \
+    specialize_inflight
+
 echo "summary: $SUMMARY"
 cat "$SUMMARY"
 exit $rc_all
