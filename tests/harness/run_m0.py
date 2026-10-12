@@ -780,6 +780,23 @@ ENGINE_METHODS["world.despawn"] = {
     "result": "world_id, world_revision, entity",
     "source": "src/agent/su_agent.c h_world_despawn, src/runtime/worker.c h_world_despawn",
 }
+ENGINE_METHODS["world.migrate_plan"] = {
+    "params": "{world_id, expected_world_revision, migration_path, transform_path?, lir_path?, drop_systems?}",
+    "result": "world_id, world_revision, plan_id, plan{valid, reason, migration_hash, plan_hash, schema_before, "
+              "schema_after, columns_added/removed/renamed, transform, resource (estimates), systems[impact]}",
+    "source": "src/agent/su_agent.c h_world_migrate_plan, src/runtime/worker.c h_internal_world_migrate_plan",
+}
+ENGINE_METHODS["world.migrate_commit"] = {
+    "params": "{world_id, plan_id, expected_world_revision, resubmit: [{system_id, candidate_id}], drop_systems?}",
+    "result": "world_id, world_revision, tick, layout_generation, migration_hash, plan_id, rollback_available, "
+              "timings, systems",
+    "source": "src/agent/su_agent.c h_world_migrate_commit, src/runtime/worker.c h_internal_world_migrate_swap",
+}
+ENGINE_METHODS["world.migrate_rollback"] = {
+    "params": "{world_id, expected_world_revision}  (no pin: SU_E_STALE_REVISION rollback_unavailable)",
+    "result": "world_id, world_revision, tick, restored_from, changes_lost, discarded_ticks, lineage",
+    "source": "src/agent/su_agent.c h_world_migrate_rollback, src/runtime/worker.c h_internal_world_restore_schema",
+}
 ENGINE_METHODS["events.read"] = {
     "params": "{world_id, cursor, max: 1..256}  (cursor above next_seq: SU_E_INVALID_ARGUMENT)",
     "result": "world_id, events[{event_seq, tick, kind, system_index, slot, seq, a, b}], next_cursor, skipped, "
@@ -3638,6 +3655,149 @@ def _with_rows(model, rows):
     return model
 
 
+# ---- M2-01b: schema migration runtime through the real binary (TX11; extra, not a TEST_SPEC id) ----
+MIG_CAP_OLD = "tests/reload/sys_a.capsule.json"
+MIG_CAP_NEW = "tests/reload/sys_a_gen2.capsule.json"
+MIG_TEST_NEW = "tests/reload/sys_a_gen2.test.json"
+MIG_FIXTURE = "tests/reload/world4.json"
+MIG_EVENT_MIGRATED = 0xFFFFFFFC        # SU_EVENT_MIGRATED (include/sutekh/entities.h)
+MIG_HEALTH_DEFAULT = 100
+MIG_ADD_HEALTH = {"migration_format": "0.1", "id": "m-tx11-add-health", "from_layout_generation": 1,
+                  "to_layout_generation": 2,
+                  "ops": [{"op": "add_field", "field": {"id": 3, "name": "health", "type": "u32",
+                                                       "default": MIG_HEALTH_DEFAULT}}]}
+MIG_REMOVE_VELOCITY = {"migration_format": "0.1", "id": "m-tx11-remove-velocity", "from_layout_generation": 1,
+                       "to_layout_generation": 2, "ops": [{"op": "remove_field", "id": 2}]}
+
+
+def migration_plan_mismatches(plan: dict, want: dict, impact_system: str, impact: str) -> list:
+    """Pure check of a world.migrate_plan answer against reference_eval.migration_plan_expectation: every
+    expected key (nested dicts compared key by key) and the impact of one system."""
+    out = []
+    for key, value in want.items():
+        got = plan.get(key)
+        if isinstance(value, dict):
+            for sub, sub_value in value.items():
+                if not isinstance(got, dict) or got.get(sub) != sub_value:
+                    out.append(f"plan.{key}.{sub}: want {sub_value!r} got {got.get(sub) if isinstance(got, dict) else got!r}")
+        elif got != value or isinstance(got, bool) != isinstance(value, bool):
+            out.append(f"plan.{key}: want {value!r} got {got!r}")
+    hits = [s for s in (plan.get("systems") or []) if isinstance(s, dict) and s.get("system_id") == impact_system]
+    if len(hits) != 1 or hits[0].get("impact") != impact:
+        out.append(f"plan impact of {impact_system}: want {impact} got {hits!r}")
+    return out
+
+
+def _migration_schema(tctx, sess, wid) -> dict:
+    """The world's schema from world.inspect (name -> entry), the layout generation and the lineage."""
+    res = call(tctx, sess, "world.inspect", {"world_id": wid, "fields": list(INSPECT_FIELDS), "limit": 1})
+    return {"schema": {f["name"]: f for f in res.get("schema", [])},
+            "layout_generation": res.get("layout_generation"), "lineage": res.get("migration_lineage", []),
+            "needs_resubmission": res.get("needs_resubmission")}
+
+
+def tx11(t: TestCtx):
+    """Schema migration runtime (extra; M2-01b): a plan for an add_field migration with its estimates and impacts,
+    a commit through an evaluated gen-2 candidate, the migrated schema (health defaulted to 100 on every alive row,
+    unused), movement after the commit compared with reference_eval.movement_ticks, SU_EVENT_MIGRATED in the event
+    log, a rollback to the pinned pre-migration checkpoint that reports the lost ticks, and two refusals (a plan that
+    removes a used field; a stale plan). Documents are written under the scratch directory inside the repository."""
+    fx = t.load(MIG_FIXTURE)
+    pos0 = fx["columns"]["position_x"]
+    vel0 = fx["columns"]["velocity_x"]
+    rows = len(pos0)
+    scratch = _write_scratch_dir(t, "tx11-")
+    add_rel = os.path.relpath(os.path.join(scratch, "m_add.json"), REPO)
+    rm_rel = os.path.relpath(os.path.join(scratch, "m_remove.json"), REPO)
+    with open(os.path.join(scratch, "m_add.json"), "w", encoding="utf-8") as fh:
+        json.dump(MIG_ADD_HEALTH, fh)
+    with open(os.path.join(scratch, "m_remove.json"), "w", encoding="utf-8") as fh:
+        json.dump(MIG_REMOVE_VELOCITY, fh)
+    sess = t.session("TX11 serve")
+    res = call(t, sess, "world.create", {"fixture_path": MIG_FIXTURE, "capsule_path": MIG_CAP_OLD})
+    wid, rev = res["world_id"], res["world_revision"]
+    res = call(t, sess, "world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": 2})
+    rev = res["world_revision"]
+    t.check_mismatches("TX11 tick 2 before the migration",
+                       verify_state(2, {"position_x": ref.movement_ticks(pos0, vel0, 2), "velocity_x": vel0},
+                                    inspect(t, sess, wid)))
+
+    # Plan: estimates and impacts; the plan changes nothing.
+    plan_res = call(t, sess, "world.migrate_plan", {"world_id": wid, "expected_world_revision": rev,
+                                                  "migration_path": add_rel})
+    plan_id = plan_res["plan_id"]
+    pl = plan_res["plan"]
+    t.check_mismatches("TX11 plan: validity, generations, schema counts, columns, impact of demo.movement",
+                       migration_plan_mismatches(pl, ref.migration_plan_expectation(1, 2, 2, 3, 1),
+                                                 "demo.movement", "compatible_after_resubmit"))
+    t.check("TX11 plan: the estimate is labelled as an estimate", True, pl.get("resource", {}).get("estimate"))
+    t.check("TX11 plan changes nothing: tick 2 still", 2, inspect(t, sess, wid)["tick"])
+
+    # Commit through an evaluated gen-2 candidate.
+    cand = call(t, sess, "capsule.submit", {"capsule_path": MIG_CAP_NEW})["candidate_id"]
+    ev = call(t, sess, "candidate.evaluate", {"candidate_id": cand, "test_path": MIG_TEST_NEW})
+    t.check("TX11 candidate (gen 2) passed evaluation", "passed", ev.get("status"))
+    com = call(t, sess, "world.migrate_commit",
+               {"world_id": wid, "plan_id": plan_id, "expected_world_revision": rev,
+                "resubmit": [{"system_id": "demo.movement", "candidate_id": cand}]})
+    t.check("TX11 commit: layout generation 2", 2, com.get("layout_generation"))
+    t.check("TX11 commit: the reply names the plan's migration hash", pl["migration_hash"], com.get("migration_hash"))
+    t.check("TX11 commit: rollback is available", True, com.get("rollback_available"))
+    rev = com["world_revision"]
+    sch = _migration_schema(t, sess, wid)
+    t.check("TX11 schema after commit: layout generation 2, one lineage entry", (2, 1),
+            (sch["layout_generation"], len(sch["lineage"])))
+    t.check("TX11 schema after commit: health is defined with default 100 and not used by any system",
+            (MIG_HEALTH_DEFAULT, False), (sch["schema"].get("health", {}).get("default"),
+                                          sch["schema"].get("health", {}).get("used")))
+    t.check("TX11 schema after commit: nothing needs resubmission", [], sch["needs_resubmission"])
+    state = inspect(t, sess, wid)
+    t.check_mismatches("TX11 tick 2 after the commit: columns unchanged by the migration",
+                       verify_state(2, {"position_x": ref.movement_ticks(pos0, vel0, 2), "velocity_x": vel0}, state))
+    ev_res = call(t, sess, "events.read", {"world_id": wid, "cursor": 0, "max": 256})
+    kinds = [e.get("kind") for e in ev_res.get("events", []) if isinstance(e, dict)]
+    t.check("TX11 SU_EVENT_MIGRATED is in the event log", True, MIG_EVENT_MIGRATED in kinds)
+
+    # Two more ticks with the migrated system; the reference applies the same movement.
+    res = call(t, sess, "world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": 2})
+    rev = res["world_revision"]
+    t.check_mismatches("TX11 tick 4 after the migration matches the reference",
+                       verify_state(4, {"position_x": ref.movement_ticks(pos0, vel0, 4), "velocity_x": vel0},
+                                    inspect(t, sess, wid)))
+
+    # Rollback to the pinned pre-migration checkpoint (tick 2): changes after it are lost and reported.
+    rb = call(t, sess, "world.migrate_rollback", {"world_id": wid, "expected_world_revision": rev})
+    t.check("TX11 rollback reports lost changes", True, rb.get("changes_lost"))
+    t.check("TX11 rollback reports the two discarded ticks", 2, rb.get("discarded_ticks"))
+    rev = rb["world_revision"]
+    t.check_mismatches("TX11 rollback restores the pinned state at tick 2",
+                       verify_state(2, {"position_x": ref.movement_ticks(pos0, vel0, 2), "velocity_x": vel0},
+                                    inspect(t, sess, wid)))
+    t.check("TX11 rollback restores the pre-migration schema (no health)", False,
+            "health" in _migration_schema(t, sess, wid)["schema"])
+
+    # Refusals: a plan that removes a used field is invalid; a plan made before a step is stale.
+    rm_plan = call(t, sess, "world.migrate_plan", {"world_id": wid, "expected_world_revision": rev,
+                                                 "migration_path": rm_rel})
+    t.check("TX11 plan removing a used field is invalid", False, rm_plan["plan"]["valid"])
+    env = sess.request("world.migrate_commit",
+                       {"world_id": wid, "plan_id": rm_plan["plan_id"], "expected_world_revision": rev,
+                        "resubmit": [{"system_id": "demo.movement", "candidate_id": cand}]})
+    t.check_mismatches("TX11 commit of an invalid plan refused with SU_E_UNSUPPORTED_MIGRATION",
+                       classify_error(env, "SU_E_UNSUPPORTED_MIGRATION"))
+    stale = call(t, sess, "world.migrate_plan", {"world_id": wid, "expected_world_revision": rev,
+                                               "migration_path": add_rel})
+    res = call(t, sess, "world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": 1})
+    rev = res["world_revision"]
+    env = sess.request("world.migrate_commit",
+                       {"world_id": wid, "plan_id": stale["plan_id"], "expected_world_revision": rev,
+                        "resubmit": [{"system_id": "demo.movement", "candidate_id": cand}]})
+    t.check_mismatches("TX11 commit of a stale plan refused with SU_E_STALE_REVISION",
+                       classify_error(env, "SU_E_STALE_REVISION"))
+    closed = call(t, sess, "world.close", {"world_id": wid, "expected_world_revision": rev})
+    t.check("TX11 world.close of the migrated world", True, closed.get("closed"))
+
+
 TESTS = [
     ("T00", "Clean bootstrap", (), t00),
     ("T01", "Reference movement", ("world.create", "world.step", "world.inspect"), t01),
@@ -3679,6 +3839,9 @@ TESTS = [
     ("TX10", "Entities: dead rows canonically zero after a native kernel stages nonzero values (native build, extra)",
      ("engine.info", "world.create", "world.despawn", "world.specialize", "world.step", "world.snapshot",
       "world.inspect", "world.close"), tx10),
+    ("TX11", "Schema migration runtime: plan, commit through a gen-2 candidate, default fill, rollback, refusals (extra, M2-01b)",
+     ("engine.info", "world.create", "world.step", "world.inspect", "world.migrate_plan", "world.migrate_commit",
+      "world.migrate_rollback", "events.read", "capsule.submit", "candidate.evaluate", "world.close"), tx11),
 ]
 
 
@@ -3960,6 +4123,15 @@ def _entity_fixture_round_trip() -> bool:
                 and doc["columns"]["velocity_x"] == [5, 6] and doc["schema_id"] == "demo.actor")
     finally:
         os.unlink(path)
+
+
+def _raises(fn, exc) -> bool:
+    """True when fn() raises exc (other exceptions are not a match)."""
+    try:
+        fn()
+    except exc:
+        return True
+    return False
 
 
 def self_test() -> int:
@@ -4544,6 +4716,41 @@ def self_test() -> int:
        and all(o % INSPECT_PAGE == 0 and 0 <= o < 1000000 for o in offs) and 0 in offs)
     ok("tx6: the test is registered and needs candidate.evaluate",
        any(tid == "TX6" and "candidate.evaluate" in req for tid, _n, req, _f in TESTS))
+    # ---- M2-01b: TX11 comparison logic and the migration reference (pure; no binary)
+    _mig_plan = {"valid": True, "reason": None, "from_layout_generation": 1, "to_layout_generation": 2,
+                 "schema_before": {"fields": 2, "digest": "x"}, "schema_after": {"fields": 3, "digest": "y"},
+                 "columns_added": 1, "columns_removed": 0, "columns_renamed": 0, "transform": None,
+                 "systems": [{"system_id": "demo.movement", "impact": "needs_resubmission", "reasons": []}]}
+    _mig_want = ref.migration_plan_expectation(1, 2, 2, 3, 1)
+    ok("tx11: a plan equal to the reference expectation gives no mismatch",
+       migration_plan_mismatches(_mig_plan, _mig_want, "demo.movement", "needs_resubmission") == [])
+    ok("tx11: a wrong schema field count is a mismatch",
+       migration_plan_mismatches({**_mig_plan, "schema_after": {"fields": 2}}, _mig_want, "demo.movement",
+                                 "needs_resubmission") != [])
+    ok("tx11: an invalid plan is a mismatch (valid must be True)",
+       migration_plan_mismatches({**_mig_plan, "valid": False}, _mig_want, "demo.movement", "needs_resubmission") != [])
+    ok("tx11: a plan whose valid flag is 1 instead of true is a mismatch (bool, not int)",
+       migration_plan_mismatches({**_mig_plan, "valid": 1}, _mig_want, "demo.movement", "needs_resubmission") != [])
+    ok("tx11: a wrong impact is a mismatch",
+       migration_plan_mismatches({**_mig_plan, "systems": [{"system_id": "demo.movement", "impact": "broken"}]},
+                                 _mig_want, "demo.movement", "needs_resubmission") != [])
+    ok("tx11: a missing system entry is a mismatch",
+       migration_plan_mismatches({**_mig_plan, "systems": []}, _mig_want, "demo.movement", "needs_resubmission") != [])
+    ok("tx11 reference: movement wraps modulo 2^32 (max + 1 = 0)",
+       ref.movement_ticks([4294967295], [1], 1) == [0])
+    ok("tx11 reference: movement after k ticks is p + k*v modulo 2^32",
+       ref.movement_ticks([3], [5], 4) == [23] and ref.movement_ticks([4294967290], [7], 2) == [8])
+    ok("tx11 reference: the add_field column is the default on every alive row",
+       ref.migrated_add_field(None, 4, MIG_HEALTH_DEFAULT) == [100, 100, 100, 100])
+    ok("tx11 reference: a non-u32 default is refused",
+       _raises(lambda: ref.migrated_add_field(None, 4, -1), ref.ReferenceError))
+    ok("tx11: TX11 is registered and needs the migration methods",
+       any(tid == "TX11" and "world.migrate_commit" in req and "world.migrate_rollback" in req
+           and "events.read" in req for tid, _n, req, _f in TESTS))
+    ok("tx11: the three migration methods are in the method table",
+       all(m in ENGINE_METHODS for m in ("world.migrate_plan", "world.migrate_commit", "world.migrate_rollback")))
+    ok("tx11: SU_EVENT_MIGRATED is 0xFFFFFFFC",
+       MIG_EVENT_MIGRATED == 0xFFFFFFFC)
     self_test_entities(ok)
     failed = [name for name, passed in checks if not passed]
     for name in failed:

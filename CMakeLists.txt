@@ -75,7 +75,7 @@ list(APPEND SU_AGENT_SOURCES src/runtime/entity_tick.c)
 # ---- END M2-00c3 entity tick ----
 add_library(su_agent STATIC ${SU_AGENT_SOURCES})
 target_include_directories(su_agent PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
-target_link_libraries(su_agent PUBLIC su_vm su_world su_ir su_platform su_snapshot su_jobs su_cmdq)
+target_link_libraries(su_agent PUBLIC su_vm su_world su_ir su_platform su_snapshot su_jobs su_cmdq su_migrate)
 target_compile_definitions(su_agent PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(su_agent)
 
@@ -248,7 +248,7 @@ if(SUTEKH_NATIVE)
     # Only the test links it; sutekh is built from su_agent without SU_TEST_FAULT_HOOKS.
     add_library(su_agent_test STATIC ${SU_AGENT_SOURCES} src/runtime/native_versions.c)
     target_include_directories(su_agent_test PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
-    target_link_libraries(su_agent_test PUBLIC su_vm su_world su_ir su_platform su_snapshot su_native su_jobs su_cmdq)
+    target_link_libraries(su_agent_test PUBLIC su_vm su_world su_ir su_platform su_snapshot su_native su_jobs su_cmdq su_migrate)
     target_compile_definitions(su_agent_test PRIVATE _POSIX_C_SOURCE=200809L SU_HAVE_NATIVE SU_TEST_FAULT_HOOKS)
     sutekh_apply_warnings(su_agent_test)
     # M1 closure C: safe retirement (in-flight count, retirement inside a kernel call) and the quarantine
@@ -380,3 +380,15 @@ add_test(NAME migration COMMAND test_migrate "${CMAKE_CURRENT_SOURCE_DIR}/tests/
     "${CMAKE_BINARY_DIR}/migration_expected.json" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 set_tests_properties(migration PROPERTIES DEPENDS migration_model)
 # ---- END M2-01a migration engine ----
+
+# ---- BEGIN M2-01b migration runtime (commit, rollback, recovery, crash stages; contract sections 3-6) ----
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/migration_runtime_scratch")
+add_executable(test_migrate_runtime tests/migration-runtime/test_migrate_runtime.c)
+target_link_libraries(test_migrate_runtime PRIVATE su_agent)
+target_compile_definitions(test_migrate_runtime PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_migrate_runtime)
+add_dependencies(test_migrate_runtime recovery_worker)
+add_test(NAME migration_runtime COMMAND test_migrate_runtime $<TARGET_FILE:recovery_worker>
+         "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/migration_runtime_scratch"
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# ---- END M2-01b migration runtime ----

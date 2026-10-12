@@ -33,6 +33,7 @@
 #include "vm/su_vm.h"
 #include "world/snapshot.h"
 #include "world/su_world.h"
+#include "world/migration/su_migrate.h"
 
 #define WORKER_MAX_WORLDS 4u
 /* Default and hard ceiling for world fixture JSON read by the worker. The default can be changed with
@@ -77,6 +78,18 @@ typedef struct RevPaths {
 
 /* One world: its schedule (ordered verified systems) and committed state. paths[i]
  * belongs to sched.sys[i]. */
+/* A prepared schema migration (M2-01b): the successor world and replacement schedule built aside,
+ * waiting for internal.world.migrate_swap. Owned until swap moves them into the world. */
+typedef struct WorkerMig {
+    int pending;
+    SuWorld *world;          /* successor world (NULL after swap) */
+    SuSchedule sched;        /* replacement schedule, entity runtime not yet attached */
+    SuMigratePlan plan;      /* owned: compiled migration, bound to the pre-migration digest */
+    RevPaths paths[SU_SCHED_MAX_SYSTEMS];
+} WorkerMig;
+
+/* One world: its schedule (ordered verified systems) and committed state. paths[i]
+ * belongs to sched.sys[i]. */
 typedef struct WorkerWorld {
     int used;
     char id[WORKER_ID_CAP];
@@ -84,6 +97,9 @@ typedef struct WorkerWorld {
     WorldInst inst;
     SuSchedule sched;
     RevPaths paths[SU_SCHED_MAX_SYSTEMS];
+    WorkerMig mig;
+    int post_swap;           /* a migration was swapped and its checkpoint is not yet captured */
+    int post_ck;             /* the post-migration checkpoint was captured (test seam) */
 } WorkerWorld;
 
 /* What a checkpoint needs beyond the snapshot bytes: the world it belongs to and the
@@ -340,11 +356,51 @@ static WorkerWorld *find_world(WorkerState *s, const char *id) {
     return NULL;
 }
 
+/* Releases a pending migration (its successor world, replacement schedule and plan). Safe when
+ * nothing is pending. */
+static void mig_clear(WorkerMig *m) {
+    if (m->world != NULL) {
+        su_world_destroy(m->world);
+    }
+    su_sched_free(&m->sched);
+    su_migrate_plan_free(&m->plan);
+    memset(m, 0, sizeof *m);
+}
+
 static void world_drop(WorkerWorld *ww) {
+    mig_clear(&ww->mig);
     inst_free(&ww->inst);
     su_sched_free(&ww->sched);
     memset(ww, 0, sizeof *ww);
 }
+
+/* Test-only crash seam for the migration stages (contract section 4, B9). SUTEKH_TEST_KILL_STAGE=<name>
+ * kills this worker at that stage (SIGKILL; abort with SUTEKH_TEST_KILL_MODE=abort). When
+ * SUTEKH_TEST_KILL_TOKEN names a file it is unlinked first and the kill happens only if that succeeds,
+ * so a replacement worker that inherits the environment does not die again. */
+#ifdef SU_TEST_FAULT_HOOKS
+static void mig_stage(const char *name) {
+    const char *want = getenv("SUTEKH_TEST_KILL_STAGE");
+    const char *tok = getenv("SUTEKH_TEST_KILL_TOKEN");
+    const char *mode = getenv("SUTEKH_TEST_KILL_MODE");
+    if (want == NULL || strcmp(want, name) != 0) {
+        return;
+    }
+    if (tok != NULL && tok[0] != '\0' && unlink(tok) != 0) {
+        return;
+    }
+    if (mode != NULL && strcmp(mode, "abort") == 0) {
+        abort();
+    }
+    kill(getpid(), SIGKILL);
+    for (;;) {
+        pause();
+    }
+}
+#define MIG_STAGE(name) mig_stage(name)
+#else
+#define MIG_STAGE(name) ((void)0)
+#endif
 
 static WorkerWorld *world_param(WorkerState *s, const SuJsonValue *params, WorkerFail *f, uint32_t *st) {
     WorkerWorld *ww = find_world(s, str_of(params, "world_id"));
@@ -1183,6 +1239,60 @@ static uint32_t h_world_inspect(WorkerState *s, const SuJsonValue *params, SuBuf
     su_buf_str(res, ",\"high_water\":");
     su_buf_u64(res, su_ents_high_water(su_world_entities_committed(ww->inst.w)));
     su_buf_str(res, "}");
+    /* M2-01b (contract section 7): layout generation, migration lineage (hex), the world's schema with use and
+     * access, and the systems that still need resubmission (none after a successful commit). */
+    {
+        const uint8_t (*lin)[32] = NULL;
+        uint32_t nlin = 0;
+        uint32_t fi;
+        su_buf_str(res, ",\"layout_generation\":");
+        su_buf_u64(res, su_world_layout_generation(ww->inst.w));
+        su_buf_str(res, ",\"migration_lineage\":[");
+        if (su_world_lineage(ww->inst.w, &lin, &nlin) == SU_OK) {
+            for (fi = 0; fi < nlin; fi++) {
+                char hex[65];
+                if (fi > 0) {
+                    su_buf_str(res, ",");
+                }
+                su_sha256_hex(lin[fi], hex);
+                su_buf_quoted(res, hex, 64);
+            }
+        }
+        su_buf_str(res, "],\"schema\":[");
+        for (fi = 0; fi < su_world_field_count(ww->inst.w); fi++) {
+            SuWorldFieldDesc fd;
+            uint32_t def = 0;
+            uint32_t acc = SU_ACCESS_READ;
+            uint32_t k;
+            int used = 0;
+            if (su_world_field_at(ww->inst.w, fi, &fd, &def) != SU_OK) {
+                continue;
+            }
+            for (k = 0; k < ww->sched.field_count; k++) {
+                if (ww->sched.fields[k].id == fd.id) {
+                    used = 1;
+                    acc = ww->sched.fields[k].access;
+                }
+            }
+            if (fi > 0) {
+                su_buf_str(res, ",");
+            }
+            su_buf_str(res, "{\"id\":");
+            su_buf_u64(res, fd.id);
+            su_buf_str(res, ",\"name\":");
+            su_buf_quoted(res, fd.name, strlen(fd.name));
+            su_buf_str(res, ",\"type\":");
+            su_buf_u64(res, fd.type);
+            su_buf_str(res, ",\"default\":");
+            su_buf_u64(res, def);
+            su_buf_str(res, ",\"used\":");
+            su_buf_str(res, used ? "true" : "false");
+            su_buf_str(res, ",\"access\":");
+            su_buf_u64(res, acc);
+            su_buf_str(res, "}");
+        }
+        su_buf_str(res, "],\"needs_resubmission\":[]");
+    }
     if (ent_h != NULL) {
         const SuEnts *ents = su_world_entities_committed(ww->inst.w);
         uint32_t ext = 0;
@@ -1439,6 +1549,11 @@ static uint32_t h_world_step(WorkerState *s, const SuJsonValue *params, SuBuf *r
     ww = world_param(s, params, f, &st);
     if (st != SU_OK) {
         return st;
+    }
+    if (ww->post_ck) {
+        /* Crash point "after checkpoint": the first step after a durable post-migration checkpoint. */
+        ww->post_ck = 0;
+        MIG_STAGE("migrate.step");
     }
     if (expect == NULL || !su_json_get_uint(su_json_member(params, "ticks"), &ticks) ||
         ticks > WORKER_MAX_TICKS) {
@@ -1803,30 +1918,50 @@ out:
 
 /* Builds a su_world descriptor for the schedule's schema over the given rows. The
  * field table is borrowed from the schedule; *descs (malloc) must be freed by the caller. */
-static uint32_t sched_desc(const SuSchedule *s, const uint32_t *ids, uint64_t rows, SuWorldDesc *desc,
-                           SuWorldFieldDesc **descs) {
+/* Access the schedule acc gives field id, or 0 when no installed system uses it. */
+static uint32_t sched_access_of(const SuSchedule *acc, uint32_t id) {
+    uint32_t k;
+    for (k = 0; acc != NULL && k < acc->field_count; k++) {
+        if (acc->fields[k].id == id) {
+            return acc->fields[k].access;
+        }
+    }
+    return 0u;
+}
+
+/* Descriptor of the WORLD's schema (M2-01b, contract section 1): every field of the world, used or not.
+ * A field's access is the schedule's where an installed system uses it and READ otherwise (a field no
+ * system uses is stored with READ, B6). Names point into the world, which must outlive the descriptor. */
+static uint32_t world_desc(const SuSchedule *acc, const SuWorld *schema, const uint32_t *ids, uint64_t rows,
+                           SuWorldDesc *desc, SuWorldFieldDesc **descs) {
+    uint32_t n = su_world_field_count(schema);
     SuWorldFieldDesc *d;
     uint32_t i;
 
     *descs = NULL;
-    d = malloc((s->field_count > 0 ? s->field_count : 1u) * sizeof *d);
+    d = malloc((n > 0u ? n : 1u) * sizeof *d);
     if (d == NULL) {
         return SU_E_RESOURCE_LIMIT;
     }
-    for (i = 0; i < s->field_count; i++) {
-        d[i].id = s->fields[i].id;
-        d[i].type = s->fields[i].type;
-        d[i].access = s->fields[i].access;
-        d[i].name = s->fields[i].name;
+    for (i = 0; i < n; i++) {
+        SuWorldFieldDesc fd;
+        uint32_t used;
+        if (su_world_field_at(schema, i, &fd, &(uint32_t){0}) != SU_OK) {
+            free(d);
+            return SU_E_INTERNAL;
+        }
+        used = sched_access_of(acc, fd.id);
+        d[i] = fd;
+        d[i].access = used != 0u ? used : SU_ACCESS_READ;
     }
     memset(desc, 0, sizeof *desc);
-    desc->schema_id = s->schema_id;
-    desc->schema_version = s->schema_version;
-    desc->layout_generation = s->layout_generation;
+    desc->schema_id = su_world_schema_id(schema);
+    desc->schema_version = su_world_schema_version(schema);
+    desc->layout_generation = su_world_layout_generation(schema);
     desc->row_count = rows;
     desc->entity_ids = ids;
     desc->fields = d;
-    desc->field_count = s->field_count;
+    desc->field_count = n;
     *descs = d;
     return SU_OK;
 }
@@ -1938,7 +2073,7 @@ static uint32_t h_world_snapshot(WorkerState *s, const SuJsonValue *params, SuBu
         return SU_E_STALE_REVISION;
     }
     sched_manifest(&ww->sched, man);
-    st = sched_desc(&ww->sched, ww->inst.ids, ww->inst.rows, &desc, &descs);
+    st = world_desc(&ww->sched, ww->inst.w, ww->inst.ids, ww->inst.rows, &desc, &descs);
     if (st != SU_OK) {
         fail(f, st, "allocation failed");
         return st;
@@ -2060,7 +2195,7 @@ static uint32_t restore_core(WorkerState *s, WorkerWorld *ww, const CkptRec *rec
 
     memset(&data, 0, sizeof data);
     memset(&nsched, 0, sizeof nsched);
-    st = sched_desc(&ww->sched, ww->inst.ids, ww->inst.rows, &desc, &descs);
+    st = world_desc(&ww->sched, ww->inst.w, ww->inst.ids, ww->inst.rows, &desc, &descs);
     if (st != SU_OK) {
         fail(f, st, "allocation failed");
         goto out;
@@ -2097,7 +2232,7 @@ static uint32_t restore_core(WorkerState *s, WorkerWorld *ww, const CkptRec *rec
         }
     }
 
-    st = sched_desc(&nsched, ww->inst.ids, ww->inst.rows, &desc2, &descs2);
+    st = world_desc(&nsched, ww->inst.w, ww->inst.ids, ww->inst.rows, &desc2, &descs2);
     if (st != SU_OK) {
         fail(f, st, "allocation failed");
         goto out;
@@ -2309,7 +2444,7 @@ static uint32_t world_capture(const WorkerWorld *ww, SuSnapshot *snap, WorkerFai
 
     rev_string(ww, rev, sizeof rev);
     sched_manifest(&ww->sched, man);
-    st = sched_desc(&ww->sched, ww->inst.ids, ww->inst.rows, &desc, &descs);
+    st = world_desc(&ww->sched, ww->inst.w, ww->inst.ids, ww->inst.rows, &desc, &descs);
     if (st != SU_OK) {
         fail(f, st, "allocation failed");
         return st;
@@ -2404,10 +2539,18 @@ static uint32_t h_internal_world_capture(WorkerState *s, const SuJsonValue *para
     if (st != SU_OK) {
         return st;
     }
+    if (ww->post_swap) {
+        /* Crash point "capture": the post-migration checkpoint is not yet durable. */
+        MIG_STAGE("migrate.capture");
+    }
     st = write_new_file(path, snap.bytes, snap.len, f);
     if (st != SU_OK) {
         su_snapshot_destroy(&snap);
         return st;
+    }
+    if (ww->post_swap) {
+        ww->post_swap = 0;
+        ww->post_ck = 1;
     }
     su_buf_str(res, "{\"world_id\":");
     su_buf_quoted(res, ww->id, strlen(ww->id));
@@ -3604,6 +3747,1298 @@ static uint32_t h_internal_specialize_install(WorkerState *s, const SuJsonValue 
 }
 #endif /* SU_HAVE_NATIVE */
 
+/* ---------- M2-01b schema migration runtime (contract M2_MIGRATION_CONTRACT.md sections 3-6) ----------
+ *
+ * Internal methods, all keyed by world_id and the supervisor's expected_world_revision:
+ *   internal.world.migrate_plan     estimates and validity; changes nothing
+ *   internal.world.migrate_prepare  builds the successor world and the replacement schedule ASIDE
+ *   internal.world.migrate_swap     publishes them (plan_hash must match the pending plan)
+ *   internal.world.migrate_abort    discards a pending migration
+ *   internal.world.create_from_snapshot  builds a world from a snapshot header and its capsules (recovery
+ *                                   of a migrated world, which the fixture no longer describes)
+ *   internal.world.restore_schema   restores a snapshot whose schema may differ (rollback); the retired
+ *                                   IDs of the current lineage are kept unless the restored schema is live */
+
+#define MIG_SPOOL_DEFAULT (UINT64_C(512) << 20)
+#define MIG_MEMORY_DEFAULT (UINT64_C(1) << 30)
+#define MIG_DOC_CAP (64u * 1024u)
+
+static int bytes_sha_is(const uint8_t *d, size_t n, const char *want) {
+    SuSha256 c;
+    uint8_t dig[32];
+    char hex[65];
+    su_sha256_init(&c);
+    su_sha256_update(&c, d, n);
+    su_sha256_final(&c, dig);
+    su_sha256_hex(dig, hex);
+    return want != NULL && strcmp(hex, want) == 0;
+}
+
+/* Reads one document and checks its sha256 (the supervisor spooled it and records the hash). */
+static uint32_t doc_read(const char *path, const char *sha, size_t max, uint8_t **data, size_t *len, WorkerFail *f) {
+    uint32_t st = su_path_read_file(path, max, data, len);
+    if (st != SU_OK) {
+        fail(f, st, "migration document could not be read");
+        return st;
+    }
+    if (!bytes_sha_is(*data, *len, sha)) {
+        free(*data);
+        *data = NULL;
+        *len = 0;
+        fail(f, SU_E_INTERNAL, "migration document does not match its recorded sha256");
+        return SU_E_INTERNAL;
+    }
+    return SU_OK;
+}
+
+typedef struct MigDocs {
+    uint8_t *mig;
+    size_t mig_len;
+    uint8_t *tr;
+    size_t tr_len;
+    uint8_t *lir;
+    size_t lir_len;
+    SuMigrateInputs in;
+} MigDocs;
+
+static void docs_free(MigDocs *d) {
+    free(d->mig);
+    free(d->tr);
+    free(d->lir);
+    memset(d, 0, sizeof *d);
+}
+
+static uint32_t docs_load(const SuJsonValue *params, MigDocs *d, WorkerFail *f) {
+    const char *mp = str_of(params, "migration_path");
+    const char *ms = str_of(params, "migration_sha256");
+    const char *tp = str_of(params, "transform_path");
+    const char *ts = str_of(params, "transform_sha256");
+    const char *lp = str_of(params, "lir_path");
+    const char *ls = str_of(params, "lir_sha256");
+    uint32_t st = SU_OK;
+
+    memset(d, 0, sizeof *d);
+    if (mp == NULL || ms == NULL) {
+        fail(f, SU_E_TYPE, "a migration needs migration_path and migration_sha256");
+        return SU_E_TYPE;
+    }
+    st = doc_read(mp, ms, SU_MIGRATE_DOC_MAX_BYTES, &d->mig, &d->mig_len, f);
+    if (st == SU_OK && tp != NULL) {
+        st = doc_read(tp, ts, MIG_DOC_CAP, &d->tr, &d->tr_len, f);
+    }
+    if (st == SU_OK && lp != NULL) {
+        st = doc_read(lp, ls, MIG_DOC_CAP, &d->lir, &d->lir_len, f);
+    }
+    if (st != SU_OK) {
+        docs_free(d);
+        return st;
+    }
+    d->in.migration = d->mig;
+    d->in.migration_len = d->mig_len;
+    d->in.transform = d->tr;
+    d->in.transform_len = d->tr_len;
+    d->in.lir = d->lir;
+    d->in.lir_len = d->lir_len;
+    return SU_OK;
+}
+
+/* The installed systems as the migration engine sees them: each capsule's field table. */
+typedef struct MigSystems {
+    SuMigrateSystem sys[SU_SCHED_MAX_SYSTEMS];
+    SuWorldFieldDesc *fd[SU_SCHED_MAX_SYSTEMS];
+    uint32_t n;
+} MigSystems;
+
+static void migsys_free(MigSystems *m) {
+    uint32_t i;
+    for (i = 0; i < m->n; i++) {
+        free(m->fd[i]);
+    }
+    memset(m, 0, sizeof *m);
+}
+
+static uint32_t migsys_build(const SuSchedule *s, MigSystems *m) {
+    uint32_t i;
+    uint32_t k;
+    memset(m, 0, sizeof *m);
+    m->n = s->count;
+    for (i = 0; i < s->count; i++) {
+        const SuLirModule *mod = s->sys[i].mod;
+        uint32_t nf = mod->field_count;
+        m->fd[i] = malloc((nf > 0u ? nf : 1u) * sizeof *m->fd[i]);
+        if (m->fd[i] == NULL) {
+            migsys_free(m);
+            return SU_E_RESOURCE_LIMIT;
+        }
+        for (k = 0; k < nf; k++) {
+            m->fd[i][k].id = mod->fields[k].id;
+            m->fd[i][k].type = mod->fields[k].type;
+            m->fd[i][k].access = mod->fields[k].access;
+            m->fd[i][k].name = mod->fields[k].name;
+        }
+        m->sys[i].system_id = s->sys[i].system_id;
+        m->sys[i].fields = m->fd[i];
+        m->sys[i].field_count = nf;
+    }
+    return SU_OK;
+}
+
+static uint32_t budget_params(const SuJsonValue *params, SuMigrateBudget *b, WorkerFail *f) {
+    uint32_t st = opt_uint(params, "spool_bytes", MIG_SPOOL_DEFAULT, 0u, UINT64_MAX, &b->spool_bytes, f);
+    if (st == SU_OK) {
+        st = opt_uint(params, "memory_bytes", MIG_MEMORY_DEFAULT, 0u, UINT64_MAX, &b->memory_bytes, f);
+    }
+    return st;
+}
+
+static int name_listed(const char *const *list, uint32_t n, const char *name) {
+    uint32_t k;
+    for (k = 0; k < n; k++) {
+        if (strcmp(list[k], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static uint32_t world_access_of(const SuWorld *w, uint32_t id, uint32_t *access) {
+    uint32_t i;
+    for (i = 0; i < su_world_field_count(w); i++) {
+        SuWorldFieldDesc fd;
+        if (su_world_field_at(w, i, &fd, &(uint32_t){0}) != SU_OK) {
+            return 0;
+        }
+        if (fd.id == id) {
+            *access = fd.access;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void put_hex(SuBuf *b, const uint8_t d[32]) {
+    char hex[65];
+    su_sha256_hex(d, hex);
+    su_buf_quoted(b, hex, 64);
+}
+
+static const char *impact_name(uint32_t impact) {
+    switch (impact) {
+    case SU_MIGRATE_IMPACT_COMPATIBLE:
+        return "compatible_after_resubmit";
+    case SU_MIGRATE_IMPACT_NEEDS_RESUBMISSION:
+        return "needs_resubmission";
+    default:
+        return "broken";
+    }
+}
+
+/* The plan as the reply shape of contract section 3 (estimates labelled as such). */
+static void write_plan(SuBuf *b, const SuMigratePlan *p) {
+    static const struct {
+        uint32_t bit;
+        const char *name;
+    } rbits[] = {{SU_MIGRATE_REASON_LAYOUT, "layout_generation"},
+                 {SU_MIGRATE_REASON_RENAMED, "renamed"},
+                 {SU_MIGRATE_REASON_TRANSFORMED, "transformed"},
+                 {SU_MIGRATE_REASON_FIELD_REMOVED, "field_removed"},
+                 {SU_MIGRATE_REASON_UNKNOWN_FIELD, "unknown_field"}};
+    uint32_t i;
+    size_t k;
+    su_buf_str(b, "{\"valid\":");
+    su_buf_str(b, p->valid ? "true" : "false");
+    su_buf_str(b, ",\"reason\":");
+    if (p->reason == SU_MIGRATE_REFUSED_FIELD_IN_USE) {
+        su_buf_str(b, "\"field_in_use\"");
+    } else if (p->reason == SU_MIGRATE_REFUSED_SPOOL_BUDGET) {
+        su_buf_str(b, "\"spool_budget\"");
+    } else if (p->reason == SU_MIGRATE_REFUSED_MEMORY) {
+        su_buf_str(b, "\"memory\"");
+    } else {
+        su_buf_str(b, "null");
+    }
+    su_buf_str(b, ",\"message\":");
+    su_buf_quoted(b, p->message, strlen(p->message));
+    su_buf_str(b, ",\"migration_id\":");
+    su_buf_quoted(b, p->migration_id, strlen(p->migration_id));
+    su_buf_str(b, ",\"from_layout_generation\":");
+    su_buf_u64(b, p->from_layout_generation);
+    su_buf_str(b, ",\"to_layout_generation\":");
+    su_buf_u64(b, p->to_layout_generation);
+    su_buf_str(b, ",\"migration_hash\":");
+    su_buf_quoted(b, p->migration_hash_hex, 64);
+    su_buf_str(b, ",\"plan_hash\":");
+    su_buf_quoted(b, p->plan_hash_hex, 64);
+    su_buf_str(b, ",\"schema_before\":{\"fields\":");
+    su_buf_u64(b, p->schema_before_fields);
+    su_buf_str(b, ",\"digest\":");
+    put_hex(b, p->schema_before_digest);
+    su_buf_str(b, "},\"schema_after\":{\"fields\":");
+    su_buf_u64(b, p->schema_after_fields);
+    su_buf_str(b, ",\"digest\":");
+    put_hex(b, p->schema_after_digest);
+    su_buf_str(b, "}");
+    su_buf_str(b, ",\"columns_added\":");
+    su_buf_u64(b, p->columns_added);
+    su_buf_str(b, ",\"columns_removed\":");
+    su_buf_u64(b, p->columns_removed);
+    su_buf_str(b, ",\"columns_renamed\":");
+    su_buf_u64(b, p->columns_renamed);
+    su_buf_str(b, ",\"transform\":");
+    if (p->has_transform) {
+        su_buf_str(b, "{\"semantic_hash\":");
+        put_hex(b, p->transform_semantic_hash);
+        su_buf_str(b, ",\"writes\":");
+        su_buf_u64(b, p->transform_writes);
+        su_buf_str(b, "}");
+    } else {
+        su_buf_str(b, "null");
+    }
+    su_buf_str(b, ",\"resource\":{\"estimate\":true,\"rows\":");
+    su_buf_u64(b, p->rows);
+    su_buf_str(b, ",\"capacity\":");
+    su_buf_u64(b, p->capacity);
+    su_buf_str(b, ",\"bytes_new_columns\":");
+    su_buf_u64(b, p->bytes_new_columns);
+    su_buf_str(b, ",\"bytes_peak\":");
+    su_buf_u64(b, p->bytes_peak);
+    su_buf_str(b, ",\"pre_migration_bytes\":");
+    su_buf_u64(b, p->pre_migration_bytes);
+    su_buf_str(b, ",\"post_commit_bytes_bound\":");
+    su_buf_u64(b, p->post_commit_bytes_bound);
+    su_buf_str(b, "}");
+    su_buf_str(b, ",\"systems\":[");
+    for (i = 0; i < p->system_count; i++) {
+        const SuMigrateSystemImpact *si = &p->systems[i];
+        int first = 1;
+        if (i > 0) {
+            su_buf_str(b, ",");
+        }
+        su_buf_str(b, "{\"system_id\":");
+        su_buf_quoted(b, si->system_id, strlen(si->system_id));
+        su_buf_str(b, ",\"impact\":");
+        su_buf_quoted(b, impact_name(si->impact), strlen(impact_name(si->impact)));
+        su_buf_str(b, ",\"reasons\":[");
+        for (k = 0; k < sizeof rbits / sizeof rbits[0]; k++) {
+            if ((si->reasons & rbits[k].bit) != 0u) {
+                if (!first) {
+                    su_buf_str(b, ",");
+                }
+                su_buf_quoted(b, rbits[k].name, strlen(rbits[k].name));
+                first = 0;
+            }
+        }
+        su_buf_str(b, "]}");
+    }
+    su_buf_str(b, "]}");
+}
+
+/* Maps a refused plan to its status: budget refusals are resource limits, the rest unsupported. */
+static uint32_t plan_refusal_code(const SuMigratePlan *p) {
+    if (p->reason == SU_MIGRATE_REFUSED_SPOOL_BUDGET || p->reason == SU_MIGRATE_REFUSED_MEMORY) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    return SU_E_UNSUPPORTED_MIGRATION;
+}
+
+/* internal.world.migrate_plan {world_id, expected_world_revision, migration_path, migration_sha256,
+ * transform_path?, transform_sha256?, lir_path?, lir_sha256?, drop_systems?, spool_bytes?, memory_bytes?}. */
+static uint32_t h_internal_world_migrate_plan(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const char *drops[SU_SCHED_MAX_SYSTEMS];
+    char rev[64];
+    MigDocs docs;
+    MigSystems ms;
+    SuMigrateBudget bud;
+    SuMigratePlan plan;
+    uint32_t nd;
+    uint32_t st = SU_OK;
+
+    (void)s;
+    memset(&plan, 0, sizeof plan);
+    memset(&ms, 0, sizeof ms);
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (expect == NULL) {
+        fail(f, SU_E_TYPE, "migrate_plan needs expected_world_revision");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+    st = budget_params(params, &bud, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    nd = string_items(su_json_member(params, "drop_systems"), drops, SU_SCHED_MAX_SYSTEMS);
+    st = docs_load(params, &docs, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = migsys_build(&ww->sched, &ms);
+    if (st == SU_OK) {
+        st = su_migrate_plan(ww->inst.w, &docs.in, ms.sys, ms.n, drops, nd, &bud, &plan);
+    }
+    if (st != SU_OK) {
+        fail(f, st, plan.message[0] != '\0' ? plan.message : "migration plan refused");
+    } else {
+        su_buf_str(res, "{\"world_id\":");
+        su_buf_quoted(res, ww->id, strlen(ww->id));
+        su_buf_str(res, ",\"world_revision\":");
+        su_buf_quoted(res, rev, strlen(rev));
+        if (str_of(params, "plan_id") != NULL) {
+            su_buf_str(res, ",\"plan_id\":");
+            su_buf_quoted(res, str_of(params, "plan_id"), strlen(str_of(params, "plan_id")));
+        }
+        su_buf_str(res, ",\"plan\":");
+        write_plan(res, &plan);
+        su_buf_str(res, "}");
+    }
+    su_migrate_plan_free(&plan);
+    migsys_free(&ms);
+    docs_free(&docs);
+    return st == SU_OK && res->failed ? SU_E_RESOURCE_LIMIT : st;
+}
+
+/* internal.world.migrate_prepare {world_id, expected_world_revision, to_layout_generation, migration...,
+ * drop_systems?, resubmit: [{system_id, capsule_path, source_path, capsule_sha256, source_sha256,
+ * semantic_hash}], spool_bytes?, memory_bytes?}. Builds the successor world and the replacement schedule
+ * aside; nothing installed changes. */
+static uint32_t h_internal_world_migrate_prepare(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const char *drops[SU_SCHED_MAX_SYSTEMS];
+    const SuJsonValue *arr = su_json_member(params, "resubmit");
+    const SuJsonValue *to_v = su_json_member(params, "to_layout_generation");
+    CkptSys rs[SU_SCHED_MAX_SYSTEMS];
+    RevPaths npaths[SU_SCHED_MAX_SYSTEMS];
+    char rev[64];
+    MigDocs docs;
+    MigSystems ms;
+    SuMigrateBudget bud;
+    SuMigratePlan plan;
+    SuMigrateTimings tm;
+    SuSchedule nsched;
+    SuWorld *cand = NULL;
+    uint64_t to64 = 0;
+    uint32_t nd;
+    uint32_t nr = 0;
+    uint32_t i;
+    uint32_t k;
+    uint32_t j;
+    uint32_t st = SU_OK;
+
+    memset(&plan, 0, sizeof plan);
+    memset(&docs, 0, sizeof docs);
+    memset(&ms, 0, sizeof ms);
+    memset(&tm, 0, sizeof tm);
+    su_sched_init(&nsched);
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (ww->mig.pending) {
+        fail(f, SU_E_INVALID_ARGUMENT, "a migration is already pending in this world");
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (expect == NULL || to_v == NULL || !su_json_get_uint(to_v, &to64) || to64 < 1u || to64 > UINT32_MAX) {
+        fail(f, SU_E_TYPE, "prepare needs expected_world_revision and to_layout_generation (u32, at least 1)");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+    MIG_STAGE("migrate.prepare");
+    st = budget_params(params, &bud, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    nd = string_items(su_json_member(params, "drop_systems"), drops, SU_SCHED_MAX_SYSTEMS);
+    if (arr == NULL || arr->type != SU_JSON_ARRAY || arr->u.array.count == 0u || arr->u.array.count > SU_SCHED_MAX_SYSTEMS) {
+        fail(f, SU_E_TYPE, "prepare needs 1..8 resubmitted systems");
+        return SU_E_TYPE;
+    }
+    for (k = 0; k < arr->u.array.count; k++) {
+        if (!restore_entry_fill(&rs[k], arr->u.array.items[k])) {
+            fail(f, SU_E_TYPE, "each resubmit entry needs system_id, capsule_path, source_path, capsule_sha256, source_sha256 and semantic_hash");
+            return SU_E_TYPE;
+        }
+    }
+    nr = (uint32_t)arr->u.array.count;
+    st = docs_load(params, &docs, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = migsys_build(&ww->sched, &ms);
+    if (st != SU_OK) {
+        goto out;
+    }
+    st = su_migrate_plan(ww->inst.w, &docs.in, ms.sys, ms.n, drops, nd, &bud, &plan);
+    if (st != SU_OK) {
+        fail(f, st, plan.message);
+        goto out;
+    }
+    if (!plan.valid) {
+        st = plan_refusal_code(&plan);
+        fail(f, st, plan.message);
+        goto out;
+    }
+    if (plan.to_layout_generation != (uint32_t)to64) {
+        st = SU_E_SCHEMA_MISMATCH;
+        fail(f, st, "to_layout_generation does not match the migration document");
+        goto out;
+    }
+    /* Contract B2: every installed system is replaced by exactly one candidate or dropped. */
+    for (i = 0; i < nr; i++) {
+        int installed = su_sched_find(&ww->sched, rs[i].system_id) >= 0;
+        if (!installed || name_listed(drops, nd, rs[i].system_id)) {
+            st = SU_E_UNSUPPORTED_MIGRATION;
+            fail(f, st, "systems_unresolved: a resubmitted system is not installed or is dropped");
+            goto out;
+        }
+        for (k = 0; k < nr; k++) {
+            if (k != i && strcmp(rs[k].system_id, rs[i].system_id) == 0) {
+                st = SU_E_UNSUPPORTED_MIGRATION;
+                fail(f, st, "systems_unresolved: a system is resubmitted twice");
+                goto out;
+            }
+        }
+    }
+    for (i = 0; i < ww->sched.count; i++) {
+        const char *sid = ww->sched.sys[i].system_id;
+        int found = 0;
+        for (k = 0; k < nr; k++) {
+            found += strcmp(rs[k].system_id, sid) == 0;
+        }
+        if (name_listed(drops, nd, sid) ? found != 0 : found != 1) {
+            st = SU_E_UNSUPPORTED_MIGRATION;
+            fail(f, st, "systems_unresolved: an installed system is neither replaced nor dropped");
+            goto out;
+        }
+    }
+    for (k = 0; k < nd; k++) {
+        if (su_sched_find(&ww->sched, drops[k]) < 0) {
+            st = SU_E_INVALID_ARGUMENT;
+            fail(f, st, "drop_systems names a system that is not installed");
+            goto out;
+        }
+    }
+    /* Replacement schedule in the installed order. Every capsule is reloaded with its recorded hashes. */
+    for (i = 0; i < ww->sched.count; i++) {
+        const char *sid = ww->sched.sys[i].system_id;
+        SuLirModule *mod = NULL;
+        uint32_t sv = 0;
+        uint32_t gen = 0;
+        char why[WORKER_MSG_CAP];
+        if (name_listed(drops, nd, sid)) {
+            continue;
+        }
+        for (j = 0; j < nr && strcmp(rs[j].system_id, sid) != 0; j++) {
+        }
+        st = su_reload_load(rs[j].paths.capsule, rs[j].paths.source, rs[j].source_hash, rs[j].capsule_hash, &mod,
+                            &sv, &gen, why, sizeof why);
+        if (st != SU_OK) {
+            fail(f, SU_E_SCHEMA_MISMATCH, why);
+            st = SU_E_SCHEMA_MISMATCH;
+            goto out;
+        }
+        if (gen != (uint32_t)to64 || sv != ww->sched.schema_version || strcmp(mod->system_id, sid) != 0) {
+            su_reload_module_free(mod);
+            st = SU_E_SCHEMA_MISMATCH;
+            fail(f, st, "replacement capsule is not at the migration's layout generation or does not match its system");
+            goto out;
+        }
+        st = su_sched_add(&nsched, mod, sv, gen, 0, 1, su_world_tick(ww->inst.w));
+        if (st != SU_OK) {
+            su_reload_module_free(mod);
+            st = SU_E_SCHEMA_MISMATCH;
+            fail(f, st, "replacement cannot join the world's schedule");
+            goto out;
+        }
+        npaths[nsched.count - 1u] = rs[j].paths;
+    }
+    if (nsched.count == 0u) {
+        st = SU_E_UNSUPPORTED_MIGRATION;
+        fail(f, st, "a world needs at least one system after the migration");
+        goto out;
+    }
+    st = su_sched_finalize(&nsched);
+    if (st != SU_OK) {
+        fail(f, SU_E_SCHEMA_MISMATCH, "replacement revisions disagree on a field's ID, name or type");
+        st = SU_E_SCHEMA_MISMATCH;
+        goto out;
+    }
+    /* Access cannot grow: the successor keeps the world's stored access (contract B6, runtime deviation). */
+    for (i = 0; i < nsched.field_count; i++) {
+        uint32_t old_access = 0;
+        if (!world_access_of(ww->inst.w, nsched.fields[i].id, &old_access) ||
+            (nsched.fields[i].access & ~old_access) != 0u) {
+            st = SU_E_UNSUPPORTED_MIGRATION;
+            fail(f, st, "a replacement system needs access to a field the world does not grant");
+            goto out;
+        }
+    }
+    st = su_migrate_prepare(ww->inst.w, &plan, NULL, &cand, &tm);
+    if (st != SU_OK) {
+        fail(f, st, "successor world could not be prepared; the world is unchanged");
+        goto out;
+    }
+    for (i = 0; i < nsched.field_count; i++) {
+        int ok = 0;
+        for (j = 0; j < su_world_field_count(cand); j++) {
+            SuWorldFieldDesc fd;
+            if (su_world_field_at(cand, j, &fd, &(uint32_t){0}) == SU_OK && fd.id == nsched.fields[i].id) {
+                ok = strcmp(fd.name, nsched.fields[i].name) == 0 && fd.type == nsched.fields[i].type;
+                break;
+            }
+        }
+        if (!ok) {
+            st = SU_E_SCHEMA_MISMATCH;
+            fail(f, st, "replacement field does not match the successor schema");
+            goto out;
+        }
+    }
+    /* Stage: everything is built; keep it until swap. */
+    ww->mig.pending = 1;
+    ww->mig.world = cand;
+    cand = NULL;
+    ww->mig.sched = nsched;
+    memset(&nsched, 0, sizeof nsched);
+    ww->mig.plan = plan;
+    memset(&plan, 0, sizeof plan);
+    memcpy(ww->mig.paths, npaths, sizeof npaths);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"plan\":");
+    write_plan(res, &ww->mig.plan);
+    su_buf_str(res, ",\"candidate\":{\"layout_generation\":");
+    su_buf_u64(res, su_world_layout_generation(ww->mig.world));
+    su_buf_str(res, ",\"tick\":");
+    su_buf_u64(res, su_world_tick(ww->mig.world));
+    su_buf_str(res, ",\"row_count\":");
+    su_buf_u64(res, su_world_row_count(ww->mig.world));
+    su_buf_str(res, ",\"systems\":");
+    write_manifest(res, &ww->mig.sched);
+    su_buf_str(res, "},\"timings\":{\"prepare_ns\":");
+    su_buf_u64(res, tm.prepare_ns);
+    su_buf_str(res, ",\"transform_ns\":");
+    su_buf_u64(res, tm.transform_ns);
+    su_buf_str(res, "}}");
+    st = SU_OK;
+out:
+    if (cand != NULL) {
+        su_world_destroy(cand);
+    }
+    su_sched_free(&nsched);
+    su_migrate_plan_free(&plan);
+    migsys_free(&ms);
+    docs_free(&docs);
+    return st == SU_OK && res->failed ? SU_E_RESOURCE_LIMIT : st;
+}
+
+/* Registry bookkeeping for a replacement revision that is begun and then installed or finished. */
+static uint64_t reg_begin_system(SuRegistry *reg, const char *world_id, const char *why, const SuSysEntry *e) {
+    uint64_t txid = su_reg_begin(reg, world_id, why, e->source_hash, e->capsule_hash);
+    if (txid == 0) {
+        return 0;
+    }
+    su_reg_set_system(reg, txid, e->system_id);
+    (void)su_reg_advance(reg, txid, SU_REV_SOURCE_VALIDATED);
+    (void)su_reg_advance(reg, txid, SU_REV_EFFECTS_VERIFIED);
+    (void)su_reg_advance(reg, txid, SU_REV_PREPARED);
+    (void)su_reg_advance(reg, txid, SU_REV_ADMITTED);
+    (void)su_reg_advance(reg, txid, SU_REV_PENDING_BOUNDARY);
+    return txid;
+}
+
+/* Appends SU_EVENT_MIGRATED (a = from layout generation, b = to) at the given tick. */
+static uint32_t ent_log_migrated(SuEntRt *rt, uint64_t tick, uint32_t from_gen, uint32_t to_gen) {
+    SuEventLog *log = su_ent_rt_log(rt);
+    SuEvent ev;
+    if (log == NULL) {
+        return SU_E_INTERNAL;
+    }
+    memset(&ev, 0, sizeof ev);
+    ev.event_seq = su_evlog_next_seq(log);
+    ev.tick = tick;
+    ev.kind = SU_EVENT_MIGRATED;
+    ev.system_index = SU_SYSTEM_INDEX_HOST;
+    ev.a = from_gen;
+    ev.b = to_gen;
+    return su_evlog_append(log, &ev, 1u);
+}
+
+/* internal.world.migrate_swap {world_id, expected_world_revision, plan_hash}. Publication at the boundary:
+ * every check and every fallible step precedes the pointer moves; a refusal changes nothing. */
+static uint32_t h_internal_world_migrate_swap(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const char *want_plan = str_of(params, "plan_hash");
+    SuSchedule *ns;
+    SuWorld *retired = NULL;
+    uint64_t txids[SU_SCHED_MAX_SYSTEMS];
+    uint32_t nb = 0;
+    uint32_t i;
+    uint64_t tick;
+    uint32_t from_gen;
+    uint32_t to_gen;
+    char rev[64];
+    char mig_hash[65];
+    uint32_t st = SU_OK;
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (!ww->mig.pending) {
+        fail(f, SU_E_INVALID_ARGUMENT, "no migration is pending in this world");
+        return SU_E_INVALID_ARGUMENT;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (expect == NULL || strcmp(expect, rev) != 0 || want_plan == NULL || strcmp(want_plan, ww->mig.plan.plan_hash_hex) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision or plan_hash does not match the pending migration");
+        return SU_E_STALE_REVISION;
+    }
+    ns = &ww->mig.sched;
+    tick = su_world_tick(ww->mig.world);
+    from_gen = ww->mig.plan.from_layout_generation;
+    to_gen = ww->mig.plan.to_layout_generation;
+    snprintf(mig_hash, sizeof mig_hash, "%s", ww->mig.plan.migration_hash_hex);
+
+    /* 1: revisions begun for the replacement systems (installed after the swap). */
+    for (i = 0; i < ns->count; i++) {
+        int old = su_sched_find(&ww->sched, ns->sys[i].system_id);
+        uint64_t txid;
+        if (old < 0) {
+            st = SU_E_INTERNAL;
+            fail(f, st, "pending replacement names a system that is not installed");
+            goto abort_regs;
+        }
+        txid = reg_begin_system(&s->reg, ww->id, "migration", &ns->sys[i]);
+        if (txid == 0) {
+            st = SU_E_RESOURCE_LIMIT;
+            fail(f, st, "version registry is full");
+            goto abort_regs;
+        }
+        txids[nb++] = txid;
+        ns->sys[i].txid = txid;
+        ns->sys[i].system_rev = ww->sched.sys[old].system_rev + 1u;
+        ns->sys[i].installed_tick = tick;
+    }
+    /* 2: the entity runtime moves to the replacement schedule and SU_EVENT_MIGRATED is appended there. */
+    ns->ent = ww->sched.ent;
+    ww->sched.ent = NULL;
+    if (ns->ent != NULL) {
+        st = ent_log_migrated(ns->ent, tick, from_gen, to_gen);
+        if (st != SU_OK) {
+            ww->sched.ent = ns->ent;
+            ns->ent = NULL;
+            fail(f, st, "migration event could not be appended");
+            goto abort_regs;
+        }
+    }
+    /* 3: the atomic publication (the pointer moves happen inside su_migrate_swap after its checks). */
+    st = su_migrate_swap(&ww->inst.w, &ww->mig.plan, ww->mig.world, &retired);
+    if (st != SU_OK) {
+        ww->sched.ent = ns->ent;
+        ns->ent = NULL;
+        fail(f, st, "migration swap refused: the world changed since the plan");
+        goto abort_regs;
+    }
+    ww->mig.world = NULL;
+    /* 4: the replaced revisions retire, the replacement revisions install at the boundary tick. */
+    for (i = 0; i < ns->count; i++) {
+        int old = su_sched_find(&ww->sched, ns->sys[i].system_id);
+        (void)su_reg_install(&s->reg, ns->sys[i].txid, ns->sys[i].system_rev, tick, ns->sys[i].semantic_hash);
+        if (old >= 0 && ww->sched.sys[old].txid != 0) {
+            (void)su_reg_retire(&s->reg, ww->sched.sys[old].txid);
+        }
+    }
+    /* 5: the old schedule goes (its native kernels are released by su_sched_free), the replacement is live. */
+    su_sched_free(&ww->sched);
+    ww->sched = *ns;
+    memset(ns, 0, sizeof *ns);
+    memcpy(ww->paths, ww->mig.paths, sizeof ww->paths);
+    su_world_destroy(retired);
+    ww->revision += 1u;
+    su_migrate_plan_free(&ww->mig.plan);
+    memset(&ww->mig, 0, sizeof ww->mig);
+    ww->post_swap = 1;
+    ww->post_ck = 0;
+    /* Crash point "swap": the state is published, the reply is not sent. */
+    MIG_STAGE("migrate.swap");
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    snprintf(rev, sizeof rev, "%s.r%llu", ww->id, (unsigned long long)ww->revision);
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"tick\":");
+    su_buf_u64(res, su_world_tick(ww->inst.w));
+    su_buf_str(res, ",\"layout_generation\":");
+    su_buf_u64(res, su_world_layout_generation(ww->inst.w));
+    su_buf_str(res, ",\"migration_hash\":");
+    su_buf_quoted(res, mig_hash, 64);
+    su_buf_str(res, ",\"worker_pid\":");
+    su_buf_u64(res, (uint64_t)getpid());
+    su_buf_str(res, ",\"semantic_manifest\":");
+    write_manifest(res, &ww->sched);
+    su_buf_str(res, "}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+
+abort_regs:
+    for (i = 0; i < nb; i++) {
+        su_reg_finish(&s->reg, txids[i], SU_REV_REJECTED, st, "migration aborted");
+    }
+    return st;
+}
+
+/* internal.world.migrate_abort {world_id}: discards a pending migration; idempotent. */
+static uint32_t h_internal_world_migrate_abort(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    uint32_t st = SU_OK;
+    int was = 0;
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    was = ww->mig.pending;
+    mig_clear(&ww->mig);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"aborted\":");
+    su_buf_str(res, was ? "true" : "false");
+    su_buf_str(res, "}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+static int cmp_u32(const void *a, const void *b) {
+    uint32_t x = *(const uint32_t *)a;
+    uint32_t y = *(const uint32_t *)b;
+    return (x > y) - (x < y);
+}
+
+/* Builds the world, its schedule and the snapshot data from snapshot bytes whose schema may differ from
+ * the current world's (contract section 5, 6). The schema comes from the header; the schedule from the
+ * recorded capsules (manifest checked); access from the schedule. retire_src (rollback only) contributes
+ * its retired IDs, minus the IDs that are live in the restored schema. On SU_OK *nsched, *neww and
+ * *ids_out are owned by the caller; data is owned by the caller in every case. */
+static uint32_t snapshot_build(const CkptRec *rec, const uint8_t *bytes, size_t len, const SuWorld *retire_src,
+                               SuSchedule *nsched, SuWorld **neww, SuSnapshotData *data, uint32_t **ids_out,
+                               uint64_t *rows_out, WorkerFail *f) {
+    SuWorld *tmp = NULL;
+    SuSnapshotError perr;
+    SuJsonDoc doc;
+    SuJsonLimits lim;
+    SuJsonError jerr;
+    SuWorldDesc desc;
+    SuWorldFieldDesc *descs = NULL;
+    const SuJsonValue *arr;
+    uint32_t *ids = NULL;
+    int doc_ok = 0;
+    uint32_t st;
+    uint32_t i;
+    uint32_t j;
+
+    memset(data, 0, sizeof *data);
+    memset(&doc, 0, sizeof doc);
+    memset(&perr, 0, sizeof perr);
+    su_sched_init(nsched);
+    *neww = NULL;
+    *ids_out = NULL;
+    *rows_out = 0;
+    st = su_snapshot_restore_world(bytes, len, NULL, 1, &tmp, data, &perr);
+    if (st != SU_OK) {
+        fail(f, st, perr.message[0] != '\0' ? perr.message : "snapshot header does not parse");
+        goto out;
+    }
+    /* Row identities: snapshot formats 0.2 and 0.3 take them from the descriptor, so they are read here. */
+    lim.max_bytes = len;
+    lim.max_depth = SU_PROTO_MAX_DEPTH + 4u;
+    st = su_json_parse(bytes, len, &lim, &doc, &jerr);
+    if (st != SU_OK) {
+        fail(f, st, jerr.message);
+        goto out;
+    }
+    doc_ok = 1;
+    arr = doc.root != NULL ? su_json_member(doc.root, "entity_ids") : NULL;
+    if (arr == NULL || arr->type != SU_JSON_ARRAY || arr->u.array.count != data->row_count) {
+        st = SU_E_SCHEMA_MISMATCH;
+        fail(f, st, "snapshot entity_ids do not match its row count");
+        goto out;
+    }
+    st = read_u32_array(arr, data->row_count, &ids);
+    if (st != SU_OK) {
+        fail(f, st, "entity_ids must be u32 integers");
+        goto out;
+    }
+    st = rebuild_schedule(rec, data, nsched, f);
+    if (st != SU_OK) {
+        goto out;
+    }
+    if (strcmp(su_world_schema_id(tmp), nsched->schema_id) != 0 ||
+        su_world_schema_version(tmp) != nsched->schema_version ||
+        su_world_layout_generation(tmp) != nsched->layout_generation) {
+        st = SU_E_SCHEMA_MISMATCH;
+        fail(f, st, "snapshot schema or layout generation does not match the recorded revisions");
+        goto out;
+    }
+    for (i = 0; i < nsched->field_count; i++) {
+        int ok = 0;
+        for (j = 0; j < su_world_field_count(tmp); j++) {
+            SuWorldFieldDesc fd;
+            if (su_world_field_at(tmp, j, &fd, &(uint32_t){0}) == SU_OK && fd.id == nsched->fields[i].id) {
+                ok = strcmp(fd.name, nsched->fields[i].name) == 0 && fd.type == nsched->fields[i].type;
+                break;
+            }
+        }
+        if (!ok) {
+            st = SU_E_SCHEMA_MISMATCH;
+            fail(f, st, "snapshot field table does not match the recorded revisions");
+            goto out;
+        }
+    }
+    if (retire_src != NULL) {
+        const uint32_t *cur = NULL;
+        uint32_t ncur = 0;
+        uint32_t total = data->retired_count;
+        uint32_t *merged;
+        uint32_t n = 0;
+        if (su_world_retired_ids(retire_src, &cur, &ncur) != SU_OK) {
+            st = SU_E_INTERNAL;
+            fail(f, st, "current retired IDs are unavailable");
+            goto out;
+        }
+        merged = malloc((total + ncur > 0u ? total + ncur : 1u) * sizeof *merged);
+        if (merged == NULL) {
+            st = SU_E_RESOURCE_LIMIT;
+            fail(f, st, "allocation failed");
+            goto out;
+        }
+        for (i = 0; i < data->retired_count; i++) {
+            merged[n++] = data->retired[i];
+        }
+        for (i = 0; i < ncur; i++) {
+            merged[n++] = cur[i];
+        }
+        qsort(merged, n, sizeof *merged, cmp_u32);
+        {
+            uint32_t w = 0;
+            for (i = 0; i < n; i++) {
+                int live = 0;
+                for (j = 0; j < su_world_field_count(tmp); j++) {
+                    SuWorldFieldDesc fd;
+                    if (su_world_field_at(tmp, j, &fd, &(uint32_t){0}) == SU_OK && fd.id == merged[i]) {
+                        live = 1;
+                        break;
+                    }
+                }
+                if ((w == 0u || merged[w - 1u] != merged[i]) && !live) {
+                    merged[w++] = merged[i];
+                }
+            }
+            free(data->retired);
+            data->retired = merged;
+            data->retired_count = w;
+        }
+    }
+    st = world_desc(nsched, tmp, ids, data->row_count, &desc, &descs);
+    if (st != SU_OK) {
+        fail(f, st, "allocation failed");
+        goto out;
+    }
+    st = su_snapshot_restore(&desc, data, neww, NULL, NULL);
+    if (st != SU_OK) {
+        fail(f, st, "snapshot does not restore into the restored schema");
+        goto out;
+    }
+    *ids_out = ids;
+    ids = NULL;
+    *rows_out = data->row_count;
+    st = SU_OK;
+out:
+    if (doc_ok) {
+        su_json_doc_free(&doc);
+    }
+    if (tmp != NULL) {
+        su_world_destroy(tmp);
+    }
+    free(descs);
+    free(ids);
+    if (st != SU_OK) {
+        if (*neww != NULL) {
+            su_world_destroy(*neww);
+            *neww = NULL;
+        }
+        su_sched_free(nsched);
+    }
+    return st;
+}
+
+/* Entity runtime of a restored world: the event log comes from the snapshot (0.2 and 0.3) with the caps given. */
+static uint32_t restored_entities(SuSchedule *ns, const SuSnapshotData *data, uint64_t ms, uint64_t me, uint64_t lm) {
+    SuEntRt *nrt = NULL;
+    uint32_t st;
+    if (data->format_minor >= 2) {
+        st = su_ent_rt_create_restored(ms, me, data->event_log_max, data->event_next_seq, data->event_dropped,
+                                       data->events, data->event_count, &nrt);
+    } else {
+        st = su_ent_rt_create_restored(ms, me, lm, 0u, 0u, NULL, 0u, &nrt);
+    }
+    if (st != SU_OK) {
+        return st;
+    }
+    st = su_sched_adopt_entities(ns, nrt);
+    if (st != SU_OK) {
+        su_ent_rt_destroy(nrt);
+    }
+    return st;
+}
+
+/* Reads and verifies snapshot bytes and fills the checkpoint record from capsules (shared by the
+ * schema-changing handlers). */
+static uint32_t snapshot_file(const SuJsonValue *params, uint8_t **data, size_t *len, CkptRec **rec_out,
+                              const char *path_key, const char *sha_key, const char *caps_key, WorkerFail *f) {
+    const char *path = str_of(params, path_key);
+    const char *sha = str_of(params, sha_key);
+    const SuJsonValue *caps = su_json_member(params, caps_key);
+    CkptRec *rec;
+    size_t i;
+    uint32_t st;
+
+    *rec_out = NULL;
+    if (path == NULL || sha == NULL || caps == NULL || caps->type != SU_JSON_ARRAY || caps->u.array.count == 0u ||
+        caps->u.array.count > SU_SCHED_MAX_SYSTEMS) {
+        fail(f, SU_E_TYPE, "snapshot_path, snapshot_sha256 and 1..8 capsules are required");
+        return SU_E_TYPE;
+    }
+    st = su_path_read_file(path, SU_SNAPSHOT_MAX_BYTES, data, len);
+    if (st != SU_OK) {
+        fail(f, st, "snapshot file could not be read");
+        return st;
+    }
+    if (!bytes_sha_is(*data, *len, sha)) {
+        free(*data);
+        *data = NULL;
+        fail(f, SU_E_INTERNAL, "snapshot file does not match its recorded sha256");
+        return SU_E_INTERNAL;
+    }
+    rec = calloc(1, sizeof *rec);
+    if (rec == NULL) {
+        free(*data);
+        *data = NULL;
+        fail(f, SU_E_RESOURCE_LIMIT, "allocation failed");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    rec->used = 1;
+    snprintf(rec->snapshot_id, sizeof rec->snapshot_id, "%s", sha);
+    rec->count = (uint32_t)caps->u.array.count;
+    for (i = 0; i < caps->u.array.count; i++) {
+        if (!restore_entry_fill(&rec->sys[i], caps->u.array.items[i])) {
+            free(rec);
+            free(*data);
+            *data = NULL;
+            fail(f, SU_E_TYPE, "each capsules entry needs system_id, capsule_path, source_path, capsule_sha256, source_sha256 and semantic_hash");
+            return SU_E_TYPE;
+        }
+    }
+    *rec_out = rec;
+    return SU_OK;
+}
+
+/* internal.world.create_from_snapshot {world_id, world_revision, snapshot_path, snapshot_sha256,
+ * capsules, max_struct_per_tick?, max_events_per_tick?, event_log_max?}. Recovery of a migrated world:
+ * the snapshot is the base and the fixture is not used. */
+static uint32_t h_internal_world_create_from_snapshot(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    const char *want = str_of(params, "world_id");
+    const char *rev_s = str_of(params, "world_revision");
+    WorkerWorld *ww = NULL;
+    SuSchedule nsched;
+    SuWorld *neww = NULL;
+    SuSnapshotData data;
+    CkptRec *rec = NULL;
+    uint8_t *bytes = NULL;
+    size_t len = 0;
+    uint32_t *ids = NULL;
+    uint64_t rows = 0;
+    uint64_t want_n = 0;
+    uint64_t exact_rev = 0;
+    uint64_t max_struct = 0;
+    uint64_t max_events = 0;
+    uint64_t log_max = 0;
+    uint32_t i;
+    uint32_t st;
+    int have_data = 0;
+
+    memset(&data, 0, sizeof data);
+    su_sched_init(&nsched);
+    (void)rev_s;
+    if (want == NULL || !parse_world_id(want, &want_n) || find_world(s, want) != NULL ||
+        !su_json_get_uint(su_json_member(params, "world_revision"), &exact_rev)) {
+        fail(f, SU_E_INVALID_ARGUMENT, "create_from_snapshot needs a free world_id and an integer world_revision");
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (opt_uint(params, "max_struct_per_tick", SU_CMDQ_DEFAULT_PER_TICK_CAP, 1u, SU_CMDQ_MAX_TICK_CAP, &max_struct, f) != SU_OK ||
+        opt_uint(params, "max_events_per_tick", SU_CMDQ_DEFAULT_PER_TICK_CAP, 1u, SU_CMDQ_MAX_TICK_CAP, &max_events, f) != SU_OK ||
+        opt_uint(params, "event_log_max", SU_CMDQ_DEFAULT_EVENT_LOG_MAX, 1u, SU_CMDQ_MAX_LOG_CAPACITY, &log_max, f) != SU_OK) {
+        return f->code;
+    }
+    for (i = 0; i < WORKER_MAX_WORLDS; i++) {
+        if (!s->worlds[i].used) {
+            ww = &s->worlds[i];
+            break;
+        }
+    }
+    if (ww == NULL) {
+        fail(f, SU_E_RESOURCE_LIMIT, "worker already holds the maximum number of worlds");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    st = snapshot_file(params, &bytes, &len, &rec, "snapshot_path", "snapshot_sha256", "capsules", f);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = snapshot_build(rec, bytes, len, NULL, &nsched, &neww, &data, &ids, &rows, f);
+    if (st == SU_OK) {
+        have_data = 1;
+        st = restored_entities(&nsched, &data, max_struct, max_events, log_max);
+        if (st != SU_OK) {
+            fail(f, st, "event log could not be restored");
+        }
+    }
+    if (st == SU_OK) {
+        for (i = 0; i < nsched.count; i++) {
+            uint64_t txid = reg_begin_system(&s->reg, want, "create_from_snapshot", &nsched.sys[i]);
+            if (txid == 0) {
+                st = SU_E_RESOURCE_LIMIT;
+                fail(f, st, "version registry is full");
+                break;
+            }
+            nsched.sys[i].txid = txid;
+            nsched.sys[i].system_rev = 1;
+            nsched.sys[i].installed_tick = 0;
+            (void)su_reg_install(&s->reg, txid, 1, su_world_tick(neww), nsched.sys[i].semantic_hash);
+        }
+    }
+    if (st == SU_OK) {
+        if (want_n > s->next_id) {
+            s->next_id = want_n;
+        }
+        snprintf(ww->id, sizeof ww->id, "%s", want);
+        ww->revision = exact_rev;
+        ww->inst.w = neww;
+        neww = NULL;
+        ww->inst.ids = ids;
+        ids = NULL;
+        ww->inst.rows = rows;
+        ww->sched = nsched;
+        memset(&nsched, 0, sizeof nsched);
+        for (i = 0; i < ww->sched.count; i++) {
+            ww->paths[i] = rec->sys[i].paths;
+        }
+        ww->used = 1;
+        su_buf_str(res, "{\"world_id\":");
+        su_buf_quoted(res, ww->id, strlen(ww->id));
+        su_buf_str(res, ",\"world_revision\":");
+        {
+            char rev[64];
+            rev_string(ww, rev, sizeof rev);
+            su_buf_quoted(res, rev, strlen(rev));
+        }
+        su_buf_str(res, ",\"tick\":");
+        su_buf_u64(res, su_world_tick(ww->inst.w));
+        su_buf_str(res, ",\"row_count\":");
+        su_buf_u64(res, ww->inst.rows);
+        su_buf_str(res, ",\"layout_generation\":");
+        su_buf_u64(res, su_world_layout_generation(ww->inst.w));
+        su_buf_str(res, ",\"worker_pid\":");
+        su_buf_u64(res, (uint64_t)getpid());
+        su_buf_str(res, ",\"semantic_manifest\":");
+        write_manifest(res, &ww->sched);
+        su_buf_str(res, "}");
+    }
+    if (neww != NULL) {
+        su_world_destroy(neww);
+    }
+    free(ids);
+    su_sched_free(&nsched);
+    if (have_data) {
+        su_snapshot_data_free(&data);
+    }
+    free(rec);
+    free(bytes);
+    if (st == SU_OK && res->failed) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    return st;
+}
+
+/* internal.world.restore_schema {world_id, expected_world_revision, snapshot_path, snapshot_sha256,
+ * capsules, mode: "advance" | "exact", world_revision?}. Rollback: the world takes the snapshot's schema and
+ * state; the replaced schedule is released; retired IDs of the current lineage are kept. */
+static uint32_t h_internal_world_restore_schema(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const char *mode = str_of(params, "mode");
+    SuSchedule nsched;
+    SuWorld *neww = NULL;
+    SuSnapshotData data;
+    CkptRec *rec = NULL;
+    uint8_t *bytes = NULL;
+    size_t len = 0;
+    uint32_t *ids = NULL;
+    uint64_t rows = 0;
+    uint64_t exact_rev = 0;
+    uint64_t ms = 0;
+    uint64_t me = 0;
+    uint64_t lm = 0;
+    uint64_t txids[SU_SCHED_MAX_SYSTEMS];
+    uint32_t nb = 0;
+    uint32_t i;
+    uint32_t st = SU_OK;
+    int exact;
+    char rev[64];
+    int have_data = 0;
+
+    memset(&data, 0, sizeof data);
+    su_sched_init(&nsched);
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (expect == NULL || mode == NULL) {
+        fail(f, SU_E_TYPE, "restore_schema needs expected_world_revision and mode");
+        return SU_E_TYPE;
+    }
+    if (strcmp(mode, "exact") == 0) {
+        exact = 1;
+        if (!su_json_get_uint(su_json_member(params, "world_revision"), &exact_rev)) {
+            fail(f, SU_E_TYPE, "exact mode needs an integer world_revision");
+            return SU_E_TYPE;
+        }
+    } else if (strcmp(mode, "advance") == 0) {
+        exact = 0;
+    } else {
+        fail(f, SU_E_TYPE, "mode must be advance or exact");
+        return SU_E_TYPE;
+    }
+    rev_string(ww, rev, sizeof rev);
+    if (strcmp(expect, rev) != 0) {
+        fail(f, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+        return SU_E_STALE_REVISION;
+    }
+    st = snapshot_file(params, &bytes, &len, &rec, "snapshot_path", "snapshot_sha256", "capsules", f);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = snapshot_build(rec, bytes, len, ww->inst.w, &nsched, &neww, &data, &ids, &rows, f);
+    if (st == SU_OK) {
+        have_data = 1;
+        (void)su_ent_rt_caps(ww->sched.ent, &ms, &me, &lm);
+        st = restored_entities(&nsched, &data, ms, me, lm);
+        if (st != SU_OK) {
+            fail(f, st, "event log could not be restored; world unchanged");
+        }
+    }
+    /* Revisions: unchanged systems keep theirs; a changed or new one begins a transaction. */
+    for (i = 0; st == SU_OK && i < nsched.count; i++) {
+        int old = su_sched_find(&ww->sched, nsched.sys[i].system_id);
+        uint64_t txid;
+        if (old >= 0 && strcmp(ww->sched.sys[old].semantic_hash, nsched.sys[i].semantic_hash) == 0) {
+            nsched.sys[i].txid = ww->sched.sys[old].txid;
+            nsched.sys[i].system_rev = ww->sched.sys[old].system_rev;
+            nsched.sys[i].installed_tick = ww->sched.sys[old].installed_tick;
+            continue;
+        }
+        txid = reg_begin_system(&s->reg, ww->id, "restore_schema", &nsched.sys[i]);
+        if (txid == 0) {
+            st = SU_E_RESOURCE_LIMIT;
+            fail(f, st, "version registry is full");
+            break;
+        }
+        txids[nb++] = txid;
+        nsched.sys[i].txid = txid;
+    }
+    if (st != SU_OK) {
+        for (i = 0; i < nb; i++) {
+            su_reg_finish(&s->reg, txids[i], SU_REV_REJECTED, st, "restore aborted");
+        }
+        goto out;
+    }
+    /* Swap: nothing below can fail. */
+    {
+        uint64_t tick = su_world_tick(neww);
+        uint32_t k;
+        for (k = 0; k < nsched.count; k++) {
+            int old = su_sched_find(&ww->sched, nsched.sys[k].system_id);
+            if (old < 0 || nsched.sys[k].txid == ww->sched.sys[old].txid) {
+                if (old >= 0) {
+                    continue;
+                }
+            }
+            nsched.sys[k].system_rev = (old >= 0 ? ww->sched.sys[old].system_rev : 0u) + 1u;
+            nsched.sys[k].installed_tick = tick;
+            (void)su_reg_install(&s->reg, nsched.sys[k].txid, nsched.sys[k].system_rev, tick, nsched.sys[k].semantic_hash);
+            if (old >= 0 && ww->sched.sys[old].txid != 0) {
+                (void)su_reg_retire(&s->reg, ww->sched.sys[old].txid);
+            }
+        }
+    }
+    su_world_destroy(ww->inst.w);
+    free(ww->inst.ids);
+    ww->inst.w = neww;
+    neww = NULL;
+    ww->inst.ids = ids;
+    ids = NULL;
+    ww->inst.rows = rows;
+    su_sched_free(&ww->sched);
+    ww->sched = nsched;
+    memset(&nsched, 0, sizeof nsched);
+    for (i = 0; i < ww->sched.count; i++) {
+        ww->paths[i] = rec->sys[i].paths;
+    }
+    ww->revision = exact ? exact_rev : ww->revision + 1u;
+    ww->post_swap = 0;
+    ww->post_ck = 0;
+    mig_clear(&ww->mig);
+    /* Crash point "rollback": the state is restored, the reply is not sent. */
+    MIG_STAGE("migrate.rollback");
+    rev_string(ww, rev, sizeof rev);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"tick\":");
+    su_buf_u64(res, su_world_tick(ww->inst.w));
+    su_buf_str(res, ",\"layout_generation\":");
+    su_buf_u64(res, su_world_layout_generation(ww->inst.w));
+    su_buf_str(res, ",\"worker_pid\":");
+    su_buf_u64(res, (uint64_t)getpid());
+    su_buf_str(res, ",\"semantic_manifest\":");
+    write_manifest(res, &ww->sched);
+    su_buf_str(res, "}");
+    st = res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+out:
+    if (neww != NULL) {
+        su_world_destroy(neww);
+    }
+    free(ids);
+    su_sched_free(&nsched);
+    if (have_data) {
+        su_snapshot_data_free(&data);
+    }
+    free(rec);
+    free(bytes);
+    return st;
+}
+
 static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int overflow, SuBuf *out) {
     SuJsonDoc doc;
     SuRequest req;
@@ -3675,6 +5110,18 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
         st = h_internal_world_digest(s, req.params, &res, &f);
     } else if (strcmp(req.method, "internal.world.restore_bytes") == 0) {
         st = h_internal_world_restore_bytes(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "internal.world.migrate_plan") == 0) {
+        st = h_internal_world_migrate_plan(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "internal.world.migrate_prepare") == 0) {
+        st = h_internal_world_migrate_prepare(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "internal.world.migrate_swap") == 0) {
+        st = h_internal_world_migrate_swap(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "internal.world.migrate_abort") == 0) {
+        st = h_internal_world_migrate_abort(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "internal.world.create_from_snapshot") == 0) {
+        st = h_internal_world_create_from_snapshot(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "internal.world.restore_schema") == 0) {
+        st = h_internal_world_restore_schema(s, req.params, &res, &f);
     } else {
         st = SU_E_UNSUPPORTED_METHOD;
         fail(&f, st, "worker does not implement this method");

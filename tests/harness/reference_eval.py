@@ -565,3 +565,29 @@ def self_check_known_answers() -> list[str]:
         if got != want:
             bad.append(f"{op}({a:#x},{b:#x}) evaluator={got:#x} known={want:#x}")
     return bad
+
+
+# ---- M2-01b schema migration reference (TX11; contract M2_MIGRATION_CONTRACT.md sections 2-5) ----
+# Independent of the engine: a migration that adds one u32 field fills it with the default for every alive row
+# below the high-water mark, and the movement system adds velocity to position each tick, modulo 2**32.
+
+def migrated_add_field(columns: dict, rows: int, default: int) -> list:
+    """The new column after an add_field migration over rows alive rows below the high-water mark."""
+    if not _is_u32(default) or rows < 0:
+        raise ReferenceError("add_field default must be u32 and rows non-negative")
+    return [default] * rows
+
+
+def movement_ticks(position: list, velocity: list, ticks: int) -> list:
+    """position_x after ticks of position_x = position_x + velocity_x (u32, wrapping), velocity unchanged."""
+    if ticks < 0 or len(position) != len(velocity):
+        raise ReferenceError("ticks must be non-negative and the columns must have equal length")
+    return [(p + ticks * v) & MASK for p, v in zip(position, velocity)]
+
+
+def migration_plan_expectation(gen_from: int, gen_to: int, fields_before: int, fields_after: int,
+                               added: int) -> dict:
+    """The plan fields TX11 checks for an add_field-only migration (no removal, no rename, no transform)."""
+    return {"valid": True, "reason": None, "from_layout_generation": gen_from, "to_layout_generation": gen_to,
+            "schema_before": {"fields": fields_before}, "schema_after": {"fields": fields_after},
+            "columns_added": added, "columns_removed": 0, "columns_renamed": 0, "transform": None}

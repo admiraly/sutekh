@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifdef SU_HAVE_NATIVE
@@ -66,6 +67,8 @@
 /* M1-02c-2 limits (docs/AGENT_RPC.md section 10). */
 #define AGENT_MAX_QUARANTINE 16u /* quarantined artifacts; a full table refuses native specialization */
 #define AGENT_MAX_RESPEC 16u     /* pending respecialization requests */
+#define AGENT_MAX_PLANS 4u       /* M2-01b: migration plans kept per world (each names spooled documents) */
+#define AGENT_MIG_MEMORY_BUDGET (UINT64_C(1) << 30) /* memory admission for world.migrate_plan (estimate) */
 #define AGENT_RESPEC_RETRIES 1u  /* extra attempts after SU_E_WORKER_FAILED (refusals are not retried) */
 #define AGENT_INTERNAL_ID "internal"
 
@@ -100,10 +103,32 @@ typedef struct Ckpt {
     uint64_t bytes;
     uint32_t count;
     int client;            /* taken by world.snapshot (counted by world.close as a snapshot) */
+    int migrated;          /* the world had a migration or rollback when this was taken: recovery uses the snapshot */
     SysRef sys[AGENT_MAX_SYSTEMS];
 } Ckpt;
 
-enum { LOG_NONE = 0, LOG_STEP = 1, LOG_INSTALL = 2, LOG_SPAWN = 3, LOG_DESPAWN = 4 };
+enum { LOG_NONE = 0, LOG_STEP = 1, LOG_INSTALL = 2, LOG_SPAWN = 3, LOG_DESPAWN = 4, LOG_MIGRATE = 5,
+       LOG_ROLLBACK = 6 };
+
+/* M2-01b: a schema migration (LOG_MIGRATE) or a rollback (LOG_ROLLBACK). Documents and replacement
+ * capsules are spooled by content hash; a rollback names the pinned pre-migration checkpoint it restored. */
+#define AGENT_MIG_ID_CAP 24u
+typedef struct MigOp {
+    char mig_sha[65];          /* migration document (spool ext "migration") */
+    char tr_sha[65];           /* transform document (ext "transform"), when has_tr */
+    char lir_sha[65];          /* transform IR (ext "lir"), when has_lir */
+    char plan_hash[65];
+    uint32_t has_tr;
+    uint32_t has_lir;
+    uint32_t to_gen;
+    uint64_t spool_bytes;      /* admission budget the plan was made with */
+    uint64_t memory_bytes;
+    uint32_t n;                /* replacement systems, in schedule order (sys[] of the committed world) */
+    SysRef sys[AGENT_MAX_SYSTEMS];
+    uint32_t nd;
+    char drop[AGENT_MAX_SYSTEMS][SU_DIAG_SYSTEM_BYTES];
+    Ckpt pin;                  /* LOG_ROLLBACK: the restored pinned checkpoint */
+} MigOp;
 
 /* One accepted mutating operation. hash_after is the canonical digest after it. */
 typedef struct LogOp {
@@ -121,7 +146,22 @@ typedef struct LogOp {
     uint32_t has_ext;
     uint32_t ext_id;
     uint64_t handle;
+    MigOp mig;             /* migration and rollback */
 } LogOp;
+
+/* A migration plan returned by world.migrate_plan. The plan is bound to the world revision it was made at;
+ * the documents are in the spool under their hashes. */
+typedef struct PlanRec {
+    int used;
+    char id[AGENT_MIG_ID_CAP];
+    char plan_hash[65];
+    uint64_t rev;
+    uint64_t tick;
+    uint32_t valid;
+    uint32_t from_gen;
+    uint32_t to_gen;
+    MigOp doc;             /* documents and budget (sys, pin and log fields unused) */
+} PlanRec;
 
 /* A native kernel installed in the active worker for one system (not canonical state). */
 typedef struct NatRec {
@@ -155,6 +195,13 @@ typedef struct AgentWorld {
     uint32_t ck_count;
     Ckpt ck[AGENT_MAX_RETAIN]; /* ck[0] oldest, ck[ck_count-1] newest */
     uint64_t reserved;     /* spool bytes reserved for this world's checkpoints */
+    /* M2-01b: the pinned pre-migration checkpoint (rollback target), sticky "migrated" flag, plans. */
+    int pin_has;
+    Ckpt pin;
+    char pin_mig[65];      /* migration hash of the commit that pinned pin (reported by rollback) */
+    int migrated;
+    uint32_t next_plan;
+    PlanRec plan[AGENT_MAX_PLANS];
     LogOp *log;
     uint32_t log_count;
     uint32_t log_cap;
@@ -259,7 +306,8 @@ typedef struct AgentCall {
 } AgentCall;
 
 /* What the worker was doing when it died, for crash bookkeeping and quarantine. */
-enum { OPK_READ = 0, OPK_STEP, OPK_INSTALL, OPK_CREATE, OPK_RESTORE, OPK_CLOSE, OPK_SPAWN, OPK_DESPAWN };
+enum { OPK_READ = 0, OPK_STEP, OPK_INSTALL, OPK_CREATE, OPK_RESTORE, OPK_CLOSE, OPK_SPAWN, OPK_DESPAWN,
+       OPK_MIGRATE, OPK_ROLLBACK };
 typedef struct InFlight {
     int kind;
     AgentWorld *w;     /* NULL for reads and creation */
@@ -273,6 +321,7 @@ static const char *const k_capabilities[] = {
     "engine.info",   "capsule.submit", "candidate.status", "candidate.evaluate",
     "candidate.install", "world.create", "world.inspect", "world.step",
     "world.snapshot", "world.restore", "world.close", "world.spawn", "world.despawn", "events.read",
+    "world.migrate_plan", "world.migrate_commit", "world.migrate_rollback",
 #ifdef SU_HAVE_NATIVE
     "world.specialize",
 #endif
@@ -594,6 +643,48 @@ static AgentCandidate *candidate_by_capsule(SuAgent *a, const char *sha);
 
 /* ---------- spool: admission, references, reclamation ---------- */
 
+/* M2-01b: 1 when the pinned checkpoint p names the spooled file (sha, ext). */
+static int migop_refs_pin(const Ckpt *p, const char *sha, const char *ext) {
+    uint32_t j;
+    if (strcmp(ext, "snap") == 0) {
+        return strcmp(p->sha, sha) == 0;
+    }
+    for (j = 0; j < p->count; j++) {
+        if (strcmp(strcmp(ext, "capsule") == 0 ? p->sys[j].capsule_sha : p->sys[j].source_sha, sha) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* M2-01b: 1 when the migration record m names the spooled file (sha, ext). */
+static int migop_refs(const MigOp *m, const char *sha, const char *ext) {
+    uint32_t j;
+    if (strcmp(ext, "migration") == 0) {
+        return strcmp(m->mig_sha, sha) == 0;
+    }
+    if (strcmp(ext, "transform") == 0) {
+        return m->has_tr && strcmp(m->tr_sha, sha) == 0;
+    }
+    if (strcmp(ext, "lir") == 0) {
+        return m->has_lir && strcmp(m->lir_sha, sha) == 0;
+    }
+    if (strcmp(ext, "snap") == 0) {
+        return m->pin.sha[0] != '\0' && strcmp(m->pin.sha, sha) == 0;
+    }
+    for (j = 0; j < m->n; j++) {
+        if (strcmp(strcmp(ext, "capsule") == 0 ? m->sys[j].capsule_sha : m->sys[j].source_sha, sha) == 0) {
+            return 1;
+        }
+    }
+    for (j = 0; j < m->pin.count; j++) {
+        if (strcmp(strcmp(ext, "capsule") == 0 ? m->pin.sys[j].capsule_sha : m->pin.sys[j].source_sha, sha) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int spool_referenced(const SuAgent *a, const char *sha, const char *ext) {
     uint32_t i;
     uint32_t k;
@@ -605,6 +696,19 @@ static int spool_referenced(const SuAgent *a, const char *sha, const char *ext) 
         const AgentWorld *w = &a->world[i];
         if (!w->used) {
             continue;
+        }
+        if (w->pin_has && migop_refs_pin(&w->pin, sha, ext)) {
+            return 1;
+        }
+        for (k = 0; k < AGENT_MAX_PLANS; k++) {
+            if (w->plan[k].used && migop_refs(&w->plan[k].doc, sha, ext)) {
+                return 1;
+            }
+        }
+        for (k = 0; k < w->log_count; k++) {
+            if (migop_refs(&w->log[k].mig, sha, ext)) {
+                return 1;
+            }
         }
         for (k = 0; k < w->ck_count; k++) {
             if (is_snap) {
@@ -892,6 +996,7 @@ static void ck_push(SuAgent *a, AgentWorld *w, uint64_t rev, uint64_t tick, cons
     snprintf(c->sha, sizeof c->sha, "%s", sha);
     c->bytes = bytes;
     c->count = w->count;
+    c->migrated = w->migrated;
     memcpy(c->sys, w->sys, sizeof c->sys);
     w->ck_count++;
     w->log_count = 0;
@@ -1076,9 +1181,11 @@ static int sync_after(SuAgent *a, AgentWorld *w, int log_kind, const LogOp *tmpl
         return CK_OK;
     }
     if (log_kind != LOG_NONE) {
-        if (log_kind == LOG_SPAWN || log_kind == LOG_DESPAWN) {
-            /* A control-plane mutation: one new revision, the tick unchanged. */
-            if (tick_new != w->tick || rev_new != w->rev + 1u) {
+        if (log_kind == LOG_SPAWN || log_kind == LOG_DESPAWN || log_kind == LOG_MIGRATE ||
+            log_kind == LOG_ROLLBACK) {
+            /* A control-plane mutation: one new revision, the tick unchanged. A rollback is a restore: one new
+             * revision, and the tick becomes the pinned checkpoint's (it may be earlier). */
+            if ((log_kind != LOG_ROLLBACK && tick_new != w->tick) || rev_new != w->rev + 1u) {
                 mark_unrecoverable(w, "entity mutation changed the revision or tick inconsistently");
                 return CK_BAD;
             }
@@ -1096,6 +1203,9 @@ static int sync_after(SuAgent *a, AgentWorld *w, int log_kind, const LogOp *tmpl
         }
         e = *tmpl;
         e.kind = log_kind;
+        if (log_kind != LOG_MIGRATE && log_kind != LOG_ROLLBACK) {
+            memset(&e.mig, 0, sizeof e.mig);
+        }
         e.ticks = delta;
         e.rev_after = rev_new;
         e.tick_after = tick_new;
@@ -1162,89 +1272,107 @@ static uint32_t seed_worker(SuAgent *a) {
 
 /* Returns 0 when w is rebuilt and verified, 1 when the replacement worker died meanwhile, 2 when
  * w is now unrecoverable (its world is marked and never retried by recovery). */
-static int rebuild_world(SuAgent *a, AgentWorld *w, RecStats *s) {
-    char cur[AGENT_REV_CAP];
+/* M2-01b replay of one logged operation. LOG_MIGRATE re-prepares the migration from the spool (documents and
+ * replacement capsules) and re-swaps it; LOG_ROLLBACK re-restores the pinned checkpoint. The caller verifies
+ * the digest the supervisor acknowledged. Returns 0, 1 (the replacement died) or 2 (unrecoverable). */
+static int replay_mig_op(SuAgent *a, AgentWorld *w, const LogOp *op, char *cur) {
     SuBuf req;
     SuBuf resp;
     Reply r;
-    const Ckpt *base;
-    char snap[SU_PATH_BUF];
-    char got[65];
-    char rv[AGENT_REV_CAP];
+    char pa[SU_PATH_BUF];
+    char ta[SU_PATH_BUF];
+    char la[SU_PATH_BUF];
     uint32_t i;
-    uint32_t k;
     uint32_t st;
-    int d;
-    uint64_t last_rev;
-    uint64_t last_tick;
-    char last_sha[65];
 
-    /* 1: recreate from the creation parameters (fixture hash and capsule hashes are checked). */
-    req_begin(&req, AGENT_INTERNAL_ID, "world.create");
-    su_buf_str(&req, "\"fixture_path\":");
-    su_buf_quoted(&req, w->fixture_path, strlen(w->fixture_path));
-    su_buf_str(&req, ",\"fixture_sha256\":");
-    su_buf_quoted(&req, w->fixture_sha, strlen(w->fixture_sha));
-    su_buf_str(&req, ",\"world_id\":");
-    su_buf_quoted(&req, w->id, strlen(w->id));
-    su_buf_str(&req, ",\"max_entities\":");
-    su_buf_u64(&req, w->cfg[0]);
-    su_buf_str(&req, ",\"max_struct_per_tick\":");
-    su_buf_u64(&req, w->cfg[1]);
-    su_buf_str(&req, ",\"max_events_per_tick\":");
-    su_buf_u64(&req, w->cfg[2]);
-    su_buf_str(&req, ",\"event_log_max\":");
-    su_buf_u64(&req, w->cfg[3]);
-    st = write_capsules(a, &req, "capsules", w->creation, w->creation_count);
-    if (st != SU_OK) {
+    if (op->kind == LOG_ROLLBACK) {
+        char snap[SU_PATH_BUF];
+        if (spool_file(a, op->mig.pin.sha, "snap", snap, sizeof snap) != SU_OK) {
+            mark_unrecoverable(w, "the pinned checkpoint is missing from the spool");
+            return 2;
+        }
+        req_begin(&req, AGENT_INTERNAL_ID, "internal.world.restore_schema");
+        su_buf_str(&req, "\"world_id\":");
+        su_buf_quoted(&req, w->id, strlen(w->id));
+        su_buf_str(&req, ",\"expected_world_revision\":");
+        su_buf_quoted(&req, cur, strlen(cur));
+        su_buf_str(&req, ",\"snapshot_path\":");
+        su_buf_quoted(&req, snap, strlen(snap));
+        su_buf_str(&req, ",\"snapshot_sha256\":");
+        su_buf_quoted(&req, op->mig.pin.sha, strlen(op->mig.pin.sha));
+        su_buf_str(&req, ",\"mode\":\"exact\",\"world_revision\":");
+        su_buf_u64(&req, op->rev_after);
+        st = write_capsules(a, &req, "capsules", op->mig.pin.sys, op->mig.pin.count);
+        if (st != SU_OK) {
+            su_buf_free(&req);
+            mark_unrecoverable(w, "a pinned capsule is missing from the spool");
+            return 2;
+        }
+        req_end(&req);
+        su_buf_init(&resp);
+        st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
         su_buf_free(&req);
-        mark_unrecoverable(w, "a creation capsule is missing from the spool");
-        return 2;
-    }
-    req_end(&req);
-    su_buf_init(&resp);
-    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
-    su_buf_free(&req);
-    if (st != SU_OK) {
-        su_buf_free(&resp);
-        return 1;
-    }
-    reply_parse(&r, resp.data, resp.len);
-    if (!r.ok || !jstr(r.result, "world_id", rv, sizeof rv) || strcmp(rv, w->id) != 0) {
-        mark_unrecoverable(w, "recreation from the creation parameters was rejected");
+        if (st != SU_OK) {
+            su_buf_free(&resp);
+            return 1;
+        }
+        reply_parse(&r, resp.data, resp.len);
+        if (!r.ok) {
+            mark_unrecoverable(w, "replay of a logged rollback was rejected");
+            reply_free(&r);
+            su_buf_free(&resp);
+            return 2;
+        }
         reply_free(&r);
         su_buf_free(&resp);
+        memcpy(w->sys, op->mig.pin.sys, sizeof w->sys);
+        w->count = op->mig.pin.count;
+        return 0;
+    }
+    if (spool_file(a, op->mig.mig_sha, "migration", pa, sizeof pa) != SU_OK ||
+        (op->mig.has_tr && spool_file(a, op->mig.tr_sha, "transform", ta, sizeof ta) != SU_OK) ||
+        (op->mig.has_lir && spool_file(a, op->mig.lir_sha, "lir", la, sizeof la) != SU_OK)) {
+        mark_unrecoverable(w, "a logged migration document is missing from the spool");
         return 2;
     }
-    reply_free(&r);
-    su_buf_free(&resp);
-
-    /* 2: newest checkpoint, at its recorded revision. */
-    if (w->ck_count == 0) {
-        mark_unrecoverable(w, "no checkpoint to recover from");
-        return 2;
-    }
-    base = &w->ck[w->ck_count - 1];
-    if (spool_file(a, base->sha, "snap", snap, sizeof snap) != SU_OK) {
-        mark_unrecoverable(w, "the newest checkpoint is missing from the spool");
-        return 2;
-    }
-    wrev(w, 1, cur, sizeof cur);
-    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.restore_bytes");
+    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.migrate_prepare");
     su_buf_str(&req, "\"world_id\":");
     su_buf_quoted(&req, w->id, strlen(w->id));
     su_buf_str(&req, ",\"expected_world_revision\":");
     su_buf_quoted(&req, cur, strlen(cur));
-    su_buf_str(&req, ",\"snapshot_path\":");
-    su_buf_quoted(&req, snap, strlen(snap));
-    su_buf_str(&req, ",\"snapshot_sha256\":");
-    su_buf_quoted(&req, base->sha, strlen(base->sha));
-    su_buf_str(&req, ",\"mode\":\"exact\",\"world_revision\":");
-    su_buf_u64(&req, base->rev);
-    st = write_capsules(a, &req, "capsules", base->sys, base->count);
+    su_buf_str(&req, ",\"to_layout_generation\":");
+    su_buf_u64(&req, op->mig.to_gen);
+    su_buf_str(&req, ",\"migration_path\":");
+    su_buf_quoted(&req, pa, strlen(pa));
+    su_buf_str(&req, ",\"migration_sha256\":");
+    su_buf_quoted(&req, op->mig.mig_sha, strlen(op->mig.mig_sha));
+    if (op->mig.has_tr) {
+        su_buf_str(&req, ",\"transform_path\":");
+        su_buf_quoted(&req, ta, strlen(ta));
+        su_buf_str(&req, ",\"transform_sha256\":");
+        su_buf_quoted(&req, op->mig.tr_sha, strlen(op->mig.tr_sha));
+    }
+    if (op->mig.has_lir) {
+        su_buf_str(&req, ",\"lir_path\":");
+        su_buf_quoted(&req, la, strlen(la));
+        su_buf_str(&req, ",\"lir_sha256\":");
+        su_buf_quoted(&req, op->mig.lir_sha, strlen(op->mig.lir_sha));
+    }
+    su_buf_str(&req, ",\"drop_systems\":[");
+    for (i = 0; i < op->mig.nd; i++) {
+        if (i > 0) {
+            su_buf_str(&req, ",");
+        }
+        su_buf_quoted(&req, op->mig.drop[i], strlen(op->mig.drop[i]));
+    }
+    su_buf_str(&req, "],\"spool_bytes\":");
+    su_buf_u64(&req, op->mig.spool_bytes);
+    su_buf_str(&req, ",\"memory_bytes\":");
+    su_buf_u64(&req, op->mig.memory_bytes);
+    st = write_capsules(a, &req, "resubmit", op->mig.sys, op->mig.n);
     if (st != SU_OK) {
         su_buf_free(&req);
-        mark_unrecoverable(w, "a checkpointed capsule is missing from the spool");
+        mark_unrecoverable(w, "a logged replacement capsule is missing from the spool");
         return 2;
     }
     req_end(&req);
@@ -1257,32 +1385,81 @@ static int rebuild_world(SuAgent *a, AgentWorld *w, RecStats *s) {
     }
     reply_parse(&r, resp.data, resp.len);
     if (!r.ok) {
-        mark_unrecoverable(w, "newest checkpoint was rejected on restore (corrupt or missing)");
+        mark_unrecoverable(w, "replay of a logged migration was rejected at prepare");
         reply_free(&r);
         su_buf_free(&resp);
         return 2;
     }
     reply_free(&r);
     su_buf_free(&resp);
-    wrev(w, base->rev, cur, sizeof cur);
-    memcpy(w->sys, base->sys, sizeof w->sys);
-    w->count = base->count;
-    d = digest_matches(a, w, base->rev, base->tick, base->sha, got, sizeof got, NULL, NULL);
-    if (d == 1) {
+
+    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.migrate_swap");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, cur, strlen(cur));
+    su_buf_str(&req, ",\"plan_hash\":");
+    su_buf_quoted(&req, op->mig.plan_hash, strlen(op->mig.plan_hash));
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
         return 1;
     }
-    if (d == 2) {
-        mark_unrecoverable(w, "restored checkpoint does not match its recorded digest");
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        mark_unrecoverable(w, "replay of a logged migration was rejected at swap");
+        reply_free(&r);
+        su_buf_free(&resp);
         return 2;
     }
-    if (!s->have_base || base->tick < s->min_base_tick) {
-        s->min_base_tick = base->tick;
-        s->have_base = 1;
-    }
+    reply_free(&r);
+    su_buf_free(&resp);
+    memcpy(w->sys, op->mig.sys, sizeof w->sys);
+    w->count = op->mig.n;
+    return 0;
+}
 
+/* Replays the logged operations after base (verifying the digest after each) and checks the last
+ * acknowledged state. Returns 0 (rebuilt), 1 (the replacement died), 2 (unrecoverable). */
+static int replay_log(SuAgent *a, AgentWorld *w, RecStats *s, const Ckpt *base) {
+    char cur[AGENT_REV_CAP];
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    uint32_t i;
+    uint32_t k;
+    uint32_t st;
+    int d;
+    uint64_t last_rev;
+    uint64_t last_tick;
+    char last_sha[65];
+    char got[65];
+
+    wrev(w, base->rev, cur, sizeof cur);
     /* 3: replay the log, verifying the digest after every operation. */
     for (k = 0; k < w->log_count; k++) {
         const LogOp *op = &w->log[k];
+        if (op->kind == LOG_MIGRATE || op->kind == LOG_ROLLBACK) {
+            char got_m[65];
+            d = replay_mig_op(a, w, op, cur);
+            if (d != 0) {
+                return d;
+            }
+            wrev(w, op->rev_after, cur, sizeof cur);
+            d = digest_matches(a, w, op->rev_after, op->tick_after, op->hash_after, got_m, sizeof got_m, NULL, NULL);
+            if (d == 1) {
+                return 1;
+            }
+            if (d == 2) {
+                mark_unrecoverable(w, "replay of a logged migration produced a state that differs from the acknowledged one");
+                return 2;
+            }
+            s->ops++;
+            continue;
+        }
         if (op->kind == LOG_STEP) {
             req_begin(&req, AGENT_INTERNAL_ID, "world.step");
             su_buf_str(&req, "\"world_id\":");
@@ -1396,6 +1573,204 @@ static int rebuild_world(SuAgent *a, AgentWorld *w, RecStats *s) {
     }
     s->worlds++;
     return 0;
+    s->worlds++;
+    return 0;
+}
+
+/* Recovery of a migrated world (M2-01b): the newest checkpoint is taken after a migration or rollback, and
+ * its schema is not the fixture's. The world is created from the snapshot header and the checkpointed
+ * capsules, verified against the checkpoint digest, and the log after it is replayed. */
+static int rebuild_migrated(SuAgent *a, AgentWorld *w, RecStats *s) {
+    const Ckpt *base = &w->ck[w->ck_count - 1];
+    char snap[SU_PATH_BUF];
+    char cur[AGENT_REV_CAP];
+    char got[65];
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    uint32_t st;
+    int d;
+
+    if (spool_file(a, base->sha, "snap", snap, sizeof snap) != SU_OK) {
+        mark_unrecoverable(w, "the newest checkpoint is missing from the spool");
+        return 2;
+    }
+    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.create_from_snapshot");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    su_buf_str(&req, ",\"world_revision\":");
+    su_buf_u64(&req, base->rev);
+    su_buf_str(&req, ",\"snapshot_path\":");
+    su_buf_quoted(&req, snap, strlen(snap));
+    su_buf_str(&req, ",\"snapshot_sha256\":");
+    su_buf_quoted(&req, base->sha, strlen(base->sha));
+    su_buf_str(&req, ",\"max_struct_per_tick\":");
+    su_buf_u64(&req, w->cfg[1]);
+    su_buf_str(&req, ",\"max_events_per_tick\":");
+    su_buf_u64(&req, w->cfg[2]);
+    su_buf_str(&req, ",\"event_log_max\":");
+    su_buf_u64(&req, w->cfg[3]);
+    st = write_capsules(a, &req, "capsules", base->sys, base->count);
+    if (st != SU_OK) {
+        su_buf_free(&req);
+        mark_unrecoverable(w, "a checkpointed capsule is missing from the spool");
+        return 2;
+    }
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return 1;
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        char why[AGENT_REASON_CAP];
+        snprintf(why, sizeof why, "recreation from the post-migration checkpoint was rejected: %.100s", r.msg);
+        mark_unrecoverable(w, why);
+        reply_free(&r);
+        su_buf_free(&resp);
+        return 2;
+    }
+    reply_free(&r);
+    su_buf_free(&resp);
+    memcpy(w->sys, base->sys, sizeof w->sys);
+    w->count = base->count;
+    wrev(w, base->rev, cur, sizeof cur);
+    d = digest_matches(a, w, base->rev, base->tick, base->sha, got, sizeof got, NULL, NULL);
+    if (d == 1) {
+        return 1;
+    }
+    if (d == 2) {
+        mark_unrecoverable(w, "restored post-migration checkpoint does not match its recorded digest");
+        return 2;
+    }
+    if (!s->have_base || base->tick < s->min_base_tick) {
+        s->min_base_tick = base->tick;
+        s->have_base = 1;
+    }
+    return replay_log(a, w, s, base);
+}
+
+static int rebuild_world(SuAgent *a, AgentWorld *w, RecStats *s) {
+    char cur[AGENT_REV_CAP];
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    const Ckpt *base;
+    char snap[SU_PATH_BUF];
+    char got[65];
+    char rv[AGENT_REV_CAP];
+    uint32_t st;
+    int d;
+
+    if (w->ck_count > 0 && w->ck[w->ck_count - 1].migrated) {
+        return rebuild_migrated(a, w, s);
+    }
+
+    /* 1: recreate from the creation parameters (fixture hash and capsule hashes are checked). */
+    req_begin(&req, AGENT_INTERNAL_ID, "world.create");
+    su_buf_str(&req, "\"fixture_path\":");
+    su_buf_quoted(&req, w->fixture_path, strlen(w->fixture_path));
+    su_buf_str(&req, ",\"fixture_sha256\":");
+    su_buf_quoted(&req, w->fixture_sha, strlen(w->fixture_sha));
+    su_buf_str(&req, ",\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    su_buf_str(&req, ",\"max_entities\":");
+    su_buf_u64(&req, w->cfg[0]);
+    su_buf_str(&req, ",\"max_struct_per_tick\":");
+    su_buf_u64(&req, w->cfg[1]);
+    su_buf_str(&req, ",\"max_events_per_tick\":");
+    su_buf_u64(&req, w->cfg[2]);
+    su_buf_str(&req, ",\"event_log_max\":");
+    su_buf_u64(&req, w->cfg[3]);
+    st = write_capsules(a, &req, "capsules", w->creation, w->creation_count);
+    if (st != SU_OK) {
+        su_buf_free(&req);
+        mark_unrecoverable(w, "a creation capsule is missing from the spool");
+        return 2;
+    }
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return 1;
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok || !jstr(r.result, "world_id", rv, sizeof rv) || strcmp(rv, w->id) != 0) {
+        mark_unrecoverable(w, "recreation from the creation parameters was rejected");
+        reply_free(&r);
+        su_buf_free(&resp);
+        return 2;
+    }
+    reply_free(&r);
+    su_buf_free(&resp);
+
+    /* 2: newest checkpoint, at its recorded revision. */
+    if (w->ck_count == 0) {
+        mark_unrecoverable(w, "no checkpoint to recover from");
+        return 2;
+    }
+    base = &w->ck[w->ck_count - 1];
+    if (spool_file(a, base->sha, "snap", snap, sizeof snap) != SU_OK) {
+        mark_unrecoverable(w, "the newest checkpoint is missing from the spool");
+        return 2;
+    }
+    wrev(w, 1, cur, sizeof cur);
+    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.restore_bytes");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, cur, strlen(cur));
+    su_buf_str(&req, ",\"snapshot_path\":");
+    su_buf_quoted(&req, snap, strlen(snap));
+    su_buf_str(&req, ",\"snapshot_sha256\":");
+    su_buf_quoted(&req, base->sha, strlen(base->sha));
+    su_buf_str(&req, ",\"mode\":\"exact\",\"world_revision\":");
+    su_buf_u64(&req, base->rev);
+    st = write_capsules(a, &req, "capsules", base->sys, base->count);
+    if (st != SU_OK) {
+        su_buf_free(&req);
+        mark_unrecoverable(w, "a checkpointed capsule is missing from the spool");
+        return 2;
+    }
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return 1;
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        mark_unrecoverable(w, "newest checkpoint was rejected on restore (corrupt or missing)");
+        reply_free(&r);
+        su_buf_free(&resp);
+        return 2;
+    }
+    reply_free(&r);
+    su_buf_free(&resp);
+    wrev(w, base->rev, cur, sizeof cur);
+    memcpy(w->sys, base->sys, sizeof w->sys);
+    w->count = base->count;
+    d = digest_matches(a, w, base->rev, base->tick, base->sha, got, sizeof got, NULL, NULL);
+    if (d == 1) {
+        return 1;
+    }
+    if (d == 2) {
+        mark_unrecoverable(w, "restored checkpoint does not match its recorded digest");
+        return 2;
+    }
+    if (!s->have_base || base->tick < s->min_base_tick) {
+        s->min_base_tick = base->tick;
+        s->have_base = 1;
+    }
+
+    return replay_log(a, w, s, base);
 }
 
 /* Appends one quarantine entry to the recovery object's list. */
@@ -4273,6 +4648,725 @@ static uint32_t h_events_read(SuAgent *a, const SuJsonValue *params, SuBuf *res,
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
+/* ---------- M2-01b: schema migrations (contract sections 3-5) ----------
+ *
+ * world.migrate_plan returns estimates and stores a plan bound to the world revision. world.migrate_commit
+ * pins the pre-migration checkpoint, prepares the successor aside, swaps it, appends LOG_MIGRATE, and takes the
+ * post-commit checkpoint, which must be durable before the reply. A failed post-commit checkpoint for lack of
+ * room rolls back to the pin (LOG_ROLLBACK) and answers SU_E_RESOURCE_LIMIT; a worker death during the post
+ * checkpoint recovers (the log replays the migration) and the checkpoint is taken again before the reply.
+ * world.migrate_rollback restores the pin as a new revision; changes made after the pin are lost. */
+
+#define AGENT_MIG_DOC_MAX (256u * 1024u)
+
+/* Spools one project document (relative to the project root) under its sha256 and returns the hash. */
+static uint32_t spool_doc(SuAgent *a, const char *rel, const char *ext, uint32_t max, char sha[65], AgentCall *c) {
+    char real[SU_PATH_BUF];
+    uint8_t *bytes = NULL;
+    size_t len = 0;
+    uint32_t st = su_path_resolve(a->root, rel, real, SU_PATH_BUF);
+    if (st != SU_OK) {
+        return call_fail(c, st, "migration document path rejected by the project path policy");
+    }
+    st = su_path_read_file(real, max, &bytes, &len);
+    if (st != SU_OK) {
+        return call_fail(c, st, "migration document could not be read");
+    }
+    st = spool_put_admit(a, ext, bytes, len, sha);
+    free(bytes);
+    if (st != SU_OK) {
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "migration document does not fit the spool budget");
+    }
+    return SU_OK;
+}
+
+/* Spool budget a migration may use: the spool limit minus what the spool is already committed to. */
+static uint64_t migration_spool_budget(const SuAgent *a) {
+    uint64_t used = committed_bytes(a);
+    return a->spool_max > used ? a->spool_max - used : 0u;
+}
+
+/* Finds a plan of w by id, or NULL. */
+static PlanRec *plan_find(AgentWorld *w, const char *id) {
+    uint32_t k;
+    for (k = 0; k < AGENT_MAX_PLANS; k++) {
+        if (w->plan[k].used && strcmp(w->plan[k].id, id) == 0) {
+            return &w->plan[k];
+        }
+    }
+    return NULL;
+}
+
+/* Restores the pinned pre-migration checkpoint as the next revision (LOG_ROLLBACK). Changes made after the pin are
+ * lost. Returns SU_OK, or the failure status with the client message set (the worker died: recovered). */
+static uint32_t rollback_pinned(SuAgent *a, AgentWorld *w, AgentCall *c, const InFlight *op) {
+    char snap[SU_PATH_BUF];
+    char cur[AGENT_REV_CAP];
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    LogOp lop;
+    uint32_t st;
+    int rc;
+
+    if (!w->pin_has) {
+        return call_fail(c, SU_E_STALE_REVISION, "rollback_unavailable: no pinned pre-migration checkpoint is retained");
+    }
+    if (spool_file(a, w->pin.sha, "snap", snap, sizeof snap) != SU_OK) {
+        mark_unrecoverable(w, "the pinned checkpoint is missing from the spool");
+        return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: the pinned checkpoint is missing");
+    }
+    wrev(w, w->rev, cur, sizeof cur);
+    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.restore_schema");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, cur, strlen(cur));
+    su_buf_str(&req, ",\"snapshot_path\":");
+    su_buf_quoted(&req, snap, strlen(snap));
+    su_buf_str(&req, ",\"snapshot_sha256\":");
+    su_buf_quoted(&req, w->pin.sha, strlen(w->pin.sha));
+    su_buf_str(&req, ",\"mode\":\"exact\",\"world_revision\":");
+    su_buf_u64(&req, w->rev + 1u);
+    st = write_capsules(a, &req, "capsules", w->pin.sys, w->pin.count);
+    if (st != SU_OK) {
+        su_buf_free(&req);
+        mark_unrecoverable(w, "a pinned capsule is missing from the spool");
+        return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: a pinned capsule is missing");
+    }
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, op);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        char msg[AGENT_MSG_CAP];
+        uint32_t code = (uint32_t)r.code;
+        snprintf(msg, sizeof msg, "%s", r.msg);
+        reply_free(&r);
+        su_buf_free(&resp);
+        return call_fail(c, code != 0 ? code : SU_E_INTERNAL, msg);
+    }
+    reply_free(&r);
+    su_buf_free(&resp);
+    memset(&lop, 0, sizeof lop);
+    lop.mig.pin = w->pin;
+    snprintf(lop.mig.plan_hash, sizeof lop.mig.plan_hash, "%s", w->pin_mig);
+    memcpy(w->sys, w->pin.sys, sizeof w->sys);
+    w->count = w->pin.count;
+    w->migrated = 1;
+    rc = sync_after(a, w, LOG_ROLLBACK, &lop, 0, 1);
+    if (rc == CK_DIED) {
+        return worker_died(a, c, op);
+    }
+    if (rc == CK_BAD) {
+        return call_fail(c, SU_E_INTERNAL, "rolled-back state diverged from the worker; world is unrecoverable");
+    }
+    return SU_OK;
+}
+
+/* Adds the replacement systems, drops, documents and budget of op to a prepare request (the same request the
+ * replay of LOG_MIGRATE sends). */
+static uint32_t migrate_prepare_request(SuAgent *a, const AgentWorld *w, const MigOp *op, uint64_t to_gen,
+                                        const char *expect, SuBuf *req) {
+    char pa[SU_PATH_BUF];
+    char ta[SU_PATH_BUF];
+    char la[SU_PATH_BUF];
+    uint32_t i;
+    uint32_t st;
+
+    if (spool_file(a, op->mig_sha, "migration", pa, sizeof pa) != SU_OK ||
+        (op->has_tr && spool_file(a, op->tr_sha, "transform", ta, sizeof ta) != SU_OK) ||
+        (op->has_lir && spool_file(a, op->lir_sha, "lir", la, sizeof la) != SU_OK)) {
+        return SU_E_INTERNAL;
+    }
+    req_begin(req, AGENT_INTERNAL_ID, "internal.world.migrate_prepare");
+    su_buf_str(req, "\"world_id\":");
+    su_buf_quoted(req, w->id, strlen(w->id));
+    su_buf_str(req, ",\"expected_world_revision\":");
+    su_buf_quoted(req, expect, strlen(expect));
+    su_buf_str(req, ",\"to_layout_generation\":");
+    su_buf_u64(req, to_gen);
+    su_buf_str(req, ",\"migration_path\":");
+    su_buf_quoted(req, pa, strlen(pa));
+    su_buf_str(req, ",\"migration_sha256\":");
+    su_buf_quoted(req, op->mig_sha, strlen(op->mig_sha));
+    if (op->has_tr) {
+        su_buf_str(req, ",\"transform_path\":");
+        su_buf_quoted(req, ta, strlen(ta));
+        su_buf_str(req, ",\"transform_sha256\":");
+        su_buf_quoted(req, op->tr_sha, strlen(op->tr_sha));
+    }
+    if (op->has_lir) {
+        su_buf_str(req, ",\"lir_path\":");
+        su_buf_quoted(req, la, strlen(la));
+        su_buf_str(req, ",\"lir_sha256\":");
+        su_buf_quoted(req, op->lir_sha, strlen(op->lir_sha));
+    }
+    su_buf_str(req, ",\"drop_systems\":[");
+    for (i = 0; i < op->nd; i++) {
+        if (i > 0) {
+            su_buf_str(req, ",");
+        }
+        su_buf_quoted(req, op->drop[i], strlen(op->drop[i]));
+    }
+    su_buf_str(req, "],\"spool_bytes\":");
+    su_buf_u64(req, op->spool_bytes);
+    su_buf_str(req, ",\"memory_bytes\":");
+    su_buf_u64(req, op->memory_bytes);
+    st = write_capsules(a, req, "resubmit", op->sys, op->n);
+    if (st != SU_OK) {
+        return st;
+    }
+    req_end(req);
+    return req->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* world.migrate_plan {world_id, expected_world_revision, migration_path, transform_path?, lir_path?, drop_systems?}.
+ * Estimates and validity; stores the plan (plan_id) bound to the current revision. Changes no state. */
+static uint32_t h_world_migrate_plan(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"world_id", "expected_world_revision", "migration_path", "transform_path",
+                                          "lir_path", "drop_systems"};
+    const char *world_id = NULL;
+    const char *expect = NULL;
+    const char *mp = NULL;
+    const char *tp = NULL;
+    const char *lp = NULL;
+    const SuJsonValue *drops_v = su_json_member(params, "drop_systems");
+    const char *dn[AGENT_MAX_SYSTEMS];
+    AgentWorld *w = NULL;
+    PlanRec *pr;
+    MigOp doc;
+    char pid[AGENT_MIG_ID_CAP];
+    char cur[AGENT_REV_CAP];
+    char path[SU_PATH_BUF];
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    const SuJsonValue *plan;
+    uint32_t nd = 0;
+    uint32_t slot;
+    uint32_t st;
+    size_t i;
+
+    if (check_keys(params, allowed, 6, c) != SU_OK || param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK ||
+        param_str(params, "migration_path", 1, &mp, c) != SU_OK || param_str(params, "transform_path", 0, &tp, c) != SU_OK ||
+        param_str(params, "lir_path", 0, &lp, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    if (drops_v != NULL) {
+        if (drops_v->type != SU_JSON_ARRAY || drops_v->u.array.count > AGENT_MAX_SYSTEMS) {
+            return call_fail(c, SU_E_TYPE, "drop_systems must be an array of at most 8 system ids");
+        }
+        for (i = 0; i < drops_v->u.array.count; i++) {
+            const SuJsonValue *e = drops_v->u.array.items[i];
+            if (e->type != SU_JSON_STRING) {
+                return call_fail(c, SU_E_TYPE, "drop_systems must be an array of strings");
+            }
+            dn[nd++] = e->u.string.data;
+        }
+    }
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    wrev(w, w->rev, cur, sizeof cur);
+    if (strcmp(expect, cur) != 0) {
+        return call_fail(c, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+    }
+    memset(&doc, 0, sizeof doc);
+    st = spool_doc(a, mp, "migration", AGENT_MIG_DOC_MAX, doc.mig_sha, c);
+    if (st == SU_OK && tp != NULL) {
+        st = spool_doc(a, tp, "transform", AGENT_CAPSULE_MAX, doc.tr_sha, c);
+        doc.has_tr = 1;
+    }
+    if (st == SU_OK && lp != NULL) {
+        st = spool_doc(a, lp, "lir", AGENT_CAPSULE_MAX, doc.lir_sha, c);
+        doc.has_lir = 1;
+    }
+    if (st != SU_OK) {
+        return st;
+    }
+    doc.spool_bytes = migration_spool_budget(a);
+    doc.memory_bytes = AGENT_MIG_MEMORY_BUDGET;
+    doc.nd = nd;
+    for (i = 0; i < nd; i++) {
+        snprintf(doc.drop[i], sizeof doc.drop[i], "%s", dn[i]);
+    }
+    slot = w->next_plan % AGENT_MAX_PLANS;
+    w->next_plan++;
+    snprintf(pid, sizeof pid, "plan-%u", (unsigned)w->next_plan);
+
+    su_buf_init(&req);
+    req_begin(&req, c->id, "internal.world.migrate_plan");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, cur, strlen(cur));
+    su_buf_str(&req, ",\"plan_id\":");
+    su_buf_quoted(&req, pid, strlen(pid));
+    if (spool_file(a, doc.mig_sha, "migration", path, sizeof path) != SU_OK) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_INTERNAL, "migration document is missing from the spool");
+    }
+    su_buf_str(&req, ",\"migration_path\":");
+    su_buf_quoted(&req, path, strlen(path));
+    su_buf_str(&req, ",\"migration_sha256\":");
+    su_buf_quoted(&req, doc.mig_sha, 64);
+    if (doc.has_tr && spool_file(a, doc.tr_sha, "transform", path, sizeof path) == SU_OK) {
+        su_buf_str(&req, ",\"transform_path\":");
+        su_buf_quoted(&req, path, strlen(path));
+        su_buf_str(&req, ",\"transform_sha256\":");
+        su_buf_quoted(&req, doc.tr_sha, 64);
+    }
+    if (doc.has_lir && spool_file(a, doc.lir_sha, "lir", path, sizeof path) == SU_OK) {
+        su_buf_str(&req, ",\"lir_path\":");
+        su_buf_quoted(&req, path, strlen(path));
+        su_buf_str(&req, ",\"lir_sha256\":");
+        su_buf_quoted(&req, doc.lir_sha, 64);
+    }
+    su_buf_str(&req, ",\"drop_systems\":[");
+    for (i = 0; i < nd; i++) {
+        if (i > 0) {
+            su_buf_str(&req, ",");
+        }
+        su_buf_quoted(&req, dn[i], strlen(dn[i]));
+    }
+    su_buf_str(&req, "],\"spool_bytes\":");
+    su_buf_u64(&req, doc.spool_bytes);
+    su_buf_str(&req, ",\"memory_bytes\":");
+    su_buf_u64(&req, doc.memory_bytes);
+    req_end(&req);
+    if (req.failed) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "world.migrate_plan request too large");
+    }
+    su_buf_init(&resp);
+    st = roundtrip(a, c->id, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, NULL);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        reply_free(&r);
+        relay(res, &resp, c);
+        su_buf_free(&resp);
+        return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+    }
+    /* Record the plan: bound to this revision; the documents stay in the spool while it is held. */
+    pr = &w->plan[slot];
+    memset(pr, 0, sizeof *pr);
+    pr->used = 1;
+    snprintf(pr->id, sizeof pr->id, "%s", pid);
+    pr->rev = w->rev;
+    pr->tick = w->tick;
+    pr->doc = doc;
+    plan = jf(r.result, "plan");
+    if (plan != NULL) {
+        uint64_t g = 0;
+        const SuJsonValue *vv = jf(plan, "valid");
+        pr->valid = vv != NULL && vv->type == SU_JSON_BOOL && vv->u.boolean != 0;
+        jstr(plan, "plan_hash", pr->plan_hash, sizeof pr->plan_hash);
+        ju64(plan, "from_layout_generation", &g);
+        pr->from_gen = (uint32_t)g;
+        g = 0;
+        ju64(plan, "to_layout_generation", &g);
+        pr->to_gen = (uint32_t)g;
+        memcpy(pr->doc.plan_hash, pr->plan_hash, sizeof pr->doc.plan_hash);
+    }
+    reply_free(&r);
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+static uint64_t mono_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
+}
+
+/* Turns a worker refusal into the client's error (the worker's status and message). */
+static uint32_t reject_from(AgentCall *c, Reply *r, SuBuf *resp) {
+    char msg[AGENT_MSG_CAP];
+    uint32_t code = (uint32_t)r->code;
+    snprintf(msg, sizeof msg, "%s", r->msg);
+    reply_free(r);
+    su_buf_free(resp);
+    return call_fail(c, code != 0 ? code : SU_E_INTERNAL, msg);
+}
+
+/* world.migrate_commit {world_id, plan_id, expected_world_revision, resubmit: [{system_id, candidate_id}],
+ * drop_systems?}. Every installed system is replaced by an evaluated candidate of the plan's target generation or
+ * dropped (contract B2). See the section comment for the stages and the crash behaviour. */
+static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"world_id", "plan_id", "expected_world_revision", "resubmit", "drop_systems"};
+    const char *world_id = NULL;
+    const char *plan_id = NULL;
+    const char *expect = NULL;
+    const SuJsonValue *rs_v = su_json_member(params, "resubmit");
+    const SuJsonValue *drops_v = su_json_member(params, "drop_systems");
+    AgentWorld *w = NULL;
+    PlanRec *pr;
+    MigOp op;
+    SysRef oldsys[AGENT_MAX_SYSTEMS];
+    uint32_t oldcount;
+    InFlight inop;
+    char cur[AGENT_REV_CAP];
+    char rv[AGENT_REV_CAP];
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    uint64_t prep_ns = 0;
+    uint64_t trans_ns = 0;
+    uint64_t t0 = 0;
+    uint64_t ck_ns = 0;
+    uint64_t swap_tick = 0;
+    uint64_t layout = 0;
+    char mig_hash[65];
+    SysRef ordered[AGENT_MAX_SYSTEMS];
+    LogOp lop;
+    uint32_t st;
+    uint32_t k;
+    uint32_t j;
+    size_t i;
+    int rc;
+
+    if (check_keys(params, allowed, 5, c) != SU_OK || param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "plan_id", 1, &plan_id, c) != SU_OK || param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    if (rs_v == NULL || rs_v->type != SU_JSON_ARRAY || rs_v->u.array.count == 0u || rs_v->u.array.count > AGENT_MAX_SYSTEMS) {
+        return call_fail(c, SU_E_TYPE, "resubmit must be an array of 1..8 {system_id, candidate_id} objects");
+    }
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    pr = plan_find(w, plan_id);
+    if (pr == NULL) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown plan_id");
+    }
+    if (!pr->valid) {
+        return call_fail(c, SU_E_UNSUPPORTED_MIGRATION, "the plan is not valid; see world.migrate_plan");
+    }
+    wrev(w, w->rev, cur, sizeof cur);
+    if (strcmp(expect, cur) != 0 || pr->rev != w->rev) {
+        return call_fail(c, SU_E_STALE_REVISION, "the plan is stale: the world revision changed after it was made");
+    }
+    memset(&op, 0, sizeof op);
+    op = pr->doc;
+    op.to_gen = pr->to_gen;
+    op.n = (uint32_t)rs_v->u.array.count;
+    memset(op.sys, 0, sizeof op.sys);
+    for (k = 0; k < op.n; k++) {
+        const SuJsonValue *item = rs_v->u.array.items[k];
+        char sid[SU_DIAG_SYSTEM_BYTES];
+        char cid[32];
+        AgentCandidate *cd = NULL;
+        if (item->type != SU_JSON_OBJECT || !jstr(item, "system_id", sid, sizeof sid) ||
+            !jstr(item, "candidate_id", cid, sizeof cid)) {
+            return call_fail(c, SU_E_TYPE, "each resubmit entry needs system_id and candidate_id");
+        }
+        for (j = 0; j < AGENT_MAX_CANDIDATES; j++) {
+            if (a->cand[j].used && strcmp(a->cand[j].id, cid) == 0) {
+                cd = &a->cand[j];
+            }
+        }
+        if (cd == NULL || strcmp(cd->system_id, sid) != 0) {
+            return call_fail(c, SU_E_INVALID_ARGUMENT, "resubmit names an unknown candidate for that system");
+        }
+        if (strcmp(cd->eval_status, "passed") != 0) {
+            return call_fail(c, SU_E_UNSUPPORTED_MIGRATION, "resubmit candidate has not passed evaluation");
+        }
+        snprintf(op.sys[k].system_id, sizeof op.sys[k].system_id, "%s", sid);
+        snprintf(op.sys[k].capsule_sha, sizeof op.sys[k].capsule_sha, "%s", cd->capsule_hash);
+        snprintf(op.sys[k].source_sha, sizeof op.sys[k].source_sha, "%s", cd->source_hash);
+        snprintf(op.sys[k].semantic_hash, sizeof op.sys[k].semantic_hash, "%s", cd->semantic_hash);
+    }
+    op.nd = 0;
+    if (drops_v != NULL) {
+        if (drops_v->type != SU_JSON_ARRAY || drops_v->u.array.count > AGENT_MAX_SYSTEMS) {
+            return call_fail(c, SU_E_TYPE, "drop_systems must be an array of at most 8 system ids");
+        }
+        for (i = 0; i < drops_v->u.array.count; i++) {
+            const SuJsonValue *e = drops_v->u.array.items[i];
+            if (e->type != SU_JSON_STRING) {
+                return call_fail(c, SU_E_TYPE, "drop_systems must be an array of strings");
+            }
+            snprintf(op.drop[op.nd], sizeof op.drop[op.nd], "%s", e->u.string.data);
+            op.nd++;
+        }
+    }
+    memset(&inop, 0, sizeof inop);
+    inop.kind = OPK_MIGRATE;
+    inop.w = w;
+    inop.tick = w->tick;
+
+    /* Pin the pre-migration state: a durable checkpoint at the acknowledged state. */
+    rc = checkpoint_world(a, w, 0);
+    if (rc == CK_DIED) {
+        return worker_died(a, c, &inop);
+    }
+    if (rc == CK_NOROOM) {
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "checkpoint budget exhausted; the migration was not started");
+    }
+    if (rc == CK_BAD) {
+        return call_fail(c, SU_E_INTERNAL, "checkpoint disagreed with the acknowledged state; world is unrecoverable");
+    }
+    w->pin = w->ck[w->ck_count - 1];
+    w->pin_has = 1;
+    memcpy(w->pin_mig, pr->plan_hash, sizeof w->pin_mig);
+    gc_spool(a);
+
+    /* Prepare the successor aside: the worker builds and checks it; nothing installed changes. */
+    su_buf_init(&req);
+    st = migrate_prepare_request(a, w, &op, op.to_gen, cur, &req);
+    if (st != SU_OK) {
+        su_buf_free(&req);
+        return call_fail(c, st, "migration documents or candidates are missing from the spool");
+    }
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &inop);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        return reject_from(c, &r, &resp);
+    }
+    ju64(jf(r.result, "timings"), "prepare_ns", &prep_ns);
+    ju64(jf(r.result, "timings"), "transform_ns", &trans_ns);
+    reply_free(&r);
+    su_buf_free(&resp);
+
+    /* Swap: publication in the worker. A refusal aborts the pending candidate. */
+    su_buf_init(&req);
+    req_begin(&req, AGENT_INTERNAL_ID, "internal.world.migrate_swap");
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, w->id, strlen(w->id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, cur, strlen(cur));
+    su_buf_str(&req, ",\"plan_hash\":");
+    su_buf_quoted(&req, pr->plan_hash, strlen(pr->plan_hash));
+    req_end(&req);
+    su_buf_init(&resp);
+    st = roundtrip(a, AGENT_INTERNAL_ID, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &inop);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    if (!r.ok) {
+        SuBuf ab;
+        uint32_t ast;
+        reply_free(&r);
+        su_buf_free(&resp);
+        su_buf_init(&ab);
+        req_begin(&ab, AGENT_INTERNAL_ID, "internal.world.migrate_abort");
+        su_buf_str(&ab, "\"world_id\":");
+        su_buf_quoted(&ab, w->id, strlen(w->id));
+        req_end(&ab);
+        su_buf_init(&resp);
+        ast = roundtrip(a, AGENT_INTERNAL_ID, &ab, &resp);
+        su_buf_free(&ab);
+        if (ast != SU_OK) {
+            su_buf_free(&resp);
+            return worker_died(a, c, &inop);
+        }
+        su_buf_free(&resp);
+        return call_fail(c, SU_E_STALE_REVISION, "migration swap refused; the pending candidate was discarded");
+    }
+    ju64(r.result, "tick", &swap_tick);
+    ju64(r.result, "layout_generation", &layout);
+    jstr(r.result, "migration_hash", mig_hash, sizeof mig_hash);
+    {
+        const SuJsonValue *man = jf(r.result, "semantic_manifest");
+        uint32_t m;
+        int ok = man != NULL && man->type == SU_JSON_ARRAY && man->u.array.count == op.n;
+        for (m = 0; ok && m < op.n; m++) {
+            char sid[SU_DIAG_SYSTEM_BYTES];
+            uint32_t q;
+            int found = 0;
+            if (!jstr(man->u.array.items[m], "system_id", sid, sizeof sid)) {
+                ok = 0;
+                break;
+            }
+            for (q = 0; q < op.n; q++) {
+                if (strcmp(op.sys[q].system_id, sid) == 0) {
+                    ordered[m] = op.sys[q];
+                    found = 1;
+                }
+            }
+            ok = found;
+        }
+        if (!ok) {
+            reply_free(&r);
+            su_buf_free(&resp);
+            mark_unrecoverable(w, "swap answer does not name the replacement systems");
+            return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: swap answer does not name the replacement systems");
+        }
+    }
+    reply_free(&r);
+    su_buf_free(&resp);
+    memcpy(op.sys, ordered, sizeof ordered);
+    memcpy(oldsys, w->sys, sizeof oldsys);
+    oldcount = w->count;
+    memcpy(w->sys, ordered, sizeof ordered);
+    w->count = op.n;
+    snprintf(op.plan_hash, sizeof op.plan_hash, "%s", pr->plan_hash);
+
+    /* Log the migration: the worker's digest after it must equal the acknowledged state. */
+    memset(&lop, 0, sizeof lop);
+    lop.mig = op;
+    rc = sync_after(a, w, LOG_MIGRATE, &lop, 0, 1);
+    if (rc == CK_DIED) {
+        memcpy(w->sys, oldsys, sizeof oldsys);
+        w->count = oldcount;
+        return worker_died(a, c, &inop);
+    }
+    if (rc == CK_BAD) {
+        return call_fail(c, SU_E_INTERNAL, "migrated state diverged from the worker; world is unrecoverable");
+    }
+
+    /* Post-commit checkpoint: it must be durable before the reply (contract section 4, B9). It records the
+     * migrated flag, so recovery builds the world from it rather than from the fixture. */
+    w->migrated = 1;
+    t0 = mono_ns();
+    rc = checkpoint_world(a, w, 0);
+    if (rc == CK_DIED) {
+        /* Recovery replays LOG_MIGRATE from the pinned checkpoint; the checkpoint is then taken again. */
+        recover(a, c, &inop);
+        rc = w->unrecoverable ? CK_BAD : checkpoint_world(a, w, 0);
+        if (rc != CK_OK) {
+            return call_fail(c, SU_E_WORKER_FAILED, "post-migration checkpoint failed after recovery; the migration stays in the replay log");
+        }
+    }
+    if (rc == CK_NOROOM) {
+        uint32_t rb = rollback_pinned(a, w, c, &inop);
+        if (rb != SU_OK) {
+            return rb;
+        }
+        snprintf(c->detail, sizeof c->detail, "%s",
+                 "{\"reason\":\"post_commit_checkpoint\",\"rolled_back_to\":\"pinned_pre_migration_checkpoint\"}");
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "post-commit checkpoint has no room; the migration was rolled back");
+    }
+    if (rc != CK_OK) {
+        return call_fail(c, SU_E_INTERNAL, "post-migration checkpoint disagreed with the acknowledged state; world is unrecoverable");
+    }
+    ck_ns = mono_ns() - t0;
+    w->migrated = 1;
+
+    wrev(w, w->rev, rv, sizeof rv);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, w->id, strlen(w->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rv, strlen(rv));
+    su_buf_str(res, ",\"tick\":");
+    su_buf_u64(res, w->tick);
+    su_buf_str(res, ",\"layout_generation\":");
+    su_buf_u64(res, layout);
+    su_buf_str(res, ",\"migration_hash\":");
+    su_buf_quoted(res, mig_hash, strlen(mig_hash));
+    su_buf_str(res, ",\"plan_id\":");
+    su_buf_quoted(res, plan_id, strlen(plan_id));
+    su_buf_str(res, ",\"rollback_available\":true,\"timings\":{\"prepare_ns\":");
+    su_buf_u64(res, prep_ns);
+    su_buf_str(res, ",\"transform_ns\":");
+    su_buf_u64(res, trans_ns);
+    su_buf_str(res, ",\"checkpoint_ns\":");
+    su_buf_u64(res, ck_ns);
+    su_buf_str(res, "},\"systems\":[");
+    for (k = 0; k < op.n; k++) {
+        if (k > 0) {
+            su_buf_str(res, ",");
+        }
+        su_buf_str(res, "{\"system_id\":");
+        su_buf_quoted(res, op.sys[k].system_id, strlen(op.sys[k].system_id));
+        su_buf_str(res, ",\"semantic_hash\":");
+        su_buf_quoted(res, op.sys[k].semantic_hash, strlen(op.sys[k].semantic_hash));
+        su_buf_str(res, "}");
+    }
+    su_buf_str(res, "]}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* world.migrate_rollback {world_id, expected_world_revision}: restores the pinned pre-migration checkpoint as a new
+ * revision. Changes made after the pin are lost; the reply says so. */
+static uint32_t h_world_migrate_rollback(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"world_id", "expected_world_revision"};
+    const char *world_id = NULL;
+    const char *expect = NULL;
+    AgentWorld *w = NULL;
+    InFlight op;
+    char cur[AGENT_REV_CAP];
+    char rv[AGENT_REV_CAP];
+    uint64_t tick_before;
+    uint64_t discarded;
+    uint32_t st;
+
+    if (check_keys(params, allowed, 2, c) != SU_OK || param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    st = world_for_call(a, world_id, &w, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    wrev(w, w->rev, cur, sizeof cur);
+    if (strcmp(expect, cur) != 0) {
+        return call_fail(c, SU_E_STALE_REVISION, "expected_world_revision does not match the active world");
+    }
+    if (!w->pin_has) {
+        return call_fail(c, SU_E_STALE_REVISION, "rollback_unavailable: no pinned pre-migration checkpoint is retained");
+    }
+    tick_before = w->tick;
+    discarded = tick_before > w->pin.tick ? tick_before - w->pin.tick : 0u;
+    memset(&op, 0, sizeof op);
+    op.kind = OPK_ROLLBACK;
+    op.w = w;
+    op.tick = w->tick;
+    st = rollback_pinned(a, w, c, &op);
+    if (st != SU_OK) {
+        return st;
+    }
+    wrev(w, w->rev, rv, sizeof rv);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, w->id, strlen(w->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rv, strlen(rv));
+    su_buf_str(res, ",\"tick\":");
+    su_buf_u64(res, w->tick);
+    su_buf_str(res, ",\"restored_from\":");
+    su_buf_quoted(res, w->pin_mig, strlen(w->pin_mig));
+    su_buf_str(res, ",\"changes_lost\":true,\"discarded_ticks\":");
+    su_buf_u64(res, discarded);
+    su_buf_str(res, ",\"lineage\":\"retained\"}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
 static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c) {
     const SuJsonValue *p = req->params;
     if (strcmp(req->method, "engine.info") == 0) {
@@ -4301,6 +5395,15 @@ static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c
     }
     if (strcmp(req->method, "world.despawn") == 0) {
         return h_world_despawn(a, p, res, c);
+    }
+    if (strcmp(req->method, "world.migrate_plan") == 0) {
+        return h_world_migrate_plan(a, p, res, c);
+    }
+    if (strcmp(req->method, "world.migrate_commit") == 0) {
+        return h_world_migrate_commit(a, p, res, c);
+    }
+    if (strcmp(req->method, "world.migrate_rollback") == 0) {
+        return h_world_migrate_rollback(a, p, res, c);
     }
     if (strcmp(req->method, "events.read") == 0) {
         return h_events_read(a, p, res, c);

@@ -495,3 +495,62 @@ and one `emit_event` per row, declared per-row caps 4 and 4):
   needs min(1024 x 4, 4096) = 4096 entries either way. The defaults only bound the number of records a tick
   may produce, which is what makes the despawn-heavy first tick fail.
 
+
+## 17. Schema migrations (M2-01b; contract `planning/contracts/M2_MIGRATION_CONTRACT.md` r2, sections 3-7)
+
+Methods (all in the capability list; the migration document is read from the project tree, its hash is
+checked, and it is copied into the supervisor spool):
+
+- **`world.migrate_plan`** `{world_id, expected_world_revision, migration_path, transform_path?, lir_path?,
+  drop_systems?: [system_id]}` -> `{world_id, world_revision, plan_id, plan}`. `plan` carries `valid`, `reason`
+  (`field_in_use`, `spool_budget`, `memory` or null), `message`, `migration_hash`, `plan_hash`, the schema
+  before and after (`fields`, `digest`), `columns_added|removed|renamed`, `transform`, `systems[{system_id,
+  impact, reasons}]` and `resource` with `estimate: true`. Impacts: `compatible_after_resubmit` (the fields
+  the system uses are unchanged), `needs_resubmission` (a renamed or transformed field), `broken` (a removed
+  field it uses). A plan changes no state. The plan is bound to the world revision it was made at.
+- **`world.migrate_commit`** `{world_id, plan_id, expected_world_revision, resubmit: [{system_id,
+  candidate_id}], drop_systems?}`. Every installed system must be replaced by one evaluated candidate
+  (`passed`) for the plan's target generation, or be dropped; otherwise `SU_E_UNSUPPORTED_MIGRATION`. Stages:
+  (1) a durable pre-migration checkpoint is taken and pinned (the rollback target); (2) the worker prepares
+  the successor world and replacement schedule aside (`internal.world.migrate_prepare`); (3) the worker
+  publishes them atomically (`internal.world.migrate_swap`, checked against the plan hash; the entity runtime
+  moves and `SU_EVENT_MIGRATED` (0xFFFFFFFC; a = from generation, b = to) is appended); (4) the migration is
+  logged (`LOG_MIGRATE`, which stores the document hashes, the replacement capsule hashes, the drops and the
+  budget); (5) the post-commit checkpoint is taken and the reply is sent only after it is durable. Result:
+  `{world_revision, tick, layout_generation, migration_hash, plan_id, rollback_available: true, timings:
+  {prepare_ns, transform_ns, checkpoint_ns}, systems}`. Timings are migration timings, not reload latency.
+- **`world.migrate_rollback`** `{world_id, expected_world_revision}` -> `{world_revision, tick, restored_from,
+  changes_lost: true, discarded_ticks, lineage: "retained"}`. Restores the pinned pre-migration checkpoint as a
+  NEW revision (`LOG_ROLLBACK`). Changes made after the pin are lost, and the reply says how many ticks were
+  discarded. Without a pin: `SU_E_STALE_REVISION` with `rollback_unavailable`.
+
+Failures: a stale plan or revision is `SU_E_STALE_REVISION`; an invalid plan or unresolved systems is
+`SU_E_UNSUPPORTED_MIGRATION`; an unknown plan is `SU_E_INVALID_ARGUMENT`. If the post-commit checkpoint has no
+room, the migration is rolled back to the pin and the answer is `SU_E_RESOURCE_LIMIT` with
+`error.detail.reason = "post_commit_checkpoint"`. If the worker dies before the commit is acknowledged,
+the answer is `SU_E_WORKER_FAILED` with a recovery object and the world is the pre-migration state (retry the
+commit). If the worker dies while the post-commit checkpoint is being taken, the recovery replays the logged
+migration, the checkpoint is taken again, and the commit is answered as a success with the recovery object.
+
+Recovery: a world whose newest checkpoint was taken after a migration or rollback (`migrated` flag) is rebuilt
+with `internal.world.create_from_snapshot` (schema from the snapshot header, schedule from the checkpointed
+capsules, row identities from the snapshot's `entity_ids`), not from the fixture; the log after it is replayed
+(`LOG_MIGRATE` and `LOG_ROLLBACK` re-run the worker's operations from the spool and must reproduce the logged
+digests).
+
+Inspect (`world.inspect`) adds `layout_generation`, `migration_lineage` (hex hashes, oldest first), `schema`
+(`[{id, name, type, default, used, access}]` for every field of the world, used or not) and
+`needs_resubmission` (always `[]` after a successful commit).
+
+Data rules: field IDs are never reused (retired IDs). A rollback keeps the retired IDs of the undone lineage
+except those that are live in the restored schema. A replacement system may not need access the world does
+not grant (access does not grow in a migration). Migration documents are limited to 256 KiB; transform and IR
+documents to 64 KiB. At most four plans are kept per world (the oldest is replaced).
+
+Test seams (test workers only, `SU_TEST_FAULT_HOOKS`): `SUTEKH_TEST_KILL_STAGE` (`migrate.prepare`,
+`migrate.swap`, `migrate.capture`, `migrate.step`, `migrate.rollback`) kills the worker at that stage once when
+`SUTEKH_TEST_KILL_TOKEN` names a file (it is unlinked first); `SUTEKH_TEST_KILL_MODE=abort` aborts instead.
+
+Not in this section (deviations, see the M2-01b handoff): inline migration documents (paths only); native
+kernels admitted but not yet installed are not tracked per world (installed kernels of the old schedule are
+released when the schedule is replaced); the native build lane is not exercised by the migration tests.
