@@ -56,17 +56,15 @@ typedef struct EntSys {
 
 static int ent_emit_despawn(void *user, uint32_t slot, uint32_t seq, uint64_t expected_handle) {
     EntEmit *e = user;
-    (void)seq;
-    return su_cmdq_append_struct(e->q, e->sys, e->chunk, slot, SU_STRUCT_DESPAWN, expected_handle, 0u,
-                                 0u) == SU_OK
+    return su_cmdq_append_struct(e->q, e->sys, e->chunk, slot, seq, SU_STRUCT_DESPAWN, expected_handle,
+                                 0u, 0u) == SU_OK
                ? 0
                : -1;
 }
 
 static int ent_emit_event(void *user, uint32_t slot, uint32_t seq, uint32_t kind, uint32_t a, uint32_t b) {
     EntEmit *e = user;
-    (void)seq;
-    return su_cmdq_append_event(e->q, e->sys, e->chunk, slot, kind, a, b) == SU_OK ? 0 : -1;
+    return su_cmdq_append_event(e->q, e->sys, e->chunk, slot, seq, kind, a, b) == SU_OK ? 0 : -1;
 }
 
 /* ---- lifecycle ---- */

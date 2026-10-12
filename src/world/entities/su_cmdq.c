@@ -16,6 +16,8 @@ typedef struct BufMeta {
     uint32_t have_row;
     uint32_t row_s;
     uint32_t row_e;
+    uint32_t last_seq;  /* last per-row seq appended to this buffer for cur_slot (any kind) */
+    uint32_t have_seq;
 } BufMeta;
 
 typedef struct RecLayout {
@@ -241,6 +243,7 @@ static void touch_row(BufMeta *m, uint32_t slot) {
         m->cur_slot = slot;
         m->row_s = 0u;
         m->row_e = 0u;
+        m->have_seq = 0u;
     }
 }
 
@@ -250,7 +253,17 @@ static void note_first_write(SuCmdQ *q, BufMeta *m) {
     }
 }
 
-uint32_t su_cmdq_append_struct(SuCmdQ *q, uint32_t sys, uint64_t chunk, uint32_t slot,
+/* One per-row sequence for both record kinds: seq must strictly increase within a row (in the
+ * buffer's emission order). Checked before any state changes. */
+static uint32_t check_row_seq(BufMeta *m, uint32_t slot, uint32_t seq) {
+    (void)slot;
+    if (m->have_seq != 0u && seq <= m->last_seq) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return SU_OK;
+}
+
+uint32_t su_cmdq_append_struct(SuCmdQ *q, uint32_t sys, uint64_t chunk, uint32_t slot, uint32_t seq,
                                uint32_t kind, uint64_t arg, uint32_t init0, uint32_t init1) {
     uint64_t b;
     uint64_t cap;
@@ -263,6 +276,9 @@ uint32_t su_cmdq_append_struct(SuCmdQ *q, uint32_t sys, uint64_t chunk, uint32_t
     }
     m = &q->meta[b];
     touch_row(m, slot);
+    if (check_row_seq(m, slot, seq) != SU_OK) {
+        return SU_E_INVALID_ARGUMENT;
+    }
     cap = q->off_s[b + 1u] - q->off_s[b];
     if (m->row_s >= q->per_row_s || m->n_s >= cap) {
         atomic_store(&q->overflow, 1u);
@@ -281,16 +297,18 @@ uint32_t su_cmdq_append_struct(SuCmdQ *q, uint32_t sys, uint64_t chunk, uint32_t
     d->kind = kind;
     d->system_index = sys;
     d->slot = slot;
-    d->seq = m->row_s;
+    d->seq = seq;
     d->arg = arg;
     d->init[0] = init0;
     d->init[1] = init1;
     m->n_s++;
     m->row_s++;
+    m->last_seq = seq;
+    m->have_seq = 1u;
     return SU_OK;
 }
 
-uint32_t su_cmdq_append_event(SuCmdQ *q, uint32_t sys, uint64_t chunk, uint32_t slot,
+uint32_t su_cmdq_append_event(SuCmdQ *q, uint32_t sys, uint64_t chunk, uint32_t slot, uint32_t seq,
                               uint32_t kind, uint32_t a, uint32_t b_val) {
     uint64_t b;
     uint64_t cap;
@@ -303,6 +321,9 @@ uint32_t su_cmdq_append_event(SuCmdQ *q, uint32_t sys, uint64_t chunk, uint32_t 
     }
     m = &q->meta[b];
     touch_row(m, slot);
+    if (check_row_seq(m, slot, seq) != SU_OK) {
+        return SU_E_INVALID_ARGUMENT;
+    }
     cap = q->off_e[b + 1u] - q->off_e[b];
     if (m->row_e >= q->per_row_e || m->n_e >= cap) {
         atomic_store(&q->overflow, 1u);
@@ -323,11 +344,13 @@ uint32_t su_cmdq_append_event(SuCmdQ *q, uint32_t sys, uint64_t chunk, uint32_t 
     d->kind = kind;
     d->system_index = sys;
     d->slot = slot;
-    d->seq = m->row_e;
+    d->seq = seq;
     d->a = a;
     d->b = b_val;
     m->n_e++;
     m->row_e++;
+    m->last_seq = seq;
+    m->have_seq = 1u;
     return SU_OK;
 }
 

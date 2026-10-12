@@ -82,14 +82,16 @@ static void emit_row(SuCmdQ *q, uint64_t cs, uint32_t sys, uint32_t slot) {
     uint32_t j;
     unsigned long bad = 0u;
     for (i = 0; i < n_cmds_of(sys, slot); i++) {
-        if (su_cmdq_append_struct(q, sys, chunk, slot, cmd_kind_of(sys, slot, i),
+        /* One per-row sequence shared by both kinds: structs take 0..n-1, events follow. */
+        if (su_cmdq_append_struct(q, sys, chunk, slot, i, cmd_kind_of(sys, slot, i),
                                   cmd_arg_of(sys, slot, i), slot + i, sys) != SU_OK) {
             bad++;
         }
     }
     for (j = 0; j < n_evts_of(sys, slot); j++) {
-        if (su_cmdq_append_event(q, sys, chunk, slot, evt_kind_of(sys, slot, j),
-                                 evt_a_of(sys, slot, j), evt_b_of(sys, slot, j)) != SU_OK) {
+        if (su_cmdq_append_event(q, sys, chunk, slot, n_cmds_of(sys, slot) + j,
+                                 evt_kind_of(sys, slot, j), evt_a_of(sys, slot, j),
+                                 evt_b_of(sys, slot, j)) != SU_OK) {
             bad++;
         }
     }
@@ -190,7 +192,7 @@ static void build_reference(void) {
                 e->kind = evt_kind_of(sys, slot, j);
                 e->system_index = sys;
                 e->slot = slot;
-                e->seq = j;
+                e->seq = n_cmds_of(sys, slot) + j; /* shared per-row sequence, as emit_row */
                 e->a = evt_a_of(sys, slot, j);
                 e->b = evt_b_of(sys, slot, j);
             }
@@ -555,7 +557,7 @@ static void *overflow_writer(void *p) {
     OverflowArg *a = p;
     uint32_t s;
     for (s = 0; s < 20u; s++) {
-        (void)su_cmdq_append_struct(a->q, a->sys, 0u, s, SU_STRUCT_DESPAWN, s, 0, 0);
+        (void)su_cmdq_append_struct(a->q, a->sys, 0u, s, 0, SU_STRUCT_DESPAWN, s, 0, 0);
     }
     return NULL;
 }
@@ -580,8 +582,8 @@ static void test_overflow(void) {
     /* A: per-row struct cap. */
     CHECK(su_cmdq_create(1, 10, 10, 1, 1, 100, 100, &q) == SU_OK);
     CHECK(su_evlog_create(8, 0, &log) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 3, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 3, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_E_RESOURCE_LIMIT);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 3, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 3, 1, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_E_RESOURCE_LIMIT);
     CHECK(su_cmdq_overflowed(q) == 1);
     su_cmdq_counts(q, &ns, &ne);
     CHECK(ns == 1u && ne == 0u);
@@ -599,12 +601,12 @@ static void test_overflow(void) {
     /* B: per-tick struct cap is exact. Five appends fit, the sixth overflows. */
     CHECK(su_cmdq_create(1, 10, 10, 3, 3, 5, 100, &q) == SU_OK);
     for (i = 0; i < 5u; i++) {
-        CHECK(su_cmdq_append_struct(q, 0, 0, (uint32_t)i, SU_STRUCT_DESPAWN, i, 0, 0) == SU_OK);
+        CHECK(su_cmdq_append_struct(q, 0, 0, (uint32_t)i, 0, SU_STRUCT_DESPAWN, i, 0, 0) == SU_OK);
     }
     CHECK(!su_cmdq_overflowed(q));
     su_cmdq_counts(q, &ns, &ne);
     CHECK(ns == 5u);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 5, SU_STRUCT_DESPAWN, 9, 0, 0) == SU_E_RESOURCE_LIMIT);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 5, 0, SU_STRUCT_DESPAWN, 9, 0, 0) == SU_E_RESOURCE_LIMIT);
     CHECK(su_cmdq_overflowed(q));
     su_cmdq_counts(q, &ns, &ne);
     CHECK(ns == 5u);
@@ -613,21 +615,21 @@ static void test_overflow(void) {
 
     /* C: per-tick event cap is exact too, and records count toward it at commit. */
     CHECK(su_cmdq_create(1, 10, 10, 3, 3, 10, 4, &q) == SU_OK);
-    CHECK(su_cmdq_append_event(q, 0, 0, 0, 0x100, 1, 1) == SU_OK);
-    CHECK(su_cmdq_append_event(q, 0, 0, 1, 0x100, 1, 1) == SU_OK);
-    CHECK(su_cmdq_append_event(q, 0, 0, 2, 0x100, 1, 1) == SU_OK);
-    CHECK(su_cmdq_append_event(q, 0, 0, 3, 0x100, 1, 1) == SU_OK);
-    CHECK(su_cmdq_append_event(q, 0, 0, 4, 0x100, 1, 1) == SU_E_RESOURCE_LIMIT);
+    CHECK(su_cmdq_append_event(q, 0, 0, 0, 0, 0x100, 1, 1) == SU_OK);
+    CHECK(su_cmdq_append_event(q, 0, 0, 1, 0, 0x100, 1, 1) == SU_OK);
+    CHECK(su_cmdq_append_event(q, 0, 0, 2, 0, 0x100, 1, 1) == SU_OK);
+    CHECK(su_cmdq_append_event(q, 0, 0, 3, 0, 0x100, 1, 1) == SU_OK);
+    CHECK(su_cmdq_append_event(q, 0, 0, 4, 0, 0x100, 1, 1) == SU_E_RESOURCE_LIMIT);
     CHECK(su_cmdq_overflowed(q));
     su_cmdq_destroy(q);
     q = NULL;
     /* 3 system events plus 2 commands is 5 records, over the cap of 4: refused before callbacks. */
     CHECK(su_cmdq_create(1, 10, 10, 3, 3, 10, 4, &q) == SU_OK);
-    CHECK(su_cmdq_append_event(q, 0, 0, 0, 0x100, 1, 1) == SU_OK);
-    CHECK(su_cmdq_append_event(q, 0, 0, 1, 0x100, 1, 1) == SU_OK);
-    CHECK(su_cmdq_append_event(q, 0, 0, 2, 0x100, 1, 1) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 0, SU_STRUCT_DESPAWN, SU_ENTITY_MAKE(0, 1), 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 1, SU_STRUCT_DESPAWN, SU_ENTITY_MAKE(1, 1), 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_event(q, 0, 0, 0, 0, 0x100, 1, 1) == SU_OK);
+    CHECK(su_cmdq_append_event(q, 0, 0, 1, 0, 0x100, 1, 1) == SU_OK);
+    CHECK(su_cmdq_append_event(q, 0, 0, 2, 0, 0x100, 1, 1) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 0, 1, SU_STRUCT_DESPAWN, SU_ENTITY_MAKE(0, 1), 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 1, 1, SU_STRUCT_DESPAWN, SU_ENTITY_MAKE(1, 1), 0, 0) == SU_OK);
     CHECK(!su_cmdq_overflowed(q));
     table_init(&t);
     cb = make_cb(&ctx, &t);
@@ -639,11 +641,11 @@ static void test_overflow(void) {
 
     /* D: buffer capacity guard. Reappearing slots reset row caps but never exceed the buffer. */
     CHECK(su_cmdq_create(1, 4, 2, 2, 1, 100, 100, &q) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 1, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 0, SU_STRUCT_DESPAWN, 3, 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 1, SU_STRUCT_DESPAWN, 4, 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 0, SU_STRUCT_DESPAWN, 5, 0, 0) == SU_E_RESOURCE_LIMIT);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 0, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 1, 0, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 0, 0, SU_STRUCT_DESPAWN, 3, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 1, 0, SU_STRUCT_DESPAWN, 4, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 0, 0, SU_STRUCT_DESPAWN, 5, 0, 0) == SU_E_RESOURCE_LIMIT);
     CHECK(su_cmdq_overflowed(q));
     su_cmdq_destroy(q);
     q = NULL;
@@ -688,8 +690,8 @@ static void test_overflow(void) {
         CHECK(su_evlog_dump(log, NULL, 0u, &lb) == SU_OK);
         before = calloc((size_t)lb, 1u);
         CHECK(su_evlog_dump(log, before, lb, &lb) == SU_OK);
-        CHECK(su_cmdq_append_struct(q, 0, 0, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
-        CHECK(su_cmdq_append_struct(q, 0, 0, 0, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_E_RESOURCE_LIMIT);
+        CHECK(su_cmdq_append_struct(q, 0, 0, 0, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
+        CHECK(su_cmdq_append_struct(q, 0, 0, 0, 1, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_E_RESOURCE_LIMIT);
         table_init(&t);
         cb = make_cb(&ctx, &t);
         CHECK(su_cmdq_commit(q, &cb, TICK, log, &rep) == SU_E_RESOURCE_LIMIT);
@@ -720,8 +722,8 @@ static void test_out_of_order_and_reset(void) {
 
     CHECK(su_cmdq_create(1, 10, 10, 4, 1, 100, 100, &q) == SU_OK);
     /* Slots 5, 3 in one buffer: out of order. Canonical output is sorted by slot. */
-    CHECK(su_cmdq_append_struct(q, 0, 0, 5, SU_STRUCT_DESPAWN, 50, 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 3, SU_STRUCT_DESPAWN, 30, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 5, 0, SU_STRUCT_DESPAWN, 50, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 3, 0, SU_STRUCT_DESPAWN, 30, 0, 0) == SU_OK);
     st = su_cmdq_merge(q, &v);
     CHECK(st == SU_OK);
     CHECK(v.cmd_fallback == 1u && v.cmd_unsorted_buffers == 1u);
@@ -732,9 +734,9 @@ static void test_out_of_order_and_reset(void) {
     }
     /* Reappearing slot 2 with 4 in between: stable order keeps emission order for equal keys. */
     su_cmdq_reset(q);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 2, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 4, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 2, SU_STRUCT_DESPAWN, 3, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 2, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 4, 0, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 2, 0, SU_STRUCT_DESPAWN, 3, 0, 0) == SU_OK);
     CHECK(su_cmdq_merge(q, &v) == SU_OK);
     CHECK(v.cmd_fallback == 1u);
     if (v.n_cmds == 3u) {
@@ -744,15 +746,15 @@ static void test_out_of_order_and_reset(void) {
     }
     /* Sorted input: no fallback. */
     su_cmdq_reset(q);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 1, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 7, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 1, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 7, 0, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_OK);
     CHECK(su_cmdq_merge(q, &v) == SU_OK);
     CHECK(v.cmd_fallback == 0u && v.cmd_unsorted_buffers == 0u);
 
     /* Reset reuses the same storage: pointers and results are identical. */
     su_cmdq_reset(q);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 1, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 7, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 1, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 7, 0, SU_STRUCT_DESPAWN, 2, 0, 0) == SU_OK);
     CHECK(su_cmdq_merge(q, &v2) == SU_OK);
     CHECK(v2.cmds == v.cmds && v2.n_cmds == v.n_cmds);
     CHECK(v2.n_cmds == 2u && v2.cmds[0].arg == 1u && v2.cmds[1].arg == 2u);
@@ -765,9 +767,9 @@ static void test_out_of_order_and_reset(void) {
     CHECK(su_cmdq_create(1, 10, 10, 1, 1, 1, 1, NULL) == SU_E_INVALID_ARGUMENT);
     CHECK(su_cmdq_create(1u << 30, 1u << 30, 1, 1, 1, 1, 1, &q) == SU_E_RESOURCE_LIMIT);
     CHECK(su_cmdq_create(1, 10, 10, 1, 1, 1, 1, &q) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 0, 1, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_E_INVALID_ARGUMENT);
-    CHECK(su_cmdq_append_struct(q, 1, 0, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_E_INVALID_ARGUMENT);
-    CHECK(su_cmdq_append_event(q, 0, 0, 10, 0x100, 0, 0) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_cmdq_append_struct(q, 0, 1, 0, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_cmdq_append_struct(q, 1, 0, 0, 0, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_cmdq_append_event(q, 0, 0, 10, 0, 0x100, 0, 0) == SU_E_INVALID_ARGUMENT);
     su_cmdq_destroy(q);
 }
 
@@ -800,20 +802,20 @@ static void test_apply_rejection_order(void) {
     CHECK(su_evlog_create(16, 0, &log) == SU_OK);
     table_init(&t);
     cb = make_cb(&ctx, &t);
-    CHECK(su_cmdq_append_struct(q, 0, 0, 2, SU_STRUCT_DESPAWN, SU_ENTITY_MAKE(2, 1), 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_event(q, 0, 0, 2, 0x200, 5, 6) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 1, 0, 2, SU_STRUCT_DESPAWN, SU_ENTITY_MAKE(2, 1), 0, 0) == SU_OK);
-    CHECK(su_cmdq_append_struct(q, 1, 0, 9, 7, 0, 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 2, 0, SU_STRUCT_DESPAWN, SU_ENTITY_MAKE(2, 1), 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_event(q, 0, 0, 2, 1, 0x200, 5, 6) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 1, 0, 2, 0, SU_STRUCT_DESPAWN, SU_ENTITY_MAKE(2, 1), 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 1, 0, 9, 0, 7, 0, 0, 0) == SU_OK);
     CHECK(su_cmdq_commit(q, &cb, TICK, log, &rep) == SU_OK);
     CHECK(rep.n_despawned == 1u && rep.n_rejected == 2u && rep.n_events == 4u);
     CHECK(su_evlog_read(log, 0u, 8u, out, &n, &nc, &sk, &dr) == SU_OK);
     CHECK(n == 4u && sk == 0u && dr == 0u && nc == 4u);
     if (n == 4u) {
-        /* Canonical: (sys0,slot2,seq0) despawn, (sys0,slot2,seq0) system event (after the record? no:
-         * system event first on ties), then (sys1,slot2,seq0) rejected, (sys1,slot9,seq0) rejected. */
-        CHECK(out[0].kind == 0x200u && out[0].system_index == 0u);
-        CHECK(out[1].kind == SU_EVENT_DESPAWNED && out[1].system_index == 0u && out[1].a == 2u &&
-              out[1].b == 1u);
+        /* Canonical: (sys0,slot2,seq0) despawn, (sys0,slot2,seq1) system event (one per-row
+         * sequence, so no tie), then (sys1,slot2,seq0) rejected, (sys1,slot9,seq0) rejected. */
+        CHECK(out[0].kind == SU_EVENT_DESPAWNED && out[0].system_index == 0u && out[0].a == 2u &&
+              out[0].b == 1u);
+        CHECK(out[1].kind == 0x200u && out[1].system_index == 0u && out[1].seq == 1u);
         CHECK(out[2].kind == SU_EVENT_REJECTED && out[2].system_index == 1u && out[2].a == SU_STRUCT_DESPAWN &&
               out[2].b == SU_E_STALE_HANDLE);
         CHECK(out[3].kind == SU_EVENT_REJECTED && out[3].system_index == 1u && out[3].slot == 9u &&
@@ -1016,6 +1018,66 @@ static void test_dump_parse(void) {
     su_evlog_destroy(log);
 }
 
+/* Despawn and emit on the same row share one per-row sequence (contract r2 section 2): the
+ * canonical order follows the VM's instruction order, whichever kind comes first. */
+static void test_row_seq_order(void) {
+    SuCmdQ *q = NULL;
+    SuEventLog *log = NULL;
+    Table t;
+    CbCtx ctx;
+    SuCmdCallbacks cb;
+    SuCommitReport rep;
+    SuEvent out[4];
+    uint64_t n = 0u;
+    uint64_t nc = 0u;
+    uint64_t sk = 0u;
+    uint64_t dr = 0u;
+
+    /* despawn (seq 0) then emit (seq 1) on row 3. */
+    CHECK(su_cmdq_create(1, 10, 10, 2, 2, 100, 100, &q) == SU_OK);
+    CHECK(su_evlog_create(16, 0, &log) == SU_OK);
+    table_init(&t);
+    cb = make_cb(&ctx, &t);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 3, 0, SU_STRUCT_DESPAWN, SU_ENTITY_MAKE(3, 1), 0, 0) == SU_OK);
+    CHECK(su_cmdq_append_event(q, 0, 0, 3, 1, 0x300, 11, 22) == SU_OK);
+    CHECK(su_cmdq_commit(q, &cb, TICK, log, &rep) == SU_OK);
+    CHECK(su_evlog_read(log, 0u, 4u, out, &n, &nc, &sk, &dr) == SU_OK);
+    CHECK(n == 2u && out[0].kind == SU_EVENT_DESPAWNED && out[1].kind == 0x300u);
+    CHECK(out[0].seq == 0u && out[1].seq == 1u && out[0].event_seq == 0u && out[1].event_seq == 1u);
+    su_cmdq_destroy(q);
+    su_evlog_destroy(log);
+    q = NULL;
+    log = NULL;
+
+    /* emit (seq 0) then despawn (seq 1) on row 3. */
+    CHECK(su_cmdq_create(1, 10, 10, 2, 2, 100, 100, &q) == SU_OK);
+    CHECK(su_evlog_create(16, 0, &log) == SU_OK);
+    table_init(&t);
+    cb = make_cb(&ctx, &t);
+    CHECK(su_cmdq_append_event(q, 0, 0, 3, 0, 0x300, 11, 22) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 3, 1, SU_STRUCT_DESPAWN, SU_ENTITY_MAKE(3, 1), 0, 0) == SU_OK);
+    CHECK(su_cmdq_commit(q, &cb, TICK, log, &rep) == SU_OK);
+    CHECK(su_evlog_read(log, 0u, 4u, out, &n, &nc, &sk, &dr) == SU_OK);
+    CHECK(n == 2u && out[0].kind == 0x300u && out[1].kind == SU_EVENT_DESPAWNED);
+    CHECK(out[0].seq == 0u && out[1].seq == 1u);
+    CHECK(out[1].a == 3u && out[1].b == 1u);
+    su_cmdq_destroy(q);
+    su_evlog_destroy(log);
+    q = NULL;
+    log = NULL;
+
+    /* A repeated or decreasing seq on one row is refused and changes nothing (no cap is consumed). */
+    CHECK(su_cmdq_create(1, 10, 10, 4, 4, 100, 100, &q) == SU_OK);
+    CHECK(su_cmdq_append_event(q, 0, 0, 3, 5, 0x300, 1, 1) == SU_OK);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 3, 5, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_cmdq_append_struct(q, 0, 0, 3, 4, SU_STRUCT_DESPAWN, 1, 0, 0) == SU_E_INVALID_ARGUMENT);
+    CHECK(!su_cmdq_overflowed(q));
+    su_cmdq_counts(q, &n, &nc);
+    CHECK(n == 0u && nc == 1u);
+    su_cmdq_destroy(q);
+    q = NULL;
+}
+
 int main(void) {
     uint64_t hash = 0u;
     build_reference();
@@ -1023,6 +1085,7 @@ int main(void) {
     test_overflow();
     test_out_of_order_and_reset();
     test_apply_rejection_order();
+    test_row_seq_order();
     test_ring_model();
     test_dump_parse();
     printf("test_cmdq: checks=%lu failures=%lu canonical_dump_fnv=%016llx\n", g_checks, g_failures,

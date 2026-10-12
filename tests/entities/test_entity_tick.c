@@ -10,10 +10,9 @@
  *     columns and event log unchanged;
  *   - the event ring wraps: events.read reports skipped and dropped counts that match the oracle.
  *
- * Known deviation (reported, not hidden): the command queue keeps one per-row counter per record kind,
- * so a row's despawn record and its event both carry seq 0 and the event sorts first. Contract section 2
- * asks for one emission order per row shared by both kinds. The oracle here encodes the implemented
- * order (event, then despawn) for that pair.
+ * Row sequence: despawn_self and emit_event on one row share a single per-row sequence (contract r2
+ * section 2). The fixture's despawn precedes its event in instruction order, so the despawn record
+ * takes seq 0 and the event seq 1. The oracle encodes that order.
  *
  * Build and run from the repository root:
  *   cmake --build <dir> --target test_entity_tick && <dir>/test_entity_tick
@@ -317,8 +316,9 @@ static void oracle_tick(Oracle *o) {
         next = o->p[i] + o->v[i];
         c = o->p[i] < o->v[i];
         if (c) {
-            oracle_push(o, o->tick, 7u, i, 0u, i, next);
+            /* The program is despawn_self (per-row seq 0) then emit_event (seq 1). */
             oracle_push(o, o->tick, SU_EVENT_DESPAWNED, i, 0u, i, 1u);
+            oracle_push(o, o->tick, 7u, i, 1u, i, next);
             o->alive[i] = 0;
             o->p[i] = 0u;
             o->v[i] = 0u;

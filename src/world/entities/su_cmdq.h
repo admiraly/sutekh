@@ -102,12 +102,16 @@ uint64_t su_cmdq_chunk_count(const SuCmdQ *q);
 void su_cmdq_reset(SuCmdQ *q);
 
 /* Appends for one (system, chunk) writer. slot must lie in chunk (slot / chunk_slots == chunk and
- * slot < nslots). Rows should be visited in ascending slot order. Out-of-order input is accepted
- * and detected at merge. */
+ * slot < nslots). seq is the VM-supplied per-row sequence (contract r2 section 2): ONE counter per
+ * row shared by despawn and event records, numbered in instruction order from 0. Within a buffer,
+ * seq must strictly increase for the current row, else SU_E_INVALID_ARGUMENT (nothing changes).
+ * The per-row caps are still counted per record kind. Rows should be visited in ascending slot
+ * order. Out-of-order input is accepted and detected at merge. */
 uint32_t su_cmdq_append_struct(SuCmdQ *q, uint32_t system_index, uint64_t chunk, uint32_t slot,
-                               uint32_t kind, uint64_t arg, uint32_t init0, uint32_t init1);
+                               uint32_t seq, uint32_t kind, uint64_t arg, uint32_t init0,
+                               uint32_t init1);
 uint32_t su_cmdq_append_event(SuCmdQ *q, uint32_t system_index, uint64_t chunk, uint32_t slot,
-                              uint32_t kind, uint32_t a, uint32_t b);
+                              uint32_t seq, uint32_t kind, uint32_t a, uint32_t b);
 
 int su_cmdq_overflowed(SuCmdQ *q);
 /* Stored record counts for the current tick, summed over buffers. Call only when writers are
