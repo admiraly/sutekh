@@ -22,7 +22,9 @@ import datetime
 import hashlib
 import importlib.util
 import json
+import math
 import os
+import statistics
 import subprocess
 import sys
 import traceback
@@ -122,7 +124,10 @@ def summarize(doc):
     ph = res.get("phases") or {}
     steps = ph.get("step_ms") or []
     steps_sorted = sorted(steps)
-    p95 = steps_sorted[max(1, -(-95 * len(steps_sorted) // 100)) - 1] if steps_sorted else None
+    # Percentile method: nearest-rank, p95 = sorted[ceil(0.95 n) - 1]. The median is the statistical median
+    # (for an even count, the mean of the two middle samples). The earlier upper-middle index gave 193.204 ms
+    # for the 20 samples of stress-1m-current.json, where the median is 192.521 ms.
+    p95 = steps_sorted[max(1, math.ceil(0.95 * len(steps_sorted))) - 1] if steps_sorted else None
     edits = ph.get("edits") or []
     snap = ph.get("snapshot") or {}
     rest = ph.get("restore") or {}
@@ -131,7 +136,7 @@ def summarize(doc):
         "reason": res.get("reason") or (doc.get("error") or {}).get("message"),
         "refused_code": res.get("refused_code"),
         "world_create_ms": ph.get("world_create_ms"),
-        "step_ms": {"n": len(steps), "median": sorted(steps)[len(steps) // 2] if steps else None,
+        "step_ms": {"n": len(steps), "median": statistics.median(steps) if steps else None,
                     "p95_nearest_rank": p95, "max": max(steps) if steps else None},
         "timed_edit_samples": len(edits),
         "snapshot": {"host_ms": snap.get("host_ms"), "bytes": snap.get("bytes"),

@@ -267,7 +267,7 @@
   "status": "passed",
   "step_ms": {
    "max": 213.446542,
-   "median": 193.203821,
+   "median": 192.521052,
    "n": 20,
    "p95_nearest_rank": 200.246255
   },

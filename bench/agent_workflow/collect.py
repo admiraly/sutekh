@@ -16,7 +16,7 @@ values from the harness completion notification into planning/evidence/m1/agent_
 When the file is absent, or an agent has no entry, its tokens and tool_calls stay null. duration_ms is the
 harness-reported duration; it is kept apart from the git-derived agent_wall_s.
 """
-import json, os, statistics, subprocess, sys
+import json, math, os, statistics, subprocess, sys
 from datetime import datetime, timezone
 
 ROOT = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
@@ -48,8 +48,9 @@ def iso(ts):
     return datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None
 
 def pct(vals, p):
+    """Nearest-rank percentile (the method of bench/native/*.py and bench/reload): sorted[ceil(p/100 n) - 1]."""
     if not vals: return None
-    s = sorted(vals); k = max(0, min(len(s) - 1, int(round(p / 100 * (len(s) - 1)))))
+    s = sorted(vals); k = max(1, math.ceil(p / 100 * len(s))) - 1
     return s[k]
 
 def main():
