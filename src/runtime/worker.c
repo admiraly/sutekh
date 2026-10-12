@@ -60,6 +60,7 @@ static size_t worker_fixture_max(void) {
 #define WORKER_INSPECT_MAX_ROWS 256u
 #define WORKER_MAX_TICKS 100000u
 #define WORKER_MSG_CAP 512u
+#define WORKER_DETAIL_CAP 1024u
 #define WORKER_MAX_FAILURES 32u
 #define WORKER_NAME_MAX 255u
 #define WORKER_ID_CAP 16u
@@ -147,11 +148,51 @@ typedef struct WorkerState {
 typedef struct WorkerFail {
     uint32_t code;
     char msg[WORKER_MSG_CAP];
+    int has_detail;                 /* detail holds a complete error.detail object */
+    char detail[WORKER_DETAIL_CAP];
 } WorkerFail;
 
 static void fail(WorkerFail *f, uint32_t code, const char *msg) {
     f->code = code;
     snprintf(f->msg, sizeof f->msg, "%s", msg);
+}
+
+/* Failure of a capsule verification: the verifier's location of the first error becomes error.detail
+ * (AGENT_RPC section 5; the same members as the supervisor's capsule.submit detail, minus the paths and
+ * hashes, which the worker does not carry). A failure without a location keeps only the message. */
+static void fail_verify(WorkerFail *f, uint32_t code, const char *msg, const SuDiag *d) {
+    SuBuf b;
+
+    fail(f, code, msg);
+    if (d == NULL || d->code == SU_OK) {
+        return;
+    }
+    su_buf_init(&b);
+    su_buf_str(&b, "{\"json_pointer\":");
+    su_buf_quoted(&b, d->json_pointer, strlen(d->json_pointer));
+    if (d->system_id[0] != '\0') {
+        su_buf_str(&b, ",\"system_id\":");
+        su_buf_quoted(&b, d->system_id, strlen(d->system_id));
+    }
+    if (d->expected[0] != '\0') {
+        su_buf_str(&b, ",\"expected\":");
+        su_buf_quoted(&b, d->expected, strlen(d->expected));
+    }
+    if (d->actual[0] != '\0') {
+        su_buf_str(&b, ",\"actual\":");
+        su_buf_quoted(&b, d->actual, strlen(d->actual));
+    }
+    if (d->hint[0] != '\0') {
+        su_buf_str(&b, ",\"hint\":");
+        su_buf_quoted(&b, d->hint, strlen(d->hint));
+    }
+    su_buf_str(&b, "}");
+    if (!b.failed && b.len < sizeof f->detail) {
+        memcpy(f->detail, b.data, b.len);
+        f->detail[b.len] = '\0';
+        f->has_detail = 1;
+    }
+    su_buf_free(&b);
 }
 
 static const char *str_of(const SuJsonValue *obj, const char *key) {
@@ -711,6 +752,7 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPat
     /* Optional capsule_sha256 / source_sha256 pin the bytes the file must still have. */
     size_t i;
     uint32_t st;
+    SuDiag vdiag;
 
     if (caps == NULL || caps->type != SU_JSON_ARRAY || caps->u.array.count == 0 ||
         caps->u.array.count > SU_SCHED_MAX_SYSTEMS) {
@@ -758,10 +800,10 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPat
             fail(f, SU_E_TYPE, "each capsules entry needs capsule_path and source_path");
             return SU_E_TYPE;
         }
-        st = su_reload_load(cap, src, str_of(item, "source_sha256"), str_of(item, "capsule_sha256"), &mod,
-                            &sv, &gen, msg, sizeof msg);
+        st = su_reload_load_diag(cap, src, str_of(item, "source_sha256"), str_of(item, "capsule_sha256"), &mod,
+                                 &sv, &gen, msg, sizeof msg, &vdiag);
         if (st != SU_OK) {
-            fail(f, st, msg);
+            fail_verify(f, st, msg, &vdiag);
             return st;
         }
         st = su_sched_add(sched, mod, sv, gen, 0, 1, 0);
@@ -1769,7 +1811,7 @@ static uint32_t h_candidate_install(WorkerState *s, const SuJsonValue *params, S
 
     st = su_reload_install(&s->reg, &ww->sched, &req, &out);
     if (st != SU_OK) {
-        fail(f, st, out.msg);
+        fail_verify(f, st, out.msg, &out.diag);
         return st;
     }
     {
@@ -5440,7 +5482,8 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
     if (st == SU_OK) {
         su_proto_ok(out, req.has_id, req.id, &res);
     } else {
-        su_proto_error(out, req.has_id, req.id, f.code != 0 ? f.code : st, f.msg);
+        su_proto_error_detail(out, req.has_id, req.id, f.code != 0 ? f.code : st, f.msg,
+                              f.has_detail ? f.detail : NULL);
     }
     if (out->failed) {
         su_buf_free(out);
