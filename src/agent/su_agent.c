@@ -2442,6 +2442,63 @@ static uint32_t h_engine_info(SuAgent *a, const SuJsonValue *params, SuBuf *res,
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
+/* error.detail of a failed capsule verification (audit item 6; LIVE_IR section 8, AGENT_RPC section 5): the
+ * JSON pointer, the source path (relative to the project root), the source and capsule SHA-256 of the bytes
+ * that failed, the system ID, expected and actual values, and one correction hint. The message keeps its
+ * bytes; the detail is additive. Omitted when the detail would not fit AgentCall.detail. */
+static void verify_detail(AgentCall *c, const SuDiag *diag, const char *root, const char *src_real,
+                          const uint8_t *cap, size_t cap_len, const uint8_t *lir, size_t lir_len) {
+    SuBuf b;
+    SuSha256 ctx;
+    uint8_t dg[32];
+    char hex[65];
+    const char *rel = src_real;
+    size_t rl = root != NULL ? strlen(root) : 0;
+
+    if (rl > 0 && strncmp(src_real, root, rl) == 0 && src_real[rl] == '/') {
+        rel = src_real + rl + 1;
+    }
+    su_buf_init(&b);
+    su_buf_str(&b, "{\"json_pointer\":");
+    su_buf_quoted(&b, diag->json_pointer, strlen(diag->json_pointer));
+    su_buf_str(&b, ",\"source_path\":");
+    su_buf_quoted(&b, rel, strlen(rel));
+    su_buf_str(&b, ",\"source_sha256\":");
+    su_sha256_init(&ctx);
+    su_sha256_update(&ctx, lir, lir_len);
+    su_sha256_final(&ctx, dg);
+    su_sha256_hex(dg, hex);
+    su_buf_quoted(&b, hex, strlen(hex));
+    su_buf_str(&b, ",\"capsule_sha256\":");
+    su_sha256_init(&ctx);
+    su_sha256_update(&ctx, cap, cap_len);
+    su_sha256_final(&ctx, dg);
+    su_sha256_hex(dg, hex);
+    su_buf_quoted(&b, hex, strlen(hex));
+    if (diag->system_id[0] != '\0') {
+        su_buf_str(&b, ",\"system_id\":");
+        su_buf_quoted(&b, diag->system_id, strlen(diag->system_id));
+    }
+    if (diag->expected[0] != '\0') {
+        su_buf_str(&b, ",\"expected\":");
+        su_buf_quoted(&b, diag->expected, strlen(diag->expected));
+    }
+    if (diag->actual[0] != '\0') {
+        su_buf_str(&b, ",\"actual\":");
+        su_buf_quoted(&b, diag->actual, strlen(diag->actual));
+    }
+    if (diag->hint[0] != '\0') {
+        su_buf_str(&b, ",\"hint\":");
+        su_buf_quoted(&b, diag->hint, strlen(diag->hint));
+    }
+    su_buf_str(&b, "}");
+    if (!b.failed && b.len < sizeof c->detail) {
+        memcpy(c->detail, b.data, b.len);
+        c->detail[b.len] = '\0';
+    }
+    su_buf_free(&b);
+}
+
 static uint32_t h_capsule_submit(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
     static const char *const allowed[] = {"capsule_path", "source_path"};
     const char *rel = NULL;
@@ -2492,6 +2549,7 @@ static uint32_t h_capsule_submit(SuAgent *a, const SuJsonValue *params, SuBuf *r
         char msg[AGENT_MSG_CAP];
         snprintf(msg, sizeof msg, "verification failed: %.200s at %.100s", diag.message,
                  diag.json_pointer[0] != '\0' ? diag.json_pointer : "/");
+        verify_detail(c, &diag, a->root, src_real, cap, cap_len, lir, lir_len);
         free(cap);
         free(lir);
         return call_fail(c, st, msg);

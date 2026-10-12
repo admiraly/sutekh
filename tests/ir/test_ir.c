@@ -689,6 +689,15 @@ static void test_caps(void) {
     CHECK(b.has_system_rev == 0u);
     su_lir_module_free(&b);
 
+    /* Audit item 6: the diagnostic carries the expected and actual values and one hint. */
+    CHECK_CODE(verify_files("tests/fixtures/caps/grant_despawn_only.capsule.json",
+                            "tests/fixtures/caps/base.lir.json", &a, &d), SU_E_CAPABILITY_DENIED);
+    CHECK_STR(d.json_pointer, "/instructions");
+    CHECK_STR(d.expected, "capability emit_event listed");
+    CHECK_STR(d.actual, "not listed");
+    CHECK(d.hint[0] != '\0');
+    CHECK(strstr(d.message, "emit_event requires capability") != NULL);
+
     /* Absent keys: nothing recorded, nothing enforced (M0-M2 verdicts). */
     CHECK_CODE(verify_files("tests/fixtures/ir02/ok_valid.capsule.json",
                             "tests/fixtures/ir02/ok_valid.lir.json", &c, &d), SU_OK);

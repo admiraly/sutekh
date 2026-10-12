@@ -33,6 +33,7 @@
 #include "agent/su_agent.h"
 #include "agent/su_proto.h"
 #include "ir/su_json.h"
+#include "ir/su_sha256.h"
 #include "sutekh/status.h"
 
 static int g_checks = 0;
@@ -624,6 +625,47 @@ static uint64_t manifest_declared_rev(const Resp *r, uint32_t i) {
     return item != NULL ? jnum(item, "declared_system_rev") : 0;
 }
 
+/* error.detail of an error response, or NULL. */
+static const SuJsonValue *resp_detail(const Resp *r) {
+    const SuJsonValue *e = r->root != NULL ? su_json_member(r->root, "error") : NULL;
+    return e != NULL ? su_json_member(e, "detail") : NULL;
+}
+
+/* Audit item 6: the detail of a verification error names the source file, its SHA-256 (over the bytes on
+ * disk, computed here independently) and the JSON pointer; expected, actual and hint are present. */
+static void check_verify_detail(const Resp *r, const char *lir_name, const char *source_path) {
+    const SuJsonValue *d = resp_detail(r);
+    char got[80];
+    char name[128];
+    char path[8192];
+    char hex[65];
+    uint8_t *bytes;
+    size_t n = 0;
+    SuSha256 ctx;
+    uint8_t dg[32];
+
+    CHECK(d != NULL);
+    if (d == NULL) {
+        return;
+    }
+    CHECK(jstr(d, "json_pointer", name, sizeof name));
+    CHECK(jstr(d, "source_path", name, sizeof name) && strcmp(name, source_path) == 0);
+    CHECK(jstr(d, "source_sha256", got, sizeof got) && strlen(got) == 64);
+    root_path(path, sizeof path, lir_name);
+    bytes = read_whole(path, &n);
+    CHECK(bytes != NULL);
+    if (bytes != NULL) {
+        su_sha256_init(&ctx);
+        su_sha256_update(&ctx, bytes, n);
+        su_sha256_final(&ctx, dg);
+        su_sha256_hex(dg, hex);
+        CHECK(strcmp(got, hex) == 0);
+        free(bytes);
+    }
+    CHECK(jstr(d, "capsule_sha256", got, sizeof got) && strlen(got) == 64);
+    CHECK(jstr(d, "hint", got, sizeof got) && got[0] != '\0');
+}
+
 static uint64_t active_pid(Session *s) {
     Resp r;
     uint64_t pid = 0;
@@ -702,13 +744,23 @@ static void test_submit_and_evaluate(Session *s, Ids *id) {
         "{\"protocol\":\"0.1\",\"id\":\"bk\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"broken.capsule.json\"}}",
         &r);
     CHECK_CODE(r, SU_E_UNKNOWN_OPCODE);
+    check_verify_detail(&r, "broken.lir.json", "broken.lir.json");
     resp_free(&r);
 
-    /* An unknown capability is refused at submission (audit item 4). */
+    /* An unknown capability is refused at submission (audit item 4), with the expected and actual values. */
     rpc(s,
         "{\"protocol\":\"0.1\",\"id\":\"bc\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"sys_a_badcap.capsule.json\"}}",
         &r);
     CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
+    check_verify_detail(&r, "sys_a_badcap.lir.json", "sys_a_badcap.lir.json");
+    {
+        char ex[96];
+        char ac[96];
+        CHECK(resp_detail(&r) != NULL);
+        CHECK(jstr(resp_detail(&r), "expected", ex, sizeof ex) && strcmp(ex, "despawn_self or emit_event") == 0);
+        CHECK(jstr(resp_detail(&r), "actual", ac, sizeof ac) && strcmp(ac, "unknown name") == 0);
+        CHECK(jstr(resp_detail(&r), "system_id", ex, sizeof ex) == 0);
+    }
     resp_free(&r);
 
     evaluate(s, id->cand_a, "sys_a.test.json", &r);

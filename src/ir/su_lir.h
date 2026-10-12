@@ -28,6 +28,8 @@
 #define SU_DIAG_POINTER_BYTES 256u
 #define SU_DIAG_SYSTEM_BYTES 128u
 #define SU_DIAG_MESSAGE_BYTES 256u
+#define SU_DIAG_HINT_BYTES 192u   /* one concrete correction hint (audit item 6; LIVE_IR section 8) */
+#define SU_DIAG_VALUE_BYTES 96u   /* expected / actual, short text */
 
 typedef struct SuDiag {
     uint32_t code;                              /* SU_OK when no error */
@@ -35,6 +37,9 @@ typedef struct SuDiag {
     char json_pointer[SU_DIAG_POINTER_BYTES];   /* RFC 6901; "" for document root */
     char system_id[SU_DIAG_SYSTEM_BYTES];       /* "" until the IR system_id is known */
     char message[SU_DIAG_MESSAGE_BYTES];
+    char hint[SU_DIAG_HINT_BYTES];              /* "" when no hint applies; set from the code by the verifier */
+    char expected[SU_DIAG_VALUE_BYTES];         /* "" when the check has no expected value */
+    char actual[SU_DIAG_VALUE_BYTES];           /* "" when the check has no actual value */
 } SuDiag;
 
 typedef struct SuLirField {
