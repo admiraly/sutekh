@@ -1,0 +1,32 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.drift",
+  "capsule": "sys_b_gen2_conflict.capsule.json",
+  "world": "world4.json",
+  "cases": [
+    {
+      "name": "sys_b_gen2_conflict_1_ticks",
+      "ticks": 1,
+      "expected_columns": {
+        "position_x": [
+          1,
+          2,
+          0,
+          8
+        ]
+      }
+    },
+    {
+      "name": "sys_b_gen2_conflict_3_ticks",
+      "ticks": 3,
+      "expected_columns": {
+        "position_x": [
+          3,
+          4,
+          2,
+          10
+        ]
+      }
+    }
+  ]
+}

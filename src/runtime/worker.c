@@ -589,12 +589,19 @@ static uint32_t string_items(const SuJsonValue *arr, const char **out, uint32_t 
     return n;
 }
 
-/* Effect analysis (su_effects.h) over the world's systems, run at world.create when there is more
- * than one system. Every system is declared parallel, so an unordered pair with a write/write or
- * read/write conflict is rejected (SU_E_SCHEMA_MISMATCH). Ordering cycles and unknown or
- * cross-phase edges are rejected by su_effects_build (SU_E_INVALID_ARGUMENT). The message names
- * the pair, the field or the cycle. */
-static uint32_t check_system_effects(const SuSchedule *sched, const RevPaths *paths, WorkerFail *f) {
+/* Effect analysis (su_effects.h) over the world's systems. It runs at every point that changes the
+ * installed system set: world.create, candidate.install (code-only), migration prepare and checkpoint
+ * restore. Every system is declared parallel, so an unordered pair with a write/write or read/write
+ * conflict is rejected (SU_E_SCHEMA_MISMATCH). Ordering cycles and unknown or cross-phase edges are
+ * rejected by su_effects_build (SU_E_INVALID_ARGUMENT). The message names the pair, the field or the
+ * cycle.
+ *
+ * ovr_mod, when not NULL, replaces the module of schedule entry ovr_idx and reads its schedule block
+ * from ovr_capsule. The install check uses it to analyse the candidate before the entry is swapped,
+ * so a refused candidate never reaches the schedule. */
+static uint32_t check_system_effects_ovr(const SuSchedule *sched, const RevPaths *paths,
+                                         const SuLirModule *ovr_mod, uint32_t ovr_idx,
+                                         const char *ovr_capsule, WorkerFail *f) {
     uint32_t n = sched->count;
     uint32_t i;
     uint32_t st = SU_OK;
@@ -628,14 +635,15 @@ static uint32_t check_system_effects(const SuSchedule *sched, const RevPaths *pa
         const SuJsonValue *aft = NULL;
         const SuJsonValue *bef = NULL;
         const char *phase = "";
-        st = read_schedule_facts(paths[i].capsule, &docs[i], &bufs[i], &phase, &aft, &bef, f);
+        const int is_ovr = ovr_mod != NULL && i == ovr_idx;
+        st = read_schedule_facts(is_ovr ? ovr_capsule : paths[i].capsule, &docs[i], &bufs[i], &phase, &aft, &bef, f);
         if (st != SU_OK) {
             goto done;
         }
         after_n[i] = string_items(aft, &afters[(size_t)i * SU_SCHED_MAX_SYSTEMS], SU_SCHED_MAX_SYSTEMS);
         before_n[i] = string_items(bef, &befores[(size_t)i * SU_SCHED_MAX_SYSTEMS], SU_SCHED_MAX_SYSTEMS);
         in[i].system_id = sched->sys[i].system_id;
-        in[i].mod = sched->sys[i].mod;
+        in[i].mod = is_ovr ? ovr_mod : sched->sys[i].mod;
         in[i].phase = phase;
         in[i].priority = 0u;
         in[i].declared_parallel = 1u;
@@ -643,7 +651,7 @@ static uint32_t check_system_effects(const SuSchedule *sched, const RevPaths *pa
         in[i].after_count = after_n[i];
         in[i].before = &befores[(size_t)i * SU_SCHED_MAX_SYSTEMS];
         in[i].before_count = before_n[i];
-        in[i].host_declared = sched->sys[i].kind == SU_SYS_KIND_HOST ? 1u : 0u;
+        in[i].host_declared = !is_ovr && sched->sys[i].kind == SU_SYS_KIND_HOST ? 1u : 0u;
     }
     st = su_effects_build(in, n, &g, err, sizeof err);
     if (st != SU_OK) {
@@ -684,6 +692,10 @@ done:
     free(after_n);
     free(before_n);
     return st;
+}
+
+static uint32_t check_system_effects(const SuSchedule *sched, const RevPaths *paths, WorkerFail *f) {
+    return check_system_effects_ovr(sched, paths, NULL, 0u, NULL, f);
 }
 
 /* Parses the capsules array of world.create and builds a finalized schedule. Systems
@@ -1688,6 +1700,28 @@ static uint32_t h_world_step(WorkerState *s, const SuJsonValue *params, SuBuf *r
 }
 
 /* Installs a candidate into a live world (see reload.h for the steps). */
+/* candidate.install effect analysis (audit item 2). The candidate replaces its entry in the world's
+ * schedule, so the whole schedule is analysed with the candidate module in that entry, before any
+ * preparation. ctx is the WorkerWorld. */
+static uint32_t install_effects_check(void *ctx, const SuLirModule *cand, const char *capsule_path, char *why,
+                                      size_t why_cap) {
+    const WorkerWorld *ww = ctx;
+    WorkerFail f;
+    int idx = su_sched_find(&ww->sched, cand->system_id);
+    uint32_t st;
+
+    memset(&f, 0, sizeof f);
+    if (idx < 0) {
+        snprintf(why, why_cap, "system %s is not in this world's schedule", cand->system_id);
+        return SU_E_INVALID_ARGUMENT;
+    }
+    st = check_system_effects_ovr(&ww->sched, ww->paths, cand, (uint32_t)idx, capsule_path, &f);
+    if (st != SU_OK) {
+        snprintf(why, why_cap, "%s", f.msg);
+    }
+    return st;
+}
+
 static uint32_t h_candidate_install(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
     WorkerWorld *ww;
     SuReloadRequest req;
@@ -1725,6 +1759,8 @@ static uint32_t h_candidate_install(WorkerState *s, const SuJsonValue *params, S
     req.current_revision = rev;
     req.current_tick = su_world_tick(ww->inst.w);
     req.allowed_effective_tick = allowed;
+    req.effects_check = install_effects_check;
+    req.effects_ctx = ww;
 
     st = su_reload_install(&s->reg, &ww->sched, &req, &out);
     if (st != SU_OK) {
@@ -2272,6 +2308,17 @@ static uint32_t rebuild_schedule(const CkptRec *rec, const SuSnapshotData *data,
     if (su_sched_finalize(nsched) != SU_OK) {
         fail(f, SU_E_SCHEMA_MISMATCH, "snapshot revisions disagree on a field's ID, name or type");
         return SU_E_SCHEMA_MISMATCH;
+    }
+    {
+        /* The restored set is analysed like any other installed set (audit item 2). */
+        RevPaths rp[SU_SCHED_MAX_SYSTEMS];
+        for (i = 0; i < rec->count; i++) {
+            rp[i] = rec->sys[i].paths;
+        }
+        st = check_system_effects(nsched, rp, f);
+        if (st != SU_OK) {
+            return st;
+        }
     }
     return SU_OK;
 }
@@ -4470,6 +4517,11 @@ static uint32_t h_internal_world_migrate_prepare(WorkerState *s, const SuJsonVal
     if (st != SU_OK) {
         fail(f, SU_E_SCHEMA_MISMATCH, "replacement revisions disagree on a field's ID, name or type");
         st = SU_E_SCHEMA_MISMATCH;
+        goto out;
+    }
+    /* The successor schedule is analysed before anything is staged (audit item 2). */
+    st = check_system_effects(&nsched, npaths, f);
+    if (st != SU_OK) {
         goto out;
     }
     /* Access cannot grow: the successor keeps the world's stored access (contract B6, runtime deviation). */

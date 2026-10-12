@@ -862,6 +862,52 @@ static void test_paging(Session *s, Ids *id) {
     CHECK(v.tick == 1);
 }
 
+/* Audit item 2: a code-only install is analysed against the whole schedule before it is prepared.
+ * Each candidate below is refused with the status the effect analysis gives (conflict and declared !=
+ * derived: SU_E_SCHEMA_MISMATCH; ordering cycle: SU_E_INVALID_ARGUMENT), and the world is unchanged:
+ * revision, tick, PID and both installed semantic hashes. Runs on world3 (sys_a, sys_b at r1, tick 0). */
+static void test_install_effects(Session *s, Ids *id) {
+    char cc[32];
+    char cy[32];
+    char ov[32];
+    char sem[80];
+    char rev[80];
+    Resp r;
+    View v;
+    Manifest m;
+
+    submit(s, "sys_b_conflict.capsule.json", cc, sizeof cc, sem, sizeof sem);
+    submit(s, "sys_a_cycle.capsule.json", cy, sizeof cy, sem, sizeof sem);
+    submit(s, "sys_b_overdecl.capsule.json", ov, sizeof ov, sem, sizeof sem);
+    snprintf(rev, sizeof rev, "%s.r1", id->world3);
+
+    install(s, cc, id->world3, rev, 0, &r);
+    CHECK_CODE(r, SU_E_SCHEMA_MISMATCH);
+    CHECK(resp_message_has(&r, "conflict on field 1 (write/write)"));
+    resp_free(&r);
+
+    install(s, cy, id->world3, rev, 0, &r);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    CHECK(resp_message_has(&r, "ordering cycle"));
+    resp_free(&r);
+
+    install(s, ov, id->world3, rev, 0, &r);
+    CHECK_CODE(r, SU_E_SCHEMA_MISMATCH);
+    CHECK(resp_message_has(&r, "field position_x declared read=1 write=0"));
+    resp_free(&r);
+
+    CHECK(read_view(s, id->world3, 4, &v));
+    CHECK(strcmp(v.rev, rev) == 0);
+    CHECK(v.tick == 0);
+    CHECK(v.pid == g_pid);
+    read_manifest(s, id->world3, &m);
+    CHECK(m.n == 2);
+    CHECK(strcmp(m.sys[0], "demo.movement") == 0);
+    CHECK(strcmp(m.hash[0], id->sem_a) == 0);
+    CHECK(strcmp(m.sys[1], "demo.drift") == 0);
+    CHECK(strcmp(m.hash[1], id->sem_b) == 0);
+}
+
 static void test_swap(Session *s, Ids *id) {
     Ref expect;
     View before;
@@ -1233,6 +1279,7 @@ int main(int argc, char **argv) {
     test_submit_and_evaluate(&s, &ids);
     test_world_create(&s, &ids);
     test_paging(&s, &ids);
+    test_install_effects(&s, &ids);
     test_swap(&s, &ids);
     test_failed_and_stale(&s, &ids);
     test_second_system_failure(&s, &ids, fault_path);

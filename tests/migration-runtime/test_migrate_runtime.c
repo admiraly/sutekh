@@ -1340,6 +1340,89 @@ static void run_two_system_refusal(void) {
     session_stop(&s);
 }
 
+/* Audit item 2: a migration commit analyses its successor schedule (prepare) before anything is staged.
+ * A resubmitted system that closes an ordering cycle, or conflicts with an unordered system on a field, is
+ * refused with the effect analysis status and the world is unchanged. A clean successor then commits. */
+static void run_effects_refusal(void) {
+    Session s;
+    Resp r;
+    char wid[24];
+    char rev[48];
+    char cyc[32];
+    char cd[32];
+    char cc[32];
+    char ca[32];
+    char pid[32];
+    char phash[65];
+    char code[64];
+    char sha0[65];
+    char sha[65];
+    char line[1024];
+    int valid = 0;
+
+    s = session_start("spool-effects");
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"cw\",\"method\":\"world.create\",\"params\":{\"fixture_path\":\"world4.json\","
+             "\"capsule_paths\":[\"sys_a.capsule.json\",\"sys_b.capsule.json\"]}}");
+    call(&s, line, &r);
+    CHECK(resp_ok(&r) && str_of(resp_result(&r), "world_id", wid, sizeof wid) &&
+          str_of(resp_result(&r), "world_revision", rev, sizeof rev));
+    resp_free(&r);
+    CHECK(digest(&s, wid, rev, sha0, NULL));
+    CHECK(submit(&s, "sys_a_gen2_cycle.capsule.json", cyc, sizeof cyc) &&
+          evaluate(&s, cyc, "sys_a_gen2_cycle.test.json"));
+    CHECK(submit(&s, "sys_b_gen2.capsule.json", cd, sizeof cd) && evaluate(&s, cd, "sys_b_gen2.test.json"));
+    CHECK(submit(&s, "sys_b_gen2_conflict.capsule.json", cc, sizeof cc) &&
+          evaluate(&s, cc, "sys_b_gen2_conflict.test.json"));
+    CHECK(submit(&s, "sys_a_gen2.capsule.json", ca, sizeof ca) && evaluate(&s, ca, "sys_a_gen2.test.json"));
+
+    /* Cycle: movement declares after drift, which runs after movement. */
+    CHECK(plan(&s, wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(valid == 1);
+    resp_free(&r);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"mc\",\"method\":\"world.migrate_commit\",\"params\":{\"world_id\":\"%s\","
+             "\"plan_id\":\"%s\",\"expected_world_revision\":\"%s\",\"resubmit\":[{\"system_id\":\"demo.movement\","
+             "\"candidate_id\":\"%s\"},{\"system_id\":\"demo.drift\",\"candidate_id\":\"%s\"}]}}",
+             wid, pid, rev, cyc, cd);
+    call(&s, line, &r);
+    CHECK(!resp_ok(&r));
+    CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_INVALID_ARGUMENT") == 0);
+    CHECK(strstr((const char *)r.text, "ordering cycle") != NULL);
+    resp_free(&r);
+    CHECK(digest(&s, wid, rev, sha, NULL) && strcmp(sha, sha0) == 0);
+
+    /* Write/write: drift writes position_x with no ordering edge to movement. */
+    CHECK(plan(&s, wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(valid == 1);
+    resp_free(&r);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"mc\",\"method\":\"world.migrate_commit\",\"params\":{\"world_id\":\"%s\","
+             "\"plan_id\":\"%s\",\"expected_world_revision\":\"%s\",\"resubmit\":[{\"system_id\":\"demo.movement\","
+             "\"candidate_id\":\"%s\"},{\"system_id\":\"demo.drift\",\"candidate_id\":\"%s\"}]}}",
+             wid, pid, rev, ca, cc);
+    call(&s, line, &r);
+    CHECK(!resp_ok(&r));
+    CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_SCHEMA_MISMATCH") == 0);
+    CHECK(strstr((const char *)r.text, "conflict on field 1 (write/write)") != NULL);
+    resp_free(&r);
+    CHECK(digest(&s, wid, rev, sha, NULL) && strcmp(sha, sha0) == 0);
+
+    /* Control: the clean successor commits. */
+    CHECK(plan(&s, wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(valid == 1);
+    resp_free(&r);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"mc\",\"method\":\"world.migrate_commit\",\"params\":{\"world_id\":\"%s\","
+             "\"plan_id\":\"%s\",\"expected_world_revision\":\"%s\",\"resubmit\":[{\"system_id\":\"demo.movement\","
+             "\"candidate_id\":\"%s\"},{\"system_id\":\"demo.drift\",\"candidate_id\":\"%s\"}]}}",
+             wid, pid, rev, ca, cd);
+    call(&s, line, &r);
+    CHECK(resp_ok(&r));
+    resp_free(&r);
+    session_stop(&s);
+}
+
 int main(int argc, char **argv) {
     Outcome ctl;
     Outcome o1;
@@ -1368,6 +1451,15 @@ int main(int argc, char **argv) {
     copy_from("tests/reload", "sys_b.capsule.json");
     copy_from("tests/reload", "sys_b.lir.json");
     copy_from("tests/reload", "sys_b.test.json");
+    copy_from("tests/reload", "sys_a_gen2_cycle.capsule.json");
+    copy_from("tests/reload", "sys_a_gen2_cycle.lir.json");
+    copy_from("tests/reload", "sys_a_gen2_cycle.test.json");
+    copy_from("tests/reload", "sys_b_gen2.capsule.json");
+    copy_from("tests/reload", "sys_b_gen2.lir.json");
+    copy_from("tests/reload", "sys_b_gen2.test.json");
+    copy_from("tests/reload", "sys_b_gen2_conflict.capsule.json");
+    copy_from("tests/reload", "sys_b_gen2_conflict.lir.json");
+    copy_from("tests/reload", "sys_b_gen2_conflict.test.json");
     overwrite_file("m_add.json",
                    "{\"migration_format\":\"0.1\",\"id\":\"m-add-health\",\"from_layout_generation\":1,"
                    "\"to_layout_generation\":2,\"ops\":[{\"op\":\"add_field\",\"field\":{\"id\":3,\"name\":\"health\","
@@ -1416,6 +1508,7 @@ int main(int argc, char **argv) {
     run_failed_second_commit("prepare");
     run_failed_second_commit("noroom");
     run_two_system_refusal();
+    run_effects_refusal();
 
     printf("migrate_runtime: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
