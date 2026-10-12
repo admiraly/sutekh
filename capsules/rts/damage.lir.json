@@ -1,0 +1,88 @@
+{
+  "ir_version": "0.2",
+  "system_id": "rts.damage",
+  "numeric_profile": "u32_mod_v1",
+  "query": "rts",
+  "instructions": [
+    {
+      "op": "const_u32",
+      "dst": "k1",
+      "value": 0
+    },
+    {
+      "op": "const_u32",
+      "dst": "k2",
+      "value": 1
+    },
+    {
+      "op": "load_u32",
+      "dst": "v3",
+      "field": "hp"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v4",
+      "field": "incoming"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t5",
+      "a": "v4",
+      "b": "v3"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s6",
+      "cond": "t5",
+      "on_true": "v4",
+      "on_false": "v3"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t7",
+      "a": "v3",
+      "b": "s6"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t8",
+      "a": "t7",
+      "b": "k1"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t9",
+      "a": "k1",
+      "b": "v3"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s10",
+      "cond": "t9",
+      "on_true": "k2",
+      "on_false": "k1"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s11",
+      "cond": "t8",
+      "on_true": "s10",
+      "on_false": "k1"
+    },
+    {
+      "op": "store_u32",
+      "field": "hp",
+      "src": "t7"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t12",
+      "a": "s11",
+      "b": "k2"
+    },
+    {
+      "op": "despawn_self",
+      "cond": "t12"
+    }
+  ]
+}

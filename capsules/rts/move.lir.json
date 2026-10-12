@@ -1,0 +1,249 @@
+{
+  "ir_version": "0.1",
+  "system_id": "rts.move",
+  "numeric_profile": "u32_mod_v1",
+  "query": "rts",
+  "instructions": [
+    {
+      "op": "const_u32",
+      "dst": "k1",
+      "value": 0
+    },
+    {
+      "op": "const_u32",
+      "dst": "k2",
+      "value": 1
+    },
+    {
+      "op": "load_u32",
+      "dst": "v3",
+      "field": "order_mode"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t4",
+      "a": "v3",
+      "b": "k2"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v5",
+      "field": "target_valid"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t6",
+      "a": "v5",
+      "b": "k2"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s7",
+      "cond": "t6",
+      "on_true": "k1",
+      "on_false": "k2"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s8",
+      "cond": "t4",
+      "on_true": "k2",
+      "on_false": "s7"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t9",
+      "a": "s8",
+      "b": "k2"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v10",
+      "field": "speed"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v11",
+      "field": "pos_x"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v12",
+      "field": "goal_x"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t13",
+      "a": "v11",
+      "b": "v12"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t14",
+      "a": "v12",
+      "b": "v11"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t15",
+      "a": "v12",
+      "b": "v11"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t16",
+      "a": "v11",
+      "b": "v12"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s17",
+      "cond": "t13",
+      "on_true": "t15",
+      "on_false": "t16"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t18",
+      "a": "s17",
+      "b": "v10"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s19",
+      "cond": "t18",
+      "on_true": "s17",
+      "on_false": "v10"
+    },
+    {
+      "op": "add_u32",
+      "dst": "t20",
+      "a": "v11",
+      "b": "s19"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t21",
+      "a": "v11",
+      "b": "s19"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s22",
+      "cond": "t14",
+      "on_true": "t21",
+      "on_false": "v11"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s23",
+      "cond": "t13",
+      "on_true": "t20",
+      "on_false": "s22"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s24",
+      "cond": "t9",
+      "on_true": "s23",
+      "on_false": "v11"
+    },
+    {
+      "op": "store_u32",
+      "field": "pos_x",
+      "src": "s24"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v25",
+      "field": "pos_y"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v26",
+      "field": "goal_y"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t27",
+      "a": "v25",
+      "b": "v26"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t28",
+      "a": "v26",
+      "b": "v25"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t29",
+      "a": "v26",
+      "b": "v25"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t30",
+      "a": "v25",
+      "b": "v26"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s31",
+      "cond": "t27",
+      "on_true": "t29",
+      "on_false": "t30"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t32",
+      "a": "s31",
+      "b": "v10"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s33",
+      "cond": "t32",
+      "on_true": "s31",
+      "on_false": "v10"
+    },
+    {
+      "op": "add_u32",
+      "dst": "t34",
+      "a": "v25",
+      "b": "s33"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t35",
+      "a": "v25",
+      "b": "s33"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s36",
+      "cond": "t28",
+      "on_true": "t35",
+      "on_false": "v25"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s37",
+      "cond": "t27",
+      "on_true": "t34",
+      "on_false": "s36"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s38",
+      "cond": "t9",
+      "on_true": "s37",
+      "on_false": "v25"
+    },
+    {
+      "op": "store_u32",
+      "field": "pos_y",
+      "src": "s38"
+    }
+  ]
+}
