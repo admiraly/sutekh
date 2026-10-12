@@ -826,6 +826,14 @@ static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf 
         su_sched_free(&sched);
         return st;
     }
+    /* Admission (contract B8): the buffers one tick would allocate must fit the budget now, not at the tick. */
+    st = su_ent_budget(&sched, su_world_row_count(inst.w), max_struct, max_events);
+    if (st != SU_OK) {
+        inst_free(&inst);
+        su_sched_free(&sched);
+        fail(f, SU_E_RESOURCE_LIMIT, "entity tick buffers exceed the resource budget; lower the rows or the systems");
+        return SU_E_RESOURCE_LIMIT;
+    }
     if (want != NULL) {
         /* Supervisor recovery: the world keeps the id it had before the worker died. */
         snprintf(id, sizeof id, "%s", want);

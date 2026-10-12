@@ -42,6 +42,10 @@ uint32_t su_ent_rt_create_restored(uint64_t max_struct_tick, uint64_t max_events
                                    uint64_t next_seq, uint64_t dropped, const SuEvent *ev, uint64_t n,
                                    SuEntRt **out);
 
+/* Admission (contract B8): SU_E_RESOURCE_LIMIT when the command and event buffers of a tick over rows slots
+ * exceed SU_CMDQ_MAX_ENTRIES per class. Allocates nothing. */
+uint32_t su_ent_budget(const SuSchedule *s, uint64_t rows, uint64_t max_struct_tick, uint64_t max_events_tick);
+
 /* Runs ticks like su_sched_run_ticks_opt for a schedule with entity state. rt must not be NULL.
  * Same done/failed_index contract as su_sched_run_ticks_opt. */
 uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks, SuSchedFault fault,

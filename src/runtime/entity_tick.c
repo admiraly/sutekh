@@ -109,6 +109,51 @@ SuEventLog *su_ent_rt_log(SuEntRt *rt) {
     return rt == NULL ? NULL : rt->log;
 }
 
+/* Admission check (contract B8): the command and event buffers a tick over rows slots would allocate, summed
+ * over every (system, chunk) exactly as su_cmdq_create sizes them, must fit SU_CMDQ_MAX_ENTRIES per class.
+ * Returns SU_E_RESOURCE_LIMIT otherwise; nothing is allocated. */
+uint32_t su_ent_budget(const SuSchedule *s, uint64_t rows, uint64_t max_struct_tick, uint64_t max_events_tick) {
+    uint64_t per_s = 0;
+    uint64_t per_e = 0;
+    uint64_t nchunks;
+    uint64_t c;
+    uint64_t total_s = 0;
+    uint64_t total_e = 0;
+    uint32_t i;
+
+    if (s == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (i = 0; i < s->count; i++) {
+        const SuLirModule *m = s->sys[i].mod;
+        if (m->uses_entity_ops) {
+            if (m->max_struct_per_row > per_s) {
+                per_s = m->max_struct_per_row;
+            }
+            if (m->max_events_per_row > per_e) {
+                per_e = m->max_events_per_row;
+            }
+        }
+    }
+    if (s->count == 0u || rows == 0u) {
+        return SU_OK;
+    }
+    nchunks = (rows + SU_CHUNK_SLOTS - 1u) / SU_CHUNK_SLOTS;
+    for (c = 0; c < nchunks; c++) {
+        uint64_t size = rows - c * SU_CHUNK_SLOTS < SU_CHUNK_SLOTS ? rows - c * SU_CHUNK_SLOTS : SU_CHUNK_SLOTS;
+        uint64_t cs = size * per_s < max_struct_tick ? size * per_s : max_struct_tick;
+        uint64_t ce = size * per_e < max_events_tick ? size * per_e : max_events_tick;
+        total_s += cs;
+        total_e += ce;
+    }
+    total_s *= s->count;
+    total_e *= s->count;
+    if (total_s > SU_CMDQ_MAX_ENTRIES || total_e > SU_CMDQ_MAX_ENTRIES) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    return SU_OK;
+}
+
 uint32_t su_ent_rt_caps(const SuEntRt *rt, uint64_t *max_struct_tick, uint64_t *max_events_tick,
                         uint64_t *event_log_max) {
     if (rt == NULL || max_struct_tick == NULL || max_events_tick == NULL || event_log_max == NULL) {

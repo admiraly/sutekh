@@ -762,9 +762,36 @@ static void test_ring_wrap(void) {
     su_world_destroy(w);
 }
 
+/* Admission budget (contract B8): buffers per class are summed over (system, chunk) and must fit
+ * SU_CMDQ_MAX_ENTRIES (4,194,304). One system at 1,000,000 rows with per-row caps 4 is 4,000,000 entries
+ * (admitted); two systems are 8,000,000 (refused, nothing allocated). */
+static void test_budget(void) {
+    SuSchedule *s1 = calloc(1u, sizeof *s1);
+    SuSchedule *s2 = calloc(1u, sizeof *s2);
+    CHECK(s1 != NULL && s2 != NULL);
+    if (s1 != NULL && s2 != NULL) {
+        CHECK_ST(build_sched(s1, 4096u, 4096u, 1u << 20), SU_OK);
+        CHECK_ST(build_sched2(s2, 4096u, 4096u, 1u << 20), SU_OK);
+        CHECK_ST(su_ent_budget(s1, 1000000u, 1048576u, 1048576u), SU_OK);
+        CHECK_ST(su_ent_budget(s2, 1000000u, 1048576u, 1048576u), SU_E_RESOURCE_LIMIT);
+        CHECK_ST(su_ent_budget(s2, 1000000u, 4096u, 4096u), SU_E_RESOURCE_LIMIT);
+        CHECK_ST(su_ent_budget(s2, 5000u, 4096u, 4096u), SU_OK);
+        CHECK_ST(su_ent_budget(NULL, 5000u, 4096u, 4096u), SU_E_INVALID_ARGUMENT);
+    }
+    if (s1 != NULL) {
+        su_sched_free(s1);
+    }
+    if (s2 != NULL) {
+        su_sched_free(s2);
+    }
+    free(s1);
+    free(s2);
+}
+
 int main(void) {
     test_oracle();
     test_workers_equal();
+    test_budget();
     test_fault_after_system();
     test_cap_abort();
     test_ring_wrap();
