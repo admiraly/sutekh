@@ -23,10 +23,12 @@ NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 def pack_files():
     """Walk package sources without local environments, secrets, or artifacts."""
     excluded = {'.git', '.venv', '.cache', 'build', 'out', 'local',
-                'local-assets', 'original-assets', '__pycache__'}
+                'local-assets', 'original-assets', '__pycache__',
+                '.claude'}  # agent worktrees and their fetched third-party trees are not package sources
     for directory, dirs, files in os.walk(ROOT, followlinks=False):
         dirs[:] = sorted(d for d in dirs if d not in excluded
                          and not d.startswith('build-')
+                         and not (Path(directory) == ROOT / 'third_party' and d == 'asmjit')  # fetched, git-ignored
                          and not (Path(directory) / d).is_symlink())
         for name in sorted(files):
             path = Path(directory) / name
