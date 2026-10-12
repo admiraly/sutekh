@@ -200,7 +200,7 @@
     "ace71702b76ae7c02": {
       "task": "M1 closure C containment, retirement tests, chunked native",
       "kind": "impl",
-      "outcome": "in_progress"
+      "outcome": "accepted_as_is"
     }
   }
 }
