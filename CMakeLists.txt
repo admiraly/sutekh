@@ -201,6 +201,12 @@ target_link_libraries(test_world_ext_retired PRIVATE su_world su_ents)
 sutekh_apply_warnings(test_world_ext_retired)
 add_test(NAME world_ext_retired COMMAND test_world_ext_retired)
 
+# Regression: su_world_restore_canonical rejects a NULL entity_ids array when row_count > 0.
+add_executable(test_world_restore_null tests/world/test_world_restore_null.c)
+target_link_libraries(test_world_restore_null PRIVATE su_world su_ents)
+sutekh_apply_warnings(test_world_restore_null)
+add_test(NAME world_restore_null COMMAND test_world_restore_null)
+
 # Regression: su_lir_verify reports parser allocation failures instead of dereferencing NULL.
 add_executable(test_lir_oom tests/ir/test_lir_oom.c)
 target_link_libraries(test_lir_oom PRIVATE su_ir)

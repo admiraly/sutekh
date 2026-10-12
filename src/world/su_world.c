@@ -995,6 +995,9 @@ uint32_t su_world_restore_canonical(const SuWorldDesc *desc, const uint8_t *buf,
         if (rows > SU_LIMIT_ROWS) {
             return SU_E_PARSE;
         }
+        if (rows > 0u && desc->entity_ids == NULL) {
+            return SU_E_INVALID_ARGUMENT;
+        }
         vals = (size_t)rows * 4u;
         if (len != hdr + vals + (size_t)fc * (8u + vals)) {
             return SU_E_PARSE;
