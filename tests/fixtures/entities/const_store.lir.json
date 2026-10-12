@@ -1,0 +1,18 @@
+{
+  "ir_version": "0.1",
+  "system_id": "demo.const",
+  "numeric_profile": "u32_mod_v1",
+  "query": "demo.actor",
+  "instructions": [
+    {
+      "op": "const_u32",
+      "dst": "k",
+      "value": 5
+    },
+    {
+      "op": "store_u32",
+      "field": "position_x",
+      "src": "k"
+    }
+  ]
+}

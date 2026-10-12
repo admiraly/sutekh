@@ -3159,7 +3159,7 @@ ENT_EVENT_KEYS = ("event_seq", "tick", "kind", "system_index", "slot", "seq", "a
 ENT_TX8_ROWS = 3000              # spans three storage chunks (1024 slots each)
 ENT_TX8_CAPACITY = 4096
 ENT_TX8_TICKS = 4
-ENT_TX8_WORKERS = (1, 2, 4)
+ENT_TX8_WORKERS = (1, 2, 4, 8)
 
 
 def ent_systems(t: "TestCtx", rels) -> list:
@@ -3445,13 +3445,150 @@ def tx7(t: TestCtx):
     call(t, sess3, "world.close", {"world_id": wid3, "expected_world_revision": rev3})
 
 
+ENT_BUDGET_ENTRIES = 4194304      # SU_CMDQ_MAX_ENTRIES (src/world/entities/su_cmdq.h), per storage class
+ENT_CHUNK_SLOTS = 1024            # SU_CHUNK_SLOTS
+ENT_DEFAULT_TICK_CAP = 4096       # world.create default max_struct_per_tick and max_events_per_tick
+
+
+def ent_budget_total(rows: int, systems: int, per_row: int, tick_cap: int) -> int:
+    """Entries per storage class that world.create admission sums (src/runtime/entity_tick.c su_ent_budget):
+    for every (system, chunk), min(chunk rows * per_row cap, tick cap); summed over the chunks, times the
+    number of systems. per_row is the largest declared cap over the systems (su_ent_budget takes the max), so
+    despawn_move (4 and 4) and guard (1 and 1) give per_row 4 for a two-system world."""
+    total = 0
+    for start in range(0, rows, ENT_CHUNK_SLOTS):
+        size = min(ENT_CHUNK_SLOTS, rows - start)
+        total += min(size * per_row, tick_cap)
+    return total * systems
+
+
+def tx9(t: TestCtx):
+    """Admission through the control plane (extra check; not a TEST_SPEC id; audit MX19). world.create of an
+    entity world with the two IR 0.2 systems (declared per-row caps 4 and 4) is refused with SU_E_RESOURCE_LIMIT
+    when the buffers one tick would allocate exceed SU_CMDQ_MAX_ENTRIES (4,194,304) in a class. The numbers:
+    2 systems x (524,288 rows / 1,024 per chunk = 512 full chunks x min(1024 x 4, 4096) = 4,096) = 4,194,304
+    (accepted, exactly at the budget); 524,287 rows: 4,194,296 (accepted); 524,289 rows: 4,194,312 (refused);
+    1,000,000 rows: 8,000,000 (refused, the 1M-row world of the contract). Refusal creates no world and leaves
+    the session working; accepted worlds close cleanly. Default caps are used throughout."""
+    expected = {524287: 4194296, 524288: 4194304, 524289: 4194312, 1000000: 8000000}
+    cases = ((524287, True), (524288, True), (524289, False), (1000000, False))
+    for rows, want_total in expected.items():
+        t.check(f"TX9 budget arithmetic: 2 systems, {rows} rows = {want_total} entries per class",
+                want_total, ent_budget_total(rows, 2, 4, ENT_DEFAULT_TICK_CAP))
+    t.check("TX9 budget: 4,194,304 is the per-class limit the worker enforces", 4194304, ENT_BUDGET_ENTRIES)
+    scratch = _write_scratch_dir(t, "m2-ent-admit-")
+    systems_rels = [ENT_CAP_MOVE, ENT_CAP_GUARD]
+    sess = t.session("TX9 serve")
+    for rows, accept in cases:
+        path = os.path.join(scratch, f"rows{rows}.json")
+        zeros = [0] * rows
+        write_entity_fixture(path, list(range(1, rows + 1)), zeros, zeros)
+        try:
+            env = sess.request("world.create", {"fixture_path": t.rel(path), "capsule_paths": systems_rels})
+            if accept:
+                t.check_mismatches(f"TX9 {rows} rows x 2 systems: world.create accepted (within the budget)",
+                                   [] if env.get("ok") is True else [f"refused: {env.get('error')}"])
+                if env.get("ok") is True:
+                    res = env["result"]
+                    call(t, sess, "world.close", {"world_id": res["world_id"],
+                                                  "expected_world_revision": res["world_revision"]})
+            else:
+                t.check_mismatches(f"TX9 {rows} rows x 2 systems: world.create refused with SU_E_RESOURCE_LIMIT",
+                                   classify_error(env, "SU_E_RESOURCE_LIMIT"))
+                t.check(f"TX9 {rows} rows: the refused create leaves the session answering", True,
+                        sess.request("engine.info", {}).get("ok") is True)
+        finally:
+            os.remove(path)
+    t.check("TX9 after the admission cases: the worker answers engine.info", True,
+            sess.request("engine.info", {}).get("ok") is True)
+
+    # Docs/AGENT_RPC.md section 16: a 1,000,000-row world with ONE system is created with the default caps, and its
+    # first despawn-heavy tick fails with SU_E_RESOURCE_LIMIT and changes nothing.
+    rows = 1000000
+    pos, vel = gen_columns(rows, 8)
+    path = os.path.join(scratch, "rows1000000-one-system.json")
+    write_entity_fixture(path, list(range(1, rows + 1)), pos, vel)
+    del pos, vel
+    try:
+        res = call(t, sess, "world.create", {"fixture_path": t.rel(path), "capsule_paths": [ENT_CAP_MOVE]})
+        wid, rev = res["world_id"], res["world_revision"]
+        env = sess.request("world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": 1})
+        t.check_mismatches("TX9 1,000,000 rows, default caps: the despawn-heavy first tick is SU_E_RESOURCE_LIMIT",
+                           classify_error(env, "SU_E_RESOURCE_LIMIT"))
+        ins = call(t, sess, "world.inspect", {"world_id": wid, "limit": 1})
+        t.check("TX9 1,000,000 rows: the refused tick left the revision unchanged", rev, ins["world_revision"])
+        t.check("TX9 1,000,000 rows: the refused tick left all rows alive", rows,
+                ins["entities"]["alive"])
+        call(t, sess, "world.close", {"world_id": wid, "expected_world_revision": rev})
+    finally:
+        os.remove(path)
+
+
+ENT_CAP_CONST = f"{ENT_DIR}/const_store.capsule.json"   # IR 0.1: position_x = 5 on every row (dead rows too)
+
+
+def tx10(t: TestCtx):
+    """Dead slots after a native kernel (audit blocker 1; native build only, extra check). An IR 0.1 system
+    stores a constant (position_x = 5) into every row, so a native kernel stages nonzero values into dead rows.
+    The entity world has an interior dead slot (slot 1, despawned through world.despawn) and capacity 8 (slots
+    3..7 never alive). After each specialized tick the dead rows are canonically zero (su_world_zero_dead after
+    the system): the native world's canonical snapshot equals the VM control's, and the inspected rows (dead
+    row 1 is zero, alive rows 0 and 2 are 5) match the control. Scalar always; avx2 when the host has it."""
+    sess = t.session("TX10 serve")
+    info = call(t, sess, "engine.info", {})
+    if "world.specialize" not in (info.get("capabilities") or []):
+        raise Unavailable("TX10 needs a native build (world.specialize is not advertised)")
+    host = info.get("native", {}).get("specialization", {}).get("host_caps", {})
+    backends = [("scalar", "native_scalar")]
+    if host.get("avx2") is True:
+        backends.append(("avx2", "native_avx2"))
+    for backend, tier in backends:
+        worlds = {}
+        for label in ("control", "native"):
+            res = call(t, sess, "world.create", {"fixture_path": ENT_ACTORS, "capsule_paths": [ENT_CAP_CONST],
+                                                "max_entities": 8})
+            wid, rev = res["world_id"], res["world_revision"]
+            res = call(t, sess, "world.despawn", {"world_id": wid, "expected_world_revision": rev,
+                                                 "entity": (1 << 32) | 1})
+            worlds[label] = [wid, res["world_revision"]]
+        nat_wid, nat_rev = worlds["native"]
+        res = call(t, sess, "world.specialize", {"world_id": nat_wid, "expected_world_revision": nat_rev,
+                                                 "system_id": "demo.const", "backend": backend})
+        t.check(f"TX10 {backend}: the constant-store system runs as {tier}", tier, res.get("execution_tier"))
+        nat_rev = res.get("world_revision", nat_rev)
+        for tick in range(3):
+            ctl_wid, ctl_rev = worlds["control"]
+            res_c = call(t, sess, "world.step", {"world_id": ctl_wid, "expected_world_revision": ctl_rev,
+                                                 "ticks": 1})
+            worlds["control"][1] = res_c["world_revision"]
+            res_n = call(t, sess, "world.step", {"world_id": nat_wid, "expected_world_revision": nat_rev,
+                                                 "ticks": 1})
+            nat_rev = res_n["world_revision"]
+            worlds["native"][1] = nat_rev
+            # Columns and entity counts per tick. The snapshot bytes are not compared: a specialization
+            # adds an installed-revision record (txid) to the manifest, which is metadata, not state.
+            ins_c = call(t, sess, "world.inspect", {"world_id": ctl_wid, "fields": ["position_x"], "limit": 8})
+            ins_n = call(t, sess, "world.inspect", {"world_id": nat_wid, "fields": ["position_x"], "limit": 8})
+            t.check(f"TX10 {backend} tick {tick + 1}: columns equal the VM control (dead row 1 is zero)",
+                    ins_c["columns"], ins_n["columns"])
+            t.check(f"TX10 {backend} tick {tick + 1}: entity counts equal the VM control",
+                    ins_c["entities"], ins_n["entities"])
+        pos_c = ins_c["columns"]["position_x"]
+        pos_n = ins_n["columns"]["position_x"]
+        t.check(f"TX10 {backend}: dead row 1 is canonically zero after the native kernel", 0, pos_n[1])
+        t.check(f"TX10 {backend}: alive rows 0 and 2 hold the stored constant", [5, 5], [pos_n[0], pos_n[2]])
+        t.check(f"TX10 {backend}: inspected columns equal the VM control", pos_c, pos_n)
+        for label in ("control", "native"):
+            call(t, sess, "world.close", {"world_id": worlds[label][0], "expected_world_revision": worlds[label][1]})
+
+
 def model_rev(rev: str) -> int:
     """The N of a world revision string '<world>.r<N>'."""
     return int(rev.rsplit(".r", 1)[1])
 
 
 def tx8(t: TestCtx):
-    """IR 0.2 programs at N=1,2,4 tick workers (extra check; not a TEST_SPEC id). A 3000-row world (three
+    """IR 0.2 programs at N=1,2,4,8 tick workers (extra check; not a TEST_SPEC id). A 3000-row world (three
     storage chunks) runs the movement system (despawn_self, emit_event), the guard system ordered after it (its
     despawn of an already-despawned row is refused with an event), for several ticks at each worker count. The
     canonical state (world.snapshot sha256: columns, entity table and event log) is equal for every N and equal
@@ -3492,7 +3629,7 @@ def tx8(t: TestCtx):
             snap = call(t, sess, "world.snapshot", {"world_id": wid, "expected_world_revision": res["world_revision"]})
             shas.setdefault(label, {})[n] = snap["sha256"]
             call(t, sess, "world.close", {"world_id": wid, "expected_world_revision": res["world_revision"]})
-        t.check(f"TX8 {label}: canonical state is equal for N=1,2,4", 1,
+        t.check(f"TX8 {label}: canonical state is equal for N=1,2,4,8", 1,
                 len(set(shas[label].values())))
 
 
@@ -3534,9 +3671,14 @@ TESTS = [
     ("TX7", "Entities: spawn/despawn/stale handles/events (real binary vs Python model, extra)",
      ("engine.info", "world.create", "world.step", "world.inspect", "world.spawn", "world.despawn", "events.read",
       "world.snapshot", "world.restore", "world.close"), tx7),
-    ("TX8", "IR 0.2 programs and tick-worker equality (N=1,2,4, extra)",
+    ("TX8", "IR 0.2 programs and tick-worker equality (N=1,2,4,8, extra)",
      ("engine.info", "world.create", "world.step", "world.inspect", "events.read", "world.snapshot",
       "world.close"), tx8),
+    ("TX9", "Entity admission budget through world.create: refused over 4,194,304 entries (extra, audit MX19)",
+     ("engine.info", "world.create", "world.close"), tx9),
+    ("TX10", "Entities: dead rows canonically zero after a native kernel stages nonzero values (native build, extra)",
+     ("engine.info", "world.create", "world.despawn", "world.specialize", "world.step", "world.snapshot",
+      "world.inspect", "world.close"), tx10),
 ]
 
 
@@ -3789,6 +3931,16 @@ def self_test_entities(ok) -> None:
            for tid, _n, req, _f in TESTS))
     ok("entity TX8 is registered and needs events.read", any(tid == "TX8" and "events.read" in req
                                                           for tid, _n, req, _f in TESTS))
+    ok("entity budget: 524,288 rows over two systems is exactly the per-class limit",
+       ent_budget_total(524288, 2, 4, ENT_DEFAULT_TICK_CAP) == ENT_BUDGET_ENTRIES)
+    ok("entity budget: 524,289 rows over two systems is over the limit",
+       ent_budget_total(524289, 2, 4, ENT_DEFAULT_TICK_CAP) > ENT_BUDGET_ENTRIES)
+    ok("entity budget: one system is limited by its own per-row cap",
+       ent_budget_total(1000000, 1, 4, ENT_DEFAULT_TICK_CAP) == 4000000)
+    ok("entity budget: the tick cap bounds a chunk",
+       ent_budget_total(1024, 1, 64, ENT_DEFAULT_TICK_CAP) == ENT_DEFAULT_TICK_CAP)
+    ok("entity TX9 is registered and needs world.create", any(tid == "TX9" and "world.create" in req
+                                                           for tid, _n, req, _f in TESTS))
     ok("entity methods are documented in the method table",
        all(m in ENGINE_METHODS for m in ("world.spawn", "world.despawn", "events.read")))
     ok("entity stale refusal is classified with SU_E_STALE_HANDLE",
