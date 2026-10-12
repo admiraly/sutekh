@@ -41,6 +41,8 @@ IDs in these snippets are illustrative, not current engine state. Response `ok:f
 | `tests.run` | Suite, source/candidate ID | Test job ID |
 | `job.status` | Job ID | State, exact input fingerprints, artifacts |
 
+**Implemented in M0 (audit item 7).** `tests.run {candidate_id, suite, timeout_ms?}` runs the candidate's test file (the file `candidate.evaluate` takes as `test_path`) and returns `{job_id, state: "completed", method, result}`, where `result` is the evaluation object (`status` `passed` or `failed`, cases, failures). `job.status {job_id}` returns the kept record: `state` (always `completed`: jobs run synchronously, so `cancellable` is `false` and `cancelled` is `false`), `candidate_id`, `inputs` (`suite_path`, `suite_sha256`, `capsule_sha256`, `source_sha256`), `artifacts` (`[]`) and `result`. The job table keeps the last 16 completed jobs in the supervisor process; an unknown `job_id` is `SU_E_INVALID_ARGUMENT`. A run that produced no result (worker failure, refused path) is an error and leaves no job. `candidate.evaluate` remains synchronous, as before. `world.run`, `world.pause` and request-id idempotence are not implemented (see the handoff).
+
 `world.step` is valid for a paused world; reject it during free running unless the interface explicitly pauses at a boundary. `candidate.install` requires sufficient evidence for the chosen policy. A client cannot set its own “passed” flag. The supervisor resolves installed revisions against its evidence registry.
 
 ## 3. Later methods

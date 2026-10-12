@@ -819,6 +819,103 @@ static void test_submit_and_evaluate(Session *s, Ids *id) {
     resp_free(&r);
 }
 
+/* SHA-256 hex of a file under the scratch project root, computed here independently of the engine. */
+static void file_sha256(const char *name, char out[65]) {
+    char path[8192];
+    uint8_t *bytes;
+    size_t n = 0;
+    SuSha256 ctx;
+    uint8_t dg[32];
+
+    root_path(path, sizeof path, name);
+    bytes = read_whole(path, &n);
+    su_sha256_init(&ctx);
+    su_sha256_update(&ctx, bytes != NULL ? bytes : (const uint8_t *)"", bytes != NULL ? n : 0u);
+    su_sha256_final(&ctx, dg);
+    su_sha256_hex(dg, out);
+    free(bytes);
+}
+
+/* Audit item 7: tests.run runs the suite now and keeps a completed job; job.status returns that record with
+ * the exact input fingerprints. A failing suite completes with status failed. Unknown jobs are refused. */
+static void test_jobs(Session *s, Ids *id) {
+    Resp r;
+    char line[512];
+    char job[32];
+    char job_bad[32];
+    char st[16];
+    char sha[65];
+    char want[65];
+    const SuJsonValue *inputs;
+    const SuJsonValue *res;
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"tr\",\"method\":\"tests.run\",\"params\":"
+             "{\"candidate_id\":\"%s\",\"suite\":\"sys_a.test.json\"}}",
+             id->cand_a);
+    rpc(s, line, &r);
+    CHECK_OK(r);
+    CHECK(jstr(resp_result(&r), "job_id", job, sizeof job));
+    CHECK(jstr(resp_result(&r), "state", st, sizeof st) && strcmp(st, "completed") == 0);
+    res = su_json_member(resp_result(&r), "result");
+    CHECK(res != NULL && jstr(res, "status", st, sizeof st) && strcmp(st, "passed") == 0);
+    resp_free(&r);
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"js\",\"method\":\"job.status\",\"params\":{\"job_id\":\"%s\"}}",
+             job);
+    rpc(s, line, &r);
+    CHECK_OK(r);
+    CHECK(jstr(resp_result(&r), "job_id", st, sizeof st) && strcmp(st, job) == 0);
+    CHECK(jstr(resp_result(&r), "state", st, sizeof st) && strcmp(st, "completed") == 0);
+    CHECK(jstr(resp_result(&r), "candidate_id", st, sizeof st) && strcmp(st, id->cand_a) == 0);
+    inputs = su_json_member(resp_result(&r), "inputs");
+    file_sha256("sys_a.test.json", want);
+    CHECK(jstr(inputs, "suite_sha256", sha, sizeof sha) && strcmp(sha, want) == 0);
+    file_sha256("sys_a.capsule.json", want);
+    CHECK(jstr(inputs, "capsule_sha256", sha, sizeof sha) && strcmp(sha, want) == 0);
+    file_sha256("sys_a.lir.json", want);
+    CHECK(jstr(inputs, "source_sha256", sha, sizeof sha) && strcmp(sha, want) == 0);
+    res = su_json_member(resp_result(&r), "result");
+    CHECK(res != NULL && jstr(res, "status", st, sizeof st) && strcmp(st, "passed") == 0);
+    resp_free(&r);
+
+    /* A failing candidate: the job completes and its result is failed. */
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"tb\",\"method\":\"tests.run\",\"params\":"
+             "{\"candidate_id\":\"%s\",\"suite\":\"sys_a_bad.test.json\"}}",
+             id->cand_bad);
+    rpc(s, line, &r);
+    CHECK_OK(r);
+    CHECK(jstr(resp_result(&r), "job_id", job_bad, sizeof job_bad));
+    res = su_json_member(resp_result(&r), "result");
+    CHECK(res != NULL && jstr(res, "status", st, sizeof st) && strcmp(st, "failed") == 0);
+    resp_free(&r);
+
+    /* Unknown job; a suite that does not name the candidate's capsule creates no job. */
+    rpc(s,
+        "{\"protocol\":\"0.1\",\"id\":\"jx\",\"method\":\"job.status\",\"params\":{\"job_id\":\"job-999999\"}}",
+        &r);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"tm\",\"method\":\"tests.run\",\"params\":"
+             "{\"candidate_id\":\"%s\",\"suite\":\"sys_b.test.json\"}}",
+             id->cand_a);
+    rpc(s, line, &r);
+    CHECK_CODE(r, SU_E_SCHEMA_MISMATCH);
+    resp_free(&r);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"js2\",\"method\":\"job.status\",\"params\":{\"job_id\":\"%s\"}}",
+             job_bad);
+    rpc(s, line, &r);
+    CHECK_OK(r);
+    CHECK(jstr(resp_result(&r), "job_id", st, sizeof st) && strcmp(st, job_bad) == 0);
+    res = su_json_member(resp_result(&r), "result");
+    CHECK(res != NULL && jstr(res, "status", st, sizeof st) && strcmp(st, "failed") == 0);
+    resp_free(&r);
+}
+
 static void test_world_create(Session *s, Ids *id) {
     Resp r;
     Manifest m;
@@ -1354,6 +1451,7 @@ int main(int argc, char **argv) {
     s = session_start(&cfg);
     test_engine_info(&s);
     test_submit_and_evaluate(&s, &ids);
+    test_jobs(&s, &ids);
     test_world_create(&s, &ids);
     test_paging(&s, &ids);
     test_install_effects(&s, &ids);

@@ -30,6 +30,7 @@
 #endif
 
 #define AGENT_MAX_CANDIDATES 16u
+#define AGENT_MAX_JOBS 16u       /* completed tests.run jobs retained; the oldest is evicted */
 #define AGENT_DEFAULT_TIMEOUT_MS 10000u
 #define AGENT_MIN_TIMEOUT_MS 50u
 #define AGENT_MAX_TIMEOUT_MS 60000u
@@ -266,6 +267,22 @@ typedef struct AgentCandidate {
     uint64_t seq;             /* creation order; the oldest record is evicted when the table is full */
 } AgentCandidate;
 
+/* A completed tests.run job (audit item 7). Jobs run synchronously, so a record exists only for a
+ * finished evaluation; its state is "completed" and its result carries the evaluation status (passed or
+ * failed). The inputs are the fingerprints the evaluation ran on. result is owned (heap). */
+typedef struct AgentJob {
+    int used;
+    char id[24];                   /* "job-N", never reused within this supervisor */
+    char candidate[32];
+    char suite_path[SU_PATH_BUF];  /* the suite (test file) path as the client named it */
+    char suite_sha256[65];
+    char capsule_sha256[65];
+    char source_sha256[65];
+    char *result;                  /* the evaluation result object, complete JSON */
+    size_t result_len;
+    uint64_t seq;
+} AgentJob;
+
 typedef struct AgentSystemPaths {
     char capsule[SU_PATH_BUF];
     char source[SU_PATH_BUF];
@@ -279,6 +296,8 @@ typedef struct SuAgent {
     uint64_t last_pid;      /* pid of the most recent active worker, for recovery reports */
     uint64_t next_candidate;
     uint64_t next_eval;
+    uint64_t next_job;
+    AgentJob jobs[AGENT_MAX_JOBS];
     AgentCandidate cand[AGENT_MAX_CANDIDATES];
     AgentWorld world[AGENT_MAX_WORLDS];
     uint64_t next_world_seq; /* highest world number ever issued: seeds replacement workers */
@@ -327,7 +346,7 @@ typedef struct InFlight {
  * must not be advertised. */
 static const char *const k_capabilities[] = {
     "engine.info",   "capsule.submit", "candidate.status", "candidate.evaluate",
-    "candidate.install", "world.create", "world.inspect", "world.step",
+    "candidate.install", "tests.run", "job.status", "world.create", "world.inspect", "world.step",
     "world.snapshot", "world.restore", "world.close", "world.spawn", "world.despawn", "events.read",
     "world.migrate_plan", "world.migrate_commit", "world.migrate_rollback",
 #ifdef SU_HAVE_NATIVE
@@ -2701,12 +2720,10 @@ static void copy_failures(const SuJsonValue *arr, SuBuf *res) {
     su_buf_str(res, "]");
 }
 
-static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBuf *res,
-                                     AgentCall *c) {
-    static const char *const allowed[] = {"candidate_id", "test_path", "timeout_ms"};
-    const char *id = NULL;
-    const char *test_rel = NULL;
-    uint64_t timeout = a->timeout_ms;
+/* The evaluation core (audit item 7): runs the candidate's test file in a disposable worker and writes the
+ * result object to res. suite_sha, when not NULL, receives the SHA-256 of the test file bytes. */
+static uint32_t candidate_evaluate_run(SuAgent *a, const char *id, const char *test_rel, uint64_t timeout,
+                                       SuBuf *res, AgentCall *c, char *suite_sha) {
     AgentCandidate *cd;
     char test_real[SU_PATH_BUF];
     char world_real[SU_PATH_BUF];
@@ -2727,13 +2744,6 @@ static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBu
     const SuJsonValue *ok_v;
     uint32_t st;
 
-    if (check_keys(params, allowed, 3, c) != SU_OK ||
-        param_str(params, "candidate_id", 1, &id, c) != SU_OK ||
-        param_str(params, "test_path", 1, &test_rel, c) != SU_OK ||
-        param_uint(params, "timeout_ms", 0, AGENT_MIN_TIMEOUT_MS, AGENT_MAX_TIMEOUT_MS,
-                   a->timeout_ms, &timeout, c) != SU_OK) {
-        return SU_E_TYPE;
-    }
     cd = find_candidate(a, id);
     if (cd == NULL) {
         return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown candidate_id");
@@ -2745,6 +2755,14 @@ static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBu
     st = su_path_read_file(test_real, AGENT_TEST_MAX, &tdata, &tlen);
     if (st != SU_OK) {
         return call_fail(c, st, "test file could not be read");
+    }
+    if (suite_sha != NULL) {
+        SuSha256 sctx;
+        uint8_t sdg[32];
+        su_sha256_init(&sctx);
+        su_sha256_update(&sctx, tdata, tlen);
+        su_sha256_final(&sctx, sdg);
+        su_sha256_hex(sdg, suite_sha);
     }
     memset(&doc, 0, sizeof doc);
     lim.max_bytes = tlen;
@@ -2902,6 +2920,145 @@ static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBu
     }
     su_json_doc_free(&doc);
     su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"candidate_id", "test_path", "timeout_ms"};
+    const char *id = NULL;
+    const char *test_rel = NULL;
+    uint64_t timeout = a->timeout_ms;
+
+    if (check_keys(params, allowed, 3, c) != SU_OK ||
+        param_str(params, "candidate_id", 1, &id, c) != SU_OK ||
+        param_str(params, "test_path", 1, &test_rel, c) != SU_OK ||
+        param_uint(params, "timeout_ms", 0, AGENT_MIN_TIMEOUT_MS, AGENT_MAX_TIMEOUT_MS,
+                   a->timeout_ms, &timeout, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    return candidate_evaluate_run(a, id, test_rel, timeout, res, c, NULL);
+}
+
+/* tests.run {candidate_id, suite, timeout_ms?} (audit item 7). The suite is the candidate's test file (the
+ * same file candidate.evaluate takes as test_path). The evaluation runs now, and the completed job is kept
+ * under job_id for job.status. A run that produced no result (worker failure, refused path) is an error and
+ * leaves no job. */
+static uint32_t h_tests_run(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"candidate_id", "suite", "timeout_ms"};
+    const char *id = NULL;
+    const char *suite = NULL;
+    uint64_t timeout = a->timeout_ms;
+    AgentCandidate *cd;
+    AgentJob *j = NULL;
+    SuBuf ev;
+    char sha[65];
+    char cap_sha[65];
+    char src_sha[65];
+    char job_id[24];
+    char cand_id[32];
+    size_t i;
+    uint32_t st;
+
+    if (check_keys(params, allowed, 3, c) != SU_OK ||
+        param_str(params, "candidate_id", 1, &id, c) != SU_OK ||
+        param_str(params, "suite", 1, &suite, c) != SU_OK ||
+        param_uint(params, "timeout_ms", 0, AGENT_MIN_TIMEOUT_MS, AGENT_MAX_TIMEOUT_MS,
+                   a->timeout_ms, &timeout, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    cd = find_candidate(a, id);
+    if (cd == NULL) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown candidate_id");
+    }
+    snprintf(cap_sha, sizeof cap_sha, "%s", cd->capsule_hash);
+    snprintf(src_sha, sizeof src_sha, "%s", cd->source_hash);
+    snprintf(cand_id, sizeof cand_id, "%s", cd->id);
+    su_buf_init(&ev);
+    st = candidate_evaluate_run(a, id, suite, timeout, &ev, c, sha);
+    if (st != SU_OK) {
+        su_buf_free(&ev);
+        return st;
+    }
+    if (ev.failed) {
+        su_buf_free(&ev);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "job result too large");
+    }
+    a->next_job++;
+    snprintf(job_id, sizeof job_id, "job-%llu", (unsigned long long)a->next_job);
+    for (i = 0; i < AGENT_MAX_JOBS && j == NULL; i++) {
+        if (!a->jobs[i].used) {
+            j = &a->jobs[i];
+        }
+    }
+    if (j == NULL) {
+        /* Bounded retention: evict the oldest completed job. */
+        for (i = 0; i < AGENT_MAX_JOBS; i++) {
+            if (j == NULL || a->jobs[i].seq < j->seq) {
+                j = &a->jobs[i];
+            }
+        }
+        free(j->result);
+        j->result = NULL;
+    }
+    memset(j, 0, sizeof *j);
+    j->result = malloc(ev.len > 0 ? ev.len : 1u);
+    if (j->result == NULL) {
+        su_buf_free(&ev);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "job result could not be kept");
+    }
+    memcpy(j->result, ev.data, ev.len);
+    j->result_len = ev.len;
+    j->used = 1;
+    j->seq = a->next_job;
+    snprintf(j->id, sizeof j->id, "%s", job_id);
+    snprintf(j->candidate, sizeof j->candidate, "%s", cand_id);
+    snprintf(j->suite_path, sizeof j->suite_path, "%s", suite);
+    snprintf(j->suite_sha256, sizeof j->suite_sha256, "%s", sha);
+    snprintf(j->capsule_sha256, sizeof j->capsule_sha256, "%s", cap_sha);
+    snprintf(j->source_sha256, sizeof j->source_sha256, "%s", src_sha);
+    su_buf_str(res, "{\"job_id\":");
+    su_buf_quoted(res, job_id, strlen(job_id));
+    su_buf_str(res, ",\"state\":\"completed\",\"method\":\"tests.run\",\"result\":");
+    su_buf_put(res, ev.data, ev.len);
+    su_buf_str(res, "}");
+    su_buf_free(&ev);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* job.status {job_id}: the completed record of a tests.run job, with its input fingerprints. Jobs are
+ * synchronous, so a job is never running and cannot be cancelled. */
+static uint32_t h_job_status(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"job_id"};
+    const char *id = NULL;
+    AgentJob *j = NULL;
+    size_t i;
+
+    if (check_keys(params, allowed, 1, c) != SU_OK || param_str(params, "job_id", 1, &id, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    for (i = 0; i < AGENT_MAX_JOBS && j == NULL; i++) {
+        if (a->jobs[i].used && strcmp(a->jobs[i].id, id) == 0) {
+            j = &a->jobs[i];
+        }
+    }
+    if (j == NULL) {
+        return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown job_id");
+    }
+    su_buf_str(res, "{\"job_id\":");
+    su_buf_quoted(res, j->id, strlen(j->id));
+    su_buf_str(res, ",\"state\":\"completed\",\"method\":\"tests.run\",\"candidate_id\":");
+    su_buf_quoted(res, j->candidate, strlen(j->candidate));
+    su_buf_str(res, ",\"cancellable\":false,\"cancelled\":false,\"inputs\":{\"suite_path\":");
+    su_buf_quoted(res, j->suite_path, strlen(j->suite_path));
+    su_buf_str(res, ",\"suite_sha256\":");
+    su_buf_quoted(res, j->suite_sha256, strlen(j->suite_sha256));
+    su_buf_str(res, ",\"capsule_sha256\":");
+    su_buf_quoted(res, j->capsule_sha256, strlen(j->capsule_sha256));
+    su_buf_str(res, ",\"source_sha256\":");
+    su_buf_quoted(res, j->source_sha256, strlen(j->source_sha256));
+    su_buf_str(res, "},\"artifacts\":[],\"result\":");
+    su_buf_put(res, (const uint8_t *)j->result, j->result_len);
+    su_buf_str(res, "}");
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
@@ -5661,6 +5818,12 @@ static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c
     if (strcmp(req->method, "candidate.evaluate") == 0) {
         return h_candidate_evaluate(a, p, res, c);
     }
+    if (strcmp(req->method, "tests.run") == 0) {
+        return h_tests_run(a, p, res, c);
+    }
+    if (strcmp(req->method, "job.status") == 0) {
+        return h_job_status(a, p, res, c);
+    }
     if (strcmp(req->method, "world.create") == 0) {
         return h_world_create(a, p, res, c);
     }
@@ -5873,6 +6036,12 @@ int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
     su_buf_free(&a->rec);
     su_buf_free(&a->event);
     su_buf_free(&a->nat_rec);
+    {
+        size_t k;
+        for (k = 0; k < AGENT_MAX_JOBS; k++) {
+            free(a->jobs[k].result);
+        }
+    }
     free(a);
     sigaction(SIGPIPE, &old, NULL);
     return ret;
