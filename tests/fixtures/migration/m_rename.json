@@ -1,0 +1,1 @@
+{"migration_format":"0.1","id":"m-rename-a","from_layout_generation":1,"to_layout_generation":2,"ops":[{"op":"rename_field","id":10,"new_name":"alpha"}]}
