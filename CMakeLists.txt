@@ -179,6 +179,8 @@ add_test(NAME rts_native_diff COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/te
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # M3-04/M3-05 detectors for contract mutants M3-M20, M3-M30, M3-M35 (Python reference; M3-M18 and M3-M26 are skipped).
 add_test(NAME rts_ref_m3_mutants COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/ref/m3_control_mutants.py")
+# M3-05 replay recorder and replayer on the semantic model (T-RTS-REPLAY-1, -2 model side; -3 needs the engine).
+add_test(NAME rts_replay COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/replay/test_replay.py")
 
 add_executable(test_reload tests/reload/test_reload.c)
 target_link_libraries(test_reload PRIVATE su_agent)
