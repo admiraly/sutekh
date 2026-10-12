@@ -406,6 +406,12 @@ target_compile_definitions(test_cmdq PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_cmdq)
 add_test(NAME cmdq COMMAND test_cmdq WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# M3-05: control-plane domains (contract 2.2). Pure checks, no world state.
+add_library(su_rts_control STATIC src/runtime/rts/control_domains.c)
+target_include_directories(su_rts_control PUBLIC src include)
+add_executable(test_control_domains tests/rts/control/test_control_domains.c)
+target_link_libraries(test_control_domains PRIVATE su_rts_control)
+add_test(NAME rts_control_domains COMMAND test_control_domains WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # M3-05 (OD-20): per-system structural and event caps.
 add_executable(test_cmdq_percap tests/entities/test_cmdq_percap.c)
 target_link_libraries(test_cmdq_percap PRIVATE su_cmdq)
