@@ -1,4 +1,5 @@
-/* Canonical JSON snapshots of a committed world (M0-08). See snapshot.h. */
+/* Canonical JSON snapshots of a committed world (M0-08; format 0.2 and entity table from M2-00c1).
+ * See snapshot.h. */
 #include "world/snapshot.h"
 
 #include <stdlib.h>
@@ -8,29 +9,32 @@
 #include "ir/su_sha256.h"
 #include "sutekh/abi.h"
 #include "sutekh/ir.h"
-
-/* Canonical encoding of the world's committed root, as documented in
- * su_world.h: "SUWSTATE" 0x00 | u32 version | u64 tick | u64 rows |
- * u32 field_count | u32 entity_ids[rows] | per-field records. */
-#define SNAP_CANON_HDR_BYTES 33u
-#define SNAP_CANON_MAGIC_BYTES 9u
-#define SNAP_CANON_ROWS_OFF (SNAP_CANON_MAGIC_BYTES + 4u + 8u)
-#define SNAP_CANON_FC_OFF (SNAP_CANON_ROWS_OFF + 8u)
-#define SNAP_CANON_TICK_OFF (SNAP_CANON_MAGIC_BYTES + 4u)
+#include "world/entities/su_ents.h"
 
 #define SNAP_TYPE_NAME "u32"
+#define SNAP_ENT_HEADER_BYTES 60u
+#define SNAP_ENT_RECORD_BYTES 9u
+#define SNAP_EVENT_TUPLE 8u
+#define SNAP_SLOT_TUPLE 3u
 
-static const char *const k_top_keys[] = {
+static const char *const k_top_01[] = {
     "snapshot_format", "world_revision", "tick", "schema_id", "schema_version",
     "layout_generation", "numeric_profile", "fields", "semantic_manifest",
     "entity_ids", "columns"};
-#define K_TOP_COUNT (sizeof k_top_keys / sizeof k_top_keys[0])
+#define K_TOP_01_COUNT (sizeof k_top_01 / sizeof k_top_01[0])
+
+static const char *const k_top_02[] = {
+    "snapshot_format", "world_revision", "tick", "schema_id", "schema_version",
+    "layout_generation", "numeric_profile", "fields", "semantic_manifest",
+    "entity_ids", "columns", "capacity", "high_water", "free_policy", "retired_count",
+    "slots", "event_next_seq", "event_dropped", "event_log_max", "events"};
+#define K_TOP_02_COUNT (sizeof k_top_02 / sizeof k_top_02[0])
 
 static const char *const k_field_keys[] = {"id", "name", "type"};
 static const char *const k_manifest_keys[] = {"system_id", "semantic_hash"};
 
-/* Emission-side view of one snapshot. Fields are ascending by id; columns[i]
- * holds row_count committed values for fields[i]. */
+/* Emission-side view of one snapshot. Fields are ascending by id; columns[i] holds row_count values
+ * for fields[i]. Format 1 takes entity_ids from the descriptor; format 2 takes the table. */
 typedef struct SnapBody {
     const char *rev;
     uint64_t tick;
@@ -39,11 +43,18 @@ typedef struct SnapBody {
     uint32_t layout_generation;
     const SuWorldFieldDesc *fields;
     uint32_t field_count;
-    uint64_t row_count;
-    const uint32_t *entity_ids;
+    uint32_t format_minor;
+    uint64_t row_count;          /* columns length: format 1 row count, format 2 high_water */
+    const uint32_t *entity_ids;  /* format 1 only */
+    const SuEnts *ents;          /* format 2 only */
     const uint32_t *const *columns;
     const SuSnapshotManifestEntry *manifest;
     uint32_t manifest_count;
+    uint64_t event_next_seq;     /* format 2 only */
+    uint64_t event_dropped;
+    uint64_t event_log_max;
+    const SuEvent *events;
+    uint64_t event_count;
 } SnapBody;
 
 typedef struct SnapBuf {
@@ -171,6 +182,28 @@ static uint32_t check_manifest(const SuSnapshotManifestEntry *m, uint32_t count)
         }
         if (!hash_ok(m[i].semantic_hash, bounded_len(m[i].semantic_hash, sizeof m[i].semantic_hash))) {
             return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    return SU_OK;
+}
+
+/* Event log state: log_max in 1..limit, retained events contiguous and ending at next_seq - 1. */
+static uint32_t check_events(const SuSnapshotEvents *ev) {
+    uint64_t i;
+    if (ev->log_max == 0u || ev->log_max > SU_SNAPSHOT_EVENT_LOG_MAX_LIMIT) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (ev->count > ev->log_max || ev->count > ev->next_seq) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (ev->count > 0u) {
+        if (ev->entries == NULL || ev->entries[0].event_seq != ev->next_seq - ev->count) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        for (i = 1; i < ev->count; i++) {
+            if (ev->entries[i].event_seq != ev->entries[0].event_seq + i) {
+                return SU_E_INVALID_ARGUMENT;
+            }
         }
     }
     return SU_OK;
@@ -312,10 +345,26 @@ static uint32_t buf_jstr(SnapBuf *b, const char *s) {
     return buf_lit(b, "\"");
 }
 
+/* External id of slot: the live entity's id, or 0 for a dead slot (canonical). */
+static uint32_t slot_external(const SuEnts *e, uint32_t slot, uint32_t *ext) {
+    SuEntity h = SU_ENTITY_INVALID;
+    uint32_t st;
+    if (!su_ents_slot_alive(e, slot)) {
+        *ext = 0u;
+        return SU_OK;
+    }
+    st = su_ents_handle_for_slot(e, slot, &h);
+    if (st != SU_OK) {
+        return st;
+    }
+    return su_ents_get_external(e, h, ext);
+}
+
 static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
     uint32_t st;
     uint32_t i;
     uint64_t r;
+    uint64_t k;
 
 #define SNAP_W(expr)                                                          \
     do {                                                                      \
@@ -325,7 +374,9 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
         }                                                                     \
     } while (0)
 
-    SNAP_W(buf_lit(o, "{\"snapshot_format\":\"" SU_SNAPSHOT_FORMAT "\",\"world_revision\":"));
+    SNAP_W(buf_lit(o, "{\"snapshot_format\":\""));
+    SNAP_W(buf_lit(o, s->format_minor == 1u ? SU_SNAPSHOT_FORMAT_01 : SU_SNAPSHOT_FORMAT));
+    SNAP_W(buf_lit(o, "\",\"world_revision\":"));
     SNAP_W(buf_jstr(o, s->rev));
     SNAP_W(buf_lit(o, ",\"tick\":"));
     SNAP_W(buf_dec(o, s->tick));
@@ -336,7 +387,6 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
     SNAP_W(buf_lit(o, ",\"layout_generation\":"));
     SNAP_W(buf_dec(o, s->layout_generation));
     SNAP_W(buf_lit(o, ",\"numeric_profile\":\"" SU_NUMERIC_PROFILE_U32_MOD_V1 "\""));
-
     SNAP_W(buf_lit(o, ",\"fields\":["));
     for (i = 0; i < s->field_count; i++) {
         if (i > 0u) {
@@ -348,7 +398,6 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
         SNAP_W(buf_jstr(o, s->fields[i].name));
         SNAP_W(buf_lit(o, ",\"type\":\"" SNAP_TYPE_NAME "\"}"));
     }
-
     SNAP_W(buf_lit(o, "],\"semantic_manifest\":["));
     for (i = 0; i < s->manifest_count; i++) {
         if (i > 0u) {
@@ -360,18 +409,21 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
         SNAP_W(buf_bytes(o, s->manifest[i].semantic_hash, 64u));
         SNAP_W(buf_lit(o, "\"}"));
     }
-
     SNAP_W(buf_lit(o, "],\"entity_ids\":["));
     for (r = 0; r < s->row_count; r++) {
+        uint32_t id = 0;
         if (r > 0u) {
             SNAP_W(buf_lit(o, ","));
         }
-        SNAP_W(buf_dec(o, s->entity_ids[r]));
+        if (s->format_minor == 1u) {
+            id = s->entity_ids[r];
+        } else {
+            SNAP_W(slot_external(s->ents, (uint32_t)r, &id));
+        }
+        SNAP_W(buf_dec(o, id));
     }
-
     SNAP_W(buf_lit(o, "],\"columns\":{"));
     for (i = 0; i < s->field_count; i++) {
-        uint64_t k;
         if (i > 0u) {
             SNAP_W(buf_lit(o, ","));
         }
@@ -385,20 +437,83 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
         }
         SNAP_W(buf_lit(o, "]"));
     }
-    SNAP_W(buf_lit(o, "}}"));
+    SNAP_W(buf_lit(o, "}"));
+    if (s->format_minor == 2u) {
+        uint32_t hw = su_ents_high_water(s->ents);
+        if (hw != s->row_count) {
+            return SU_E_INTERNAL;
+        }
+        SNAP_W(buf_lit(o, ",\"capacity\":"));
+        SNAP_W(buf_dec(o, su_ents_capacity(s->ents)));
+        SNAP_W(buf_lit(o, ",\"high_water\":"));
+        SNAP_W(buf_dec(o, hw));
+        SNAP_W(buf_lit(o, ",\"free_policy\":\"" SU_ENTS_FREE_POLICY "\""));
+        SNAP_W(buf_lit(o, ",\"retired_count\":"));
+        SNAP_W(buf_dec(o, su_ents_retired_count(s->ents)));
+        SNAP_W(buf_lit(o, ",\"slots\":["));
+        for (i = 0; i < hw; i++) {
+            uint32_t gen = 0;
+            uint32_t ext = 0;
+            if (i > 0u) {
+                SNAP_W(buf_lit(o, ","));
+            }
+            SNAP_W(su_ents_slot_generation(s->ents, i, &gen));
+            SNAP_W(slot_external(s->ents, i, &ext));
+            SNAP_W(buf_lit(o, "["));
+            SNAP_W(buf_dec(o, gen));
+            SNAP_W(buf_lit(o, su_ents_slot_alive(s->ents, i) ? ",1," : ",0,"));
+            SNAP_W(buf_dec(o, ext));
+            SNAP_W(buf_lit(o, "]"));
+        }
+        SNAP_W(buf_lit(o, "],\"event_next_seq\":"));
+        SNAP_W(buf_dec(o, s->event_next_seq));
+        SNAP_W(buf_lit(o, ",\"event_dropped\":"));
+        SNAP_W(buf_dec(o, s->event_dropped));
+        SNAP_W(buf_lit(o, ",\"event_log_max\":"));
+        SNAP_W(buf_dec(o, s->event_log_max));
+        SNAP_W(buf_lit(o, ",\"events\":["));
+        for (k = 0; k < s->event_count; k++) {
+            const SuEvent *ev = &s->events[k];
+            if (k > 0u) {
+                SNAP_W(buf_lit(o, ","));
+            }
+            SNAP_W(buf_lit(o, "["));
+            SNAP_W(buf_dec(o, ev->event_seq));
+            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_dec(o, ev->tick));
+            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_dec(o, ev->kind));
+            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_dec(o, ev->system_index));
+            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_dec(o, ev->slot));
+            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_dec(o, ev->seq));
+            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_dec(o, ev->a));
+            SNAP_W(buf_lit(o, ","));
+            SNAP_W(buf_dec(o, ev->b));
+            SNAP_W(buf_lit(o, "]"));
+        }
+        SNAP_W(buf_lit(o, "]"));
+    }
+    SNAP_W(buf_lit(o, "}"));
 #undef SNAP_W
     return SU_OK;
 }
 
-/* ---- capture ----------------------------------------------------------- */
+/* ---- lifetime --------------------------------------------------------- */
 
-static uint32_t rd_u32(const uint8_t *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
-           ((uint32_t)p[3] << 24);
+static void put_u32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+    p[2] = (uint8_t)((v >> 16) & 0xFFu);
+    p[3] = (uint8_t)((v >> 24) & 0xFFu);
 }
 
-static uint64_t rd_u64(const uint8_t *p) {
-    return (uint64_t)rd_u32(p) | ((uint64_t)rd_u32(p + 4) << 32);
+static void put_u64(uint8_t *p, uint64_t v) {
+    put_u32(p, (uint32_t)(v & 0xFFFFFFFFu));
+    put_u32(p + 4, (uint32_t)(v >> 32));
 }
 
 void su_snapshot_destroy(SuSnapshot *s) {
@@ -409,17 +524,28 @@ void su_snapshot_destroy(SuSnapshot *s) {
     memset(s, 0, sizeof *s);
 }
 
+/* ---- capture ----------------------------------------------------------- */
+
 uint32_t su_snapshot_capture(const SuWorld *w, const SuWorldDesc *desc,
                              const char *world_revision,
                              const SuSnapshotManifestEntry *manifest, uint32_t manifest_count,
                              SuSnapshot *out) {
+    return su_snapshot_capture_ex(w, desc, world_revision, manifest, manifest_count, NULL, out);
+}
+
+uint32_t su_snapshot_capture_ex(const SuWorld *w, const SuWorldDesc *desc,
+                                const char *world_revision,
+                                const SuSnapshotManifestEntry *manifest, uint32_t manifest_count,
+                                const SuSnapshotEvents *events, SuSnapshot *out) {
     SuWorldFieldDesc *sf = NULL;
-    uint8_t *canon = NULL;
-    size_t canon_len = 0;
     const uint32_t **cols = NULL;
+    const SuEnts *ents;
     SnapBody body;
     SnapBuf buf;
-    uint64_t rows;
+    SuSnapshotEvents empty;
+    const SuSnapshotEvents *ev;
+    uint64_t cap;
+    uint64_t hw;
     uint32_t i;
     uint32_t st = SU_OK;
 
@@ -446,50 +572,30 @@ uint32_t su_snapshot_capture(const SuWorld *w, const SuWorldDesc *desc,
     if (st != SU_OK) {
         return st;
     }
-    rows = desc->row_count;
-    if (su_world_row_count(w) != rows || su_world_field_count(w) != desc->field_count ||
+    if (events == NULL) {
+        memset(&empty, 0, sizeof empty);
+        empty.log_max = SU_SNAPSHOT_DEFAULT_EVENT_LOG_MAX;
+        ev = &empty;
+    } else {
+        ev = events;
+    }
+    st = check_events(ev);
+    if (st != SU_OK) {
+        goto done;
+    }
+    ents = su_world_entities_committed(w);
+    cap = su_ents_capacity(ents);
+    hw = su_ents_high_water(ents);
+    if (desc->row_count > cap || su_world_row_count(w) != cap ||
+        su_world_field_count(w) != desc->field_count ||
         su_world_layout_generation(w) != desc->layout_generation) {
         st = SU_E_SCHEMA_MISMATCH;
         goto done;
     }
-    /* Cheap lower bound on the encoded size (two bytes per value), checked
-     * before the transient canonical copy is allocated. */
-    if (rows * ((uint64_t)desc->field_count + 1u) > SU_SNAPSHOT_MAX_BYTES / 2u) {
+    /* Cheap lower bound on the encoded size (two bytes per value), checked before any copy. */
+    if (hw * ((uint64_t)desc->field_count + 1u) > SU_SNAPSHOT_MAX_BYTES / 2u) {
         st = SU_E_RESOURCE_LIMIT;
         goto done;
-    }
-
-    /* Entity IDs and tick come from the world's documented canonical encoding.
-     * The descriptor's IDs must agree with it. */
-    st = su_world_canonical_size(w, &canon_len);
-    if (st != SU_OK) {
-        goto done;
-    }
-    canon = malloc(canon_len > 0u ? canon_len : 1u);
-    if (canon == NULL) {
-        st = SU_E_RESOURCE_LIMIT;
-        goto done;
-    }
-    {
-        size_t need = canon_len;
-        st = su_world_canonical_write(w, canon, need, &canon_len);
-        if (st != SU_OK || canon_len != need) {
-            st = (st != SU_OK) ? st : SU_E_INTERNAL;
-            goto done;
-        }
-    }
-    if (canon_len < SNAP_CANON_HDR_BYTES + 4u * (size_t)rows ||
-        rd_u64(canon + SNAP_CANON_ROWS_OFF) != rows ||
-        rd_u32(canon + SNAP_CANON_FC_OFF) != desc->field_count ||
-        rd_u64(canon + SNAP_CANON_TICK_OFF) != su_world_tick(w)) {
-        st = SU_E_INTERNAL;
-        goto done;
-    }
-    for (i = 0; i < (uint32_t)rows; i++) {
-        if (rd_u32(canon + SNAP_CANON_HDR_BYTES + 4u * (size_t)i) != desc->entity_ids[i]) {
-            st = SU_E_SCHEMA_MISMATCH;
-            goto done;
-        }
     }
 
     /* Committed columns, cross-checked by name. */
@@ -509,11 +615,28 @@ uint32_t su_snapshot_capture(const SuWorld *w, const SuWorldDesc *desc,
             goto done;
         }
         if (su_world_read_committed_by_name(w, sf[i].name, &by_name, &r2) != SU_OK ||
-            by_name != by_id || r1 != rows || r2 != rows) {
+            by_name != by_id || r1 != cap || r2 != cap) {
             st = SU_E_SCHEMA_MISMATCH;
             goto done;
         }
         cols[i] = by_id;
+    }
+    /* The descriptor's entity IDs must agree with the creation identities it describes: a slot that is
+     * alive at its first generation has never been reused, so its external id must be the descriptor's. */
+    for (uint64_t r = 0; r < desc->row_count; r++) {
+        uint32_t ext = 0;
+        uint32_t gen = 0;
+        st = slot_external(ents, (uint32_t)r, &ext);
+        if (st == SU_OK) {
+            st = su_ents_slot_generation(ents, (uint32_t)r, &gen);
+        }
+        if (st != SU_OK) {
+            goto done;
+        }
+        if (su_ents_slot_alive(ents, (uint32_t)r) && gen == SU_GEN_FIRST && ext != desc->entity_ids[r]) {
+            st = SU_E_SCHEMA_MISMATCH;
+            goto done;
+        }
     }
 
     memset(&body, 0, sizeof body);
@@ -524,11 +647,17 @@ uint32_t su_snapshot_capture(const SuWorld *w, const SuWorldDesc *desc,
     body.layout_generation = desc->layout_generation;
     body.fields = sf;
     body.field_count = desc->field_count;
-    body.row_count = rows;
-    body.entity_ids = desc->entity_ids;
-    body.columns = (const uint32_t *const *)cols;
+    body.format_minor = 2u;
+    body.row_count = hw;
+    body.ents = ents;
+    body.columns = cols;
     body.manifest = manifest;
     body.manifest_count = manifest_count;
+    body.event_next_seq = ev->next_seq;
+    body.event_dropped = ev->dropped;
+    body.event_log_max = ev->log_max;
+    body.events = ev->entries;
+    body.event_count = ev->count;
 
     st = emit_body(&body, &buf);
     if (st != SU_OK) {
@@ -547,9 +676,8 @@ uint32_t su_snapshot_capture(const SuWorld *w, const SuWorldDesc *desc,
     buf.p = NULL;
 
 done:
-    free(canon);
-    free(sf);
     free(cols);
+    free(sf);
     free(buf.p);
     if (st != SU_OK) {
         memset(out, 0, sizeof *out);
@@ -624,6 +752,8 @@ static void data_free(SuSnapshotData *d) {
     }
     free(d->columns);
     free(d->world_revision);
+    su_ents_destroy(d->entities);
+    free(d->events);
     memset(d, 0, sizeof *d);
 }
 
@@ -660,6 +790,83 @@ static uint32_t read_manifest_entry(const SuJsonValue *obj, SuSnapshotManifestEn
     return SU_OK;
 }
 
+/* Builds an entity table from per-slot records through the canonical parser, so every table invariant
+ * is checked by one implementation. */
+static uint32_t build_table(uint64_t capacity, uint64_t hw, const uint32_t *gen, const uint8_t *alive,
+                            const uint32_t *ext, uint64_t retired, SuEnts **out) {
+    size_t total;
+    size_t i;
+    uint64_t alive_count = 0;
+    uint8_t *b;
+    uint32_t st;
+    *out = NULL;
+    if (hw > capacity || capacity > SU_LIMIT_ROWS) {
+        return SU_E_TYPE;
+    }
+    total = SNAP_ENT_HEADER_BYTES + (size_t)hw * SNAP_ENT_RECORD_BYTES;
+    b = malloc(total);
+    if (b == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memcpy(b, "SUENTABL", 8u);
+    b[8] = 0u;
+    put_u32(b + 9, 1u);
+    put_u32(b + 13, (uint32_t)strlen(SU_ENTS_FREE_POLICY));
+    memcpy(b + 17, SU_ENTS_FREE_POLICY, strlen(SU_ENTS_FREE_POLICY));
+    for (i = 0; i < hw; i++) {
+        alive_count += alive[i] ? 1u : 0u;
+    }
+    put_u64(b + 28, capacity);
+    put_u64(b + 36, hw);
+    put_u64(b + 44, alive_count);
+    put_u64(b + 52, retired);
+    for (i = 0; i < hw; i++) {
+        uint8_t *r = b + SNAP_ENT_HEADER_BYTES + i * SNAP_ENT_RECORD_BYTES;
+        put_u32(r, gen[i]);
+        put_u32(r + 4, ext[i]);
+        r[8] = alive[i] ? 1u : 0u;
+    }
+    st = su_ents_canonical_parse(b, total, out);
+    free(b);
+    if (st == SU_E_RESOURCE_LIMIT) {
+        return st;
+    }
+    return st == SU_OK ? SU_OK : SU_E_TYPE;
+}
+
+/* Reads a slot record [generation, alive, external_id]. */
+static uint32_t read_slot(const SuJsonValue *v, uint32_t *gen, uint8_t *alive, uint32_t *ext) {
+    uint64_t a = 0;
+    if (v == NULL || v->type != SU_JSON_ARRAY || v->u.array.count != SNAP_SLOT_TUPLE) {
+        return SU_E_TYPE;
+    }
+    if (get_u32(v->u.array.items[0], gen) != SU_OK || get_u64(v->u.array.items[1], &a) != SU_OK ||
+        a > 1u || get_u32(v->u.array.items[2], ext) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    *alive = (uint8_t)a;
+    return SU_OK;
+}
+
+/* Reads one event tuple [event_seq, tick, kind, system_index, slot, seq, a, b]. */
+static uint32_t read_event(const SuJsonValue *v, SuEvent *ev) {
+    const SuJsonValue *it[SNAP_EVENT_TUPLE];
+    uint32_t k;
+    if (v == NULL || v->type != SU_JSON_ARRAY || v->u.array.count != SNAP_EVENT_TUPLE) {
+        return SU_E_TYPE;
+    }
+    for (k = 0; k < SNAP_EVENT_TUPLE; k++) {
+        it[k] = v->u.array.items[k];
+    }
+    if (get_u64(it[0], &ev->event_seq) != SU_OK || get_u64(it[1], &ev->tick) != SU_OK ||
+        get_u32(it[2], &ev->kind) != SU_OK || get_u32(it[3], &ev->system_index) != SU_OK ||
+        get_u32(it[4], &ev->slot) != SU_OK || get_u32(it[5], &ev->seq) != SU_OK ||
+        get_u32(it[6], &ev->a) != SU_OK || get_u32(it[7], &ev->b) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    return SU_OK;
+}
+
 uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *desc,
                            SuSnapshotData *out, SuSnapshotError *err) {
     SuJsonLimits lim;
@@ -672,8 +879,18 @@ uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *
     const SuJsonValue *root;
     const SuJsonValue *arr;
     const SuJsonValue *cols;
+    const SuJsonValue *fmt;
     uint64_t tick = 0;
     uint64_t prev_id = 0;
+    uint64_t capacity = 0;
+    uint64_t hw = 0;
+    uint64_t retired = 0;
+    uint64_t rows = 0;
+    uint32_t minor = 0;
+    uint32_t *gen = NULL;
+    uint8_t *alive = NULL;
+    uint32_t *ext = NULL;
+    SuEnts *table = NULL;
     uint32_t i;
     uint32_t st;
 
@@ -710,17 +927,27 @@ uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *
         goto done;
     }
     root = doc.root;
-    st = check_keys(root, k_top_keys, K_TOP_COUNT);
+    if (root == NULL || root->type != SU_JSON_OBJECT) {
+        st = SU_E_TYPE;
+        fail_msg(err, "snapshot must be a JSON object");
+        goto done;
+    }
+    fmt = su_json_member(root, "snapshot_format");
+    if (str_is(fmt, SU_SNAPSHOT_FORMAT_01)) {
+        minor = 1u;
+    } else if (str_is(fmt, SU_SNAPSHOT_FORMAT)) {
+        minor = 2u;
+    } else {
+        st = SU_E_TYPE;
+        fail_msg(err, "unsupported snapshot_format");
+        goto done;
+    }
+    st = minor == 1u ? check_keys(root, k_top_01, K_TOP_01_COUNT) : check_keys(root, k_top_02, K_TOP_02_COUNT);
     if (st != SU_OK) {
         fail_msg(err, "top-level keys missing, unknown or not an object");
         goto done;
     }
 
-    if (!str_is(su_json_member(root, "snapshot_format"), SU_SNAPSHOT_FORMAT)) {
-        st = SU_E_TYPE;
-        fail_msg(err, "unsupported snapshot_format");
-        goto done;
-    }
     {
         const SuJsonValue *rv = su_json_member(root, "world_revision");
         if (rv->type != SU_JSON_STRING || !text_ok(rv->u.string.data, rv->u.string.len, SU_SNAPSHOT_MAX_NAME)) {
@@ -854,33 +1081,199 @@ uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *
         }
     }
 
-    /* entity_ids: the row count and identities of the target world. */
+    /* Entity table, stored rows and event log. */
     arr = su_json_member(root, "entity_ids");
     if (arr->type != SU_JSON_ARRAY) {
         st = SU_E_TYPE;
         fail_msg(err, "entity_ids must be an array");
         goto done;
     }
-    if (arr->u.array.count != desc->row_count) {
-        st = SU_E_SCHEMA_MISMATCH;
-        fail_msg(err, "row count does not match the target world");
-        goto done;
-    }
-    for (i = 0; i < (uint32_t)desc->row_count; i++) {
-        uint32_t ev = 0;
-        st = get_u32(arr->u.array.items[i], &ev);
-        if (st != SU_OK) {
-            fail_msg(err, "entity_ids must be u32 integers");
-            goto done;
-        }
-        if (ev != desc->entity_ids[i]) {
+    if (minor == 1u) {
+        if (arr->u.array.count != desc->row_count) {
             st = SU_E_SCHEMA_MISMATCH;
-            fail_msg(err, "entity_ids do not match the target world");
+            fail_msg(err, "row count does not match the target world");
             goto done;
         }
+        for (i = 0; i < (uint32_t)desc->row_count; i++) {
+            uint32_t ev = 0;
+            st = get_u32(arr->u.array.items[i], &ev);
+            if (st != SU_OK) {
+                fail_msg(err, "entity_ids must be u32 integers");
+                goto done;
+            }
+            if (ev != desc->entity_ids[i]) {
+                st = SU_E_SCHEMA_MISMATCH;
+                fail_msg(err, "entity_ids do not match the target world");
+                goto done;
+            }
+        }
+        capacity = desc->row_count;
+        hw = desc->row_count;
+        rows = hw;
+        if (rows > 0u) {
+            gen = malloc(rows * sizeof *gen);
+            alive = malloc(rows);
+            ext = malloc(rows * sizeof *ext);
+            if (gen == NULL || alive == NULL || ext == NULL) {
+                st = SU_E_RESOURCE_LIMIT;
+                goto done;
+            }
+        }
+        for (i = 0; i < (uint32_t)rows; i++) {
+            gen[i] = 1u;
+            alive[i] = 1u;
+            ext[i] = desc->entity_ids[i];
+        }
+        st = build_table(capacity, hw, gen, alive, ext, 0u, &table);
+        if (st != SU_OK) {
+            fail_msg(err, "entity table cannot be built");
+            goto done;
+        }
+        d.entities = table;
+        table = NULL;
+    } else {
+        uint64_t ev_count = 0;
+        uint64_t log_max = 0;
+        uint64_t next_seq = 0;
+        const SuJsonValue *slots;
+        if (get_u64(su_json_member(root, "capacity"), &capacity) != SU_OK || capacity > SU_LIMIT_ROWS) {
+            st = SU_E_RESOURCE_LIMIT;
+            fail_msg(err, "capacity is missing or over the limit");
+            goto done;
+        }
+        if (capacity < desc->row_count) {
+            st = SU_E_SCHEMA_MISMATCH;
+            fail_msg(err, "capacity is below the target world's row count");
+            goto done;
+        }
+        if (get_u64(su_json_member(root, "high_water"), &hw) != SU_OK || hw > capacity) {
+            st = SU_E_TYPE;
+            fail_msg(err, "high_water must be an integer at most capacity");
+            goto done;
+        }
+        if (!str_is(su_json_member(root, "free_policy"), SU_ENTS_FREE_POLICY)) {
+            st = SU_E_TYPE;
+            fail_msg(err, "free_policy is not supported");
+            goto done;
+        }
+        if (get_u64(su_json_member(root, "retired_count"), &retired) != SU_OK || retired > hw) {
+            st = SU_E_TYPE;
+            fail_msg(err, "retired_count must be an integer at most high_water");
+            goto done;
+        }
+        rows = hw;
+        slots = su_json_member(root, "slots");
+        if (slots->type != SU_JSON_ARRAY || slots->u.array.count != hw) {
+            st = SU_E_TYPE;
+            fail_msg(err, "slots must hold one record per slot below high_water");
+            goto done;
+        }
+        if (rows > 0u) {
+            gen = malloc(rows * sizeof *gen);
+            alive = malloc(rows);
+            ext = malloc(rows * sizeof *ext);
+            if (gen == NULL || alive == NULL || ext == NULL) {
+                st = SU_E_RESOURCE_LIMIT;
+                goto done;
+            }
+        }
+        for (i = 0; i < (uint32_t)rows; i++) {
+            st = read_slot(slots->u.array.items[i], &gen[i], &alive[i], &ext[i]);
+            if (st != SU_OK) {
+                fail_msg(err, "slot records need [generation, alive 0|1, external_id]");
+                goto done;
+            }
+        }
+        if (arr->u.array.count != hw) {
+            st = SU_E_SCHEMA_MISMATCH;
+            fail_msg(err, "row count does not match the high_water of the snapshot");
+            goto done;
+        }
+        for (i = 0; i < (uint32_t)rows; i++) {
+            uint32_t ev = 0;
+            st = get_u32(arr->u.array.items[i], &ev);
+            if (st != SU_OK) {
+                fail_msg(err, "entity_ids must be u32 integers");
+                goto done;
+            }
+            if (i < desc->row_count && alive[i] && gen[i] == SU_GEN_FIRST && ev != desc->entity_ids[i]) {
+                st = SU_E_SCHEMA_MISMATCH;
+                fail_msg(err, "entity_ids do not match the target world");
+                goto done;
+            }
+        }
+        for (i = 0; i < (uint32_t)rows; i++) {
+            uint32_t ev = 0;
+            (void)get_u32(arr->u.array.items[i], &ev);
+            if (ev != ext[i]) {
+                st = SU_E_TYPE;
+                fail_msg(err, "entity_ids disagree with the slot records");
+                goto done;
+            }
+        }
+        st = build_table(capacity, hw, gen, alive, ext, retired, &table);
+        if (st != SU_OK) {
+            fail_msg(err, "entity table is not canonical");
+            goto done;
+        }
+        if (su_ents_retired_count(table) != retired) {
+            st = SU_E_TYPE;
+            fail_msg(err, "retired_count disagrees with the slot records");
+            goto done;
+        }
+        d.entities = table;
+        table = NULL;
+
+        if (get_u64(su_json_member(root, "event_next_seq"), &next_seq) != SU_OK ||
+            get_u64(su_json_member(root, "event_dropped"), &d.event_dropped) != SU_OK ||
+            get_u64(su_json_member(root, "event_log_max"), &log_max) != SU_OK ||
+            log_max == 0u || log_max > SU_SNAPSHOT_EVENT_LOG_MAX_LIMIT) {
+            st = SU_E_TYPE;
+            fail_msg(err, "event log counters are malformed or out of range");
+            goto done;
+        }
+        arr = su_json_member(root, "events");
+        if (arr->type != SU_JSON_ARRAY || arr->u.array.count > log_max || arr->u.array.count > next_seq) {
+            st = SU_E_TYPE;
+            fail_msg(err, "events must be an array no longer than the log");
+            goto done;
+        }
+        ev_count = arr->u.array.count;
+        if (ev_count > 0u) {
+            d.events = malloc(ev_count * sizeof *d.events);
+            if (d.events == NULL) {
+                st = SU_E_RESOURCE_LIMIT;
+                goto done;
+            }
+        }
+        for (i = 0; i < (uint32_t)ev_count; i++) {
+            st = read_event(arr->u.array.items[i], &d.events[i]);
+            if (st != SU_OK) {
+                fail_msg(err, "event entries need eight integers");
+                goto done;
+            }
+        }
+        if (ev_count > 0u) {
+            uint64_t k;
+            if (d.events[0].event_seq != next_seq - ev_count) {
+                st = SU_E_TYPE;
+                fail_msg(err, "events must end at event_next_seq - 1");
+                goto done;
+            }
+            for (k = 1; k < ev_count; k++) {
+                if (d.events[k].event_seq != d.events[0].event_seq + k) {
+                    st = SU_E_TYPE;
+                    fail_msg(err, "events must have consecutive sequence numbers");
+                    goto done;
+                }
+            }
+        }
+        d.event_next_seq = next_seq;
+        d.event_log_max = log_max;
+        d.event_count = ev_count;
     }
 
-    /* columns: one array per field, keyed by name, each of row_count values. */
+    /* columns: one array per field, keyed by name, each of rows values. */
     cols = su_json_member(root, "columns");
     if (cols->type != SU_JSON_OBJECT || cols->u.object.count != desc->field_count) {
         st = SU_E_TYPE;
@@ -899,7 +1292,9 @@ uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *
             goto done;
         }
     }
-    d.row_count = desc->row_count;
+    d.row_count = rows;
+    d.capacity = capacity;
+    d.format_minor = minor;
     d.field_count = desc->field_count;
     if (d.field_count > 0u) {
         d.columns = calloc(d.field_count, sizeof *d.columns);
@@ -927,6 +1322,12 @@ uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *
                 fail_msg(err, "column values must be u32 integers");
                 goto done;
             }
+            /* Dead rows are canonically zero. */
+            if (d.columns[i][k] != 0u && !su_ents_slot_alive(d.entities, (uint32_t)k)) {
+                st = SU_E_TYPE;
+                fail_msg(err, "dead rows must hold zero values");
+                goto done;
+            }
         }
     }
     d.tick = tick;
@@ -942,11 +1343,18 @@ uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *
     body.layout_generation = desc->layout_generation;
     body.fields = sf;
     body.field_count = desc->field_count;
+    body.format_minor = minor;
     body.row_count = d.row_count;
     body.entity_ids = desc->entity_ids;
+    body.ents = d.entities;
     body.columns = (const uint32_t *const *)d.columns;
     body.manifest = d.manifest;
     body.manifest_count = d.manifest_count;
+    body.event_next_seq = d.event_next_seq;
+    body.event_dropped = d.event_dropped;
+    body.event_log_max = d.event_log_max;
+    body.events = d.events;
+    body.event_count = d.event_count;
     st = emit_body(&body, &canon);
     if (st != SU_OK) {
         fail_msg(err, "snapshot cannot be re-encoded canonically");
@@ -965,6 +1373,10 @@ done:
     if (st != SU_OK) {
         data_free(&d);
     }
+    su_ents_destroy(table);
+    free(gen);
+    free(alive);
+    free(ext);
     free(canon.p);
     free(sf);
     su_json_doc_free(&doc);
@@ -978,6 +1390,8 @@ uint32_t su_snapshot_restore(const SuWorldDesc *desc, const SuSnapshotData *data
                              const SuSnapshotManifestEntry **manifest, uint32_t *manifest_count) {
     SuWorldFieldDesc *sf = NULL;
     SuWorld *w = NULL;
+    uint32_t *pad = NULL;
+    uint64_t cap;
     uint32_t i;
     uint64_t t;
     uint32_t st;
@@ -999,18 +1413,37 @@ uint32_t su_snapshot_restore(const SuWorldDesc *desc, const SuSnapshotData *data
     if (st != SU_OK) {
         return st;
     }
-    if (data->row_count != desc->row_count || data->field_count != desc->field_count ||
-        (data->field_count > 0u && data->columns == NULL)) {
+    if (data->entities == NULL) {
+        /* Empty data (a rejected or unfilled parse) does not fit any world. */
         st = SU_E_SCHEMA_MISMATCH;
         goto done;
     }
-    st = su_world_create(desc, &w);
+    cap = su_ents_capacity(data->entities);
+    if (data->field_count != desc->field_count || (data->field_count > 0u && data->columns == NULL) ||
+        cap != data->capacity || cap < desc->row_count || data->row_count != su_ents_high_water(data->entities)) {
+        st = SU_E_SCHEMA_MISMATCH;
+        goto done;
+    }
+    st = su_world_create_ex(desc, cap, &w);
     if (st != SU_OK) {
         goto done;
     }
-    /* Fresh world at tick 0: committed columns are settable only here. */
+    /* Fresh world at tick 0: the table and committed columns are settable only here. */
+    st = su_world_adopt_entities(w, data->entities);
+    if (st != SU_OK) {
+        goto fail_world;
+    }
+    pad = calloc(cap > 0u ? (size_t)cap : 1u, sizeof *pad);
+    if (pad == NULL) {
+        st = SU_E_RESOURCE_LIMIT;
+        goto fail_world;
+    }
     for (i = 0; i < desc->field_count; i++) {
-        st = su_world_init_committed(w, sf[i].id, data->columns[i], data->row_count);
+        memset(pad, 0, (size_t)cap * sizeof *pad);
+        if (data->row_count > 0u) {
+            memcpy(pad, data->columns[i], (size_t)data->row_count * sizeof *pad);
+        }
+        st = su_world_init_committed(w, sf[i].id, pad, cap);
         if (st != SU_OK) {
             goto fail_world;
         }
@@ -1027,6 +1460,7 @@ uint32_t su_snapshot_restore(const SuWorldDesc *desc, const SuSnapshotData *data
         st = SU_E_INTERNAL;
         goto fail_world;
     }
+    free(pad);
     *out_world = w;
     if (manifest != NULL) {
         *manifest = data->manifest;
@@ -1039,6 +1473,7 @@ uint32_t su_snapshot_restore(const SuWorldDesc *desc, const SuSnapshotData *data
     return st;
 
 fail_world:
+    free(pad);
     su_world_destroy(w);
 done:
     free(sf);

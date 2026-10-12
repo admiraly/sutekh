@@ -273,6 +273,21 @@ static int dump_equal(const SuWorld *w, const uint8_t *want, size_t want_len) {
 
 /* ---- manifest --------------------------------------------------------- */
 
+/* True if needle occurs in the first hn bytes of hay. */
+static int has_bytes(const uint8_t *hay, size_t hn, const char *needle) {
+    size_t nn = strlen(needle);
+    size_t i;
+    if (nn > hn) {
+        return 0;
+    }
+    for (i = 0; i + nn <= hn; i++) {
+        if (memcmp(hay + i, needle, nn) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static SuSnapshotManifestEntry k_manifest[2];
 
 static void init_manifest(void) {
@@ -423,7 +438,8 @@ static void test_determinism_and_format(const Example *ex) {
     SuSnapshot sb;
     SuSnapshot sa2;
     static const char want_cols[] =
-        "\"columns\":{\"position_x\":[0,1,4294967295,7],\"velocity_x\":[1,2,1,0]}}";
+        "\"columns\":{\"position_x\":[0,1,4294967295,7],\"velocity_x\":[1,2,1,0]}";
+    static const char want_tail[] = ",\"event_log_max\":65536,\"events\":[]}";
 
     make_desc(ex, &d);
     CHECK_ST(make_example_world(ex, &a), SU_OK);
@@ -448,13 +464,15 @@ static void test_determinism_and_format(const Example *ex) {
         CHECK(strcmp(hex, sa.id) == 0);
     }
 
-    /* Canonical shape: starts with the format and ends with columns. */
+    /* Canonical shape (format 0.2): starts with the format, carries the columns, and ends with the
+     * empty event log. */
     {
-        static const char prefix[] = "{\"snapshot_format\":\"0.1\",\"world_revision\":\"rev-det\"";
+        static const char prefix[] = "{\"snapshot_format\":\"0.2\",\"world_revision\":\"rev-det\"";
         CHECK(sa.len >= strlen(prefix) && memcmp(sa.bytes, prefix, strlen(prefix)) == 0);
     }
-    CHECK(sa.len >= strlen(want_cols) &&
-          memcmp(sa.bytes + sa.len - strlen(want_cols), want_cols, strlen(want_cols)) == 0);
+    CHECK(has_bytes(sa.bytes, sa.len, want_cols));
+    CHECK(sa.len >= strlen(want_tail) &&
+          memcmp(sa.bytes + sa.len - strlen(want_tail), want_tail, strlen(want_tail)) == 0);
 
     /* Equal worlds stay equal after identical ticks; unequal worlds differ. */
     CHECK_ST(run_ticks(a, 1u), SU_OK);
@@ -563,7 +581,7 @@ static const Corruption k_corruptions[] = {
     {"tick as string", SU_E_TYPE, "\"tick\":3,", "\"tick\":\"3\",", 0u, 0, 0},
     {"tick negative", SU_E_TYPE, "\"tick\":3,", "\"tick\":-3,", 0u, 0, 0},
     {"tick fractional", SU_E_TYPE, "\"tick\":3,", "\"tick\":3.0,", 0u, 0, 0},
-    {"wrong snapshot_format", SU_E_TYPE, "\"snapshot_format\":\"0.1\"", "\"snapshot_format\":\"0.2\"", 0u, 0, 0},
+    {"wrong snapshot_format", SU_E_TYPE, "\"snapshot_format\":\"0.2\"", "\"snapshot_format\":\"0.3\"", 0u, 0, 0},
     {"invalid UTF-8 in revision", SU_E_PARSE, "\"rev-3\"", "\"\xff\"", 0u, 0, 0},
     {"wrong schema_id", SU_E_SCHEMA_MISMATCH, "\"schema_id\":\"demo.actor\"", "\"schema_id\":\"demo.other\"", 0u, 0, 0},
     {"wrong schema_version", SU_E_SCHEMA_MISMATCH, "\"schema_version\":1", "\"schema_version\":2", 0u, 0, 0},
@@ -645,11 +663,13 @@ static void test_corruption(const Example *ex) {
         CHECK(su_world_tick(live) == 3u);
     }
 
-    /* Parsing against a different row count is a schema mismatch. */
+    /* Format 0.2: a descriptor with more rows than the snapshot's capacity is a schema mismatch. */
     {
-        SuWorldDesc small = d;
-        small.row_count = 3u;
-        check_parse_rejects(&small, good.bytes, good.len, SU_E_SCHEMA_MISMATCH, "row count mismatch");
+        static const uint32_t big_ids[5] = {1u, 2u, 3u, 4u, 5u};
+        SuWorldDesc big = d;
+        big.row_count = 5u;
+        big.entity_ids = big_ids;
+        check_parse_rejects(&big, good.bytes, good.len, SU_E_SCHEMA_MISMATCH, "row count above capacity");
     }
 
     /* A failed restore produces no world and leaves the live world alone. */
@@ -878,11 +898,367 @@ static void test_checkpoints(const Example *ex) {
     su_checkpoint_store_destroy(NULL);
 }
 
+/* ---- M2-00c1: format 0.2 with entity history, 0.1 golden, golden bytes ---- */
+
+static const SuWorldFieldDesc k_s2_fields[] = {
+    {10u, SU_TYPE_U32, SU_ACCESS_READ, "a"},
+    {20u, SU_TYPE_U32, SU_ACCESS_WRITE, "b"},
+    {5u, SU_TYPE_U32, SU_ACCESS_READ | SU_ACCESS_WRITE, "c"},
+};
+static const uint32_t k_s2_ids[4] = {101u, 102u, 103u, 104u};
+#define S2_CAPACITY 8u
+#define S2_FIXTURE_02 "tests/fixtures/snapshot02/worked_0_2.json"
+#define S2_FIXTURE_02_ID "tests/fixtures/snapshot02/worked_0_2.sha256"
+#define S2_FIXTURE_01 "tests/fixtures/snapshot01/golden_0_1.json"
+#define S2_FIXTURE_V1 "tests/fixtures/world_v1/state_v1.bin"
+
+static void s2_desc(SuWorldDesc *d, uint64_t rows, const uint32_t *ids) {
+    memset(d, 0, sizeof *d);
+    d->schema_id = "worked";
+    d->schema_version = 1u;
+    d->layout_generation = 1u;
+    d->row_count = rows;
+    d->entity_ids = ids;
+    d->fields = k_s2_fields;
+    d->field_count = 3u;
+}
+
+/* Fixed history: init, one tick, two spawns, a despawn, a retirement, a respawn into the lowest free
+ * slot, and a three-event log. Deterministic; the worked fixture is regenerated from it. */
+static uint32_t s2_build(SuWorld **out, SuSnapshotEvents *ev, SuEvent *evs) {
+    static const uint32_t a[4] = {1u, 2u, 3u, 4u};
+    static const uint32_t b[4] = {5u, 6u, 7u, 8u};
+    static const uint32_t c[4] = {9u, 10u, 11u, 12u};
+    SuWorldDesc d;
+    SuWorld *w = NULL;
+    SuWorldSpawnValue sv[2];
+    SuEntity h = SU_ENTITY_INVALID;
+    SuEntity r2 = SU_ENTITY_INVALID;
+    SuEnts *e;
+    uint32_t st;
+
+    s2_desc(&d, 4u, k_s2_ids);
+    st = su_world_create_ex(&d, S2_CAPACITY, &w);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (su_world_init_committed(w, 10u, a, 4u) != SU_OK || su_world_init_committed(w, 20u, b, 4u) != SU_OK ||
+        su_world_init_committed(w, 5u, c, 4u) != SU_OK || su_world_begin_tick(w) != SU_OK ||
+        su_world_publish(w) != SU_OK) {
+        su_world_destroy(w);
+        return SU_E_INTERNAL;
+    }
+    sv[0].field_id = 10u;
+    sv[0].value = 100u;
+    sv[1].field_id = 20u;
+    sv[1].value = 200u;
+    st = su_world_spawn(w, sv, 2u, 0u, &h); /* slot 4, generation 1, external id 0 */
+    if (st != SU_OK || SU_ENTITY_SLOT(h) != 4u) {
+        su_world_destroy(w);
+        return SU_E_INTERNAL;
+    }
+    sv[0].field_id = 5u;
+    sv[0].value = 7u;
+    st = su_world_spawn(w, sv, 1u, 555u, &h); /* slot 5, external id 555 */
+    if (st != SU_OK || SU_ENTITY_SLOT(h) != 5u) {
+        su_world_destroy(w);
+        return SU_E_INTERNAL;
+    }
+    st = su_world_despawn(w, SU_ENTITY_MAKE(1u, 1u)); /* slot 1 freed, generation 2 next */
+    if (st != SU_OK) {
+        su_world_destroy(w);
+        return st;
+    }
+    /* Retire slot 2: move its stored generation to 0xFFFFFFFE through the test seam, then despawn. */
+    e = (SuEnts *)(void *)su_world_entities_committed(w);
+    if (su_ents_fault_set_generation(e, 2u, 0xFFFFFFFEu) != SU_OK ||
+        su_ents_handle_for_slot(e, 2u, &r2) != SU_OK || su_world_despawn(w, r2) != SU_OK) {
+        su_world_destroy(w);
+        return SU_E_INTERNAL;
+    }
+    sv[0].field_id = 10u;
+    sv[0].value = 9u;
+    st = su_world_spawn(w, sv, 1u, 9u, &h); /* lowest free slot is 1, generation 2 */
+    if (st != SU_OK || h != SU_ENTITY_MAKE(1u, 2u)) {
+        su_world_destroy(w);
+        return SU_E_INTERNAL;
+    }
+
+    evs[0].event_seq = 7u;
+    evs[0].tick = 1u;
+    evs[0].kind = SU_EVENT_SPAWNED;
+    evs[0].system_index = SU_SYSTEM_INDEX_HOST;
+    evs[0].slot = 5u;
+    evs[0].seq = 0u;
+    evs[0].a = 5u;
+    evs[0].b = 1u;
+    evs[1].event_seq = 8u;
+    evs[1].tick = 1u;
+    evs[1].kind = SU_EVENT_DESPAWNED;
+    evs[1].system_index = SU_SYSTEM_INDEX_HOST;
+    evs[1].slot = 1u;
+    evs[1].seq = 0u;
+    evs[1].a = 1u;
+    evs[1].b = 1u;
+    evs[2].event_seq = 9u;
+    evs[2].tick = 1u;
+    evs[2].kind = 3u;
+    evs[2].system_index = 0u;
+    evs[2].slot = 0u;
+    evs[2].seq = 0u;
+    evs[2].a = 42u;
+    evs[2].b = 7u;
+    memset(ev, 0, sizeof *ev);
+    ev->next_seq = 10u;
+    ev->dropped = 7u;
+    ev->log_max = 4u;
+    ev->entries = evs;
+    ev->count = 3u;
+    *out = w;
+    return SU_OK;
+}
+
+static void test_format02_history(void) {
+    SuWorld *w = NULL;
+    SuWorld *w2 = NULL;
+    SuWorldDesc d;
+    SuSnapshotEvents ev;
+    SuEvent evs[3];
+    SuSnapshot snap;
+    SuSnapshot again;
+    SuSnapshotData data;
+    SuSnapshotError err;
+    SuWorldSpawnValue sv;
+    SuEntity h1 = SU_ENTITY_INVALID;
+    SuEntity h2 = SU_ENTITY_INVALID;
+    SuEntity hs1 = SU_ENTITY_INVALID;
+    uint32_t gen = 0;
+    int eq = 0;
+
+    CHECK_ST(s2_build(&w, &ev, evs), SU_OK);
+    s2_desc(&d, 4u, k_s2_ids);
+    CHECK_ST(su_snapshot_capture_ex(w, &d, "rev-2", k_manifest, 2u, &ev, &snap), SU_OK);
+    CHECK(snap.len >= 24u && memcmp(snap.bytes, "{\"snapshot_format\":\"0.2\"", 24u) == 0);
+    CHECK(has_bytes(snap.bytes, snap.len, ",\"capacity\":8,\"high_water\":6,\"free_policy\":\"lowest_slot\","
+                                          "\"retired_count\":1,\"slots\":["));
+    CHECK(has_bytes(snap.bytes, snap.len, ",\"event_next_seq\":10,\"event_dropped\":7,\"event_log_max\":4,"
+                                          "\"events\":[[7,1,4294967294,4294967295,5,0,5,1],"));
+
+    /* Parse: the entity table, retired count and event log come back exactly. */
+    memset(&data, 0, sizeof data);
+    memset(&err, 0, sizeof err);
+    CHECK_ST(su_snapshot_parse(snap.bytes, snap.len, &d, &data, &err), SU_OK);
+    CHECK(data.format_minor == 2u);
+    CHECK(data.capacity == S2_CAPACITY && data.row_count == 6u);
+    CHECK(data.entities != NULL && su_ents_retired_count(data.entities) == 1u);
+    CHECK(data.entities != NULL && su_ents_alive_count(data.entities) == 5u);
+    CHECK(data.event_next_seq == 10u && data.event_dropped == 7u && data.event_log_max == 4u);
+    CHECK(data.event_count == 3u && data.events != NULL);
+    if (data.events != NULL) {
+        CHECK(data.events[2].a == 42u && data.events[2].b == 7u && data.events[2].event_seq == 9u);
+    }
+
+    /* Exact restore: generations, the retired slot and every column are reproduced; a re-capture of the
+     * restored world is byte-identical to the original snapshot. */
+    CHECK_ST(su_snapshot_restore(&d, &data, &w2, NULL, NULL), SU_OK);
+    if (w2 != NULL) {
+        CHECK_ST(su_world_state_equal(w, w2, &eq), SU_OK);
+        CHECK(eq == 1);
+        CHECK(su_world_tick(w2) == su_world_tick(w));
+        CHECK(su_ents_slot_retired(su_world_entities_committed(w2), 2u) == 1);
+        CHECK_ST(su_ents_slot_generation(su_world_entities_committed(w2), 2u, &gen), SU_OK);
+        CHECK(gen == SU_GEN_RETIRED);
+        CHECK_ST(su_snapshot_capture_ex(w2, &d, "rev-2", k_manifest, 2u, &ev, &again), SU_OK);
+        CHECK(again.len == snap.len && memcmp(again.bytes, snap.bytes, snap.len) == 0);
+        su_snapshot_destroy(&again);
+    }
+
+    /* Stale handles are refused in the live world: retired slot, reused slot, generation 0. */
+    CHECK_ST(su_world_despawn(w, SU_ENTITY_MAKE(2u, 0xFFFFFFFEu)), SU_E_STALE_HANDLE);
+    CHECK_ST(su_world_despawn(w, SU_ENTITY_MAKE(1u, 1u)), SU_E_STALE_HANDLE);
+    CHECK_ST(su_world_despawn(w, SU_ENTITY_MAKE(5u, 0u)), SU_E_STALE_HANDLE);
+    CHECK_ST(su_ents_handle_for_slot(su_world_entities_committed(w), 1u, &hs1), SU_OK);
+    CHECK(hs1 == SU_ENTITY_MAKE(1u, 2u));
+
+    /* Determinism after restore: the same spawn in both worlds issues the same handle (the lowest free
+     * slot is 6, since slot 2 is retired and slots 0..5 are in use). */
+    sv.field_id = 10u;
+    sv.value = 3u;
+    if (w2 != NULL) {
+        CHECK_ST(su_world_spawn(w, &sv, 1u, 0u, &h1), SU_OK);
+        CHECK_ST(su_world_spawn(w2, &sv, 1u, 0u, &h2), SU_OK);
+        CHECK(h1 == h2 && h1 == SU_ENTITY_MAKE(6u, 1u));
+        CHECK_ST(su_world_despawn(w, h1), SU_OK);
+        CHECK_ST(su_world_despawn(w2, h2), SU_OK);
+        CHECK_ST(su_world_despawn(w2, h2), SU_E_STALE_HANDLE);
+    }
+
+    su_snapshot_data_free(&data);
+    su_snapshot_destroy(&snap);
+    su_world_destroy(w2);
+    su_world_destroy(w);
+}
+
+/* A 0.1-layout world: the golden fixture's state built through the public API. */
+static uint32_t make_example_world_for_golden(const uint32_t *a, const uint32_t *b, const uint32_t *c,
+                                              SuWorld **out) {
+    SuWorldDesc d;
+    SuWorld *w = NULL;
+    uint32_t st;
+    s2_desc(&d, 4u, k_s2_ids);
+    st = su_world_create(&d, &w);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (su_world_init_committed(w, 10u, a, 4u) != SU_OK || su_world_init_committed(w, 20u, b, 4u) != SU_OK ||
+        su_world_init_committed(w, 5u, c, 4u) != SU_OK || su_world_begin_tick(w) != SU_OK ||
+        su_world_publish(w) != SU_OK) {
+        su_world_destroy(w);
+        return SU_E_INTERNAL;
+    }
+    *out = w;
+    return SU_OK;
+}
+
+static void test_format01_golden(void) {
+    static const uint32_t gid[3] = {101u, 102u, 103u};
+    SuWorldDesc d;
+    SuWorldDesc short_d;
+    SuSnapshotData data;
+    SuSnapshotError err;
+    SuWorld *w = NULL;
+    SuWorld *v1 = NULL;
+    SuWorld *ref = NULL;
+    SuSnapshot snap;
+    size_t len = 0;
+    size_t vlen = 0;
+    uint8_t *golden;
+    uint8_t *v1bytes;
+    int eq = 0;
+    uint32_t a[4] = {1u, 2u, 3u, 4u};
+    uint32_t b[4] = {5u, 6u, 7u, 8u};
+    uint32_t c[4] = {9u, 10u, 11u, 12u};
+
+    golden = read_file(S2_FIXTURE_01, &len);
+    v1bytes = read_file(S2_FIXTURE_V1, &vlen);
+    CHECK(golden != NULL && v1bytes != NULL);
+    if (golden == NULL || v1bytes == NULL) {
+        free(golden);
+        free(v1bytes);
+        return;
+    }
+    s2_desc(&d, 4u, k_s2_ids);
+    d.schema_id = "golden"; /* the golden fixture was written for schema "golden" */
+
+    /* 0.1 golden: parses, and restores to the state the M0 encoder recorded. */
+    memset(&data, 0, sizeof data);
+    memset(&err, 0, sizeof err);
+    CHECK_ST(su_snapshot_parse(golden, len, &d, &data, &err), SU_OK);
+    CHECK(data.format_minor == 1u && data.capacity == 4u && data.row_count == 4u);
+    CHECK(data.event_log_max == 0u && data.event_count == 0u);
+    CHECK(su_ents_alive_count(data.entities) == 4u && su_ents_retired_count(data.entities) == 0u);
+    CHECK_ST(su_snapshot_restore(&d, &data, &w, NULL, NULL), SU_OK);
+    CHECK_ST(make_example_world_for_golden(a, b, c, &ref), SU_OK);
+    if (w != NULL && ref != NULL) {
+        CHECK_ST(su_world_state_equal(w, ref, &eq), SU_OK);
+        CHECK(eq == 1);
+        CHECK(su_world_tick(w) == 1u);
+    }
+    /* The M0 v1 dump of the same state restores through the canonical parser to an identical world. */
+    CHECK_ST(su_world_restore_canonical(&d, v1bytes, vlen, &v1), SU_OK);
+    if (v1 != NULL && w != NULL) {
+        CHECK_ST(su_world_state_equal(v1, w, &eq), SU_OK);
+        CHECK(eq == 1);
+    }
+    /* Re-capture writes format 0.2 and parses back to the same state. */
+    if (w != NULL) {
+        CHECK_ST(su_snapshot_capture(w, &d, "golden-rev", k_manifest, 2u, &snap), SU_OK);
+        CHECK(snap.len >= 24u && memcmp(snap.bytes, "{\"snapshot_format\":\"0.2\"", 24u) == 0);
+        su_snapshot_destroy(&snap);
+    }
+
+    /* The 0.1 layout still requires capacity == rows: a descriptor with fewer rows is refused. */
+    s2_desc(&short_d, 3u, gid);
+    short_d.schema_id = "golden";
+    check_parse_rejects(&short_d, golden, len, SU_E_SCHEMA_MISMATCH, "0.1 row count mismatch");
+    su_snapshot_data_free(&data);
+
+    su_world_destroy(w);
+    su_world_destroy(v1);
+    su_world_destroy(ref);
+    free(golden);
+    free(v1bytes);
+}
+
+/* Golden bytes: regenerates or checks the worked 0.2 fixture. */
+static int test_format02_golden(const char *regen_dir) {
+    SuWorld *w = NULL;
+    SuWorldDesc d;
+    SuSnapshotEvents ev;
+    SuEvent evs[3];
+    SuSnapshot snap;
+    size_t len = 0;
+    uint8_t *want;
+    char path[512];
+    FILE *f;
+    int ok = 1;
+
+    if (s2_build(&w, &ev, evs) != SU_OK) {
+        return 0;
+    }
+    s2_desc(&d, 4u, k_s2_ids);
+    if (su_snapshot_capture_ex(w, &d, "rev-2", k_manifest, 2u, &ev, &snap) != SU_OK) {
+        su_world_destroy(w);
+        return 0;
+    }
+    if (regen_dir != NULL) {
+        snprintf(path, sizeof path, "%s/worked_0_2.json", regen_dir);
+        f = fopen(path, "wb");
+        if (f == NULL || fwrite(snap.bytes, 1u, snap.len, f) != snap.len) {
+            ok = 0;
+        }
+        if (f != NULL) {
+            fclose(f);
+        }
+        snprintf(path, sizeof path, "%s/worked_0_2.sha256", regen_dir);
+        f = fopen(path, "wb");
+        if (f == NULL || fprintf(f, "%s\n", snap.id) < 0) {
+            ok = 0;
+        }
+        if (f != NULL) {
+            fclose(f);
+        }
+    } else {
+        want = read_file(S2_FIXTURE_02, &len);
+        CHECK(want != NULL);
+        if (want != NULL) {
+            CHECK(len == snap.len && memcmp(want, snap.bytes, len) == 0);
+            free(want);
+        }
+        want = read_file(S2_FIXTURE_02_ID, &len);
+        CHECK(want != NULL);
+        if (want != NULL) {
+            CHECK(len == 65u && memcmp(want, snap.id, 64u) == 0);
+            free(want);
+        }
+    }
+    su_snapshot_destroy(&snap);
+    su_world_destroy(w);
+    return ok;
+}
+
 int main(int argc, char **argv) {
     const char *path = argc > 1 ? argv[1] : "examples/world.json";
     Example ex;
 
     init_manifest();
+    if (argc > 2 && strcmp(argv[1], "--regen-02") == 0) {
+        /* Maintenance mode: rewrite the worked 0.2 fixture into argv[2]. Not run by ctest. */
+        return test_format02_golden(argv[2]) ? 0 : 1;
+    }
+    test_format02_history();
+    test_format01_golden();
+    test_format02_golden(NULL);
     if (!load_example(path, &ex)) {
         fprintf(stderr, "cannot load example world %s\n", path);
         return 1;

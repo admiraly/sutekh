@@ -340,3 +340,11 @@ target_link_libraries(test_cmdq PRIVATE su_cmdq Threads::Threads)
 target_compile_definitions(test_cmdq PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_cmdq)
 add_test(NAME cmdq COMMAND test_cmdq WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# ---- BEGIN M2-00c1 world integration (entity table in su_world; snapshot 0.2) ----
+target_link_libraries(su_world PUBLIC su_ents)
+add_executable(test_world_ents tests/entities/test_world_ents.c)
+target_link_libraries(test_world_ents PRIVATE su_world)
+sutekh_apply_warnings(test_world_ents)
+add_test(NAME world_entities COMMAND test_world_ents WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# ---- END M2-00c1 world integration ----

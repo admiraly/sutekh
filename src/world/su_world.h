@@ -1,32 +1,42 @@
-/* Sutekh M0 fixed-row SoA u32 world (M0-03).
+/* Sutekh fixed-capacity SoA u32 world (M0-03; entity table integrated in M2-00c1).
  *
- * One table, fixed row count, stable entity IDs, u32 columns. Each field has
- * a committed root (last accepted full tick), a working root (state being
- * computed for the next tick) and, for writable fields, a staging column that
- * a system's output is written into. All storage is allocated at creation.
+ * One table of u32 columns with a fixed capacity, chosen at creation. Each field has a committed
+ * root (last accepted full tick), a working root (state being computed for the next tick) and, for
+ * writable fields, a staging column that a system's output is written into. The entity table
+ * (src/world/entities/su_ents.h, contract M2_ENTITIES_CONTRACT.md) has a committed and a working
+ * copy with the same discipline. All storage is allocated at creation.
+ *
+ * Capacity: capacity = max(row_count, desc.max_entities) (max_entities 0 means row_count). Columns and
+ * the entity table are allocated for capacity rows. su_world_row_count() reports capacity. Rows
+ * beyond the initial row_count start dead, with zero values.
  *
  * Tick protocol (M0_CONTRACT.md section 4, T09):
- *   su_world_begin_tick    copy committed -> working
+ *   su_world_begin_tick    copy committed -> working (columns and entity table)
  *   per system:
  *     su_world_build_invocation  views over working (reads)
  *     su_world_build_outputs     views over staging (writes)
  *     on SU_OK: su_world_commit_staging(ids, n) copies staging -> working
+ *               su_world_zero_dead(w)  zeroes dead rows of working (runtime, after each commit)
  *     on failure: discard (no commit)
- *   su_world_publish       on whole-tick success: working -> committed, tick++
+ *   su_world_publish       on whole-tick success: dead rows zeroed, working -> committed, tick++
  *   su_world_abort         on any failure: discard working; committed untouched
  *
- * Views returned by build_* point into world-owned binding arrays and column
- * memory. They are valid until the next call that changes the world or its
- * phase, and must not be retained (ABI section 3). Pointers in views are
- * borrowed; the world owns all memory. */
+ * Spawn, despawn and fixture initialization are control-plane mutations of the committed root and
+ * are accepted only between ticks.
+ *
+ * Views returned by build_* point into world-owned binding arrays and column memory. They are valid
+ * until the next call that changes the world or its phase, and must not be retained (ABI section 3).
+ * Pointers in views are borrowed; the world owns all memory. */
 #ifndef SUTEKH_WORLD_SU_WORLD_H
 #define SUTEKH_WORLD_SU_WORLD_H
 
 #include <stddef.h>
 #include <stdint.h>
 #include "sutekh/abi.h"
+#include "sutekh/entities.h"
 #include "sutekh/ir.h"
 #include "sutekh/status.h"
+#include "world/entities/su_ents.h"
 
 /* Implementation cap for schema IDs and field names (bytes, excluding NUL). */
 #define SU_WORLD_NAME_MAX 255u
@@ -44,29 +54,46 @@ typedef struct SuWorldDesc {
     const char *schema_id;        /* NUL-terminated, 1..SU_WORLD_NAME_MAX bytes */
     uint32_t schema_version;
     uint32_t layout_generation;
-    uint64_t row_count;           /* <= SU_LIMIT_ROWS */
+    uint64_t row_count;           /* initial alive entities, <= SU_LIMIT_ROWS */
     const uint32_t *entity_ids;   /* row_count entries; nonzero and unique; may be NULL when row_count == 0 */
     const SuWorldFieldDesc *fields; /* any order; sorted internally by id */
     uint32_t field_count;         /* <= SU_LIMIT_FIELDS */
 } SuWorldDesc;
+
+/* One field value for su_world_spawn. */
+typedef struct SuWorldSpawnValue {
+    uint32_t field_id;
+    uint32_t value;
+} SuWorldSpawnValue;
 
 /* Creation. On failure *out is NULL and nothing is retained.
  * SU_E_INVALID_ARGUMENT: NULL pointer, empty/invalid access, zero or duplicate
  *   entity ID.
  * SU_E_TYPE: field type other than SU_TYPE_U32.
  * SU_E_SCHEMA_MISMATCH: duplicate field ID or name.
- * SU_E_RESOURCE_LIMIT: row_count or field_count over the SU_LIMIT_* caps, a
+ * SU_E_RESOURCE_LIMIT: row_count, max_entities or field_count over the SU_LIMIT_* caps, a
  *   name over SU_WORLD_NAME_MAX, any size overflow, or allocation failure. */
 uint32_t su_world_create(const SuWorldDesc *desc, SuWorld **out);
+/* As su_world_create with a capacity request (M2-00c1). The capacity is max(row_count, max_entities);
+ * max_entities 0 means row_count. Kept separate from SuWorldDesc so that existing descriptors that are
+ * not zero-initialized keep their meaning. SU_E_RESOURCE_LIMIT if the capacity exceeds SU_LIMIT_ROWS.
+ * Other errors as su_world_create. */
+uint32_t su_world_create_ex(const SuWorldDesc *desc, uint64_t max_entities, SuWorld **out);
 /* NULL-safe. Frees all storage. */
 void su_world_destroy(SuWorld *w);
 
+/* Capacity (column length). Equals the initial row count for fixture worlds. */
 uint64_t su_world_row_count(const SuWorld *w);
 uint32_t su_world_field_count(const SuWorld *w);
 uint32_t su_world_layout_generation(const SuWorld *w);
 uint64_t su_world_tick(const SuWorld *w);
 /* Nonzero while a tick is open (between begin_tick and publish/abort). */
 int su_world_in_tick(const SuWorld *w);
+
+/* Entity table accessors. The committed table is the one external readers see; the working table is
+ * the one a tick computes. The pointers stay valid until the world is destroyed. NULL w gives NULL. */
+const SuEnts *su_world_entities_committed(const SuWorld *w);
+const SuEnts *su_world_entities_working(const SuWorld *w);
 
 /* Tick control. Each returns SU_E_INVALID_ARGUMENT on NULL or wrong phase
  * and leaves the committed root untouched. */
@@ -78,8 +105,12 @@ uint32_t su_world_begin_tick(SuWorld *w);
  * SU_E_SCHEMA_MISMATCH: ID not in the schema.
  * SU_E_UNDECLARED_WRITE: field is not writable. */
 uint32_t su_world_commit_staging(SuWorld *w, const uint32_t *field_ids, uint32_t count);
-/* Working -> committed for every field; tick++. Only call after the whole tick
- * succeeded. */
+/* Zeroes every column of every DEAD slot in the working root. Only in a tick. Full chunks are skipped;
+ * the cost is proportional to the dead slots of the other chunks. Alive rows are never touched.
+ * SU_E_INVALID_ARGUMENT outside a tick. */
+uint32_t su_world_zero_dead(SuWorld *w);
+/* Working -> committed for every field and the entity table; dead rows are zeroed first; tick++.
+ * Only call after the whole tick succeeded. */
 uint32_t su_world_publish(SuWorld *w);
 /* Discards the open tick. Committed state is not modified. Outside a tick this
  * is a no-op returning SU_OK. */
@@ -91,11 +122,38 @@ uint32_t su_world_abort(SuWorld *w);
 uint32_t su_world_build_invocation(SuWorld *w, SuInvocation *out);
 uint32_t su_world_build_outputs(SuWorld *w, SuOutputs *out);
 
+/* Alive and generation views for slots [base, base+n). In a tick they read the working table, otherwise
+ * the committed table. alive receives 0 or 1 per slot; generation receives the stored generation
+ * (RETIRED for retired slots).
+ * SU_E_INVALID_ARGUMENT: base + n > capacity, NULL buffer with n > 0, or NULL w. */
+uint32_t su_world_alive_view(const SuWorld *w, uint32_t base, uint32_t n, uint8_t *alive);
+uint32_t su_world_generation_view(const SuWorld *w, uint32_t base, uint32_t n, uint32_t *generation);
+
+/* Control-plane spawn, applied to the committed root between ticks. Writes the given field values
+ * (all other fields 0) into the new slot. Field values may name any field of the schema, readable or
+ * writable. external_id may be 0. The new handle is written to *out.
+ * SU_E_INVALID_ARGUMENT: in a tick, NULL out, count > 0 with NULL values, count > field_count, or a
+ *   duplicate field ID.
+ * SU_E_SCHEMA_MISMATCH: unknown field ID.
+ * SU_E_RESOURCE_LIMIT: no free slot (nothing changes). */
+uint32_t su_world_spawn(SuWorld *w, const SuWorldSpawnValue *values, uint32_t count,
+                        uint32_t external_id, SuEntity *out);
+/* Control-plane despawn between ticks. Zeroes the slot's columns in the committed root and retires
+ * the slot's handle. SU_E_INVALID_ARGUMENT in a tick; SU_E_STALE_HANDLE for stale, dead, retired or
+ * out-of-range handles (nothing changes). */
+uint32_t su_world_despawn(SuWorld *w, SuEntity handle);
+
 /* Fixture initialization: replaces committed column values. Only allowed
- * outside a tick at tick 0. values must hold row_count entries.
+ * outside a tick at tick 0. count must be row_count (the capacity) or the initial row count; in the
+ * latter case only the first count rows are written and the rest stay zero.
  * SU_E_INVALID_ARGUMENT: NULL values, not allowed phase/tick, count mismatch.
  * SU_E_SCHEMA_MISMATCH: unknown field ID. */
 uint32_t su_world_init_committed(SuWorld *w, uint32_t field_id, const uint32_t *values, uint64_t count);
+/* Replaces the committed entity table with a copy of t (snapshot restore). Only outside a tick at
+ * tick 0, before any publish. t must have the world's capacity.
+ * SU_E_INVALID_ARGUMENT: NULL, phase or tick, or capacity mismatch. Dead rows of committed columns
+ * are not modified here; the caller supplies zero values for them. */
+uint32_t su_world_adopt_entities(SuWorld *w, const SuEnts *t);
 
 /* Inspection of the committed root (what external readers see). The pointer is
  * valid until the world is destroyed or published over.
@@ -103,17 +161,27 @@ uint32_t su_world_init_committed(SuWorld *w, uint32_t field_id, const uint32_t *
 uint32_t su_world_read_committed(const SuWorld *w, uint32_t field_id, const uint32_t **data, uint64_t *row_count);
 uint32_t su_world_read_committed_by_name(const SuWorld *w, const char *name, const uint32_t **data, uint64_t *row_count);
 
-/* Canonical state encoding of the committed root (no JSON, no names, no
- * padding). Layout, all integers little-endian:
- *   "SUWSTATE" 0x00 | u32 encoding_version (1) | u64 tick | u64 row_count |
- *   u32 field_count | u32 entity_ids[row_count] |
- *   per field in ascending field_id: u32 field_id | u32 elem_type |
- *                                    u32 values[row_count]
- * su_world_canonical_size reports the byte size; su_world_canonical_write
- * writes into buf if cap >= size and returns SU_E_INVALID_ARGUMENT otherwise
- * (written is set to the required size). */
+/* Canonical state encoding of the committed root (no JSON, no names, no padding), version 2
+ * (contract section 1). Layout, all integers little-endian:
+ *   "SUWSTATE" 0x00 | u32 encoding_version (2) | u64 tick | u32 field_count |
+ *   entity table (su_ents_canonical_write: "SUENTABL", capacity, high_water, alive and retired counts,
+ *     free policy "lowest_slot", then generation, external id and alive byte per slot below high_water) |
+ *   per field in ascending field_id: u32 field_id | u32 elem_type | u32 values[high_water]
+ * Rows at or above high_water are implicitly dead, zero and generation 1. Dead rows below high_water
+ * are zero by invariant.
+ * su_world_canonical_size reports the byte size; su_world_canonical_write writes into buf if
+ * cap >= size and returns SU_E_INVALID_ARGUMENT otherwise (written is set to the required size). */
 uint32_t su_world_canonical_size(const SuWorld *w, size_t *size);
 uint32_t su_world_canonical_write(const SuWorld *w, uint8_t *buf, size_t cap, size_t *written);
+/* Restores a world from canonical bytes into a NEW world created from desc. Accepts version 2 (as
+ * written above) and version 1 (the M0 layout: "SUWSTATE" 0x00 | u32 1 | u64 tick | u64 row_count |
+ * u32 field_count | u32 entity_ids[row_count] | per field u32 id | u32 type | u32 values[row_count];
+ * all slots alive with generation 1, row_count must equal desc->row_count).
+ * Strict: length must match exactly, field table and entity table must agree with desc, and dead
+ * rows must be zero. *out is NULL on failure.
+ * SU_E_PARSE: bad magic, version, length, or entity table. SU_E_SCHEMA_MISMATCH: field or row
+ * identity does not match desc. SU_E_TYPE: nonzero dead row. */
+uint32_t su_world_restore_canonical(const SuWorldDesc *desc, const uint8_t *buf, size_t len, SuWorld **out);
 /* Compares canonical encodings of two committed roots. *equal is 1 or 0. */
 uint32_t su_world_state_equal(const SuWorld *a, const SuWorld *b, int *equal);
 
