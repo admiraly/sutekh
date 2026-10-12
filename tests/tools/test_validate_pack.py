@@ -67,7 +67,7 @@ class ReportModeGates(unittest.TestCase):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "PACK_VALIDATION.json"
-            report.write_text(report_text, encoding="utf-8")
+            report.write_bytes(report_text.encode("utf-8"))
             patches = [mock.patch.object(vp, "REPORT_PATH", report)]
             if schema_status is not None:
                 skipped = {"status": schema_status, "reason": "test: jsonschema absent"}
@@ -79,7 +79,7 @@ class ReportModeGates(unittest.TestCase):
             finally:
                 for patch in patches:
                     patch.stop()
-            return rc, report.read_text(encoding="utf-8")
+            return rc, report.read_bytes().decode("utf-8")
 
     def test_stale_report_fails_check(self):
         import contextlib, io
