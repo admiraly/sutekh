@@ -8,9 +8,24 @@
       "type": "string",
       "minLength": 1
     },
+    "system_rev": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "optional (M3-03a, OD-16); absent means the revision is not declared by the record"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "description": "optional (M3-03a, OD-16); the capabilities the system uses, for example despawn_self (IR 0.2); absent means none"
+    },
     "source": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "IR variant only (required there; refused in the host variant)"
     },
     "schema": {
       "type": "object",
@@ -71,7 +86,68 @@
         "additionalProperties": false
       },
       "minItems": 1,
-      "maxItems": 256
+      "maxItems": 256,
+      "description": "IR variant only (required there; refused in the host variant)"
+    },
+    "host": {
+      "type": "object",
+      "description": "Host variant (M3-03a, OD-16; M3-04a). A host system is an operator compiled into the engine, not IR. Its declared field table must equal the operator descriptor exactly (checked by the loader).",
+      "properties": {
+        "operator": {
+          "const": "rts_ops_v1"
+        },
+        "operator_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "constants_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "sha256 hex of the operator constants text"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "type": {
+                "const": "u32"
+              },
+              "access": {
+                "enum": [
+                  "read",
+                  "write",
+                  "read_write"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "type",
+              "access"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 256
+        }
+      },
+      "required": [
+        "operator",
+        "operator_version",
+        "constants_hash",
+        "fields"
+      ],
+      "additionalProperties": false
     },
     "schedule": {
       "type": "object",
@@ -157,19 +233,56 @@
         "0.1",
         "0.2"
       ],
-      "description": "optional; absent means 0.1; must equal the IR ir_version"
+      "description": "optional; absent means 0.1; must equal the IR ir_version. IR variant only"
     }
   },
   "required": [
     "capsule_format",
     "system_id",
-    "source",
     "schema",
     "numeric_profile",
-    "fields",
     "schedule",
     "limits",
     "tests"
+  ],
+  "oneOf": [
+    {
+      "description": "IR variant: source, fields and ir_version apply; host is absent",
+      "required": [
+        "source",
+        "fields"
+      ],
+      "not": {
+        "required": [
+          "host"
+        ]
+      }
+    },
+    {
+      "description": "host variant: host is present; source, fields and ir_version are absent",
+      "required": [
+        "host"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "source"
+            ]
+          },
+          {
+            "required": [
+              "fields"
+            ]
+          },
+          {
+            "required": [
+              "ir_version"
+            ]
+          }
+        ]
+      }
+    }
   ],
   "additionalProperties": false,
   "$schema": "https://json-schema.org/draft/2020-12/schema",
