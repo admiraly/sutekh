@@ -1335,3 +1335,11 @@ uint32_t su_world_recovery_digest(const SuWorld *w, uint8_t out[32]) {
     free(buf);
     return SU_OK;
 }
+
+const char *su_world_schema_id(const SuWorld *w) {
+    return w != NULL ? w->schema_id : NULL;
+}
+
+uint32_t su_world_schema_version(const SuWorld *w) {
+    return w != NULL ? w->schema_version : 0u;
+}

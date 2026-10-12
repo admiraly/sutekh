@@ -365,3 +365,18 @@ target_link_libraries(test_entity_tick PRIVATE su_agent su_world su_cmdq su_ents
 sutekh_apply_warnings(test_entity_tick)
 add_test(NAME entity_tick COMMAND test_entity_tick WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # ---- END M2-00c3 entity tick integration ----
+
+# ---- BEGIN M2-01a migration engine (schema migrations; contract M2_MIGRATION_CONTRACT.md) ----
+add_library(su_migrate STATIC src/world/migration/su_migrate.c)
+target_include_directories(su_migrate PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
+target_link_libraries(su_migrate PUBLIC su_world su_vm su_ir su_ents su_snapshot)
+sutekh_apply_warnings(su_migrate)
+add_executable(test_migrate tests/migration/test_migrate.c)
+target_link_libraries(test_migrate PRIVATE su_migrate)
+sutekh_apply_warnings(test_migrate)
+add_test(NAME migration_model COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/migration/model.py"
+    --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures" --out "${CMAKE_BINARY_DIR}/migration_expected.json")
+add_test(NAME migration COMMAND test_migrate "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    "${CMAKE_BINARY_DIR}/migration_expected.json" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+set_tests_properties(migration PROPERTIES DEPENDS migration_model)
+# ---- END M2-01a migration engine ----

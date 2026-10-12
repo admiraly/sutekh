@@ -109,6 +109,9 @@ uint32_t su_world_create_successor(const SuWorld *old, const SuWorldDesc *desc, 
  * SU_E_INVALID_ARGUMENT: NULL values with count > 0, in a tick, count > capacity. SU_E_SCHEMA_MISMATCH:
  * unknown field ID. */
 uint32_t su_world_put_committed(SuWorld *w, uint32_t field_id, const uint32_t *values, uint64_t count);
+/* Schema identity (fixed at creation; a migration keeps the schema ID). */
+const char *su_world_schema_id(const SuWorld *w);
+uint32_t su_world_schema_version(const SuWorld *w);
 /* Default of a field (the value su_world_spawn writes when the request does not name it). */
 uint32_t su_world_field_default(const SuWorld *w, uint32_t field_id, uint32_t *out);
 /* Field table entry by index (ascending field ID). name points into the world. */
