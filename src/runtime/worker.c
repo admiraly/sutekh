@@ -21,6 +21,7 @@
 #include "runtime/checkpoint.h"
 #include "runtime/registry.h"
 #include "runtime/reload.h"
+#include "runtime/rts/control_domains.h"
 #include "runtime/jobs/su_effects.h"
 #include "runtime/jobs/su_jobs.h"
 #include "runtime/schedule.h"
@@ -1231,6 +1232,229 @@ static uint32_t h_world_despawn(WorkerState *s, const SuJsonValue *params, SuBuf
     su_buf_quoted(res, rev, strlen(rev));
     su_buf_str(res, ",\"entity\":");
     su_buf_u64(res, hv);
+    su_buf_str(res, "}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* Field id of a schedule field by name, or 0 when the schedule has no such field. */
+static uint32_t field_id_by_name(const WorkerWorld *ww, const char *name, size_t len) {
+    uint32_t k;
+    for (k = 0; k < ww->sched.field_count; k++) {
+        const char *nm = ww->sched.fields[k].name;
+        if (strlen(nm) == len && memcmp(nm, name, len) == 0) {
+            return ww->sched.fields[k].id;
+        }
+    }
+    return 0u;
+}
+
+/* Fails with code and message; returns the code. */
+static uint32_t set_fields_fail(WorkerFail *f, uint32_t code, const char *msg) {
+    fail(f, code, msg);
+    return code;
+}
+
+/* world.set_fields {world_id, expected_world_revision, entities:[{entity, values}]} (M3-05, OD-3, contract
+ * 2.2). Every row is validated before any mutation: shape, duplicate slots, liveness and generation of each
+ * handle, writable names and their domains, and the resulting-row rules on the committed row with the payload
+ * applied. A refused call changes nothing. An accepted call writes each touched column once, bumps the
+ * revision once and emits no event. */
+#define SET_FIELDS_MAX_ROWS 1024u
+#define SET_FIELDS_MAX_FIELDS 14u
+#define SET_FIELDS_NAME_CAP 32u
+static uint32_t h_world_set_fields(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const SuJsonValue *ents = su_json_member(params, "entities");
+    uint64_t n;
+    uint64_t i;
+    uint64_t k;
+    uint32_t j;
+    uint32_t st = SU_OK;
+    uint32_t fid[SET_FIELDS_MAX_FIELDS];
+    uint32_t nf = 0;
+    uint32_t fval[SET_FIELDS_MAX_ROWS][SET_FIELDS_MAX_FIELDS];
+    uint8_t has[SET_FIELDS_MAX_ROWS][SET_FIELDS_MAX_FIELDS];
+    uint64_t hv[SET_FIELDS_MAX_ROWS];
+    uint32_t slot[SET_FIELDS_MAX_ROWS];
+    uint32_t id_kind;
+    uint32_t id_range;
+    uint32_t id_fslot;
+    uint32_t id_fgen;
+    const uint32_t *col_kind = NULL;
+    const uint32_t *col_range = NULL;
+    const uint32_t *col_fslot = NULL;
+    const uint32_t *col_fgen = NULL;
+    uint64_t rows_n = 0;
+    uint64_t rr;
+    char rev[64];
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = check_expected(ww, expect, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (ents == NULL || ents->type != SU_JSON_ARRAY || ents->u.array.count == 0u ||
+        ents->u.array.count > SET_FIELDS_MAX_ROWS) {
+        return set_fields_fail(f, SU_E_TYPE,
+                               "world.set_fields needs entities as an array of 1..1024 {entity, values} objects");
+    }
+    n = ents->u.array.count;
+    id_kind = field_id_by_name(ww, "kind", 4u);
+    id_range = field_id_by_name(ww, "range_sq", 8u);
+    id_fslot = field_id_by_name(ww, "formation_slot", 14u);
+    id_fgen = field_id_by_name(ww, "formation_gen", 13u);
+    if (id_kind == 0u || id_range == 0u || id_fslot == 0u || id_fgen == 0u) {
+        return set_fields_fail(f, SU_E_SCHEMA_MISMATCH, "world schema lacks a control field");
+    }
+    memset(has, 0, sizeof has);
+    memset(fval, 0, sizeof fval);
+
+    /* Pass 1: shape, handles and values. Nothing is written. */
+    for (i = 0; i < n; i++) {
+        const SuJsonValue *item = ents->u.array.items[i];
+        const SuJsonValue *eh = NULL;
+        const SuJsonValue *vals = NULL;
+        uint32_t cnt = 0;
+        uint8_t a = 0;
+        uint32_t g = 0;
+
+        if (item == NULL || item->type != SU_JSON_OBJECT) {
+            return set_fields_fail(f, SU_E_TYPE, "each entities item must be an object");
+        }
+        eh = su_json_member(item, "entity");
+        vals = su_json_member(item, "values");
+        if (eh == NULL || !su_json_get_uint(eh, &hv[i]) || vals == NULL || vals->type != SU_JSON_OBJECT) {
+            return set_fields_fail(f, SU_E_TYPE, "each entities item needs entity (integer handle) and values (object)");
+        }
+        slot[i] = SU_ENTITY_SLOT(hv[i]);
+        for (k = 0; k < i; k++) {
+            if (slot[k] == slot[i]) {
+                return set_fields_fail(f, SU_E_INVALID_ARGUMENT, "duplicate entity in one world.set_fields call");
+            }
+        }
+        /* Liveness and generation of the handle (the committed row). */
+        if (su_world_alive_view(ww->inst.w, slot[i], 1u, &a) != SU_OK ||
+            su_world_generation_view(ww->inst.w, slot[i], 1u, &g) != SU_OK || a == 0u ||
+            g != SU_ENTITY_GEN(hv[i])) {
+            return set_fields_fail(f, SU_E_STALE_HANDLE, "entity handle is stale or dead");
+        }
+        for (k = 0; k < vals->u.object.count; k++) {
+            const SuJsonMember *m = &vals->u.object.members[k];
+            char name[SET_FIELDS_NAME_CAP];
+            uint64_t v = 0;
+            uint32_t id;
+
+            if (m->key_len >= SET_FIELDS_NAME_CAP) {
+                return set_fields_fail(f, SU_E_SCHEMA_MISMATCH, "values names an unknown field");
+            }
+            memcpy(name, m->key, m->key_len);
+            name[m->key_len] = '\0';
+            id = field_id_by_name(ww, m->key, m->key_len);
+            if (id == 0u) {
+                return set_fields_fail(f, SU_E_SCHEMA_MISMATCH, "values names an unknown field");
+            }
+            if (!su_rts_ctl_writable(name)) {
+                return set_fields_fail(f, SU_E_TYPE, "field is not writable by world.set_fields");
+            }
+            if (!su_json_get_uint(m->value, &v) || v > UINT32_MAX) {
+                return set_fields_fail(f, SU_E_TYPE, "field values must be u32 integers");
+            }
+            if (su_rts_ctl_check_value(name, (uint32_t)v) != SU_OK) {
+                return set_fields_fail(f, SU_E_TYPE, "value outside the field's domain");
+            }
+            for (j = 0; j < nf; j++) {
+                if (fid[j] == id) {
+                    break;
+                }
+            }
+            if (j == nf) {
+                if (nf >= SET_FIELDS_MAX_FIELDS) {
+                    return set_fields_fail(f, SU_E_TYPE, "too many distinct fields in one call");
+                }
+                fid[nf++] = id;
+            }
+            fval[i][j] = (uint32_t)v;
+            has[i][j] = 1u;
+            cnt++;
+        }
+        if (cnt == 0u) {
+            return set_fields_fail(f, SU_E_TYPE, "each entities item needs at least one value");
+        }
+    }
+
+    /* Pass 2: resulting-row rules on the committed row with the payload applied. */
+    if (su_world_read_committed(ww->inst.w, id_kind, &col_kind, &rows_n) != SU_OK ||
+        su_world_read_committed(ww->inst.w, id_range, &col_range, &rr) != SU_OK ||
+        su_world_read_committed(ww->inst.w, id_fslot, &col_fslot, &rr) != SU_OK ||
+        su_world_read_committed(ww->inst.w, id_fgen, &col_fgen, &rr) != SU_OK) {
+        return set_fields_fail(f, SU_E_INTERNAL, "committed control columns could not be read");
+    }
+    for (i = 0; i < n; i++) {
+        uint32_t range = col_range[slot[i]];
+        uint32_t fs = col_fslot[slot[i]];
+        uint32_t fg = col_fgen[slot[i]];
+        uint32_t kind = col_kind[slot[i]];
+        for (j = 0; j < nf; j++) {
+            if (!has[i][j]) {
+                continue;
+            }
+            if (fid[j] == id_range) {
+                range = fval[i][j];
+            } else if (fid[j] == id_fslot) {
+                fs = fval[i][j];
+            } else if (fid[j] == id_fgen) {
+                fg = fval[i][j];
+            }
+        }
+        /* formation_slot is NONE or a slot of this world (contract 2.2). */
+        if (su_rts_ctl_check_formation_slot(fs, (uint32_t)rows_n) != SU_OK) {
+            return set_fields_fail(f, SU_E_TYPE, "formation_slot is outside the world's capacity");
+        }
+        if (su_rts_ctl_check_row(kind, range, fs, fg) != SU_OK) {
+            return set_fields_fail(f, SU_E_TYPE, "resulting row breaks a control rule; call refused");
+        }
+    }
+
+    /* Apply: one column write per touched field, then one revision bump. */
+    for (j = 0; j < nf; j++) {
+        const uint32_t *col = NULL;
+        uint32_t *buf;
+        uint64_t r;
+        uint32_t fst;
+
+        if (su_world_read_committed(ww->inst.w, fid[j], &col, &rr) != SU_OK) {
+            return set_fields_fail(f, SU_E_INTERNAL, "committed column could not be read");
+        }
+        buf = malloc((size_t)(rows_n > 0u ? rows_n : 1u) * sizeof *buf);
+        if (buf == NULL) {
+            return set_fields_fail(f, SU_E_RESOURCE_LIMIT, "allocation failed");
+        }
+        for (r = 0; r < rows_n; r++) {
+            buf[r] = col[r];
+        }
+        for (i = 0; i < n; i++) {
+            if (has[i][j]) {
+                buf[slot[i]] = fval[i][j];
+            }
+        }
+        fst = su_world_put_committed(ww->inst.w, fid[j], buf, rows_n);
+        free(buf);
+        if (fst != SU_OK) {
+            return set_fields_fail(f, SU_E_INTERNAL, "committed column could not be written");
+        }
+    }
+    ww->revision++;
+    rev_string(ww, rev, sizeof rev);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"updated\":");
+    su_buf_u64(res, n);
     su_buf_str(res, "}");
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
@@ -5418,6 +5642,8 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
         st = h_world_spawn(s, req.params, &res, &f);
     } else if (strcmp(req.method, "world.despawn") == 0) {
         st = h_world_despawn(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "world.set_fields") == 0) {
+        st = h_world_set_fields(s, req.params, &res, &f);
     } else if (strcmp(req.method, "events.read") == 0) {
         st = h_events_read(s, req.params, &res, &f);
     } else if (strcmp(req.method, "internal.candidate.evaluate") == 0) {

@@ -83,6 +83,7 @@ add_test(NAME vm COMMAND test_vm WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 
 file(GLOB SU_AGENT_SOURCES CONFIGURE_DEPENDS src/agent/*.c)
 list(APPEND SU_AGENT_SOURCES src/runtime/worker.c src/runtime/registry.c src/runtime/schedule.c src/runtime/reload.c)
+list(APPEND SU_AGENT_SOURCES src/runtime/rts/control_domains.c)
 # ---- BEGIN M2-00c3 entity tick (src/runtime/entity_tick.c) ----
 list(APPEND SU_AGENT_SOURCES src/runtime/entity_tick.c)
 # ---- BEGIN M3-04a host entries (src/runtime/rts/host_decl.c) ----
@@ -435,6 +436,13 @@ add_test(NAME cmdq COMMAND test_cmdq WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_D
 # M3-05: control-plane domains (contract 2.2). Pure checks, no world state.
 add_library(su_rts_control STATIC src/runtime/rts/control_domains.c)
 target_include_directories(su_rts_control PUBLIC src include)
+# M3-05 world.set_fields (contract 2.2): the worker handler against an RTS world built by world.create.
+add_executable(test_world_set_fields tests/rts/control/test_world_set_fields.c)
+target_link_libraries(test_world_set_fields PRIVATE su_agent)
+target_include_directories(test_world_set_fields PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/host")
+target_compile_definitions(test_world_set_fields PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_world_set_fields)
+add_test(NAME rts_world_set_fields COMMAND test_world_set_fields "${CMAKE_BINARY_DIR}/rts_world_set_fields_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 add_executable(test_control_domains tests/rts/control/test_control_domains.c)
 target_link_libraries(test_control_domains PRIVATE su_rts_control)
 add_test(NAME rts_control_domains COMMAND test_control_domains WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
