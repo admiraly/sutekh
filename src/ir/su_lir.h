@@ -54,6 +54,10 @@ typedef struct SuLirModule {
     uint32_t register_count;
     uint32_t insn_count;
     uint64_t max_rows;           /* capsule limits.max_rows; enforced by the VM wrapper */
+    uint32_t ir_version_minor;   /* 1 for "0.1", 2 for "0.2" (IR 0.2, M2-00c2) */
+    uint32_t max_struct_per_row; /* capsule limits.max_struct_per_row (0.2; 0 when absent) */
+    uint32_t max_events_per_row; /* capsule limits.max_events_per_row (0.2; 0 when absent) */
+    uint32_t uses_entity_ops;    /* 1 when any 0.2 op (slot/gen/tick/despawn_self/emit_event) appears */
     SuInsn *insns;               /* field operands are table indices */
     uint8_t source_hash[32];
     char source_hash_hex[65];

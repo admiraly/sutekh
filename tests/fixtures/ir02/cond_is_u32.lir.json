@@ -1,0 +1,43 @@
+{
+  "ir_version": "0.2",
+  "system_id": "demo.movement",
+  "numeric_profile": "u32_mod_v1",
+  "query": "demo.actor",
+  "instructions": [
+    {
+      "op": "load_u32",
+      "dst": "p",
+      "field": "position_x"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v",
+      "field": "velocity_x"
+    },
+    {
+      "op": "add_u32",
+      "dst": "next",
+      "a": "p",
+      "b": "v"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "c",
+      "a": "p",
+      "b": "v"
+    },
+    {
+      "op": "slot_u32",
+      "dst": "s"
+    },
+    {
+      "op": "despawn_self",
+      "cond": "s"
+    },
+    {
+      "op": "store_u32",
+      "field": "position_x",
+      "src": "next"
+    }
+  ]
+}

@@ -123,6 +123,18 @@
         },
         "allocation": {
           "const": "forbidden"
+        },
+        "max_struct_per_row": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64,
+          "description": "IR 0.2 only (optional, default 0)"
+        },
+        "max_events_per_row": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64,
+          "description": "IR 0.2 only (optional, default 0)"
         }
       },
       "required": [
@@ -139,6 +151,13 @@
         "minLength": 1
       },
       "minItems": 1
+    },
+    "ir_version": {
+      "enum": [
+        "0.1",
+        "0.2"
+      ],
+      "description": "optional; absent means 0.1; must equal the IR ir_version"
     }
   },
   "required": [
