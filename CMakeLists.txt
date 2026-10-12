@@ -88,6 +88,9 @@ list(APPEND SU_AGENT_SOURCES src/runtime/entity_tick.c)
 # ---- BEGIN M3-04a host entries (src/runtime/rts/host_decl.c) ----
 list(APPEND SU_AGENT_SOURCES src/runtime/rts/host_decl.c src/runtime/rts/host_registry.c)
 # ---- END M3-04a host entries ----
+# ---- BEGIN M3-04 RTS host operators (profiles/rts/native) ----
+list(APPEND SU_AGENT_SOURCES profiles/rts/native/rts_ops_common.c profiles/rts/native/rts_spatial.c profiles/rts/native/rts_scatter.c)
+# ---- END M3-04 RTS host operators ----
 # ---- END M2-00c3 entity tick ----
 add_library(su_agent STATIC ${SU_AGENT_SOURCES})
 target_include_directories(su_agent PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
@@ -150,6 +153,30 @@ target_include_directories(test_host_restore PRIVATE "${CMAKE_CURRENT_SOURCE_DIR
 target_compile_definitions(test_host_restore PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_host_restore)
 add_test(NAME host_restore COMMAND test_host_restore "${CMAKE_BINARY_DIR}/host_restore_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# M3-04: RTS host operators, known answers (10.1 SPATIAL, GATHER, SCATTER), store set, fault seams, records (T-HOST-05).
+add_executable(test_rts_ops tests/rts/native/test_rts_ops.c)
+target_link_libraries(test_rts_ops PRIVATE su_agent)
+target_include_directories(test_rts_ops PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(test_rts_ops PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_rts_ops)
+add_test(NAME rts_native_ops COMMAND test_rts_ops "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# M3-04 T-HOST-05: production descriptors against the committed M3-04a records (see test_rts_records.c; the
+# committed constants_hash check is a known blocker and fails until the owner resolves it).
+add_executable(test_rts_records tests/rts/native/test_rts_records.c)
+target_link_libraries(test_rts_records PRIVATE su_agent)
+target_include_directories(test_rts_records PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(test_rts_records PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_rts_records)
+add_test(NAME rts_native_records COMMAND test_rts_records "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# M3-04: differential driver (C operators on scenes from bench/rts/gen against the bench/rts/ref model).
+add_executable(test_rts_diff tests/rts/native/test_rts_diff.c)
+target_link_libraries(test_rts_diff PRIVATE su_agent)
+target_include_directories(test_rts_diff PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(test_rts_diff PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_rts_diff)
+add_test(NAME rts_native_diff COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/native/diff_driver.py"
+         --driver "$<TARGET_FILE:test_rts_diff>" --work "${CMAKE_BINARY_DIR}/rts_native_diff_scratch"
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(test_reload tests/reload/test_reload.c)
 target_link_libraries(test_reload PRIVATE su_agent)
