@@ -18,6 +18,10 @@ int su_rts_ctl_writable(const char *name);
  * domain of the named field, SU_OK otherwise. The caller has checked name with su_rts_ctl_writable. */
 uint32_t su_rts_ctl_check_value(const char *name, uint32_t value);
 
+/* formation_slot range against the world capacity (contract 2.2): NONE, or an index in 0..capacity-1.
+ * su_rts_ctl_check_value cannot do this because it has no capacity. Returns SU_E_TYPE otherwise. */
+uint32_t su_rts_ctl_check_formation_slot(uint32_t value, uint32_t capacity);
+
 /* Resulting-row rules (contract 2.2, D2): applied to the committed row with the payload applied.
  * kind 2 rows keep range_sq 0; formation_gen is 0 exactly when formation_slot is NONE. */
 uint32_t su_rts_ctl_check_row(uint32_t kind, uint32_t range_sq, uint32_t formation_slot,

@@ -270,9 +270,7 @@ static uint32_t su_check_ext(const SuWorldDesc *desc, const SuWorldSchemaExt *ex
         (ext->lineage_count > 0u && ext->lineage == NULL)) {
         return SU_E_INVALID_ARGUMENT;
     }
-    if (desc->field_count > 0u && ext->defaults == NULL) {
-        return SU_OK;
-    }
+    /* ext->defaults may be NULL (all defaults 0); the retired-ID checks below still apply. */
     for (i = 1u; i < ext->retired_count; i++) {
         if (ext->retired_ids[i] <= ext->retired_ids[i - 1u]) {
             return SU_E_SCHEMA_MISMATCH;
@@ -996,6 +994,9 @@ uint32_t su_world_restore_canonical(const SuWorldDesc *desc, const uint8_t *buf,
         }
         if (rows > SU_LIMIT_ROWS) {
             return SU_E_PARSE;
+        }
+        if (rows > 0u && desc->entity_ids == NULL) {
+            return SU_E_INVALID_ARGUMENT;
         }
         vals = (size_t)rows * 4u;
         if (len != hdr + vals + (size_t)fc * (8u + vals)) {
