@@ -282,7 +282,7 @@
       "change_class": "integration",
       "requires_native_validation": true,
       "acceptance": [
-        "T00–T15 runtime evidence, with timings reported as actuals.",
+        "T00\u2013T15 runtime evidence, with timings reported as actuals.",
         "T12 instrumentation proves no compiler/assembler/linker on capsule edit."
       ],
       "status": "integrated"
@@ -534,7 +534,7 @@
         "Stale handles, churn and deterministic event merge validated.",
         "IR extensions versioned with verifier/reference/backend tests."
       ],
-      "status": "planned"
+      "status": "integrated"
     },
     {
       "id": "M2-01",
@@ -561,7 +561,7 @@
         "Memory failure, rollback and layout invalidation tests.",
         "Large migrations separated from small code-reload timing."
       ],
-      "status": "planned"
+      "status": "integrated"
     },
     {
       "id": "M3-00",

@@ -52,7 +52,7 @@
     ]
   },
   "m2": {
-    "state": "implemented_audited_waiting_owner_decisions",
+    "state": "closed_owner_accepted",
     "audits": [
       "planning/audit/M2-00-audit.md",
       "planning/audit/M2-audit.md",
@@ -66,15 +66,21 @@
       "planning/handoffs/2026-10-12-m2-01-fixes3.md"
     ],
     "verified_by_orchestrator": "at head after fixes3: default release ctest 22/22; native ctest 34/34; native harness passed 26/failed 0/unavailable 0",
-    "open": [
-      "owner decision N5 (field ids of an undone commit reusable)",
-      "owner decision N4 (recovery exhaustion inside undo; documented)",
-      "owner acceptance of deviation: post-commit failure is an undo, not LOG_ROLLBACK",
-      "rollback digest equality needs contract-level digest change (waiver or change)",
-      "1M-row timing is an observation only",
-      "TSan: 4 worker tests fail under TSan from the 4 GiB RLIMIT_AS guard (environmental per fix agent); proposed guard change not made",
-      "no independent re-check of fixes3"
-    ],
-    "note": "M2 closure not declared; owner acceptance not given."
+    "open": [],
+    "note": "M2 closure not declared; owner acceptance not given.",
+    "owner_acceptance": {
+      "date": "2026-10-12",
+      "statement": "accept M2 and keep going",
+      "accepted_as_documented": [
+        "N4 recovery exhaustion inside undo (documented, fails closed)",
+        "N5 field ids of an undone commit reusable",
+        "post-commit failure is an undo, not LOG_ROLLBACK",
+        "rollback digest equality not provided (needs contract-level digest change)",
+        "1M-row timing is observation only",
+        "TSan failures in 4 worker tests environmental per fix agent, no guard change",
+        "no independent re-check of fixes3 (orchestrator verified ctest default 22/22, native 34/34, native harness 26/0)"
+      ],
+      "m1_note": "M1 owner acceptance was not given in this statement and remains pending"
+    }
   }
 }
