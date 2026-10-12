@@ -100,7 +100,8 @@ static const char *json_str(const SuJsonValue *obj, const char *key) {
 }
 
 /* Verifies the capsule and its IR (path relative to the repository root). */
-static uint32_t load_module(SuLirModule *mod, uint32_t *gen, uint32_t *sv) {
+static uint32_t load_module_at(const char *cap_path, const char *lir_src, SuLirModule *mod, uint32_t *gen,
+                               uint32_t *sv) {
     Buf cb = {0};
     Buf lb = {0};
     SuJsonDoc cdoc;
@@ -113,7 +114,7 @@ static uint32_t load_module(SuLirModule *mod, uint32_t *gen, uint32_t *sv) {
     uint64_t v = 0;
     uint32_t st = SU_E_INVALID_ARGUMENT;
 
-    if (!read_file(SYS_CAP, &cb) || su_json_parse(cb.p, cb.n, &k_limits, &cdoc, &jerr) != SU_OK) {
+    if (!read_file(cap_path, &cb) || su_json_parse(cb.p, cb.n, &k_limits, &cdoc, &jerr) != SU_OK) {
         free(cb.p);
         return st;
     }
@@ -121,7 +122,7 @@ static uint32_t load_module(SuLirModule *mod, uint32_t *gen, uint32_t *sv) {
     src = json_str(cdoc.root, "source");
     if (schema != NULL && src != NULL && su_json_get_uint(su_json_member(schema, "layout_generation"), &g) &&
         su_json_get_uint(su_json_member(schema, "version"), &v)) {
-        snprintf(lir_path, sizeof lir_path, "%s", SYS_LIR);
+        snprintf(lir_path, sizeof lir_path, "%s", lir_src);
         if (read_file(lir_path, &lb)) {
             st = su_lir_verify(cb.p, cb.n, lb.p, lb.n, mod, &diag);
             if (st != SU_OK) {
@@ -135,6 +136,10 @@ static uint32_t load_module(SuLirModule *mod, uint32_t *gen, uint32_t *sv) {
     free(cb.p);
     free(lb.p);
     return st;
+}
+
+static uint32_t load_module(SuLirModule *mod, uint32_t *gen, uint32_t *sv) {
+    return load_module_at(SYS_CAP, SYS_LIR, mod, gen, sv);
 }
 
 /* ---------- worlds and schedules ---------- */
@@ -460,6 +465,119 @@ static uint32_t run_workers(uint32_t workers, RunOut *r, SuSchedule **keep_sched
 }
 
 /* Oracle vs the engine, tick by tick. */
+/* Two systems: movement (despawn_self and emit_event) and guard (ordered after it). */
+#define GUARD_CAP "tests/fixtures/entities/guard.capsule.json"
+#define GUARD_LIR "tests/fixtures/entities/guard.lir.json"
+
+static uint32_t build_sched2(SuSchedule *s, uint64_t struct_cap, uint64_t event_cap, uint64_t log_max) {
+    SuLirModule *m1 = calloc(1u, sizeof *m1);
+    SuLirModule *m2 = calloc(1u, sizeof *m2);
+    uint32_t gen = 0;
+    uint32_t sv = 0;
+    uint32_t gen2 = 0;
+    uint32_t sv2 = 0;
+    uint32_t st;
+    if (m1 == NULL || m2 == NULL) {
+        free(m1);
+        free(m2);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    st = load_module_at(SYS_CAP, SYS_LIR, m1, &gen, &sv);
+    if (st == SU_OK) {
+        st = load_module_at(GUARD_CAP, GUARD_LIR, m2, &gen2, &sv2);
+    }
+    if (st != SU_OK || gen != gen2 || sv != sv2) {
+        su_lir_module_free(m1);
+        su_lir_module_free(m2);
+        free(m1);
+        free(m2);
+        return st != SU_OK ? st : SU_E_SCHEMA_MISMATCH;
+    }
+    su_sched_init(s);
+    st = su_sched_add(s, m1, sv, gen, 0, 1, 0);
+    if (st != SU_OK) {
+        su_lir_module_free(m1);
+        su_lir_module_free(m2);
+        free(m1);
+        free(m2);
+        return st;
+    }
+    st = su_sched_add(s, m2, sv2, gen2, 0, 1, 0);
+    if (st != SU_OK) {
+        su_lir_module_free(m2);
+        free(m2);
+        return st;
+    }
+    st = su_sched_finalize(s);
+    if (st != SU_OK) {
+        return st;
+    }
+    return su_sched_enable_entities(s, struct_cap, event_cap, log_max);
+}
+
+typedef struct FaultCtx {
+    uint32_t fail_index;
+    uint32_t armed;
+} FaultCtx;
+
+static int fault_at(uint32_t system_index, void *ctx) {
+    const FaultCtx *f = ctx;
+    return f->armed != 0u && system_index == f->fail_index ? 1 : 0;
+}
+
+/* A failure after system 0 produced records (the second system faults) aborts the whole tick: committed
+ * columns, entity table, event log and tick are exactly as before; a clean tick then succeeds. */
+static void test_fault_after_system(void) {
+    SuSchedule *s = calloc(1u, sizeof *s);
+    SuWorld *w = make_world(N_ROWS, MAX_ENT);
+    SuSchedTickOpts opt;
+    FaultCtx fc = {1u, 0u};
+    uint64_t done = 0;
+    uint32_t fi = UINT32_MAX;
+    uint8_t *wb0;
+    uint8_t *wb1;
+    uint8_t *lb0;
+    uint8_t *lb1;
+    size_t wl0 = 0;
+    size_t wl1 = 0;
+    uint64_t ll0 = 0;
+    uint64_t ll1 = 0;
+
+    CHECK(s != NULL && w != NULL);
+    if (s == NULL || w == NULL) {
+        free(s);
+        su_world_destroy(w);
+        return;
+    }
+    memset(&opt, 0, sizeof opt);
+    opt.workers = 2;
+    opt.chunk_min_rows = 1u;
+    CHECK_ST(build_sched2(s, 4096u, 4096u, 1u << 20), SU_OK);
+    CHECK_ST(init_world(w, N_ROWS), SU_OK);
+    CHECK_ST(su_sched_run_ticks_opt(w, s, 1u, NULL, NULL, &opt, &done, &fi), SU_OK);
+    CHECK(done == 1u && su_world_tick(w) == 1u);
+
+    wb0 = world_bytes(w, &wl0);
+    lb0 = log_bytes(su_ent_rt_log(s->ent), &ll0);
+    fc.armed = 1u;
+    CHECK_ST(su_sched_run_ticks_opt(w, s, 1u, fault_at, &fc, &opt, &done, &fi), SU_E_CANDIDATE_FAILED);
+    CHECK(done == 0u && fi == 1u && su_world_tick(w) == 1u);
+    wb1 = world_bytes(w, &wl1);
+    lb1 = log_bytes(su_ent_rt_log(s->ent), &ll1);
+    CHECK(wb0 != NULL && wb1 != NULL && wl0 == wl1 && memcmp(wb0, wb1, wl0) == 0);
+    CHECK(lb0 != NULL && lb1 != NULL && ll0 == ll1 && memcmp(lb0, lb1, (size_t)ll0) == 0);
+    fc.armed = 0u;
+    CHECK_ST(su_sched_run_ticks_opt(w, s, 1u, fault_at, &fc, &opt, &done, &fi), SU_OK);
+    CHECK(done == 1u && su_world_tick(w) == 2u);
+    free(wb0);
+    free(wb1);
+    free(lb0);
+    free(lb1);
+    su_sched_free(s);
+    free(s);
+    su_world_destroy(w);
+}
+
 static void test_oracle(void) {
     SuSchedule *s = malloc(sizeof *s);
     SuWorld *w = make_world(N_ROWS, MAX_ENT);
@@ -642,6 +760,7 @@ static void test_ring_wrap(void) {
 int main(void) {
     test_oracle();
     test_workers_equal();
+    test_fault_after_system();
     test_cap_abort();
     test_ring_wrap();
     printf("test_entity_tick: %d checks, %d failures\n", g_checks, g_failures);

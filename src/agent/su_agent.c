@@ -3857,13 +3857,15 @@ static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char
         return call_fail(c, SU_E_WORKER_FAILED, "admission worker response was malformed");
     }
     if (!r.ok) {
-        /* The worker rejected the candidate itself (load, compile or schedule failure). */
+        /* The worker rejected the candidate itself (load, compile or schedule failure). A capability refusal
+         * (for example ir_0_2_not_lowered) keeps its code. */
         char msg[AGENT_MSG_CAP];
+        uint32_t wst = r.code == SU_E_CAPABILITY_DENIED ? SU_E_CAPABILITY_DENIED : SU_E_CANDIDATE_FAILED;
         snprintf(msg, sizeof msg, "%.500s", r.msg);
         reply_free(&r);
         su_buf_free(&adm);
         su_buf_free(&det);
-        return call_fail(c, SU_E_CANDIDATE_FAILED, msg);
+        return call_fail(c, wst, msg);
     }
     if (!jstr(r.result, "status", status, sizeof status)) {
         reply_free(&r);

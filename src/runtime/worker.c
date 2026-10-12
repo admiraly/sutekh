@@ -3271,8 +3271,10 @@ static uint32_t h_internal_specialize_admit(WorkerState *s, const SuJsonValue *p
     st = spec_prepare(sched.sys[0].mod, gen, tier_auto, &caps, &seq, fallback, sizeof fallback, msg,
                       sizeof msg);
     if (st != SU_OK) {
-        fail(f, SU_E_CANDIDATE_FAILED, msg);
-        st = SU_E_CANDIDATE_FAILED;
+        /* A capability refusal (for example ir_0_2_not_lowered, contract r2 section 3) keeps its code. */
+        uint32_t pst = st == SU_E_CAPABILITY_DENIED ? SU_E_CAPABILITY_DENIED : SU_E_CANDIDATE_FAILED;
+        fail(f, pst, msg);
+        st = pst;
         goto out;
     }
     /* Corpus admission (VM is the oracle). */

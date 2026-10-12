@@ -3295,6 +3295,14 @@ def tx7(t: TestCtx):
     model = ref.EntityWorld(cap0["fields"], fx["columns"], fx["entity_ids"], 8, 4096, 4096, 65536)
     model.initial_rows = len(fx["entity_ids"])
     ent_check_state(t, sess, wid, model, "TX7 initial")
+    if "world.specialize" in (call(t, sess, "engine.info", {}).get("capabilities") or []):
+        # Native builds only: IR 0.2 modules are never lowered (contract r2 section 3).
+        env = sess.request("world.specialize", {"world_id": wid, "expected_world_revision": rev,
+                                                "system_id": "demo.movement", "backend": "scalar"})
+        t.check_mismatches("TX7 native: world.specialize of an IR 0.2 system refused with SU_E_CAPABILITY_DENIED",
+                           classify_error(env, "SU_E_CAPABILITY_DENIED"))
+        t.check("TX7 native: refusal reason is ir_0_2_not_lowered", "ir_0_2_not_lowered",
+                (env.get("error") or {}).get("message"))
 
     # Spawn between ticks: explicit values with an external id, then defaults (zero) without one.
     res = call(t, sess, "world.spawn", {"world_id": wid, "expected_world_revision": rev,
