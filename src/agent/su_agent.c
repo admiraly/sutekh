@@ -4,6 +4,15 @@
 
 #include <signal.h>
 #include <stdio.h>
+
+/* ARCHITECTURE section 7 mode names. This binary serves the agent API, so it is never `release`; `perf_trusted`
+ * needs explicit instrumentation settings it does not take. The native build (SUTEKH_NATIVE, set in CMakeLists.txt)
+ * is `dev_native`; the default VM build is `dev_checked`. */
+#ifdef SUTEKH_NATIVE_BUILD
+#define SU_RUNTIME_MODE "dev_native"
+#else
+#define SU_RUNTIME_MODE "dev_checked"
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -2386,7 +2395,7 @@ static uint32_t h_engine_info(SuAgent *a, const SuJsonValue *params, SuBuf *res,
     su_buf_str(res, ",\"artifact_format\":");
     su_buf_u64(res, SU_ARTIFACT_FORMAT_VERSION);
     su_buf_str(res, ",\"numeric_profile\":\"" SU_NUMERIC_PROFILE_U32_MOD_V1
-                    "\",\"runtime_mode\":\"headless-m0-posix\",\"transport\":\"stdio\""
+                    "\",\"runtime_mode\":\"" SU_RUNTIME_MODE "\",\"transport\":\"stdio\""
                     ",\"process\":{\"role\":\"supervisor\",\"pid\":");
     su_buf_u64(res, (uint64_t)getpid());
     su_buf_str(res, "},\"active_worker\":{\"pid\":");
