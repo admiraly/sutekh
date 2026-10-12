@@ -1,0 +1,92 @@
+{
+  "description": "Audit item 4 (C04) verifier cases: capsule capabilities and system_rev over ir02/ok_valid. A capsule without capabilities keeps the M0-M2 verdicts (ir02 manifest, unchanged).",
+  "generator": "tests/fixtures/caps/make_caps.py",
+  "cases": [
+    {
+      "id": "grant_both_ok",
+      "path": "base.lir.json",
+      "capsule": "grant_both_ok.capsule.json",
+      "expected_code": "SU_OK",
+      "note": "{\"capabilities\": [\"despawn_self\", \"emit_event\"], \"system_rev\": 3}"
+    },
+    {
+      "id": "grant_both_no_rev_ok",
+      "path": "base.lir.json",
+      "capsule": "grant_both_no_rev_ok.capsule.json",
+      "expected_code": "SU_OK",
+      "note": "{\"capabilities\": [\"despawn_self\", \"emit_event\"]}"
+    },
+    {
+      "id": "grant_despawn_only",
+      "path": "base.lir.json",
+      "capsule": "grant_despawn_only.capsule.json",
+      "expected_code": "SU_E_CAPABILITY_DENIED",
+      "note": "{\"capabilities\": [\"despawn_self\"]}",
+      "stage": 5
+    },
+    {
+      "id": "grant_emit_only",
+      "path": "base.lir.json",
+      "capsule": "grant_emit_only.capsule.json",
+      "expected_code": "SU_E_CAPABILITY_DENIED",
+      "note": "{\"capabilities\": [\"emit_event\"]}",
+      "stage": 5
+    },
+    {
+      "id": "grant_empty",
+      "path": "base.lir.json",
+      "capsule": "grant_empty.capsule.json",
+      "expected_code": "SU_E_CAPABILITY_DENIED",
+      "note": "{\"capabilities\": []}",
+      "stage": 5
+    },
+    {
+      "id": "grant_unknown_name",
+      "path": "base.lir.json",
+      "capsule": "grant_unknown_name.capsule.json",
+      "expected_code": "SU_E_CAPABILITY_DENIED",
+      "note": "{\"capabilities\": [\"despawn_self\", \"teleport\"]}",
+      "stage": 4
+    },
+    {
+      "id": "grant_duplicate",
+      "path": "base.lir.json",
+      "capsule": "grant_duplicate.capsule.json",
+      "expected_code": "SU_E_TYPE",
+      "note": "{\"capabilities\": [\"despawn_self\", \"despawn_self\"]}",
+      "stage": 4
+    },
+    {
+      "id": "grant_non_string",
+      "path": "base.lir.json",
+      "capsule": "grant_non_string.capsule.json",
+      "expected_code": "SU_E_TYPE",
+      "note": "{\"capabilities\": [7]}",
+      "stage": 4
+    },
+    {
+      "id": "grant_not_array",
+      "path": "base.lir.json",
+      "capsule": "grant_not_array.capsule.json",
+      "expected_code": "SU_E_TYPE",
+      "note": "{\"capabilities\": \"despawn_self\"}",
+      "stage": 4
+    },
+    {
+      "id": "system_rev_zero",
+      "path": "base.lir.json",
+      "capsule": "system_rev_zero.capsule.json",
+      "expected_code": "SU_E_TYPE",
+      "note": "{\"system_rev\": 0}",
+      "stage": 4
+    },
+    {
+      "id": "system_rev_string",
+      "path": "base.lir.json",
+      "capsule": "system_rev_string.capsule.json",
+      "expected_code": "SU_E_TYPE",
+      "note": "{\"system_rev\": \"2\"}",
+      "stage": 4
+    }
+  ]
+}

@@ -33,6 +33,7 @@
 #include "agent/su_agent.h"
 #include "agent/su_proto.h"
 #include "ir/su_json.h"
+#include "ir/su_sha256.h"
 #include "sutekh/status.h"
 
 static int g_checks = 0;
@@ -609,6 +610,62 @@ static void create_many(Session *s, const char *fixture, const char *a, const ch
     rpc(s, line, r);
 }
 
+/* Entry i of the semantic_manifest of a world.create response, or NULL. */
+static const SuJsonValue *manifest_item(const Resp *r, uint32_t i) {
+    const SuJsonValue *man = resp_result(r) != NULL ? su_json_member(resp_result(r), "semantic_manifest") : NULL;
+    if (man == NULL || man->type != SU_JSON_ARRAY || i >= man->u.array.count) {
+        return NULL;
+    }
+    return man->u.array.items[i];
+}
+
+/* The declared_system_rev of manifest entry i, or 0 when absent. */
+static uint64_t manifest_declared_rev(const Resp *r, uint32_t i) {
+    const SuJsonValue *item = manifest_item(r, i);
+    return item != NULL ? jnum(item, "declared_system_rev") : 0;
+}
+
+/* error.detail of an error response, or NULL. */
+static const SuJsonValue *resp_detail(const Resp *r) {
+    const SuJsonValue *e = r->root != NULL ? su_json_member(r->root, "error") : NULL;
+    return e != NULL ? su_json_member(e, "detail") : NULL;
+}
+
+/* Audit item 6: the detail of a verification error names the source file, its SHA-256 (over the bytes on
+ * disk, computed here independently) and the JSON pointer; expected, actual and hint are present. */
+static void check_verify_detail(const Resp *r, const char *lir_name, const char *source_path) {
+    const SuJsonValue *d = resp_detail(r);
+    char got[80];
+    char name[128];
+    char path[8192];
+    char hex[65];
+    uint8_t *bytes;
+    size_t n = 0;
+    SuSha256 ctx;
+    uint8_t dg[32];
+
+    CHECK(d != NULL);
+    if (d == NULL) {
+        return;
+    }
+    CHECK(jstr(d, "json_pointer", name, sizeof name));
+    CHECK(jstr(d, "source_path", name, sizeof name) && strcmp(name, source_path) == 0);
+    CHECK(jstr(d, "source_sha256", got, sizeof got) && strlen(got) == 64);
+    root_path(path, sizeof path, lir_name);
+    bytes = read_whole(path, &n);
+    CHECK(bytes != NULL);
+    if (bytes != NULL) {
+        su_sha256_init(&ctx);
+        su_sha256_update(&ctx, bytes, n);
+        su_sha256_final(&ctx, dg);
+        su_sha256_hex(dg, hex);
+        CHECK(strcmp(got, hex) == 0);
+        free(bytes);
+    }
+    CHECK(jstr(d, "capsule_sha256", got, sizeof got) && strlen(got) == 64);
+    CHECK(jstr(d, "hint", got, sizeof got) && got[0] != '\0');
+}
+
 static uint64_t active_pid(Session *s) {
     Resp r;
     uint64_t pid = 0;
@@ -687,6 +744,23 @@ static void test_submit_and_evaluate(Session *s, Ids *id) {
         "{\"protocol\":\"0.1\",\"id\":\"bk\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"broken.capsule.json\"}}",
         &r);
     CHECK_CODE(r, SU_E_UNKNOWN_OPCODE);
+    check_verify_detail(&r, "broken.lir.json", "broken.lir.json");
+    resp_free(&r);
+
+    /* An unknown capability is refused at submission (audit item 4), with the expected and actual values. */
+    rpc(s,
+        "{\"protocol\":\"0.1\",\"id\":\"bc\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"sys_a_badcap.capsule.json\"}}",
+        &r);
+    CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
+    check_verify_detail(&r, "sys_a_badcap.lir.json", "sys_a_badcap.lir.json");
+    {
+        char ex[96];
+        char ac[96];
+        CHECK(resp_detail(&r) != NULL);
+        CHECK(jstr(resp_detail(&r), "expected", ex, sizeof ex) && strcmp(ex, "despawn_self or emit_event") == 0);
+        CHECK(jstr(resp_detail(&r), "actual", ac, sizeof ac) && strcmp(ac, "unknown name") == 0);
+        CHECK(jstr(resp_detail(&r), "system_id", ex, sizeof ex) == 0);
+    }
     resp_free(&r);
 
     evaluate(s, id->cand_a, "sys_a.test.json", &r);
@@ -745,20 +819,119 @@ static void test_submit_and_evaluate(Session *s, Ids *id) {
     resp_free(&r);
 }
 
+/* SHA-256 hex of a file under the scratch project root, computed here independently of the engine. */
+static void file_sha256(const char *name, char out[65]) {
+    char path[8192];
+    uint8_t *bytes;
+    size_t n = 0;
+    SuSha256 ctx;
+    uint8_t dg[32];
+
+    root_path(path, sizeof path, name);
+    bytes = read_whole(path, &n);
+    su_sha256_init(&ctx);
+    su_sha256_update(&ctx, bytes != NULL ? bytes : (const uint8_t *)"", bytes != NULL ? n : 0u);
+    su_sha256_final(&ctx, dg);
+    su_sha256_hex(dg, out);
+    free(bytes);
+}
+
+/* Audit item 7: tests.run runs the suite now and keeps a completed job; job.status returns that record with
+ * the exact input fingerprints. A failing suite completes with status failed. Unknown jobs are refused. */
+static void test_jobs(Session *s, Ids *id) {
+    Resp r;
+    char line[512];
+    char job[32];
+    char job_bad[32];
+    char st[16];
+    char sha[65];
+    char want[65];
+    const SuJsonValue *inputs;
+    const SuJsonValue *res;
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"tr\",\"method\":\"tests.run\",\"params\":"
+             "{\"candidate_id\":\"%s\",\"suite\":\"sys_a.test.json\"}}",
+             id->cand_a);
+    rpc(s, line, &r);
+    CHECK_OK(r);
+    CHECK(jstr(resp_result(&r), "job_id", job, sizeof job));
+    CHECK(jstr(resp_result(&r), "state", st, sizeof st) && strcmp(st, "completed") == 0);
+    res = su_json_member(resp_result(&r), "result");
+    CHECK(res != NULL && jstr(res, "status", st, sizeof st) && strcmp(st, "passed") == 0);
+    resp_free(&r);
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"js\",\"method\":\"job.status\",\"params\":{\"job_id\":\"%s\"}}",
+             job);
+    rpc(s, line, &r);
+    CHECK_OK(r);
+    CHECK(jstr(resp_result(&r), "job_id", st, sizeof st) && strcmp(st, job) == 0);
+    CHECK(jstr(resp_result(&r), "state", st, sizeof st) && strcmp(st, "completed") == 0);
+    CHECK(jstr(resp_result(&r), "candidate_id", st, sizeof st) && strcmp(st, id->cand_a) == 0);
+    inputs = su_json_member(resp_result(&r), "inputs");
+    file_sha256("sys_a.test.json", want);
+    CHECK(jstr(inputs, "suite_sha256", sha, sizeof sha) && strcmp(sha, want) == 0);
+    file_sha256("sys_a.capsule.json", want);
+    CHECK(jstr(inputs, "capsule_sha256", sha, sizeof sha) && strcmp(sha, want) == 0);
+    file_sha256("sys_a.lir.json", want);
+    CHECK(jstr(inputs, "source_sha256", sha, sizeof sha) && strcmp(sha, want) == 0);
+    res = su_json_member(resp_result(&r), "result");
+    CHECK(res != NULL && jstr(res, "status", st, sizeof st) && strcmp(st, "passed") == 0);
+    resp_free(&r);
+
+    /* A failing candidate: the job completes and its result is failed. */
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"tb\",\"method\":\"tests.run\",\"params\":"
+             "{\"candidate_id\":\"%s\",\"suite\":\"sys_a_bad.test.json\"}}",
+             id->cand_bad);
+    rpc(s, line, &r);
+    CHECK_OK(r);
+    CHECK(jstr(resp_result(&r), "job_id", job_bad, sizeof job_bad));
+    res = su_json_member(resp_result(&r), "result");
+    CHECK(res != NULL && jstr(res, "status", st, sizeof st) && strcmp(st, "failed") == 0);
+    resp_free(&r);
+
+    /* Unknown job; a suite that does not name the candidate's capsule creates no job. */
+    rpc(s,
+        "{\"protocol\":\"0.1\",\"id\":\"jx\",\"method\":\"job.status\",\"params\":{\"job_id\":\"job-999999\"}}",
+        &r);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    resp_free(&r);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"tm\",\"method\":\"tests.run\",\"params\":"
+             "{\"candidate_id\":\"%s\",\"suite\":\"sys_b.test.json\"}}",
+             id->cand_a);
+    rpc(s, line, &r);
+    CHECK_CODE(r, SU_E_SCHEMA_MISMATCH);
+    resp_free(&r);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"js2\",\"method\":\"job.status\",\"params\":{\"job_id\":\"%s\"}}",
+             job_bad);
+    rpc(s, line, &r);
+    CHECK_OK(r);
+    CHECK(jstr(resp_result(&r), "job_id", st, sizeof st) && strcmp(st, job_bad) == 0);
+    res = su_json_member(resp_result(&r), "result");
+    CHECK(res != NULL && jstr(res, "status", st, sizeof st) && strcmp(st, "failed") == 0);
+    resp_free(&r);
+}
+
 static void test_world_create(Session *s, Ids *id) {
     Resp r;
     Manifest m;
     char rev[64];
     char want[80];
 
-    /* Backward-compatible single capsule_path. */
-    create_one(s, "world4.json", "sys_a.capsule.json", &r);
+    /* Backward-compatible single capsule_path. The capsule declares system_rev 7 (audit item 4): the
+     * manifest shows it. A capsule without the key shows no declared_system_rev (world1 below). */
+    create_one(s, "world4.json", "sys_a_rev.capsule.json", &r);
     CHECK_OK(r);
     jstr(resp_result(&r), "world_id", id->world0, sizeof id->world0);
     jstr(resp_result(&r), "world_revision", rev, sizeof rev);
     snprintf(want, sizeof want, "%s.r1", id->world0);
     CHECK(strcmp(rev, want) == 0);
     CHECK(jnum(resp_result(&r), "tick") == 0);
+    CHECK(manifest_declared_rev(&r, 0) == 7);
     resp_free(&r);
     read_manifest(s, id->world0, &m);
     CHECK(m.n == 1);
@@ -773,6 +946,7 @@ static void test_world_create(Session *s, Ids *id) {
     jstr(resp_result(&r), "world_id", id->world1, sizeof id->world1);
     CHECK(jnum(resp_result(&r), "row_count") == 4);
     CHECK(jnum(resp_result(&r), "worker_pid") == g_pid);
+    CHECK(manifest_item(&r, 0) != NULL && su_json_member(manifest_item(&r, 0), "declared_system_rev") == NULL);
     resp_free(&r);
     read_manifest(s, id->world1, &m);
     CHECK(m.n == 2);
@@ -860,6 +1034,52 @@ static void test_paging(Session *s, Ids *id) {
     CHECK(read_view(s, id->world2, 1024, &v));
     CHECK(ref_equal(&v.cols, &expect));
     CHECK(v.tick == 1);
+}
+
+/* Audit item 2: a code-only install is analysed against the whole schedule before it is prepared.
+ * Each candidate below is refused with the status the effect analysis gives (conflict and declared !=
+ * derived: SU_E_SCHEMA_MISMATCH; ordering cycle: SU_E_INVALID_ARGUMENT), and the world is unchanged:
+ * revision, tick, PID and both installed semantic hashes. Runs on world3 (sys_a, sys_b at r1, tick 0). */
+static void test_install_effects(Session *s, Ids *id) {
+    char cc[32];
+    char cy[32];
+    char ov[32];
+    char sem[80];
+    char rev[80];
+    Resp r;
+    View v;
+    Manifest m;
+
+    submit(s, "sys_b_conflict.capsule.json", cc, sizeof cc, sem, sizeof sem);
+    submit(s, "sys_a_cycle.capsule.json", cy, sizeof cy, sem, sizeof sem);
+    submit(s, "sys_b_overdecl.capsule.json", ov, sizeof ov, sem, sizeof sem);
+    snprintf(rev, sizeof rev, "%s.r1", id->world3);
+
+    install(s, cc, id->world3, rev, 0, &r);
+    CHECK_CODE(r, SU_E_SCHEMA_MISMATCH);
+    CHECK(resp_message_has(&r, "conflict on field 1 (write/write)"));
+    resp_free(&r);
+
+    install(s, cy, id->world3, rev, 0, &r);
+    CHECK_CODE(r, SU_E_INVALID_ARGUMENT);
+    CHECK(resp_message_has(&r, "ordering cycle"));
+    resp_free(&r);
+
+    install(s, ov, id->world3, rev, 0, &r);
+    CHECK_CODE(r, SU_E_SCHEMA_MISMATCH);
+    CHECK(resp_message_has(&r, "field position_x declared read=1 write=0"));
+    resp_free(&r);
+
+    CHECK(read_view(s, id->world3, 4, &v));
+    CHECK(strcmp(v.rev, rev) == 0);
+    CHECK(v.tick == 0);
+    CHECK(v.pid == g_pid);
+    read_manifest(s, id->world3, &m);
+    CHECK(m.n == 2);
+    CHECK(strcmp(m.sys[0], "demo.movement") == 0);
+    CHECK(strcmp(m.hash[0], id->sem_a) == 0);
+    CHECK(strcmp(m.sys[1], "demo.drift") == 0);
+    CHECK(strcmp(m.hash[1], id->sem_b) == 0);
 }
 
 static void test_swap(Session *s, Ids *id) {
@@ -1231,8 +1451,10 @@ int main(int argc, char **argv) {
     s = session_start(&cfg);
     test_engine_info(&s);
     test_submit_and_evaluate(&s, &ids);
+    test_jobs(&s, &ids);
     test_world_create(&s, &ids);
     test_paging(&s, &ids);
+    test_install_effects(&s, &ids);
     test_swap(&s, &ids);
     test_failed_and_stale(&s, &ids);
     test_second_system_failure(&s, &ids, fault_path);

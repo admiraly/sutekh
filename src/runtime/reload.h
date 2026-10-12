@@ -8,6 +8,8 @@
  *     supervisor recorded at submission (bytes unchanged)        -> REJECTED
  *   4 the candidate's system must already be in the world's schedule
  *   5 layout compatibility with the world (schema, generation, fields) -> REJECTED
+ *   5a effect analysis of the candidate against the whole schedule (req->effects_check,
+ *     audit item 2) -> REJECTED with the analysis status; EFFECTS_VERIFIED after it passes
  *   6 prepare: new heap module and VM context (PREPARED)
  *   7 evidence gate: the supervisor's evaluation must have passed (PREVIEW_TESTED)
  *   8 admission: revision and layout generation rechecked (ADMITTED)
@@ -49,6 +51,12 @@ typedef struct SuReloadRequest {
     const char *current_revision;  /* world_revision now */
     uint64_t current_tick;
     uint64_t allowed_effective_tick;
+    /* Effect analysis of the candidate against the whole schedule (audit item 2; worker.c supplies it).
+     * Called after the layout check and before anything is prepared. Returns SU_OK, or the status the
+     * install is refused with and the reason in why. NULL skips the analysis (tests of this module only). */
+    uint32_t (*effects_check)(void *ctx, const SuLirModule *cand, const char *capsule_path, char *why,
+                              size_t why_cap);
+    void *effects_ctx;
 } SuReloadRequest;
 
 typedef struct SuReloadResult {

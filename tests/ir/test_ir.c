@@ -748,6 +748,47 @@ static void test_ir02_hashes(void) {
     su_lir_module_free(&b);
 }
 
+/* Audit item 4 (C04): capsule "capabilities" are enforced and "system_rev" is recorded. The verdicts are
+ * in tests/fixtures/caps/manifest.json; here the recorded fields are checked on the granted module, and
+ * the semantic hash is shown to exclude both keys (the ok_valid pin is unchanged). */
+static void test_caps(void) {
+    SuLirModule a, b, c;
+    SuDiag d;
+
+    run_negative_manifest("tests/fixtures/caps/manifest.json", "tests/fixtures/caps/", 11u);
+
+    CHECK_CODE(verify_files("tests/fixtures/caps/grant_both_ok.capsule.json",
+                            "tests/fixtures/caps/base.lir.json", &a, &d), SU_OK);
+    CHECK(a.has_capabilities == 1u);
+    CHECK(a.capabilities == (SU_LIR_CAP_DESPAWN_SELF | SU_LIR_CAP_EMIT_EVENT));
+    CHECK(a.has_system_rev == 1u);
+    CHECK(a.system_rev == 3u);
+    CHECK_STR(a.semantic_hash_hex, "cbd6d237363cd208b71c02de59f03ecd7f6d0e0c0b4b609bee002964e4db682d");
+    su_lir_module_free(&a);
+
+    CHECK_CODE(verify_files("tests/fixtures/caps/grant_both_no_rev_ok.capsule.json",
+                            "tests/fixtures/caps/base.lir.json", &b, &d), SU_OK);
+    CHECK(b.has_capabilities == 1u);
+    CHECK(b.has_system_rev == 0u);
+    su_lir_module_free(&b);
+
+    /* Audit item 6: the diagnostic carries the expected and actual values and one hint. */
+    CHECK_CODE(verify_files("tests/fixtures/caps/grant_despawn_only.capsule.json",
+                            "tests/fixtures/caps/base.lir.json", &a, &d), SU_E_CAPABILITY_DENIED);
+    CHECK_STR(d.json_pointer, "/instructions");
+    CHECK_STR(d.expected, "capability emit_event listed");
+    CHECK_STR(d.actual, "not listed");
+    CHECK(d.hint[0] != '\0');
+    CHECK(strstr(d.message, "emit_event requires capability") != NULL);
+
+    /* Absent keys: nothing recorded, nothing enforced (M0-M2 verdicts). */
+    CHECK_CODE(verify_files("tests/fixtures/ir02/ok_valid.capsule.json",
+                            "tests/fixtures/ir02/ok_valid.lir.json", &c, &d), SU_OK);
+    CHECK(c.has_capabilities == 0u);
+    CHECK(c.has_system_rev == 0u);
+    su_lir_module_free(&c);
+}
+
 int main(void) {
     test_sha256();
     test_json();
@@ -759,6 +800,7 @@ int main(void) {
     test_ir02_positives();
     test_ir02_hashes();
     test_ir02_minor_gate();
+    test_caps();
 
     printf("test_ir: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

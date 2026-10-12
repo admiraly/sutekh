@@ -14,6 +14,9 @@
 #define SU_IR_VERSION_01 "0.1"
 #define SU_CAPSULE_FORMAT "0.1"
 #define SU_CAP_DECL_MAX 64u /* max_struct_per_row / max_events_per_row range 0..64 (M2 contract section 2) */
+/* Capability names accepted in a capsule's "capabilities" array (audit item 4). */
+#define SU_CAP_NAME_DESPAWN_SELF "despawn_self"
+#define SU_CAP_NAME_EMIT_EVENT "emit_event"
 
 typedef struct Str {
     const char *p;
@@ -112,6 +115,10 @@ typedef struct CapInfo {
     int declares_event_cap;      /* limits.max_events_per_row present */
     uint32_t max_struct_per_row;
     uint32_t max_events_per_row;
+    int has_system_rev;          /* top-level "system_rev" present */
+    uint32_t system_rev;
+    int has_capabilities;        /* top-level "capabilities" present */
+    uint32_t capabilities;       /* SU_LIR_CAP_* bits of the listed names */
 } CapInfo;
 
 typedef struct IrInfo {
@@ -182,6 +189,26 @@ static void ptr_child(char *out, size_t cap, const char *base, const char *key, 
     }
 }
 
+/* One concrete correction hint per status code (audit item 6). The hint names the change that
+ * makes the candidate verify; it does not repeat the message. */
+static const char *hint_for(uint32_t code) {
+    switch (code) {
+    case SU_E_PARSE: return "fix the JSON syntax at the json_pointer";
+    case SU_E_TYPE: return "use the JSON type and value the schema requires at json_pointer";
+    case SU_E_DUPLICATE_KEY: return "remove the repeated key";
+    case SU_E_UNKNOWN_OPCODE: return "use an opcode of the IR table for this ir_version";
+    case SU_E_UNDEFINED_REGISTER: return "define the register before its first use";
+    case SU_E_DUPLICATE_REGISTER: return "give each register one definition";
+    case SU_E_UNDECLARED_READ: return "declare the field read:true in the capsule fields, or stop loading it";
+    case SU_E_UNDECLARED_WRITE: return "declare the field write:true in the capsule fields, or stop storing it";
+    case SU_E_SCHEMA_MISMATCH: return "make the IR and the capsule agree on schema, ir_version and field table";
+    case SU_E_RESOURCE_LIMIT: return "reduce the IR or raise the capsule limit, within its documented maximum";
+    case SU_E_CAPABILITY_DENIED: return "list the capability in the capsule capabilities array, or remove the operation";
+    case SU_E_INVALID_ARGUMENT: return "correct the argument at json_pointer";
+    default: return "";
+    }
+}
+
 static uint32_t set_diag(SuDiag *d, uint32_t code, const char *ptr, const char *fmt, ...) {
     va_list ap;
     size_t n = 0;
@@ -190,6 +217,23 @@ static uint32_t set_diag(SuDiag *d, uint32_t code, const char *ptr, const char *
     va_start(ap, fmt);
     vsnprintf(d->message, sizeof d->message, fmt, ap);
     va_end(ap);
+    snprintf(d->hint, sizeof d->hint, "%s", hint_for(code));
+    return code;
+}
+
+/* As set_diag, plus the expected and actual values of the failed check (already formatted). */
+static uint32_t set_diag_ev(SuDiag *d, uint32_t code, const char *ptr, const char *expected, const char *actual,
+                            const char *fmt, ...) {
+    va_list ap;
+    size_t n = 0;
+    d->code = code;
+    pbuf_put(d->json_pointer, sizeof d->json_pointer, &n, ptr, strlen(ptr));
+    va_start(ap, fmt);
+    vsnprintf(d->message, sizeof d->message, fmt, ap);
+    va_end(ap);
+    snprintf(d->hint, sizeof d->hint, "%s", hint_for(code));
+    snprintf(d->expected, sizeof d->expected, "%s", expected);
+    snprintf(d->actual, sizeof d->actual, "%s", actual);
     return code;
 }
 
@@ -321,12 +365,13 @@ static uint32_t stage1_limits(SuDiag *d, const SuJsonValue *cap_root, const SuJs
 /* ---------- stage 4: top-level and nested shape ---------- */
 
 static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
-    /* Required keys first (nine), then the optional IR 0.2 "ir_version". */
+    /* Required keys first (nine), then the optional keys: IR 0.2 "ir_version", and the M3-03a
+     * "capabilities" and "system_rev" (audit item 4). */
     static const KeySpec top[] = {
         {"capsule_format", K_STRING}, {"system_id", K_NAME}, {"source", K_NAME},
         {"schema", K_OBJECT}, {"numeric_profile", K_STRING}, {"fields", K_ARRAY},
         {"schedule", K_OBJECT}, {"limits", K_OBJECT}, {"tests", K_ARRAY},
-        {"ir_version", K_STRING}};
+        {"ir_version", K_STRING}, {"capabilities", K_ARRAY}, {"system_rev", K_U32_POS}};
     static const KeySpec schema_keys[] = {
         {"id", K_NAME}, {"version", K_U32_POS}, {"layout_generation", K_U32_POS}};
     static const KeySpec field_keys[] = {
@@ -357,6 +402,39 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
         }
     } else {
         ci->ir_version_minor = 1u;
+    }
+    v = su_json_member(root, "system_rev");
+    if (v != NULL) {
+        uint64_t sr = 0;
+        su_json_get_uint(v, &sr);
+        ci->has_system_rev = 1;
+        ci->system_rev = (uint32_t)sr;
+    }
+    v = su_json_member(root, "capabilities");
+    if (v != NULL) {
+        size_t k;
+        ci->has_capabilities = 1;
+        for (k = 0; k < v->u.array.count; k++) {
+            const SuJsonValue *it = v->u.array.items[k];
+            uint32_t bit;
+            if (it->type != SU_JSON_STRING) {
+                return set_diag(d, SU_E_TYPE, "/capabilities", "capabilities must be an array of strings");
+            }
+            if (str_is(jstr(it), SU_CAP_NAME_DESPAWN_SELF)) {
+                bit = SU_LIR_CAP_DESPAWN_SELF;
+            } else if (str_is(jstr(it), SU_CAP_NAME_EMIT_EVENT)) {
+                bit = SU_LIR_CAP_EMIT_EVENT;
+            } else {
+                return set_diag_ev(d, SU_E_CAPABILITY_DENIED, "/capabilities", "despawn_self or emit_event",
+                                   "unknown name", "unknown capability '%.*s'; known: despawn_self, emit_event",
+                                   clampi(it->u.string.len), it->u.string.data);
+            }
+            if ((ci->capabilities & bit) != 0u) {
+                return set_diag(d, SU_E_TYPE, "/capabilities", "capability '%.*s' is listed twice",
+                                clampi(it->u.string.len), it->u.string.data);
+            }
+            ci->capabilities |= bit;
+        }
     }
     v = su_json_member(root, "capsule_format");
     if (!str_is(jstr(v), SU_CAPSULE_FORMAT)) {
@@ -709,25 +787,24 @@ static uint32_t check_instructions(SuDiag *d, const IrInfo *ii, Body *b) {
             ptr_child(ptr, sizeof ptr, base, spec->field_key, strlen(spec->field_key));
             if (!find_field(b->table, b->nf, fname, &fi)) {
                 if (spec->field_mode == 1) {
-                    return set_diag(d, SU_E_UNDECLARED_READ, ptr, "field '%.*s' is not declared in the capsule",
-                                    clampi(fname.n), fname.p);
+                    return set_diag_ev(d, SU_E_UNDECLARED_READ, ptr, "declared field", "not declared",
+                                       "field '%.*s' is not declared in the capsule", clampi(fname.n), fname.p);
                 }
-                return set_diag(d, SU_E_UNDECLARED_WRITE, ptr, "field '%.*s' is not declared in the capsule",
-                                clampi(fname.n), fname.p);
+                return set_diag_ev(d, SU_E_UNDECLARED_WRITE, ptr, "declared field", "not declared",
+                                   "field '%.*s' is not declared in the capsule", clampi(fname.n), fname.p);
             }
             if (spec->field_mode == 1 && !(b->table[fi].access & SU_ACCESS_READ)) {
-                return set_diag(d, SU_E_UNDECLARED_READ, ptr, "field '%.*s' is not readable",
-                                clampi(fname.n), fname.p);
+                return set_diag_ev(d, SU_E_UNDECLARED_READ, ptr, "read:true", "read:false",
+                                   "field '%.*s' is not readable", clampi(fname.n), fname.p);
             }
             if (spec->field_mode == 2) {
                 if (!(b->table[fi].access & SU_ACCESS_WRITE)) {
-                    return set_diag(d, SU_E_UNDECLARED_WRITE, ptr, "field '%.*s' is not writable",
-                                    clampi(fname.n), fname.p);
+                    return set_diag_ev(d, SU_E_UNDECLARED_WRITE, ptr, "write:true", "write:false",
+                                       "field '%.*s' is not writable", clampi(fname.n), fname.p);
                 }
                 if (b->store_count[fi] != 0) {
-                    return set_diag(d, SU_E_UNDECLARED_WRITE, ptr,
-                                    "field '%.*s' is stored more than once per row",
-                                    clampi(fname.n), fname.p);
+                    return set_diag_ev(d, SU_E_UNDECLARED_WRITE, ptr, "one store per row", "stored again",
+                                       "field '%.*s' is stored more than once per row", clampi(fname.n), fname.p);
                 }
             }
         }
@@ -978,9 +1055,15 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     }
     ninsn = ii.insns->u.array.count;
     if ((uint64_t)ninsn > ci.max_instructions) {
-        rc = set_diag(d, SU_E_RESOURCE_LIMIT, "/instructions",
-                      "IR has %zu instructions; capsule limits.max_instructions is %llu",
-                      ninsn, (unsigned long long)ci.max_instructions);
+        {
+            char ev[SU_DIAG_VALUE_BYTES];
+            char av[SU_DIAG_VALUE_BYTES];
+            snprintf(ev, sizeof ev, "%llu or fewer", (unsigned long long)ci.max_instructions);
+            snprintf(av, sizeof av, "%zu", ninsn);
+            rc = set_diag_ev(d, SU_E_RESOURCE_LIMIT, "/instructions", ev, av,
+                             "IR has %zu instructions; capsule limits.max_instructions is %llu",
+                             ninsn, (unsigned long long)ci.max_instructions);
+        }
         goto done;
     }
     /* IR 0.2 worst case per row (straight-line IR, conditions ignored): one structural request per
@@ -989,16 +1072,42 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
         uint32_t nd = count_op(&ii, "despawn_self");
         uint32_t ne = count_op(&ii, "emit_event");
         if (nd > ci.max_struct_per_row) {
-            rc = set_diag(d, SU_E_RESOURCE_LIMIT, "/limits/max_struct_per_row",
-                          "IR has %u despawn_self per row; capsule limits.max_struct_per_row is %u",
-                          (unsigned)nd, (unsigned)ci.max_struct_per_row);
+            char ev[SU_DIAG_VALUE_BYTES];
+            char av[SU_DIAG_VALUE_BYTES];
+            snprintf(ev, sizeof ev, "%u or fewer", (unsigned)ci.max_struct_per_row);
+            snprintf(av, sizeof av, "%u", (unsigned)nd);
+            rc = set_diag_ev(d, SU_E_RESOURCE_LIMIT, "/limits/max_struct_per_row", ev, av,
+                             "IR has %u despawn_self per row; capsule limits.max_struct_per_row is %u",
+                             (unsigned)nd, (unsigned)ci.max_struct_per_row);
             goto done;
         }
         if (ne > ci.max_events_per_row) {
-            rc = set_diag(d, SU_E_RESOURCE_LIMIT, "/limits/max_events_per_row",
-                          "IR has %u emit_event per row; capsule limits.max_events_per_row is %u",
-                          (unsigned)ne, (unsigned)ci.max_events_per_row);
+            char ev[SU_DIAG_VALUE_BYTES];
+            char av[SU_DIAG_VALUE_BYTES];
+            snprintf(ev, sizeof ev, "%u or fewer", (unsigned)ci.max_events_per_row);
+            snprintf(av, sizeof av, "%u", (unsigned)ne);
+            rc = set_diag_ev(d, SU_E_RESOURCE_LIMIT, "/limits/max_events_per_row", ev, av,
+                             "IR has %u emit_event per row; capsule limits.max_events_per_row is %u",
+                             (unsigned)ne, (unsigned)ci.max_events_per_row);
             goto done;
+        }
+        /* Grants (audit item 4, C04): an operation whose capability the capsule does not list is refused.
+         * Only a capsule that carries "capabilities" is checked; a capsule without the key keeps the
+         * M0-M2 behaviour (planning/audit/spec-conformance-audit.md item 4). Listed-but-unused grants are
+         * allowed. */
+        if (ci.has_capabilities) {
+            if (nd > 0u && (ci.capabilities & SU_LIR_CAP_DESPAWN_SELF) == 0u) {
+                rc = set_diag_ev(d, SU_E_CAPABILITY_DENIED, "/instructions", "capability despawn_self listed",
+                                 "not listed",
+                                 "despawn_self requires capability \"despawn_self\", which the capsule does not list");
+                goto done;
+            }
+            if (ne > 0u && (ci.capabilities & SU_LIR_CAP_EMIT_EVENT) == 0u) {
+                rc = set_diag_ev(d, SU_E_CAPABILITY_DENIED, "/instructions", "capability emit_event listed",
+                                 "not listed",
+                                 "emit_event requires capability \"emit_event\", which the capsule does not list");
+                goto done;
+            }
         }
     }
 
@@ -1045,6 +1154,10 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     m.artifact_format = ii.ir_minor >= 2u ? SU_ARTIFACT_FORMAT_VERSION_0_2 : SU_ARTIFACT_FORMAT_VERSION;
     m.ir_version_minor = ii.ir_minor;
     m.max_struct_per_row = ci.max_struct_per_row;
+    m.has_system_rev = (uint32_t)ci.has_system_rev;
+    m.system_rev = ci.system_rev;
+    m.has_capabilities = (uint32_t)ci.has_capabilities;
+    m.capabilities = ci.capabilities;
     m.max_events_per_row = ci.max_events_per_row;
     m.uses_entity_ops = b.uses_ops;
     m.system_id = dup_str(ii.system);

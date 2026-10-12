@@ -60,11 +60,65 @@ PROGRAMS = {
         {"op": "sub_u32", "dst": "next", "a": "p", "b": "v"},
         {"op": "store_u32", "field": "position_x", "src": "next"},
     ]),
+    # sys_a's program under two more capsules (audit item 4): a declared system_rev, and an unknown capability.
+    "sys_a_rev": ("demo.movement", [
+        {"op": "load_u32", "dst": "p", "field": "position_x"},
+        {"op": "load_u32", "dst": "v", "field": "velocity_x"},
+        {"op": "add_u32", "dst": "next", "a": "p", "b": "v"},
+        {"op": "store_u32", "field": "position_x", "src": "next"},
+    ]),
+    "sys_a_badcap": ("demo.movement", [
+        {"op": "load_u32", "dst": "p", "field": "position_x"},
+        {"op": "load_u32", "dst": "v", "field": "velocity_x"},
+        {"op": "add_u32", "dst": "next", "a": "p", "b": "v"},
+        {"op": "store_u32", "field": "position_x", "src": "next"},
+    ]),
     "sys_a_gen2": ("demo.movement", [
         {"op": "load_u32", "dst": "p", "field": "position_x"},
         {"op": "load_u32", "dst": "v", "field": "velocity_x"},
         {"op": "add_u32", "dst": "next", "a": "p", "b": "v"},
         {"op": "store_u32", "field": "position_x", "src": "next"},
+    ]),
+    # Refusal fixtures (audit item 2): each is a candidate that a code-only install must refuse.
+    #   sys_b_conflict  demo.drift writes position_x with no ordering edge to demo.movement (write/write)
+    #   sys_a_cycle     demo.movement declares after demo.drift, which already runs after it (cycle)
+    #   sys_b_overdecl  demo.drift declares a READ of position_x that its IR never loads (declared != derived)
+    "sys_b_conflict": ("demo.drift", [
+        {"op": "load_u32", "dst": "p", "field": "position_x"},
+        {"op": "const_u32", "dst": "one", "value": 1},
+        {"op": "add_u32", "dst": "next", "a": "p", "b": "one"},
+        {"op": "store_u32", "field": "position_x", "src": "next"},
+    ]),
+    "sys_a_cycle": ("demo.movement", [
+        {"op": "load_u32", "dst": "p", "field": "position_x"},
+        {"op": "load_u32", "dst": "v", "field": "velocity_x"},
+        {"op": "add_u32", "dst": "next", "a": "p", "b": "v"},
+        {"op": "store_u32", "field": "position_x", "src": "next"},
+    ]),
+    "sys_b_overdecl": ("demo.drift", [
+        {"op": "load_u32", "dst": "v", "field": "velocity_x"},
+        {"op": "const_u32", "dst": "one", "value": 1},
+        {"op": "add_u32", "dst": "next", "a": "v", "b": "one"},
+        {"op": "store_u32", "field": "velocity_x", "src": "next"},
+    ]),
+    # Gen-2 refusal fixtures for the migration commit (layout generation 2 is the migration target).
+    "sys_a_gen2_cycle": ("demo.movement", [
+        {"op": "load_u32", "dst": "p", "field": "position_x"},
+        {"op": "load_u32", "dst": "v", "field": "velocity_x"},
+        {"op": "add_u32", "dst": "next", "a": "p", "b": "v"},
+        {"op": "store_u32", "field": "position_x", "src": "next"},
+    ]),
+    "sys_b_gen2_conflict": ("demo.drift", [
+        {"op": "load_u32", "dst": "p", "field": "position_x"},
+        {"op": "const_u32", "dst": "one", "value": 1},
+        {"op": "add_u32", "dst": "next", "a": "p", "b": "one"},
+        {"op": "store_u32", "field": "position_x", "src": "next"},
+    ]),
+    "sys_b_gen2": ("demo.drift", [
+        {"op": "load_u32", "dst": "v", "field": "velocity_x"},
+        {"op": "const_u32", "dst": "one", "value": 1},
+        {"op": "add_u32", "dst": "next", "a": "v", "b": "one"},
+        {"op": "store_u32", "field": "velocity_x", "src": "next"},
     ]),
     "sys_b": ("demo.drift", [
         {"op": "load_u32", "dst": "v", "field": "velocity_x"},
@@ -110,6 +164,8 @@ def model(systems, ticks):
                 pos = [(p - v) % M for p, v in zip(pos, vel)]
             elif s == "b":
                 vel = [(v + 1) % M for v in vel]
+            elif s == "c":
+                pos = [(p + 1) % M for p in pos]
             else:
                 raise ValueError(s)
     return {"position_x": pos, "velocity_x": vel}
@@ -152,15 +208,37 @@ def main():
     write("sys_a_bad.capsule.json", capsule("sys_a_bad", "demo.movement", 1, MOVE_FIELDS, ["sys_a_bad.test.json"]))
     write("sys_a_gen2.capsule.json", capsule("sys_a_gen2", "demo.movement", 2, MOVE_FIELDS, ["sys_a_gen2.test.json"]))
     write("sys_b.capsule.json", capsule("sys_b", "demo.drift", 1, DRIFT_FIELDS, ["sys_b.test.json"], after=["demo.movement"]))
+    # Refusal candidates. The effect analysis refuses them before any evaluation, so they name the
+    # existing test file of their system; it is never run for them.
+    write("sys_b_conflict.capsule.json", capsule("sys_b_conflict", "demo.drift", 1, [(1, "position_x", True, True)], ["sys_b.test.json"]))
+    write("sys_a_cycle.capsule.json", capsule("sys_a_cycle", "demo.movement", 1, MOVE_FIELDS, ["sys_a.test.json"], after=["demo.drift"]))
+    write("sys_a_gen2_cycle.capsule.json", capsule("sys_a_gen2_cycle", "demo.movement", 2, MOVE_FIELDS, ["sys_a_gen2_cycle.test.json"], after=["demo.drift"]))
+    write("sys_b_gen2_conflict.capsule.json", capsule("sys_b_gen2_conflict", "demo.drift", 2, [(1, "position_x", True, True)], ["sys_b_gen2_conflict.test.json"]))
+    write("sys_b_gen2.capsule.json", capsule("sys_b_gen2", "demo.drift", 2, DRIFT_FIELDS, ["sys_b_gen2.test.json"], after=["demo.movement"]))
+    # Audit item 4: a declared system_rev (recorded, shown in the manifest) and an unknown capability
+    # (refused at submission). Both use sys_a's program and test file.
+    rev7 = capsule("sys_a_rev", "demo.movement", 1, MOVE_FIELDS, ["sys_a_rev.test.json"])
+    rev7["system_rev"] = 7
+    write("sys_a_rev.capsule.json", rev7)
+    badcap = capsule("sys_a_badcap", "demo.movement", 1, MOVE_FIELDS, ["sys_a.test.json"])
+    badcap["capabilities"] = ["teleport"]
+    write("sys_a_badcap.capsule.json", badcap)
+    write("sys_b_overdecl.capsule.json", capsule(
+        "sys_b_overdecl", "demo.drift", 1,
+        [(2, "velocity_x", True, True), (1, "position_x", True, False)], ["sys_b.test.json"], after=["demo.movement"]))
 
     # Evaluations: each candidate runs alone against world4.json. sys_a_bad is checked
     # against the v1 expectations, so its evaluation must fail.
     both = ["position_x", "velocity_x"]
     write("sys_a.test.json", test_file("sys_a", "demo.movement", ["a1"], [0, 1, 3], "sys_a.capsule.json", both))
+    write("sys_a_rev.test.json", test_file("sys_a_rev", "demo.movement", ["a1"], [0, 1, 3], "sys_a_rev.capsule.json", both))
     write("sys_a_v2.test.json", test_file("sys_a_v2", "demo.movement", ["a2"], [0, 1, 3], "sys_a_v2.capsule.json", both))
     write("sys_a_bad.test.json", test_file("sys_a_bad", "demo.movement", ["a1"], [1, 3], "sys_a_bad.capsule.json", both))
     write("sys_a_gen2.test.json", test_file("sys_a_gen2", "demo.movement", ["a1"], [1, 3], "sys_a_gen2.capsule.json", both))
     write("sys_b.test.json", test_file("sys_b", "demo.drift", ["b"], [1, 3], "sys_b.capsule.json", ["velocity_x"]))
+    write("sys_a_gen2_cycle.test.json", test_file("sys_a_gen2_cycle", "demo.movement", ["a1"], [1, 3], "sys_a_gen2_cycle.capsule.json", both))
+    write("sys_b_gen2_conflict.test.json", test_file("sys_b_gen2_conflict", "demo.drift", ["c"], [1, 3], "sys_b_gen2_conflict.capsule.json", ["position_x"]))
+    write("sys_b_gen2.test.json", test_file("sys_b_gen2", "demo.drift", ["b"], [1, 3], "sys_b_gen2.capsule.json", ["velocity_x"]))
 
 
 if __name__ == "__main__":

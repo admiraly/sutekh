@@ -144,7 +144,6 @@ uint32_t su_reload_install(SuRegistry *reg, SuSchedule *s, const SuReloadRequest
         return reject(reg, out, txid, SU_REV_REJECTED, st, msg);
     }
     step(reg, txid, SU_REV_SOURCE_VALIDATED);
-    step(reg, txid, SU_REV_EFFECTS_VERIFIED);
     snprintf(out->system_id, sizeof out->system_id, "%s", mod->system_id);
     snprintf(out->source_hash, sizeof out->source_hash, "%s", mod->source_hash_hex);
     snprintf(out->capsule_hash, sizeof out->capsule_hash, "%s", mod->capsule_hash_hex);
@@ -164,6 +163,17 @@ uint32_t su_reload_install(SuRegistry *reg, SuSchedule *s, const SuReloadRequest
         su_reload_module_free(mod);
         return reject(reg, out, txid, SU_REV_REJECTED, st, why);
     }
+
+    /* 5a. Effects: the candidate is analysed together with every other system of the world before it
+     * can be prepared (audit item 2). A refusal leaves the schedule and the committed state unchanged. */
+    if (req->effects_check != NULL) {
+        st = req->effects_check(req->effects_ctx, mod, req->capsule_path, why, sizeof why);
+        if (st != SU_OK) {
+            su_reload_module_free(mod);
+            return reject(reg, out, txid, SU_REV_REJECTED, st, why);
+        }
+    }
+    step(reg, txid, SU_REV_EFFECTS_VERIFIED);
 
     /* 6. Prepare the entry: the context borrows the heap module. */
     fresh.mod = mod;
