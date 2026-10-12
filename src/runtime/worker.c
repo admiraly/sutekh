@@ -1411,7 +1411,7 @@ static uint32_t h_world_set_fields(WorkerState *s, const SuJsonValue *params, Su
             }
         }
         /* formation_slot is NONE or a slot of this world (contract 2.2). */
-        if (fs != SU_RTS_NONE && (uint64_t)fs >= rows_n) {
+        if (su_rts_ctl_check_formation_slot(fs, (uint32_t)rows_n) != SU_OK) {
             return set_fields_fail(f, SU_E_TYPE, "formation_slot is outside the world's capacity");
         }
         if (su_rts_ctl_check_row(kind, range, fs, fg) != SU_OK) {
