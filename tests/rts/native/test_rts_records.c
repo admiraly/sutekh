@@ -4,9 +4,9 @@
  * Two checks per record:
  *   - "except constants_hash": the record's constants_hash is replaced by the descriptor's hash in a scratch copy;
  *     every other field (system_id, operator_version, fields, schema, schedule, numeric profile) must agree.
- *   - "committed": the record as committed. This FAILS while the record's constants_hash has no recorded constants
- *     text (BLOCKER, see planning/handoffs/2026-10-12-m3-04.md): the committed hashes 0d634621... (spatial) and
- *     c1ad001c... (scatter) are not the SHA-256 of the texts this tree implements, and no text is recorded anywhere.
+ *   - "committed": the record as committed. The two committed constants_hash values were replaced with the hashes of the
+ *     constants texts this tree implements (owner-accepted resolution of M3-04 blocker B1; the earlier M3-04a
+ *     values 0d634621... and c1ad001c... had no recorded constants text).
  *
  * Usage: test_rts_records <repo-root> <scratch-dir>   (CTest runs it from the repository root)
  */

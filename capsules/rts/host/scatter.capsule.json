@@ -12,7 +12,7 @@
   "host": {
     "operator": "rts_ops_v1",
     "operator_version": 1,
-    "constants_hash": "c1ad001c5c52d86069d2a4cf762bca27ebced460808291b6988d10bac6d3ff8c",
+    "constants_hash": "660d232cedd047e9f93fd98051de85613887f95a0a166ad9f71af122d35744fb",
     "fields": [
       { "id": 1, "name": "kind", "type": "u32", "access": "read" },
       { "id": 36, "name": "dmg_out", "type": "u32", "access": "read" },

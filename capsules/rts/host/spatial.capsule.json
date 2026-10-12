@@ -12,7 +12,7 @@
   "host": {
     "operator": "rts_ops_v1",
     "operator_version": 1,
-    "constants_hash": "0d634621d4a9ab859d9d7cb5257dddf7b3051fa75f1ab1779d9c9243ea8c132e",
+    "constants_hash": "e5ade26f1d2e1f4ff8d008e3e14069b6447fe6548394c4342df97401f7ef15b2",
     "fields": [
       { "id": 1, "name": "kind", "type": "u32", "access": "read" },
       { "id": 2, "name": "team", "type": "u32", "access": "read" },

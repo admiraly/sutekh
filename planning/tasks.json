@@ -820,7 +820,7 @@
       "acceptance": [
         "10.1 SPATIAL, GATHER, SCATTER; ASan and UBSan; instrumented store-set check (4.4); fault seams (N9); descriptors equal the M3-04a host records (T-HOST-05)."
       ],
-      "status": "planned"
+      "status": "integrated"
     },
     {
       "id": "M3-05",
