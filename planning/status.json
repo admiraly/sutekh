@@ -126,7 +126,7 @@
       "M3-03",
       "M3-04"
     ],
-    "note": "M3-05 next (blocked on conformance-fix capabilities support and Q2 liveness refusal). M3-04 B1 resolved by replacing host record constants_hash values with the M3-04 hashes. Open M3-04 items: T-HOST-07/11/12, native build, timing."
+    "note": "M3-05 next. engine accepts system_rev/capabilities (conformance fix). Q2 liveness refusal still to do in M3-05."
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "m0_accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
@@ -137,5 +137,24 @@
       "file": "planning/amendments/2026-10-12-owner-ratifications.md",
       "statement": "accept all, keep going"
     }
-  ]
+  ],
+  "conformance_fixes": {
+    "handoff": "planning/handoffs/2026-10-12-spec-conformance-fixes.md",
+    "regression_handoff": "planning/handoffs/2026-10-12-regression-fixes.md",
+    "done": [
+      "effects analysis on install/migration/restore",
+      "capabilities enforced when key present; system_rev recorded",
+      "error.detail on capsule.submit",
+      "tests.run and job.status (synchronous)"
+    ],
+    "open_owner_items": [
+      "world.run/world.pause (new subsystem)",
+      "request-id idempotence (breaks existing clients; amendment)",
+      "replay.compare (undefined semantics)",
+      "mandatory capabilities (changes ~40 ir02 verdicts)",
+      "error.detail on worker-side errors (envelope change)",
+      "amendment proposals A1-A9 in the handoff",
+      "perf: per-op digest cost and duplicate capture at checkpoint, binary size growth"
+    ]
+  }
 }

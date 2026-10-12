@@ -105,13 +105,15 @@ class EngineVerifyTests(unittest.TestCase):
                            "systems": counts}, fh, indent=2, sort_keys=True)
                 fh.write("\n")
 
-    def test_as_is_records_are_refused_by_engine_on_system_rev(self):
+    def test_as_is_records_are_accepted_by_engine(self):
+        """After the capabilities / system_rev support landed, the committed records verify unchanged and
+        their semantic hash equals that of the projection without the two keys."""
         for name in h.SYSTEMS:
             with self.subTest(system=name):
                 info = self.drv.verify(*self.as_is[name])
-                self.assertFalse(info["ok"])
-                self.assertEqual(info["name"], "SU_E_TYPE")
-                self.assertIn("unknown key 'system_rev'", info["detail"])
+                self.assertTrue(info["ok"], info)
+                proj = self.drv.verify(*self.projected[name])
+                self.assertEqual(info["semantic"], proj["semantic"])
 
     def test_binary_capsule_submit_agrees_with_driver(self):
         requests = [(name, f"rts/{name}.capsule.json") for name in h.SYSTEMS]
@@ -127,16 +129,15 @@ class EngineVerifyTests(unittest.TestCase):
                 self.assertEqual(rep["result"]["source_hash"], info["source"])
                 self.assertEqual(rep["result"]["artifact_format"], 2 if name == "damage" else 1)
 
-    def test_binary_refuses_as_is_records(self):
-        """The committed records with system_rev and capabilities are refused by the binary too."""
+    def test_binary_accepts_as_is_records(self):
+        """The committed records with system_rev and capabilities are accepted by the binary."""
         for name in h.SYSTEMS:
             with self.subTest(system=name):
                 rel = os.path.relpath(self.as_is[name][0], self.root)  # as_is/<name>.capsule.json
                 replies = self._binary([(name, rel)])
                 rep = replies[name]
-                self.assertFalse(rep["ok"])
-                self.assertEqual(rep["error"]["code"], "SU_E_TYPE")
-                self.assertIn("unknown key 'system_rev'", rep["error"]["message"])
+                self.assertTrue(rep["ok"], rep)
+                self.assertEqual(rep["result"]["status"], "effects_verified")
 
 
 if __name__ == "__main__":
