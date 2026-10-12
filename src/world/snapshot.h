@@ -36,6 +36,7 @@
 
 #define SU_SNAPSHOT_FORMAT "0.2"                     /* written by capture */
 #define SU_SNAPSHOT_FORMAT_01 "0.1"                  /* accepted by parse and restore */
+#define SU_SNAPSHOT_FORMAT_03 "0.3"                  /* written by capture when lineage or retired ids exist */
 #define SU_SNAPSHOT_MAX_BYTES (64u * 1024u * 1024u)  /* input and output cap */
 #define SU_SNAPSHOT_MAX_DEPTH 8u                     /* JSON nesting depth */
 #define SU_SNAPSHOT_MAX_MANIFEST 1024u               /* manifest entries */
@@ -90,6 +91,12 @@ typedef struct SuSnapshotData {
     uint64_t event_log_max;
     SuEvent *events;                      /* owned; event_count retained events */
     uint64_t event_count;
+    /* Schema extensions (format 0.3; zero and empty for 0.1 and 0.2). */
+    uint32_t *field_defaults;             /* per field, ascending id; 0 when absent */
+    uint8_t (*lineage)[32];               /* migration hashes, oldest first */
+    uint32_t lineage_count;
+    uint32_t *retired;                    /* retired field IDs, ascending */
+    uint32_t retired_count;
 } SuSnapshotData;
 
 /* Captures the committed root of w, with an empty event log (next_seq 0, log_max
@@ -141,5 +148,16 @@ void su_snapshot_data_free(SuSnapshotData *d);
 uint32_t su_snapshot_restore(const SuWorldDesc *desc, const SuSnapshotData *data,
                              SuWorld **out_world,
                              const SuSnapshotManifestEntry **manifest, uint32_t *manifest_count);
+
+/* Schema-aware restore (M2-01a). With allow_schema_change 0, bytes must match desc exactly (schema
+ * identity, field table, layout generation) and the restored world takes the snapshot's defaults, lineage
+ * and retired IDs. With allow_schema_change 1 (rollback and recovery only) desc is ignored and the schema is
+ * taken from the snapshot header: the world is built WITHOUT the original fixture. Its fields carry
+ * SU_ACCESS_READ, because access is not stored in snapshots; installed systems re-establish access.
+ * data_out (optional) receives the parsed data, to be freed with su_snapshot_data_free.
+ * SU_E_SCHEMA_MISMATCH: schema or generation differs and allow_schema_change is 0. Other errors as parse. */
+uint32_t su_snapshot_restore_world(const uint8_t *bytes, size_t len, const SuWorldDesc *desc,
+                                   int allow_schema_change, SuWorld **out_world,
+                                   SuSnapshotData *data_out, SuSnapshotError *err);
 
 #endif

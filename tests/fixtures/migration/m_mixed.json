@@ -1,0 +1,1 @@
+{"migration_format":"0.1","id":"m-mixed-alpha","from_layout_generation":1,"to_layout_generation":2,"ops":[{"op":"rename_field","id":10,"new_name":"alpha"},{"op":"add_field","field":{"id":30,"name":"d","type":"u32","default":9}},{"op":"transform","document":"transform.json"}]}

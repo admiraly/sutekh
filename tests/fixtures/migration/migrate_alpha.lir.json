@@ -1,0 +1,14 @@
+{
+  "ir_version": "0.1",
+  "system_id": "migrate.alpha",
+  "numeric_profile": "u32_mod_v1",
+  "query": "worked",
+  "instructions": [
+    {"op": "load_u32", "dst": "x", "field": "alpha"},
+    {"op": "load_u32", "dst": "y", "field": "b"},
+    {"op": "add_u32", "dst": "s", "a": "x", "b": "y"},
+    {"op": "mul_u32", "dst": "m", "a": "x", "b": "y"},
+    {"op": "store_u32", "field": "alpha", "src": "s"},
+    {"op": "store_u32", "field": "d", "src": "m"}
+  ]
+}
