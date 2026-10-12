@@ -177,6 +177,8 @@ sutekh_apply_warnings(test_rts_diff)
 add_test(NAME rts_native_diff COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/native/diff_driver.py"
          --driver "$<TARGET_FILE:test_rts_diff>" --work "${CMAKE_BINARY_DIR}/rts_native_diff_scratch"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# M3-04/M3-05 detectors for contract mutants M3-M20, M3-M30, M3-M35 (Python reference; M3-M18 and M3-M26 are skipped).
+add_test(NAME rts_ref_m3_mutants COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/ref/m3_control_mutants.py")
 
 add_executable(test_reload tests/reload/test_reload.c)
 target_link_libraries(test_reload PRIVATE su_agent)
