@@ -86,10 +86,22 @@ static void test_rows(void) {
     CHECK(su_rts_ctl_check_row(1u, 0u, 7u, 0u) == SU_E_TYPE);
 }
 
+/* formation_slot is NONE or an index in 0..capacity-1 (contract 2.2), checked against the world. */
+static void test_formation_slot_capacity(void) {
+    CHECK(su_rts_ctl_check_formation_slot(SU_RTS_NONE, 4u) == SU_OK);
+    CHECK(su_rts_ctl_check_formation_slot(0u, 4u) == SU_OK);
+    CHECK(su_rts_ctl_check_formation_slot(3u, 4u) == SU_OK);
+    CHECK(su_rts_ctl_check_formation_slot(4u, 4u) == SU_E_TYPE);
+    CHECK(su_rts_ctl_check_formation_slot(7u, 4u) == SU_E_TYPE);
+    CHECK(su_rts_ctl_check_formation_slot(0u, 0u) == SU_E_TYPE);
+    CHECK(su_rts_ctl_check_formation_slot(SU_RTS_NONE, 0u) == SU_OK);
+}
+
 int main(void) {
     test_writable_set();
     test_bounds();
     test_rows();
+    test_formation_slot_capacity();
     printf("test_control_domains: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
