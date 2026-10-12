@@ -39,6 +39,16 @@ target_link_libraries(test_world PRIVATE su_world)
 sutekh_apply_warnings(test_world)
 add_test(NAME world COMMAND test_world)
 
+# ---- BEGIN M2-00a generational entity table (su_ents; contract r2) ----
+add_library(su_ents STATIC src/world/entities/su_ents.c)
+target_include_directories(su_ents PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
+sutekh_apply_warnings(su_ents)
+add_executable(test_entities tests/entities/test_entities.c)
+target_link_libraries(test_entities PRIVATE su_ents)
+sutekh_apply_warnings(test_entities)
+add_test(NAME entities COMMAND test_entities)
+# ---- END M2-00a generational entity table ----
+
 add_library(su_ir STATIC src/ir/su_sha256.c src/ir/su_json.c src/ir/su_lir.c)
 target_include_directories(su_ir PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 sutekh_apply_warnings(su_ir)
