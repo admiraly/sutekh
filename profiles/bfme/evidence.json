@@ -1,0 +1,14 @@
+{
+  "registry": "bfme-evidence/0.1",
+  "variant": {
+    "game": "BFME II",
+    "expansion": "Rise of the Witch-king",
+    "patch": "latest official",
+    "status": "provisional",
+    "selected_by": "coordinator decision, owner may reverse"
+  },
+  "behaviors": [],
+  "unknowns": [],
+  "fidelity": [],
+  "regression": []
+}
