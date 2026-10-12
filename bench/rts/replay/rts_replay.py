@@ -232,6 +232,19 @@ def _handle(v) -> int:
     return v
 
 
+# rts_u32_v1 value domains (contract 2.2); mirrors su_rts_ctl_check_value in src/runtime/rts/control_domains.c.
+# formation_slot's capacity bound and the formation/kind rules are resulting-row checks, not per-field.
+FIELD_DOMAINS = {
+    **{n: (lambda v: v <= 32767) for n in ("pos_x", "pos_y", "order_x", "order_y", "formation_ox", "formation_oy")},
+    "speed": lambda v: v <= 1024,
+    "range_sq": lambda v: v == 0 or 1 <= v <= 262144,
+    "reload": lambda v: 1 <= v <= 1024,
+    "damage": lambda v: 1 <= v <= 65535,
+    "flight": lambda v: 1 <= v <= 64,
+    "order_mode": lambda v: v <= 2,
+}
+
+
 def _set_fields(w: World, args: dict) -> None:
     ents = args.get("entities")
     if not isinstance(ents, list) or not (1 <= len(ents) <= limits.ROWS_MAX):
@@ -256,6 +269,8 @@ def _set_fields(w: World, args: dict) -> None:
                 raise ModelError("SU_E_TYPE", name, "not writable by set_fields")
             if type(v) is not int or not (0 <= v <= U32_MAX):
                 raise ModelError("SU_E_TYPE", name, "u32 integer")
+            if name in FIELD_DOMAINS and not FIELD_DOMAINS[name](v):
+                raise ModelError("SU_E_TYPE", name, "outside the rts_u32_v1 domain (2.2)")
             row[name] = v
         # Resulting-row rules (D2), on the committed row with the payload applied.
         if (row["formation_slot"] == NONE) != (row["formation_gen"] == 0):

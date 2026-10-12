@@ -199,6 +199,33 @@ class BatchAndSetFieldsRules(unittest.TestCase):
                      "args": {"entities": [{"entity": handle(0), "values": {"hp": 3}}]}})
         self.assertEqual(cm.exception.code, "SU_E_TYPE")
 
+    def test_set_fields_enforces_rts_u32_v1_domains(self):  # contract 2.2 / T-RTS-CTRL-1
+        # Same bounds as spawn (src/runtime/rts/control_domains.c). Each case must be refused.
+        refused = [("flight", 0), ("flight", 65), ("reload", 0), ("reload", 1025), ("damage", 0),
+                   ("damage", 65536), ("order_mode", 3), ("pos_x", 32768), ("pos_y", 40000),
+                   ("order_x", 32768), ("speed", 1025), ("range_sq", 262145), ("formation_ox", 32768)]
+        for name, value in refused:
+            b = rr.ModelBackend(CAP)
+            b.load_scene(SCENE)
+            before = b.scene_digest()
+            with self.subTest(field=name, value=value):
+                with self.assertRaises(ModelError) as cm:
+                    b.apply({"cmd": rr.CMD_SET_FIELDS,
+                             "args": {"entities": [{"entity": handle(0), "values": {name: value}}]}})
+                self.assertEqual(cm.exception.code, "SU_E_TYPE")
+                self.assertEqual(b.scene_digest(), before)
+
+    def test_set_fields_accepts_domain_edges(self):
+        accepted = [("flight", 1), ("flight", 64), ("reload", 1), ("reload", 1024), ("damage", 1),
+                    ("damage", 65535), ("order_mode", 2), ("pos_x", 32767), ("speed", 1024),
+                    ("range_sq", 0), ("range_sq", 262144)]
+        for name, value in accepted:
+            b = rr.ModelBackend(CAP)
+            b.load_scene(SCENE)
+            with self.subTest(field=name, value=value):
+                b.apply({"cmd": rr.CMD_SET_FIELDS,
+                         "args": {"entities": [{"entity": handle(0), "values": {name: value}}]}})
+
     def test_set_fields_refuses_stale_handle(self):
         b = rr.ModelBackend(CAP)
         b.load_scene(SCENE)
