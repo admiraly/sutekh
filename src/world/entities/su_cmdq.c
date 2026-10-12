@@ -38,8 +38,8 @@ struct SuCmdQ {
     uint64_t chunk_slots;
     uint64_t nchunks;
     uint64_t nbuf;
-    uint32_t per_row_s;
-    uint32_t per_row_e;
+    uint32_t *prs;          /* nsys: per-system struct cap per row (OD-20) */
+    uint32_t *pre;          /* nsys: per-system event cap per row */
     uint64_t per_tick_s;
     uint64_t per_tick_e;
     BufMeta *meta;          /* nbuf */
@@ -109,6 +109,8 @@ void su_cmdq_destroy(SuCmdQ *q) {
     free(q->ebuf);
     free(q->cursor);
     free(q->heap);
+    free(q->prs);
+    free(q->pre);
     free(q->m_cmd);
     free(q->t_cmd);
     free(q->m_evt);
@@ -121,10 +123,45 @@ void su_cmdq_destroy(SuCmdQ *q) {
 uint32_t su_cmdq_create(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots,
                         uint32_t per_row_struct_cap, uint32_t per_row_event_cap,
                         uint64_t per_tick_struct_cap, uint64_t per_tick_event_cap, SuCmdQ **out) {
+    uint32_t i;
+    uint32_t *ps;
+    uint32_t *pe;
+    uint32_t st;
+
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    if (nsystems == 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    /* Uniform caps: every system gets the same per-row cap. */
+    ps = malloc(sizeof *ps * (size_t)nsystems);
+    pe = malloc(sizeof *pe * (size_t)nsystems);
+    if (ps == NULL || pe == NULL) {
+        free(ps);
+        free(pe);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (i = 0; i < nsystems; i++) {
+        ps[i] = per_row_struct_cap;
+        pe[i] = per_row_event_cap;
+    }
+    st = su_cmdq_create_ex(nsystems, nslots, chunk_slots, ps, pe, per_tick_struct_cap,
+                           per_tick_event_cap, out);
+    free(ps);
+    free(pe);
+    return st;
+}
+
+uint32_t su_cmdq_create_ex(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots,
+                           const uint32_t *per_row_struct_cap, const uint32_t *per_row_event_cap,
+                           uint64_t per_tick_struct_cap, uint64_t per_tick_event_cap, SuCmdQ **out) {
     SuCmdQ *q;
     uint64_t b;
     uint64_t tot_s = 0;
     uint64_t tot_e = 0;
+    uint32_t i;
 
     if (out == NULL) {
         return SU_E_INVALID_ARGUMENT;
@@ -133,8 +170,13 @@ uint32_t su_cmdq_create(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots
     if (nsystems == 0u || nslots == 0u || nslots > UINT64_C(0xFFFFFFFF) || chunk_slots == 0u ||
         per_tick_struct_cap == 0u || per_tick_event_cap == 0u ||
         per_tick_struct_cap > SU_CMDQ_MAX_TICK_CAP || per_tick_event_cap > SU_CMDQ_MAX_TICK_CAP ||
-        per_row_struct_cap > 64u || per_row_event_cap > 64u) {
+        per_row_struct_cap == NULL || per_row_event_cap == NULL) {
         return SU_E_INVALID_ARGUMENT;
+    }
+    for (i = 0; i < nsystems; i++) {
+        if (per_row_struct_cap[i] > 64u || per_row_event_cap[i] > 64u) {
+            return SU_E_INVALID_ARGUMENT;
+        }
     }
 
     q = calloc(1, sizeof *q);
@@ -150,10 +192,18 @@ uint32_t su_cmdq_create(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots
         return SU_E_RESOURCE_LIMIT;
     }
     q->nbuf = (uint64_t)nsystems * q->nchunks;
-    q->per_row_s = per_row_struct_cap;
-    q->per_row_e = per_row_event_cap;
+    q->prs = calloc(nsystems, sizeof *q->prs);
+    q->pre = calloc(nsystems, sizeof *q->pre);
     q->per_tick_s = per_tick_struct_cap;
     q->per_tick_e = per_tick_event_cap;
+    if (q->prs == NULL || q->pre == NULL) {
+        su_cmdq_destroy(q);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (i = 0; i < nsystems; i++) {
+        q->prs[i] = per_row_struct_cap[i];
+        q->pre[i] = per_row_event_cap[i];
+    }
 
     q->meta = calloc((size_t)q->nbuf, sizeof *q->meta);
     q->off_s = calloc((size_t)q->nbuf + 1u, sizeof *q->off_s);
@@ -166,11 +216,13 @@ uint32_t su_cmdq_create(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots
         return SU_E_RESOURCE_LIMIT;
     }
 
-    /* Buffer capacity: min(chunk_size * max_per_row, per_tick_cap). Last chunk may be short. */
+    /* Buffer capacity: min(chunk_size * max_per_row, per_tick_cap), with the system's own cap (OD-20).
+     * A system with cap 0 gets an empty buffer, so any append to it overflows. Last chunk may be short. */
     for (b = 0; b < q->nbuf; b++) {
         uint64_t size = chunk_size(q, b % q->nchunks);
-        uint64_t cs = size * per_row_struct_cap;
-        uint64_t ce = size * per_row_event_cap;
+        uint64_t sys = b / q->nchunks;
+        uint64_t cs = size * q->prs[sys];
+        uint64_t ce = size * q->pre[sys];
         cs = cs < per_tick_struct_cap ? cs : per_tick_struct_cap;
         ce = ce < per_tick_event_cap ? ce : per_tick_event_cap;
         tot_s += cs;
@@ -280,7 +332,7 @@ uint32_t su_cmdq_append_struct(SuCmdQ *q, uint32_t sys, uint64_t chunk, uint32_t
         return SU_E_INVALID_ARGUMENT;
     }
     cap = q->off_s[b + 1u] - q->off_s[b];
-    if (m->row_s >= q->per_row_s || m->n_s >= cap) {
+    if (m->row_s >= q->prs[b / q->nchunks] || m->n_s >= cap) {
         atomic_store(&q->overflow, 1u);
         return SU_E_RESOURCE_LIMIT;
     }
@@ -325,7 +377,7 @@ uint32_t su_cmdq_append_event(SuCmdQ *q, uint32_t sys, uint64_t chunk, uint32_t 
         return SU_E_INVALID_ARGUMENT;
     }
     cap = q->off_e[b + 1u] - q->off_e[b];
-    if (m->row_e >= q->per_row_e || m->n_e >= cap) {
+    if (m->row_e >= q->pre[b / q->nchunks] || m->n_e >= cap) {
         atomic_store(&q->overflow, 1u);
         return SU_E_RESOURCE_LIMIT;
     }
@@ -1048,7 +1100,8 @@ uint32_t su_cmdq_memory(const SuCmdQ *q, SuCmdQMemory *out) {
     out->scratch = 2u * q->per_tick_s * sizeof(SuStructCmd) + q->per_tick_s * sizeof(SuEvent) +
                    3u * q->per_tick_e * sizeof(SuEvent);
     out->bookkeeping = nb * sizeof(BufMeta) + 2u * (nb + 1u) * sizeof(uint64_t) +
-                       2u * nb * sizeof(uint64_t) + (uint64_t)sizeof *q;
+                       2u * nb * sizeof(uint64_t) + 2u * (uint64_t)q->nsys * sizeof(uint32_t) +
+                       (uint64_t)sizeof *q;
     out->total = out->structural + out->events + out->scratch + out->bookkeeping;
     return SU_OK;
 }
