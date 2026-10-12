@@ -52,6 +52,14 @@ Snapshots and network/replay data use a specified canonical encoding: versioned 
 
 M0 fixtures remain JSON for transparency. Binary snapshot encoding becomes necessary only when M1/M2 workload measurements justify it. The representation version and numeric profile are included in every state fingerprint. State equality compares canonical bytes or fields, not hash output alone when reporting a divergence.
 
+### 6.1 Entity table in the world (M2-00c1)
+
+The world owns a committed and a working generational entity table (`src/world/entities/su_ents.h`). Capacity is `max(initial rows, max_entities)`, fixed at creation through `su_world_create_ex`; `su_world_row_count` reports the capacity, which equals the initial row count for every fixture world. Dead rows are canonically zero in the working and committed roots: `su_world_zero_dead` runs after each `commit_staging` in a tick, and `su_world_publish` zeroes dead rows before it publishes.
+
+Canonical state, version 2 (`SUWSTATE`, all integers little-endian): `"SUWSTATE" 0x00 | u32 2 | u64 tick | u32 field_count | entity table | per field in ascending id: u32 id | u32 type | u32 values[high_water]`. The entity table is the `SUENTABL` encoding of section 1 of the M2 entities contract (capacity, high_water, alive and retired counts, free policy `lowest_slot`, then a generation, external id and alive byte per slot below high_water). Version 1 (the M0 layout, all slots alive) still restores through `su_world_restore_canonical`.
+
+Snapshot format `"0.2"` is what capture writes. After the 0.1 keys, in fixed order: `capacity`, `high_water`, `free_policy`, `retired_count`, `slots` (`[generation, alive, external_id]` per slot below high_water), `event_next_seq`, `event_dropped`, `event_log_max`, `events` (`[event_seq, tick, kind, system_index, slot, seq_in_row, a, b]` per retained event). Columns and `entity_ids` hold high_water rows. Format `"0.1"` still parses and restores; its capacity must equal its row count. The worked example is `tests/fixtures/snapshot02/worked_0_2.json` (sha256 in `worked_0_2.sha256`). The descriptor's entity IDs are checked only for slots still at their first generation, because a reused slot legitimately carries a different identity.
+
 ## 7. Layout specialization
 
 A later release optimizer may explore SoA, AoSoA, hot/cold splits, and system fusion. It works on a snapshot of the access graph and produces a new layout artifact plus validated bindings. It cannot change public field IDs or invalidate live addresses because capsules never retain them.

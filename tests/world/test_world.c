@@ -588,22 +588,23 @@ static void test_canonical_state(void) {
     SuWorldFieldDesc renamed[K_FIELD_COUNT];
     uint32_t i;
 
-    /* Layout: magic(9) + version(4) + tick(8) + rows(8) + fields(4)
-     *         + entities(3*4) + 3 * (id 4 + type 4 + values 3*4). */
+    /* Layout v2: magic(9) + version(4) + tick(8) + field_count(4) + entity table (60 + 9 * high_water)
+     *         + 3 * (id 4 + type 4 + values high_water * 4), with high_water = 3 for a fixture world. */
     CHECK_ST(make_world(3u, k_fields, K_FIELD_COUNT, ids, &w1), SU_OK);
     seed(w1, 3u);
     CHECK_ST(su_world_canonical_size(w1, &size), SU_OK);
-    CHECK(size == 9u + 4u + 8u + 8u + 4u + 12u + 3u * (8u + 12u));
+    CHECK(size == 25u + 60u + 9u * 3u + 3u * (8u + 12u));
     buf = malloc(size);
     CHECK(buf != NULL);
     if (buf != NULL) {
         CHECK_ST(su_world_canonical_write(w1, buf, size, &written), SU_OK);
         CHECK(written == size);
         CHECK(memcmp(buf, "SUWSTATE\0", 9u) == 0);
-        /* Fields ascending: first record is id 5 (field c), then 10, then 20. */
-        CHECK(buf[9 + 4 + 8 + 8 + 4 + 12] == 5u);
-        CHECK(buf[9 + 4 + 8 + 8 + 4 + 12 + 8 + 12] == 10u);
-        CHECK(buf[9 + 4 + 8 + 8 + 4 + 12 + 2 * (8 + 12) + 0] == 20u);
+        CHECK(buf[9] == 2u && buf[10] == 0u && buf[11] == 0u && buf[12] == 0u);
+        /* Fields ascending after the entity table: first record is id 5 (field c), then 10, then 20. */
+        CHECK(buf[25 + 60 + 27] == 5u);
+        CHECK(buf[25 + 60 + 27 + 20] == 10u);
+        CHECK(buf[25 + 60 + 27 + 40] == 20u);
         free(buf);
     }
 
