@@ -238,6 +238,22 @@ if(SUTEKH_NATIVE)
     target_link_libraries(su_agent_test PUBLIC su_vm su_world su_ir su_platform su_snapshot su_native su_jobs)
     target_compile_definitions(su_agent_test PRIVATE _POSIX_C_SOURCE=200809L SU_HAVE_NATIVE SU_TEST_FAULT_HOOKS)
     sutekh_apply_warnings(su_agent_test)
+    # M1 closure C: safe retirement (in-flight count, retirement inside a kernel call) and the quarantine
+    # key. In process, against the agent library compiled with the test seams.
+    add_executable(test_safe_retire tests/native/qualification/test_safe_retire.c)
+    target_link_libraries(test_safe_retire PRIVATE su_agent_test su_native su_ir)
+    target_compile_definitions(test_safe_retire PRIVATE _POSIX_C_SOURCE=200809L SU_HAVE_NATIVE)
+    sutekh_apply_warnings(test_safe_retire)
+    add_test(NAME safe_retire COMMAND test_safe_retire "${CMAKE_CURRENT_SOURCE_DIR}"
+             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # M1 closure C: chunked native kernels (N in {1,2,4} x {vm, scalar, avx2}, 100,001 and 1,000,000 rows,
+    # chunk failure keeps the committed state). In process, against the agent library with the seams.
+    add_executable(test_native_chunked tests/native/qualification/test_native_chunked.c)
+    target_link_libraries(test_native_chunked PRIVATE su_agent_test su_native su_ir su_jobs)
+    target_compile_definitions(test_native_chunked PRIVATE _POSIX_C_SOURCE=200809L SU_HAVE_NATIVE)
+    sutekh_apply_warnings(test_native_chunked)
+    add_test(NAME native_chunked COMMAND test_native_chunked "${CMAKE_CURRENT_SOURCE_DIR}"
+             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_executable(test_specialize_inflight tests/native/qualification/test_specialize_inflight.c)
     target_link_libraries(test_specialize_inflight PRIVATE su_agent_test su_native su_ir)
     sutekh_apply_warnings(test_specialize_inflight)

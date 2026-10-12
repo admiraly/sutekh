@@ -286,8 +286,7 @@ parameters. `engine.info` reports them as `tick_workers: {workers, chunk_min_row
   count, never on N). Results are canonical: identical committed columns for every N (`test_tick_workers`,
   harness TX5 against the reference evaluator). A failing chunk aborts the whole tick; the reported system is
   the first failing one and the committed state is unchanged.
-- Native kernels (SUTEKH_NATIVE builds) run as one call over the whole range even when N > 1; the
-  row-sliced native path is not implemented in M1 (decision recorded in planning/handoffs/2026-10-12-m1-closure-b.md).
+- Native kernels (SUTEKH_NATIVE builds) are chunked the same way from M1 closure C (section 13).
 - Candidate evaluation (`candidate.evaluate`, disposable workers) always runs serially.
 
 **Schedule checks at `world.create`.** With more than one system the worker runs the effect analysis
@@ -306,3 +305,53 @@ scrubbed environment (`SU_TEST_*`, `SUTEKH_*`, sanitizer options). Harness TX6 c
 `/proc/<pid>/limits`, the absence of `SECRET_X` in `/proc/<pid>/environ` of the active worker and of a
 disposable worker observed during `candidate.evaluate`, and that the spool default admits a
 1,000,000-row world with the default limits.
+
+## 13. Containment of workers, chunked native kernels and safe retirement (M1 closure C)
+
+**Containment (C07).** Every child of the supervisor gets RLIMIT_AS (4 GiB), RLIMIT_FSIZE (256 MiB; `SIGXFSZ` is
+ignored, so an over-limit write fails with `EFBIG` and the child lives), RLIMIT_CORE 0, and network denial. The
+active worker has RLIMIT_NOFILE 1024 and no CPU limit (long simulations). A disposable worker (candidate.evaluate,
+world.specialize admission) has RLIMIT_NOFILE 64 and the CPU bound of its request. Config fields
+`worker_file_bytes`, `worker_nofile` and `disposable_nofile` take 0 for these defaults.
+
+Network denial is a raw seccomp-bpf filter on x86-64 Linux (no libseccomp): `PR_SET_NO_NEW_PRIVS`, then
+`PR_SET_SECCOMP` with `socket`, `connect`, `accept`, `bind`, `listen`, `accept4` and `socketpair` returning `EPERM`.
+The child checks the filter by calling `socket(AF_INET)` before exec. Off x86-64, or when the filter cannot be
+installed, the child tries `unshare(CLONE_NEWNET)`. Nothing is claimed that the child did not verify.
+
+The child writes what it enforced (getrlimit read-back and the network mode) to a close-on-exec status pipe before
+exec. The supervisor reads that record and reports it. `candidate.evaluate` and the `world.specialize` answer carry:
+
+```json
+"containment": {"reported": true, "rlimit_as": 4294967296, "rlimit_cpu": 12, "rlimit_fsize": 268435456,
+                "rlimit_nofile": 64, "no_network": "seccomp", "reason": "seccomp filter installed; ..."}
+```
+
+`no_network` is `seccomp`, `netns` or `none`. A limit the child did not report is `null`. `unlimited` means RLIM_INFINITY.
+Tests: `containment` (tests/recovery/test_containment.c) runs a probe in a child (test workers only, method
+`internal.test.containment`) and asserts socket EPERM, EFBIG after exactly 1 MiB, EMFILE at 64 descriptors,
+`Seccomp: 2`, and the `/proc/self/limits` values. A control child with nothing enabled shows the unrestricted behaviour.
+Harness TX6 asserts the same facts from outside (`/proc/<pid>/limits` exactly 4 GiB, 256 MiB, 1024 or 64; `Seccomp: 2`
+for the active worker and for an observed disposable child; the `candidate.evaluate` containment object).
+
+**Chunked native kernels.** `su_nv_run_system_chunked` (src/runtime/native_versions.c) runs a native kernel over the
+canonical chunks of su_jobs (boundaries depend only on the row count) on sliced column views, with N pool workers.
+Chunks read working columns and write disjoint staging ranges, so they run concurrently; the commit happens once, after
+every chunk returned `SU_OK`. The status is the lowest failing chunk's. Tests: `native_chunked`
+(tests/native/qualification/test_native_chunked.c): N in {1, 2, 4} x {VM, native scalar, native AVX2 when the host has
+AVX2}, 50 ticks on 100,001 rows and 3 ticks on 1,000,000 rows, each equal to the serial VM reference; the chunk seam
+is called once per chunk and tick; one failing chunk leaves the committed columns unchanged.
+
+**Decision: tick workers stay opt-in.** `SUTEKH_TICK_WORKERS` defaults to 1. Deterministic replay equality across worker
+counts is proven by the tests above (VM and native, N = 1, 2, 4), but whether parallelism is the default is a product
+decision for M2. It is not made here.
+
+**Safe retirement.** The in-flight count of a native kernel is zero at every system boundary (`safe_retire`). Releasing
+an artifact from inside its own kernel call defers the unmapping until the call returns; the call's result is
+committed and equals the VM (`safe_retire`, seam `SU_NV_FAULT_RELEASE_IN_CALL`). The quarantine table compares whole
+artifact hashes (`safe_retire`, `su_agent_test_quar_hit`).
+
+**Digest tick check (defense in depth, not separately tested).** `digest_matches` compares the tick as well as the
+revision. The tick comparison at the replay sites is implied by the snapshot digest comparison, because the snapshot
+bytes carry the tick (src/world/snapshot.c); the rollback site ignores a mismatch. That check is therefore not a
+separate behaviour, and no test was added for it.

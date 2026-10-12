@@ -159,16 +159,21 @@ static void case_contained(const char *worker) {
     char seccomp[64];
     char limits_text[8192];
     const SuJsonValue *r;
+    /* Under AddressSanitizer the engine runs its workers with SUTEKH_WORKER_AS_BYTES=0 (no address-space
+     * bound: the sanitizer reserves a large range). The probe then checks that no bound was set. */
+    const char *asenv = getenv("SUTEKH_WORKER_AS_BYTES");
+    int as_unbounded = asenv != NULL && strcmp(asenv, "0") == 0;
+    uint64_t want_as = as_unbounded ? SU_PROC_UNLIMITED : 4u * GIB;
 
     memset(&lim, 0, sizeof lim);
-    lim.address_space_bytes = 4u * GIB;
+    lim.address_space_bytes = as_unbounded ? 0u : 4u * GIB;
     lim.cpu_seconds = 12u;
     lim.file_bytes = MIB;
     lim.nofile = 64u;
     lim.deny_network = 1;
     probe_run(&pr, worker, &lim);
     CHECK(pr.p.containment.reported == 1);
-    CHECK(pr.p.containment.rlimit_as == 4u * GIB);
+    CHECK(pr.p.containment.rlimit_as == want_as);
     CHECK(pr.p.containment.rlimit_cpu == 12u);
     CHECK(pr.p.containment.rlimit_fsize == MIB);
     CHECK(pr.p.containment.rlimit_nofile == 64u);
@@ -195,7 +200,7 @@ static void case_contained(const char *worker) {
         CHECK(limit_soft(limits_text, "Max file size") == MIB);
         CHECK(limit_soft(limits_text, "Max open files") == 64u);
         CHECK(limit_soft(limits_text, "Max core file size") == 0u);
-        CHECK(limit_soft(limits_text, "Max address space") == 4u * GIB);
+        CHECK(limit_soft(limits_text, "Max address space") == want_as);
     }
     probe_free_all(&pr);
 }
