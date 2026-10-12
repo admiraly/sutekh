@@ -30,7 +30,16 @@ static const char *const k_top_02[] = {
     "slots", "event_next_seq", "event_dropped", "event_log_max", "events"};
 #define K_TOP_02_COUNT (sizeof k_top_02 / sizeof k_top_02[0])
 
+static const char *const k_top_03[] = {
+    "snapshot_format", "world_revision", "tick", "schema_id", "schema_version",
+    "layout_generation", "numeric_profile", "fields", "semantic_manifest",
+    "entity_ids", "columns", "capacity", "high_water", "free_policy", "retired_count",
+    "slots", "event_next_seq", "event_dropped", "event_log_max", "events",
+    "migration_lineage", "retired_field_ids"};
+#define K_TOP_03_COUNT (sizeof k_top_03 / sizeof k_top_03[0])
+
 static const char *const k_field_keys[] = {"id", "name", "type"};
+static const char *const k_field_keys_03[] = {"id", "name", "type", "default"};
 static const char *const k_manifest_keys[] = {"system_id", "semantic_hash"};
 
 /* Emission-side view of one snapshot. Fields are ascending by id; columns[i] holds row_count values
@@ -55,6 +64,11 @@ typedef struct SnapBody {
     uint64_t event_log_max;
     const SuEvent *events;
     uint64_t event_count;
+    const uint32_t *defaults;        /* format 3: per field, desc order */
+    const uint8_t (*lineage)[32];    /* format 3 */
+    uint32_t lineage_count;
+    const uint32_t *retired;         /* format 3, ascending */
+    uint32_t retired_count;
 } SnapBody;
 
 typedef struct SnapBuf {
@@ -375,7 +389,9 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
     } while (0)
 
     SNAP_W(buf_lit(o, "{\"snapshot_format\":\""));
-    SNAP_W(buf_lit(o, s->format_minor == 1u ? SU_SNAPSHOT_FORMAT_01 : SU_SNAPSHOT_FORMAT));
+    SNAP_W(buf_lit(o, s->format_minor == 1u ? SU_SNAPSHOT_FORMAT_01
+                   : s->format_minor == 3u  ? SU_SNAPSHOT_FORMAT_03
+                                            : SU_SNAPSHOT_FORMAT));
     SNAP_W(buf_lit(o, "\",\"world_revision\":"));
     SNAP_W(buf_jstr(o, s->rev));
     SNAP_W(buf_lit(o, ",\"tick\":"));
@@ -396,7 +412,12 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
         SNAP_W(buf_dec(o, s->fields[i].id));
         SNAP_W(buf_lit(o, ",\"name\":"));
         SNAP_W(buf_jstr(o, s->fields[i].name));
-        SNAP_W(buf_lit(o, ",\"type\":\"" SNAP_TYPE_NAME "\"}"));
+        SNAP_W(buf_lit(o, ",\"type\":\"" SNAP_TYPE_NAME "\""));
+        if (s->format_minor == 3u) {
+            SNAP_W(buf_lit(o, ",\"default\":"));
+            SNAP_W(buf_dec(o, s->defaults[i]));
+        }
+        SNAP_W(buf_lit(o, "}"));
     }
     SNAP_W(buf_lit(o, "],\"semantic_manifest\":["));
     for (i = 0; i < s->manifest_count; i++) {
@@ -438,7 +459,7 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
         SNAP_W(buf_lit(o, "]"));
     }
     SNAP_W(buf_lit(o, "}"));
-    if (s->format_minor == 2u) {
+    if (s->format_minor >= 2u) {
         uint32_t hw = su_ents_high_water(s->ents);
         if (hw != s->row_count) {
             return SU_E_INTERNAL;
@@ -497,6 +518,27 @@ static uint32_t emit_body(const SnapBody *s, SnapBuf *o) {
         }
         SNAP_W(buf_lit(o, "]"));
     }
+    if (s->format_minor == 3u) {
+        char hex[65];
+        SNAP_W(buf_lit(o, ",\"migration_lineage\":["));
+        for (i = 0; i < s->lineage_count; i++) {
+            if (i > 0u) {
+                SNAP_W(buf_lit(o, ","));
+            }
+            su_sha256_hex(s->lineage[i], hex);
+            SNAP_W(buf_lit(o, "\""));
+            SNAP_W(buf_bytes(o, hex, 64u));
+            SNAP_W(buf_lit(o, "\""));
+        }
+        SNAP_W(buf_lit(o, "],\"retired_field_ids\":["));
+        for (i = 0; i < s->retired_count; i++) {
+            if (i > 0u) {
+                SNAP_W(buf_lit(o, ","));
+            }
+            SNAP_W(buf_dec(o, s->retired[i]));
+        }
+        SNAP_W(buf_lit(o, "]"));
+    }
     SNAP_W(buf_lit(o, "}"));
 #undef SNAP_W
     return SU_OK;
@@ -548,6 +590,11 @@ uint32_t su_snapshot_capture_ex(const SuWorld *w, const SuWorldDesc *desc,
     uint64_t hw;
     uint32_t i;
     uint32_t st = SU_OK;
+    uint32_t *defaults = NULL;
+    const uint8_t (*hist_lineage)[32] = NULL;
+    uint32_t hist_lineage_n = 0;
+    const uint32_t *hist_retired = NULL;
+    uint32_t hist_retired_n = 0;
 
     if (out == NULL) {
         return SU_E_INVALID_ARGUMENT;
@@ -639,6 +686,35 @@ uint32_t su_snapshot_capture_ex(const SuWorld *w, const SuWorldDesc *desc,
         }
     }
 
+    /* Schema history (M2-01a): format 0.3 only when the lineage or the retired IDs are non-empty. */
+    {
+        const uint8_t (*lin)[32] = NULL;
+        const uint32_t *ret = NULL;
+        uint32_t lin_n = 0;
+        uint32_t ret_n = 0;
+        if (su_world_lineage(w, &lin, &lin_n) != SU_OK || su_world_retired_ids(w, &ret, &ret_n) != SU_OK) {
+            st = SU_E_INTERNAL;
+            goto done;
+        }
+        hist_lineage = lin;
+        hist_lineage_n = lin_n;
+        hist_retired = ret;
+        hist_retired_n = ret_n;
+        if (desc->field_count > 0u) {
+            defaults = malloc(desc->field_count * sizeof *defaults);
+            if (defaults == NULL) {
+                st = SU_E_RESOURCE_LIMIT;
+                goto done;
+            }
+        }
+        for (i = 0; i < desc->field_count; i++) {
+            if (su_world_field_default(w, sf[i].id, &defaults[i]) != SU_OK) {
+                st = SU_E_SCHEMA_MISMATCH;
+                goto done;
+            }
+        }
+    }
+
     memset(&body, 0, sizeof body);
     body.rev = world_revision;
     body.tick = su_world_tick(w);
@@ -647,7 +723,12 @@ uint32_t su_snapshot_capture_ex(const SuWorld *w, const SuWorldDesc *desc,
     body.layout_generation = desc->layout_generation;
     body.fields = sf;
     body.field_count = desc->field_count;
-    body.format_minor = 2u;
+    body.format_minor = (hist_lineage_n > 0u || hist_retired_n > 0u) ? 3u : 2u;
+    body.defaults = defaults;
+    body.lineage = hist_lineage;
+    body.lineage_count = hist_lineage_n;
+    body.retired = hist_retired;
+    body.retired_count = hist_retired_n;
     body.row_count = hw;
     body.ents = ents;
     body.columns = cols;
@@ -678,6 +759,7 @@ uint32_t su_snapshot_capture_ex(const SuWorld *w, const SuWorldDesc *desc,
 done:
     free(cols);
     free(sf);
+    free(defaults);
     free(buf.p);
     if (st != SU_OK) {
         memset(out, 0, sizeof *out);
@@ -754,6 +836,9 @@ static void data_free(SuSnapshotData *d) {
     free(d->world_revision);
     su_ents_destroy(d->entities);
     free(d->events);
+    free(d->field_defaults);
+    free(d->lineage);
+    free(d->retired);
     memset(d, 0, sizeof *d);
 }
 
@@ -867,7 +952,8 @@ static uint32_t read_event(const SuJsonValue *v, SuEvent *ev) {
     return SU_OK;
 }
 
-uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *desc,
+/* Strict parse against desc (formats 0.1, 0.2 and 0.3). Shared by the public entry points. */
+static uint32_t parse_core(const uint8_t *bytes, size_t len, const SuWorldDesc *desc,
                            SuSnapshotData *out, SuSnapshotError *err) {
     SuJsonLimits lim;
     SuJsonDoc doc;
@@ -937,12 +1023,16 @@ uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *
         minor = 1u;
     } else if (str_is(fmt, SU_SNAPSHOT_FORMAT)) {
         minor = 2u;
+    } else if (str_is(fmt, SU_SNAPSHOT_FORMAT_03)) {
+        minor = 3u;
     } else {
         st = SU_E_TYPE;
         fail_msg(err, "unsupported snapshot_format");
         goto done;
     }
-    st = minor == 1u ? check_keys(root, k_top_01, K_TOP_01_COUNT) : check_keys(root, k_top_02, K_TOP_02_COUNT);
+    st = minor == 1u   ? check_keys(root, k_top_01, K_TOP_01_COUNT)
+         : minor == 2u ? check_keys(root, k_top_02, K_TOP_02_COUNT)
+                       : check_keys(root, k_top_03, K_TOP_03_COUNT);
     if (st != SU_OK) {
         fail_msg(err, "top-level keys missing, unknown or not an object");
         goto done;
@@ -1014,16 +1104,28 @@ uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *
         fail_msg(err, "field count does not match the target world");
         goto done;
     }
+    d.field_defaults = calloc(desc->field_count > 0u ? desc->field_count : 1u, sizeof *d.field_defaults);
+    if (d.field_defaults == NULL) {
+        st = SU_E_RESOURCE_LIMIT;
+        goto done;
+    }
     for (i = 0; i < desc->field_count; i++) {
         const SuJsonValue *f = arr->u.array.items[i];
         const SuJsonValue *id;
         const SuJsonValue *nm;
         const SuJsonValue *ty;
         uint32_t fid = 0;
-        st = check_keys(f, k_field_keys, 3u);
+        st = minor == 3u ? check_keys(f, k_field_keys_03, 4u) : check_keys(f, k_field_keys, 3u);
         if (st != SU_OK) {
-            fail_msg(err, "field entries need exactly id, name and type");
+            fail_msg(err, "field entries need exactly id, name and type (and default in 0.3)");
             goto done;
+        }
+        if (minor == 3u) {
+            st = get_u32(su_json_member(f, "default"), &d.field_defaults[i]);
+            if (st != SU_OK) {
+                fail_msg(err, "field default must be a u32 integer");
+                goto done;
+            }
         }
         id = su_json_member(f, "id");
         nm = su_json_member(f, "name");
@@ -1049,6 +1151,78 @@ uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *
             memcmp(nm->u.string.data, sf[i].name, nm->u.string.len) != 0) {
             st = SU_E_SCHEMA_MISMATCH;
             fail_msg(err, "field table does not match the target world");
+            goto done;
+        }
+    }
+
+    /* Schema history (format 0.3): lineage and retired IDs. */
+    if (minor == 3u) {
+        uint32_t k;
+        arr = su_json_member(root, "migration_lineage");
+        if (arr->type != SU_JSON_ARRAY || arr->u.array.count > SU_WORLD_MAX_HISTORY) {
+            st = arr->type != SU_JSON_ARRAY ? SU_E_TYPE : SU_E_RESOURCE_LIMIT;
+            fail_msg(err, "migration_lineage must be an array of at most the history limit");
+            goto done;
+        }
+        d.lineage_count = (uint32_t)arr->u.array.count;
+        if (d.lineage_count > 0u) {
+            d.lineage = malloc(d.lineage_count * sizeof *d.lineage);
+            if (d.lineage == NULL) {
+                st = SU_E_RESOURCE_LIMIT;
+                goto done;
+            }
+        }
+        for (k = 0; k < d.lineage_count; k++) {
+            const SuJsonValue *h = arr->u.array.items[k];
+            uint32_t b;
+            if (h->type != SU_JSON_STRING || !hash_ok(h->u.string.data, h->u.string.len)) {
+                st = SU_E_TYPE;
+                fail_msg(err, "migration_lineage entries must be 64 lowercase hex characters");
+                goto done;
+            }
+            for (b = 0; b < 32u; b++) {
+                int hi = h->u.string.data[2u * b];
+                int lo = h->u.string.data[2u * b + 1u];
+                hi = hi <= '9' ? hi - '0' : hi - 'a' + 10;
+                lo = lo <= '9' ? lo - '0' : lo - 'a' + 10;
+                d.lineage[k][b] = (uint8_t)((hi << 4) | lo);
+            }
+        }
+        arr = su_json_member(root, "retired_field_ids");
+        if (arr->type != SU_JSON_ARRAY || arr->u.array.count > SU_WORLD_MAX_HISTORY) {
+            st = arr->type != SU_JSON_ARRAY ? SU_E_TYPE : SU_E_RESOURCE_LIMIT;
+            fail_msg(err, "retired_field_ids must be an array of at most the history limit");
+            goto done;
+        }
+        d.retired_count = (uint32_t)arr->u.array.count;
+        if (d.retired_count > 0u) {
+            d.retired = malloc(d.retired_count * sizeof *d.retired);
+            if (d.retired == NULL) {
+                st = SU_E_RESOURCE_LIMIT;
+                goto done;
+            }
+        }
+        for (k = 0; k < d.retired_count; k++) {
+            uint32_t rid = 0;
+            uint32_t f;
+            st = get_u32(arr->u.array.items[k], &rid);
+            if (st != SU_OK || (k > 0u && rid <= d.retired[k - 1u])) {
+                st = SU_E_TYPE;
+                fail_msg(err, "retired_field_ids must be u32 integers, strictly ascending");
+                goto done;
+            }
+            for (f = 0; f < desc->field_count; f++) {
+                if (sf[f].id == rid) {
+                    st = SU_E_SCHEMA_MISMATCH;
+                    fail_msg(err, "a retired field ID is a live field of the schema");
+                    goto done;
+                }
+            }
+            d.retired[k] = rid;
+        }
+        if (d.lineage_count == 0u && d.retired_count == 0u) {
+            st = SU_E_TYPE;
+            fail_msg(err, "format 0.3 requires a non-empty lineage or retired list");
             goto done;
         }
     }
@@ -1355,6 +1529,11 @@ uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *
     body.event_log_max = d.event_log_max;
     body.events = d.events;
     body.event_count = d.event_count;
+    body.defaults = d.field_defaults;
+    body.lineage = (const uint8_t (*)[32])d.lineage;
+    body.lineage_count = d.lineage_count;
+    body.retired = d.retired;
+    body.retired_count = d.retired_count;
     st = emit_body(&body, &canon);
     if (st != SU_OK) {
         fail_msg(err, "snapshot cannot be re-encoded canonically");
@@ -1383,11 +1562,17 @@ done:
     return st;
 }
 
+uint32_t su_snapshot_parse(const uint8_t *bytes, size_t len, const SuWorldDesc *desc,
+                           SuSnapshotData *out, SuSnapshotError *err) {
+    return parse_core(bytes, len, desc, out, err);
+}
+
 /* ---- restore ----------------------------------------------------------- */
 
 uint32_t su_snapshot_restore(const SuWorldDesc *desc, const SuSnapshotData *data,
                              SuWorld **out_world,
                              const SuSnapshotManifestEntry **manifest, uint32_t *manifest_count) {
+    SuWorldSchemaExt ext;
     SuWorldFieldDesc *sf = NULL;
     SuWorld *w = NULL;
     uint32_t *pad = NULL;
@@ -1424,7 +1609,12 @@ uint32_t su_snapshot_restore(const SuWorldDesc *desc, const SuSnapshotData *data
         st = SU_E_SCHEMA_MISMATCH;
         goto done;
     }
-    st = su_world_create_ex(desc, cap, &w);
+    ext.defaults = data->field_defaults;
+    ext.retired_ids = data->retired;
+    ext.retired_count = data->retired_count;
+    ext.lineage = (const uint8_t (*)[32])data->lineage;
+    ext.lineage_count = data->lineage_count;
+    st = su_world_create_ext(desc, cap, &ext, &w);
     if (st != SU_OK) {
         goto done;
     }
@@ -1477,5 +1667,142 @@ fail_world:
     su_world_destroy(w);
 done:
     free(sf);
+    return st;
+}
+
+/* ---- schema from the header (M2-01a) ----------------------------------- */
+
+/* Builds a descriptor from the snapshot header alone: schema_id, schema_version, layout_generation and the
+ * field table. Names point into doc, which the caller keeps alive. Access is SU_ACCESS_READ for every field.
+ * Only the header is checked here; parse_core performs every other check. */
+static uint32_t header_desc(const uint8_t *bytes, size_t len, SuJsonDoc *doc, SuWorldDesc *desc,
+                            SuWorldFieldDesc **fields, SuSnapshotError *err) {
+    SuJsonLimits lim;
+    SuJsonError jerr;
+    const SuJsonValue *root;
+    const SuJsonValue *sid;
+    const SuJsonValue *arr;
+    uint32_t ver = 0;
+    uint32_t gen = 0;
+    uint32_t n;
+    uint32_t i;
+    uint32_t st;
+
+    memset(doc, 0, sizeof *doc);
+    *fields = NULL;
+    memset(desc, 0, sizeof *desc);
+    lim.max_bytes = len;
+    lim.max_depth = SU_SNAPSHOT_MAX_DEPTH;
+    st = su_json_parse(bytes, len, &lim, doc, &jerr);
+    if (st != SU_OK) {
+        fail_msg(err, jerr.message);
+        return st;
+    }
+    root = doc->root;
+    if (root == NULL || root->type != SU_JSON_OBJECT) {
+        fail_msg(err, "snapshot must be a JSON object");
+        return SU_E_TYPE;
+    }
+    sid = su_json_member(root, "schema_id");
+    if (sid == NULL || sid->type != SU_JSON_STRING || !text_ok(sid->u.string.data, sid->u.string.len, SU_WORLD_NAME_MAX)) {
+        fail_msg(err, "schema_id is missing or malformed");
+        return SU_E_TYPE;
+    }
+    st = get_u32(su_json_member(root, "schema_version"), &ver);
+    if (st == SU_OK) {
+        st = get_u32(su_json_member(root, "layout_generation"), &gen);
+    }
+    if (st != SU_OK) {
+        fail_msg(err, "schema_version and layout_generation must be u32 integers");
+        return SU_E_TYPE;
+    }
+    arr = su_json_member(root, "fields");
+    if (arr == NULL || arr->type != SU_JSON_ARRAY) {
+        fail_msg(err, "fields must be an array");
+        return SU_E_TYPE;
+    }
+    if (arr->u.array.count > SU_LIMIT_FIELDS) {
+        fail_msg(err, "field count exceeds the limit");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    n = (uint32_t)arr->u.array.count;
+    *fields = calloc(n > 0u ? n : 1u, sizeof **fields);
+    if (*fields == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (i = 0; i < n; i++) {
+        const SuJsonValue *f = arr->u.array.items[i];
+        const SuJsonValue *nm;
+        uint32_t fid = 0;
+        if (f == NULL || f->type != SU_JSON_OBJECT) {
+            fail_msg(err, "field entries must be objects");
+            return SU_E_TYPE;
+        }
+        st = get_u32(su_json_member(f, "id"), &fid);
+        nm = su_json_member(f, "name");
+        if (st != SU_OK || nm == NULL || nm->type != SU_JSON_STRING ||
+            !text_ok(nm->u.string.data, nm->u.string.len, SU_WORLD_NAME_MAX)) {
+            fail_msg(err, "field id or name is malformed");
+            return SU_E_TYPE;
+        }
+        (*fields)[i].id = fid;
+        (*fields)[i].type = SU_TYPE_U32;
+        (*fields)[i].access = SU_ACCESS_READ;
+        (*fields)[i].name = nm->u.string.data;
+    }
+    desc->schema_id = sid->u.string.data;
+    desc->schema_version = ver;
+    desc->layout_generation = gen;
+    desc->row_count = 0u;
+    desc->entity_ids = NULL;
+    desc->fields = *fields;
+    desc->field_count = n;
+    return SU_OK;
+}
+
+uint32_t su_snapshot_restore_world(const uint8_t *bytes, size_t len, const SuWorldDesc *desc,
+                                   int allow_schema_change, SuWorld **out_world,
+                                   SuSnapshotData *data_out, SuSnapshotError *err) {
+    SuJsonDoc hdoc;
+    SuWorldDesc hd;
+    SuWorldFieldDesc *hf = NULL;
+    const SuWorldDesc *use = desc;
+    SuSnapshotData local;
+    SuSnapshotData *d = data_out != NULL ? data_out : &local;
+    uint32_t st;
+
+    if (out_world == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out_world = NULL;
+    memset(&hdoc, 0, sizeof hdoc);
+    memset(&local, 0, sizeof local);
+    if (data_out != NULL) {
+        memset(data_out, 0, sizeof *data_out);
+    }
+    if (allow_schema_change) {
+        st = header_desc(bytes, len, &hdoc, &hd, &hf, err);
+        if (st != SU_OK) {
+            goto done;
+        }
+        use = &hd;
+    } else if (desc == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    st = parse_core(bytes, len, use, d, err);
+    if (st != SU_OK) {
+        goto done;
+    }
+    st = su_snapshot_restore(use, d, out_world, NULL, NULL);
+
+done:
+    if (st != SU_OK) {
+        data_free(d);
+    }
+    if (data_out == NULL) {
+        data_free(&local);
+    }
+    free(hf);
+    su_json_doc_free(&hdoc);
     return st;
 }

@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ir/su_sha256.h"
+
 #define SU_WORLD_PHASE_IDLE UINT32_C(0)
 #define SU_WORLD_PHASE_TICK UINT32_C(1)
 #define SU_WORLD_ACCESS_MASK (SU_ACCESS_READ | SU_ACCESS_WRITE)
@@ -22,6 +24,7 @@ typedef struct SuWorldField {
     uint32_t id;
     uint32_t type;
     uint32_t access;
+    uint32_t def;   /* default written by spawn for fields the request does not name */
     char *name;
 } SuWorldField;
 
@@ -44,6 +47,10 @@ struct SuWorld {
     uint32_t **staging;       /* per table index; NULL for read-only fields */
     SuColumnBinding *inv_bindings; /* readable fields, ascending id */
     SuColumnBinding *out_bindings; /* writable fields, ascending id */
+    uint32_t *retired;             /* retired field IDs, ascending; never shrunk (M2-01a) */
+    uint32_t retired_count;
+    uint8_t (*lineage)[32];        /* migration hashes, oldest first (M2-01a) */
+    uint32_t lineage_count;
 };
 
 /* ---- helpers ---------------------------------------------------------- */
@@ -240,6 +247,8 @@ void su_world_destroy(SuWorld *w) {
     free(w->schema_id);
     free(w->inv_bindings);
     free(w->out_bindings);
+    free(w->retired);
+    free(w->lineage);
     free(w);
 }
 
@@ -247,7 +256,44 @@ uint32_t su_world_create(const SuWorldDesc *desc, SuWorld **out) {
     return su_world_create_ex(desc, 0u, out);
 }
 
+/* Checks the schema extensions against the descriptor (run before any allocation). */
+static uint32_t su_check_ext(const SuWorldDesc *desc, const SuWorldSchemaExt *ext) {
+    uint32_t i;
+    uint32_t k;
+    if (ext == NULL) {
+        return SU_OK;
+    }
+    if (ext->retired_count > SU_WORLD_MAX_HISTORY || ext->lineage_count > SU_WORLD_MAX_HISTORY) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    if ((ext->retired_count > 0u && ext->retired_ids == NULL) ||
+        (ext->lineage_count > 0u && ext->lineage == NULL)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (desc->field_count > 0u && ext->defaults == NULL) {
+        return SU_OK;
+    }
+    for (i = 1u; i < ext->retired_count; i++) {
+        if (ext->retired_ids[i] <= ext->retired_ids[i - 1u]) {
+            return SU_E_SCHEMA_MISMATCH;
+        }
+    }
+    for (i = 0; i < desc->field_count; i++) {
+        for (k = 0; k < ext->retired_count; k++) {
+            if (ext->retired_ids[k] == desc->fields[i].id) {
+                return SU_E_SCHEMA_MISMATCH;
+            }
+        }
+    }
+    return SU_OK;
+}
+
 uint32_t su_world_create_ex(const SuWorldDesc *desc, uint64_t max_entities, SuWorld **out) {
+    return su_world_create_ext(desc, max_entities, NULL, out);
+}
+
+uint32_t su_world_create_ext(const SuWorldDesc *desc, uint64_t max_entities, const SuWorldSchemaExt *ext,
+                             SuWorld **out) {
     SuWorld *w = NULL;
     size_t id_len = 0;
     size_t n_rows = 0;
@@ -311,6 +357,11 @@ uint32_t su_world_create_ex(const SuWorldDesc *desc, uint64_t max_entities, SuWo
         if ((f->access & SU_ACCESS_WRITE) != 0u) {
             writable++;
         }
+    }
+
+    st = su_check_ext(desc, ext);
+    if (st != SU_OK) {
+        return st;
     }
 
     /* Entity IDs: nonzero and unique. */
@@ -381,6 +432,7 @@ uint32_t su_world_create_ex(const SuWorldDesc *desc, uint64_t max_entities, SuWo
         w->fields[i].id = desc->fields[i].id;
         w->fields[i].type = desc->fields[i].type;
         w->fields[i].access = desc->fields[i].access;
+        w->fields[i].def = ext != NULL && ext->defaults != NULL ? ext->defaults[i] : 0u;
         w->fields[i].name = su_copy_name(desc->fields[i].name, name_len);
         if (w->fields[i].name == NULL) {
             goto fail_alloc;
@@ -417,6 +469,22 @@ uint32_t su_world_create_ex(const SuWorldDesc *desc, uint64_t max_entities, SuWo
     w->out_bindings = calloc(writable > 0 ? writable : 1u, sizeof *w->out_bindings);
     if (w->inv_bindings == NULL || w->out_bindings == NULL) {
         goto fail_alloc;
+    }
+    if (ext != NULL && ext->retired_count > 0u) {
+        w->retired = malloc(ext->retired_count * sizeof *w->retired);
+        if (w->retired == NULL) {
+            goto fail_alloc;
+        }
+        memcpy(w->retired, ext->retired_ids, ext->retired_count * sizeof *w->retired);
+        w->retired_count = ext->retired_count;
+    }
+    if (ext != NULL && ext->lineage_count > 0u) {
+        w->lineage = malloc(ext->lineage_count * sizeof *w->lineage);
+        if (w->lineage == NULL) {
+            goto fail_alloc;
+        }
+        memcpy(w->lineage, ext->lineage, ext->lineage_count * sizeof *w->lineage);
+        w->lineage_count = ext->lineage_count;
     }
 
     /* Initial entity IDs live in the entity table (external ids); columns start zeroed. */
@@ -698,6 +766,10 @@ uint32_t su_world_spawn(SuWorld *w, const SuWorldSpawnValue *values, uint32_t co
     }
     slot = SU_ENTITY_SLOT(h);
     su_zero_slot(w, w->committed, slot);
+    /* Fields the request does not name take their default (M2-01a; 0 for worlds that never migrated). */
+    for (k = 0; k < w->field_count; k++) {
+        w->committed[k][slot] = w->fields[k].def;
+    }
     for (k = 0; k < count; k++) {
         w->committed[su_find_id(w, values[k].field_id)][slot] = values[k].value;
     }
@@ -1074,4 +1146,192 @@ uint32_t su_world_state_equal(const SuWorld *a, const SuWorld *b, int *equal) {
     free(ba);
     free(bb);
     return st;
+}
+
+/* ---- schema extensions (M2-01a) ----------------------------------------- */
+
+uint32_t su_world_field_default(const SuWorld *w, uint32_t field_id, uint32_t *out) {
+    long idx;
+    if (w == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    idx = su_find_id(w, field_id);
+    if (idx < 0) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    *out = w->fields[idx].def;
+    return SU_OK;
+}
+
+uint32_t su_world_field_at(const SuWorld *w, uint32_t index, SuWorldFieldDesc *out, uint32_t *default_value) {
+    if (w == NULL || out == NULL || default_value == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (index >= w->field_count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    out->id = w->fields[index].id;
+    out->type = w->fields[index].type;
+    out->access = w->fields[index].access;
+    out->name = w->fields[index].name;
+    *default_value = w->fields[index].def;
+    return SU_OK;
+}
+
+uint32_t su_world_retired_ids(const SuWorld *w, const uint32_t **ids, uint32_t *count) {
+    if (w == NULL || ids == NULL || count == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *ids = w->retired;
+    *count = w->retired_count;
+    return SU_OK;
+}
+
+uint32_t su_world_lineage(const SuWorld *w, const uint8_t (**hashes)[32], uint32_t *count) {
+    if (w == NULL || hashes == NULL || count == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *hashes = (const uint8_t (*)[32])w->lineage;
+    *count = w->lineage_count;
+    return SU_OK;
+}
+
+uint32_t su_world_set_layout_generation(SuWorld *w, uint32_t layout_generation) {
+    if (w == NULL || w->phase != SU_WORLD_PHASE_IDLE) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    w->layout_generation = layout_generation;
+    return SU_OK;
+}
+
+uint32_t su_world_put_committed(SuWorld *w, uint32_t field_id, const uint32_t *values, uint64_t count) {
+    long idx;
+    uint64_t s;
+    if (w == NULL || (values == NULL && count > 0u) || w->phase != SU_WORLD_PHASE_IDLE) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (count > w->row_count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    idx = su_find_id(w, field_id);
+    if (idx < 0) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    for (s = 0; s < w->row_count; s++) {
+        uint32_t v = s < count ? values[s] : 0u;
+        if (!su_ents_slot_alive(w->ents_committed, (uint32_t)s)) {
+            v = 0u;
+        }
+        w->committed[idx][s] = v;
+        w->working[idx][s] = v;
+    }
+    return SU_OK;
+}
+
+uint32_t su_world_create_successor(const SuWorld *old, const SuWorldDesc *desc, const SuWorldSchemaExt *ext,
+                                   SuWorld **out) {
+    SuWorld *w = NULL;
+    uint32_t st;
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    if (old == NULL || desc == NULL || su_world_in_tick(old)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (desc->row_count != 0u || desc->entity_ids != NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (strcmp(old->schema_id, desc->schema_id) != 0) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    st = su_world_create_ext(desc, old->row_count, ext, &w);
+    if (st != SU_OK) {
+        return st;
+    }
+    /* Entity table, generations and tick are carried over unchanged. */
+    su_ents_destroy(w->ents_committed);
+    su_ents_destroy(w->ents_working);
+    w->ents_committed = NULL;
+    w->ents_working = NULL;
+    st = su_ents_clone(old->ents_committed, &w->ents_committed);
+    if (st == SU_OK) {
+        st = su_ents_clone(old->ents_committed, &w->ents_working);
+    }
+    if (st != SU_OK) {
+        su_world_destroy(w);
+        return st;
+    }
+    w->tick = old->tick;
+    *out = w;
+    return SU_OK;
+}
+
+/* Digest over the field table: the schema descriptor (contract section 1). */
+static uint32_t su_schema_digest_internal(const SuWorld *w, uint8_t out[32]) {
+    SuSha256 ctx;
+    uint8_t hdr[18];
+    uint8_t rec[16];
+    uint32_t i;
+    memcpy(hdr, "SUWSCHEMA", 9u);
+    hdr[9] = 0u;
+    su_put_u32(hdr + 10, 1u);
+    su_put_u32(hdr + 14, w->field_count);
+    su_sha256_init(&ctx);
+    su_sha256_update(&ctx, hdr, sizeof hdr);
+    for (i = 0; i < w->field_count; i++) {
+        size_t n = strlen(w->fields[i].name);
+        su_put_u32(rec, w->fields[i].id);
+        su_put_u32(rec + 4, w->fields[i].type);
+        su_put_u32(rec + 8, w->fields[i].def);
+        su_put_u32(rec + 12, (uint32_t)n);
+        su_sha256_update(&ctx, rec, sizeof rec);
+        su_sha256_update(&ctx, w->fields[i].name, n);
+    }
+    su_sha256_final(&ctx, out);
+    return SU_OK;
+}
+
+uint32_t su_world_schema_digest(const SuWorld *w, uint8_t out[32]) {
+    if (w == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return su_schema_digest_internal(w, out);
+}
+
+uint32_t su_world_recovery_digest(const SuWorld *w, uint8_t out[32]) {
+    size_t need = 0;
+    uint8_t *buf;
+    uint8_t gen[4];
+    uint8_t sd[32];
+    uint32_t st;
+    SuSha256 ctx;
+    if (w == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    st = su_canonical_size_internal(w, &need);
+    if (st != SU_OK) {
+        return st;
+    }
+    buf = malloc(need > 0u ? need : 1u);
+    if (buf == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    {
+        size_t written = 0;
+        st = su_world_canonical_write(w, buf, need, &written);
+    }
+    if (st != SU_OK) {
+        free(buf);
+        return st;
+    }
+    su_schema_digest_internal(w, sd);
+    su_put_u32(gen, w->layout_generation);
+    su_sha256_init(&ctx);
+    su_sha256_update(&ctx, buf, need);
+    su_sha256_update(&ctx, gen, sizeof gen);
+    su_sha256_update(&ctx, sd, sizeof sd);
+    su_sha256_final(&ctx, out);
+    free(buf);
+    return SU_OK;
 }

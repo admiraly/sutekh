@@ -345,7 +345,7 @@ sutekh_apply_warnings(test_cmdq)
 add_test(NAME cmdq COMMAND test_cmdq WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ---- BEGIN M2-00c1 world integration (entity table in su_world; snapshot 0.2) ----
-target_link_libraries(su_world PUBLIC su_ents)
+target_link_libraries(su_world PUBLIC su_ents su_ir)
 add_executable(test_world_ents tests/entities/test_world_ents.c)
 target_link_libraries(test_world_ents PRIVATE su_world)
 sutekh_apply_warnings(test_world_ents)

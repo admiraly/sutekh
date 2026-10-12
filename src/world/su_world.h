@@ -79,6 +79,53 @@ uint32_t su_world_create(const SuWorldDesc *desc, SuWorld **out);
  * not zero-initialized keep their meaning. SU_E_RESOURCE_LIMIT if the capacity exceeds SU_LIMIT_ROWS.
  * Other errors as su_world_create. */
 uint32_t su_world_create_ex(const SuWorldDesc *desc, uint64_t max_entities, SuWorld **out);
+/* Schema extensions (M2-01a, contract M2_MIGRATION_CONTRACT.md sections 1, 6). Every field has a u32
+ * default (0 unless a migration set one) that su_world_spawn writes for fields the request does not name.
+ * The world owns the retired field-ID list (ascending, never shrunk within a lineage) and the lineage
+ * (raw SHA-256 migration hashes, oldest first). Both are persisted by snapshot 0.3.
+ * ext may be NULL (all defaults 0, no retired IDs, empty lineage). defaults has one entry per desc field in
+ * desc order. SU_E_SCHEMA_MISMATCH: a retired ID is a live field, or retired IDs are not strictly ascending.
+ * SU_E_RESOURCE_LIMIT: more than SU_WORLD_MAX_HISTORY retired IDs or lineage entries. Other errors as
+ * su_world_create. */
+#define SU_WORLD_MAX_HISTORY 4096u
+typedef struct SuWorldSchemaExt {
+    const uint32_t *defaults;       /* desc->field_count entries, desc order; NULL means all 0 */
+    const uint32_t *retired_ids;    /* strictly ascending */
+    uint32_t retired_count;
+    const uint8_t (*lineage)[32];   /* migration hashes */
+    uint32_t lineage_count;
+} SuWorldSchemaExt;
+uint32_t su_world_create_ext(const SuWorldDesc *desc, uint64_t max_entities, const SuWorldSchemaExt *ext,
+                             SuWorld **out);
+/* Builds the successor of old for a migration commit, aside from old: the entity table (including
+ * generations, retired slots and capacity), the tick and the committed table are copied from old; the
+ * columns are zero. desc describes the NEW schema (row_count 0, entity_ids NULL; desc->layout_generation is
+ * the new generation). The caller fills the columns with su_world_put_committed. old is not modified.
+ * SU_E_INVALID_ARGUMENT: old in a tick, desc->row_count != 0. */
+uint32_t su_world_create_successor(const SuWorld *old, const SuWorldDesc *desc, const SuWorldSchemaExt *ext,
+                                   SuWorld **out);
+/* Writes committed (and working) values for one field: the first min(count, capacity) rows from values,
+ * the rest zero, dead rows zeroed. Outside a tick only. Used by migration prepare.
+ * SU_E_INVALID_ARGUMENT: NULL values with count > 0, in a tick, count > capacity. SU_E_SCHEMA_MISMATCH:
+ * unknown field ID. */
+uint32_t su_world_put_committed(SuWorld *w, uint32_t field_id, const uint32_t *values, uint64_t count);
+/* Default of a field (the value su_world_spawn writes when the request does not name it). */
+uint32_t su_world_field_default(const SuWorld *w, uint32_t field_id, uint32_t *out);
+/* Field table entry by index (ascending field ID). name points into the world. */
+uint32_t su_world_field_at(const SuWorld *w, uint32_t index, SuWorldFieldDesc *out, uint32_t *default_value);
+/* Retired IDs (ascending) and lineage (oldest first). Pointers are valid until the world is destroyed. */
+uint32_t su_world_retired_ids(const SuWorld *w, const uint32_t **ids, uint32_t *count);
+uint32_t su_world_lineage(const SuWorld *w, const uint8_t (**hashes)[32], uint32_t *count);
+/* Sets the layout generation of an idle world (migration commit only). */
+uint32_t su_world_set_layout_generation(SuWorld *w, uint32_t layout_generation);
+/* Schema descriptor digest: SHA-256 of "SUWSCHEMA" 0x00 | u32 1 | u32 field_count | per field in ascending id:
+ * u32 id | u32 type | u32 default | u32 name_length | name bytes, all integers little-endian. Access is not
+ * covered (contract section 1). */
+uint32_t su_world_schema_digest(const SuWorld *w, uint8_t out[32]);
+/* Recovery digest (contract section 6): SHA-256(canonical_state || u32 layout_generation LE || schema digest),
+ * where canonical_state is su_world_canonical_write of the committed root. */
+uint32_t su_world_recovery_digest(const SuWorld *w, uint8_t out[32]);
+
 /* NULL-safe. Frees all storage. */
 void su_world_destroy(SuWorld *w);
 
