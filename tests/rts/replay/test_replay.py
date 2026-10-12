@@ -18,6 +18,7 @@ if _REF not in sys.path:
     sys.path.insert(0, _REF)
 
 import rts_replay as rr  # noqa: E402
+import spawn_batch_limits as limits  # noqa: E402
 from model import ModelError  # noqa: E402
 
 CAP = 64
@@ -44,10 +45,10 @@ def default_commands():
     return [
         (3, rr.CMD_SET_FIELDS, {"entities": [{"entity": handle(2), "values": {"order_x": 900}}]}),
         (5, rr.CMD_SPAWN_BATCH, {"rows": [
-            {"kind": 1, "team": 1, "hp": 9, "pos_x": 100, "pos_y": 100, "reload": 2,
-             "damage": 3, "flight": 4},
-            {"kind": 2, "team": 0, "hp": 0, "pos_x": 300, "pos_y": 300, "reload": 1,
-             "damage": 1, "flight": 1},
+            {"values": {"kind": 1, "team": 1, "hp": 9, "pos_x": 100, "pos_y": 100, "reload": 2,
+                        "damage": 3, "flight": 4}, "external_id": 77},
+            {"values": {"kind": 2, "team": 0, "hp": 0, "pos_x": 300, "pos_y": 300, "reload": 1,
+                        "damage": 1, "flight": 1}},
         ]}),
         (8, rr.CMD_DESPAWN, {"entity": handle(1)}),
         (10, rr.CMD_SET_FIELDS, {"entities": [{"entity": handle(3), "values": {"flight": 5}}]}),
@@ -175,8 +176,8 @@ class BatchAndSetFieldsRules(unittest.TestCase):
         b.load_scene(SCENE)
         before = b.scene_digest()
         bad = {"rows": [
-            {"kind": 1, "hp": 5, "reload": 1, "damage": 1, "flight": 1},
-            {"kind": 1, "hp": 0, "reload": 1, "damage": 1, "flight": 1},  # hp must be >= 1
+            {"values": {"kind": 1, "hp": 5, "reload": 1, "damage": 1, "flight": 1}},
+            {"values": {"kind": 1, "hp": 0, "reload": 1, "damage": 1, "flight": 1}},  # hp >= 1
         ]}
         with self.assertRaises(ModelError):
             b.apply({"cmd": rr.CMD_SPAWN_BATCH, "args": bad})
@@ -184,7 +185,7 @@ class BatchAndSetFieldsRules(unittest.TestCase):
 
     def test_spawn_batch_refuses_when_free_slots_are_short(self):
         b = rr.ModelBackend(4)
-        row = {"kind": 1, "hp": 1, "reload": 1, "damage": 1, "flight": 1}
+        row = {"values": {"kind": 1, "hp": 1, "reload": 1, "damage": 1, "flight": 1}}
         with self.assertRaises(ModelError) as cm:
             b.apply({"cmd": rr.CMD_SPAWN_BATCH, "args": {"rows": [row] * 5}})
         self.assertEqual(cm.exception.code, "SU_E_RESOURCE_LIMIT")
@@ -205,6 +206,40 @@ class BatchAndSetFieldsRules(unittest.TestCase):
             b.apply({"cmd": rr.CMD_SET_FIELDS,
                      "args": {"entities": [{"entity": handle(0, gen=9), "values": {"flight": 2}}]}})
         self.assertEqual(cm.exception.code, "SU_E_STALE_HANDLE")
+
+
+class BatchLimits(unittest.TestCase):
+    def test_request_size_refused_before_rows(self):
+        with self.assertRaises(limits.BatchRefused) as cm:
+            limits.check_request_size(b"x" * (limits.REQUEST_BYTES_MAX + 1))
+        self.assertEqual(cm.exception.code, "SU_E_RESOURCE_LIMIT")
+        limits.check_request_size(b"x" * limits.REQUEST_BYTES_MAX)
+
+    def test_row_count_range(self):
+        limits.check_row_count(1)
+        limits.check_row_count(limits.ROWS_MAX)
+        for bad in (0, limits.ROWS_MAX + 1):
+            with self.assertRaises(limits.BatchRefused):
+                limits.check_row_count(bad)
+
+    def test_free_slot_and_high_water_prechecks(self):
+        limits.check_prechecks(rows=4, capacity=10, alive=6, high_water=10)
+        with self.assertRaises(limits.BatchRefused):
+            limits.check_prechecks(rows=5, capacity=10, alive=6, high_water=10)
+        with self.assertRaises(limits.BatchRefused):
+            limits.check_prechecks(rows=2, capacity=1000000, alive=0,
+                                   high_water=limits.HW_MAX - 1)
+
+    def test_worst_case_request_fits_the_cap(self):
+        # D6 / C (F4): 1,024 rows with every field and external_id at 10 digits, compact JSON,
+        # is 948,225 bytes, under the 1 MiB cap. Rebuilt here from the field names and widths.
+        row_fields = ("kind", "team", "hp", "pos_x", "pos_y", "speed", "range_sq", "reload",
+                      "damage", "flight", "order_mode", "order_x", "order_y", "formation_slot",
+                      "formation_gen", "formation_ox", "formation_oy")
+        row = {"values": {name: 4294967295 for name in row_fields}, "external_id": 4294967295}
+        size = len(rr.canonical_json(row).encode("ascii"))
+        self.assertLessEqual(size * limits.ROWS_MAX, 948225 + 1024)
+        self.assertLess(size * limits.ROWS_MAX, limits.REQUEST_BYTES_MAX)
 
 
 if __name__ == "__main__":
