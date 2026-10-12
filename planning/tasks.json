@@ -734,7 +734,7 @@
       "acceptance": [
         "Existing IR capsules validate unchanged; IR and host variants validate; rts_u32_v1 accepted; max_rows above 1,000,000 refused; unknown top-level key refused; no other key changes."
       ],
-      "status": "planned"
+      "status": "integrated"
     },
     {
       "id": "M3-03",
@@ -794,7 +794,7 @@
       "acceptance": [
         "IR entries unchanged (T-HOST-01); T-HOST-02..13; targeted compile with and without SU_HAVE_NATIVE; existing scheduler, tick-worker, entity-tick and reload tests pass unchanged."
       ],
-      "status": "planned"
+      "status": "integrated"
     },
     {
       "id": "M3-04",
