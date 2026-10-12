@@ -381,6 +381,41 @@ static void world_drop(WorkerWorld *ww) {
  * byte is a digit n >= 2 counts the kills: it is rewritten with n-1 and the kill happens (n = 2 kills twice,
  * the second in a replacement worker). */
 #ifdef SU_TEST_FAULT_HOOKS
+/* N2 test seam: SUTEKH_TEST_MIG_ALLOC_TOKEN names a file holding a decimal injection point. The next migrate.plan or
+ * migrate.prepare request that reads it removes the file and fails that point of the request (see su_migrate.h).
+ * Without a token the hooks are NULL and nothing is counted. */
+static SuMigrateHooks *mig_alloc_hooks(SuMigrateHooks *h) {
+    const char *tok = getenv("SUTEKH_TEST_MIG_ALLOC_TOKEN");
+    char buf[32];
+    char *end = NULL;
+    unsigned long long v;
+    size_t n;
+    FILE *f;
+
+    if (tok == NULL || tok[0] == '\0') {
+        return NULL;
+    }
+    f = fopen(tok, "rb");
+    if (f == NULL) {
+        return NULL;
+    }
+    n = fread(buf, 1, sizeof buf - 1u, f);
+    fclose(f);
+    buf[n] = '\0';
+    v = strtoull(buf, &end, 10);
+    if (end == buf || v == 0ull || unlink(tok) != 0) {
+        return NULL;
+    }
+    memset(h, 0, sizeof *h);
+    h->fail_at = (uint64_t)v;
+    return h;
+}
+#define MIG_ALLOC_HOOKS(h) mig_alloc_hooks(h)
+#else
+#define MIG_ALLOC_HOOKS(h) ((void)(h), (SuMigrateHooks *)NULL)
+#endif
+
+#ifdef SU_TEST_FAULT_HOOKS
 static void mig_stage(const char *name) {
     const char *want = getenv("SUTEKH_TEST_KILL_STAGE");
     const char *tok = getenv("SUTEKH_TEST_KILL_TOKEN");
@@ -4098,7 +4133,8 @@ static uint32_t h_internal_world_migrate_plan(WorkerState *s, const SuJsonValue 
     }
     st = migsys_build(&ww->sched, &ms);
     if (st == SU_OK) {
-        st = su_migrate_plan(ww->inst.w, &docs.in, ms.sys, ms.n, drops, nd, &bud, &plan);
+        SuMigrateHooks ahk;
+        st = su_migrate_plan_inject(ww->inst.w, &docs.in, ms.sys, ms.n, drops, nd, &bud, MIG_ALLOC_HOOKS(&ahk), &plan);
     }
     if (st != SU_OK) {
         fail(f, st, plan.message[0] != '\0' ? plan.message : "migration plan refused");
@@ -4126,6 +4162,8 @@ static uint32_t h_internal_world_migrate_plan(WorkerState *s, const SuJsonValue 
  * semantic_hash}], spool_bytes?, memory_bytes?}. Builds the successor world and the replacement schedule
  * aside; nothing installed changes. */
 static uint32_t h_internal_world_migrate_prepare(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    SuMigrateHooks ahk;
+    SuMigrateHooks *ahkp = NULL;
     WorkerWorld *ww;
     const char *expect = str_of(params, "expected_world_revision");
     const char *drops[SU_SCHED_MAX_SYSTEMS];
@@ -4172,6 +4210,7 @@ static uint32_t h_internal_world_migrate_prepare(WorkerState *s, const SuJsonVal
         return SU_E_STALE_REVISION;
     }
     MIG_STAGE("migrate.prepare");
+    ahkp = MIG_ALLOC_HOOKS(&ahk);
     st = budget_params(params, &bud, f);
     if (st != SU_OK) {
         return st;
@@ -4196,7 +4235,7 @@ static uint32_t h_internal_world_migrate_prepare(WorkerState *s, const SuJsonVal
     if (st != SU_OK) {
         goto out;
     }
-    st = su_migrate_plan(ww->inst.w, &docs.in, ms.sys, ms.n, drops, nd, &bud, &plan);
+    st = su_migrate_plan_inject(ww->inst.w, &docs.in, ms.sys, ms.n, drops, nd, &bud, ahkp, &plan);
     if (st != SU_OK) {
         fail(f, st, plan.message);
         goto out;
@@ -4301,7 +4340,7 @@ static uint32_t h_internal_world_migrate_prepare(WorkerState *s, const SuJsonVal
             goto out;
         }
     }
-    st = su_migrate_prepare(ww->inst.w, &plan, NULL, &cand, &tm);
+    st = su_migrate_prepare(ww->inst.w, &plan, ahkp, &cand, &tm);
     if (st != SU_OK) {
         fail(f, st, "successor world could not be prepared; the world is unchanged");
         goto out;

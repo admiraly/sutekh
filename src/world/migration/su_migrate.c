@@ -61,6 +61,34 @@ typedef struct Sb {
     int oom;
 } Sb;
 
+/* ---- failure injection (N2) -----------------------------------------------
+ * Every allocation the engine makes in plan and prepare is an injection point, counted through the hooks of the
+ * call in progress (SuMigrateHooks; NULL counts nothing and never fails). An armed point makes the allocation
+ * return NULL before it is made, so the caller's own out-of-memory path runs. The engine is single-threaded per call
+ * (migrations run in the world's worker, outside ticks), so the hooks of one call are held in g_alloc_hooks for its
+ * duration and cleared on return. */
+static SuMigrateHooks *g_alloc_hooks = NULL;
+
+static int inject_point(SuMigrateHooks *h) {
+    if (h == NULL) {
+        return 0;
+    }
+    h->points++;
+    return h->fail_at != 0u && h->points == h->fail_at;
+}
+
+static void *mig_malloc(size_t n) {
+    return inject_point(g_alloc_hooks) ? NULL : malloc(n);
+}
+
+static void *mig_calloc(size_t n, size_t m) {
+    return inject_point(g_alloc_hooks) ? NULL : calloc(n, m);
+}
+
+static void *mig_realloc(void *p, size_t n) {
+    return inject_point(g_alloc_hooks) ? NULL : realloc(p, n);
+}
+
 static void sb_put(Sb *b, const char *s, size_t n) {
     if (b->oom) {
         return;
@@ -71,7 +99,7 @@ static void sb_put(Sb *b, const char *s, size_t n) {
         while (nc < b->len + n + 1u) {
             nc *= 2u;
         }
-        np = realloc(b->p, nc);
+        np = mig_realloc(b->p, nc);
         if (np == NULL) {
             b->oom = 1;
             return;
@@ -257,14 +285,6 @@ static void schema_digest_of(const SuWorldFieldDesc *f, const uint32_t *def, uin
 }
 
 /* ---- failure injection --------------------------------------------------- */
-
-static int inject_point(SuMigrateHooks *h) {
-    if (h == NULL) {
-        return 0;
-    }
-    h->points++;
-    return h->fail_at != 0u && h->points == h->fail_at;
-}
 
 #define MIG_POINT(h)                                 \
     do {                                             \
@@ -470,7 +490,7 @@ static uint32_t parse_xform(const uint8_t *bytes, size_t len, Xform *x, SuMigrat
         return fail_plan(p, SU_E_TYPE, "writes must be a non-empty array of field IDs");
     }
     x->writes_n = (uint32_t)wr->u.array.count;
-    x->writes = malloc(x->writes_n * sizeof *x->writes);
+    x->writes = mig_malloc(x->writes_n * sizeof *x->writes);
     if (x->writes == NULL) {
         return fail_plan(p, SU_E_RESOURCE_LIMIT, "out of memory reading writes");
     }
@@ -617,10 +637,33 @@ static uint64_t est_bytes(uint64_t hw, uint64_t fields) {
     return hw * ((fields + 1u) * EST_VALUE_BYTES + EST_SLOT_BYTES) + EST_HEADER_BYTES;
 }
 
+static uint32_t plan_body(const SuWorld *w, const SuMigrateInputs *in,
+                          const SuMigrateSystem *systems, uint32_t system_count,
+                          const char *const *drop_systems, uint32_t drop_count,
+                          const SuMigrateBudget *budget, SuMigratePlan *out);
+
+uint32_t su_migrate_plan_inject(const SuWorld *w, const SuMigrateInputs *in,
+                                const SuMigrateSystem *systems, uint32_t system_count,
+                                const char *const *drop_systems, uint32_t drop_count,
+                                const SuMigrateBudget *budget, SuMigrateHooks *hooks, SuMigratePlan *out) {
+    uint32_t st;
+    g_alloc_hooks = hooks;
+    st = plan_body(w, in, systems, system_count, drop_systems, drop_count, budget, out);
+    g_alloc_hooks = NULL;
+    return st;
+}
+
 uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
                          const SuMigrateSystem *systems, uint32_t system_count,
                          const char *const *drop_systems, uint32_t drop_count,
                          const SuMigrateBudget *budget, SuMigratePlan *out) {
+    return su_migrate_plan_inject(w, in, systems, system_count, drop_systems, drop_count, budget, NULL, out);
+}
+
+static uint32_t plan_body(const SuWorld *w, const SuMigrateInputs *in,
+                          const SuMigrateSystem *systems, uint32_t system_count,
+                          const char *const *drop_systems, uint32_t drop_count,
+                          const SuMigrateBudget *budget, SuMigratePlan *out) {
     SuJsonLimits lim;
     SuJsonDoc mdoc;
     SuJsonError jerr;
@@ -741,8 +784,8 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
         st = fail_plan(out, SU_E_RESOURCE_LIMIT, "schema exceeds the field limit");
         goto done;
     }
-    srcf = calloc(src_n > 0u ? src_n : 1u, sizeof *srcf);
-    srcdef = calloc(src_n > 0u ? src_n : 1u, sizeof *srcdef);
+    srcf = mig_calloc(src_n > 0u ? src_n : 1u, sizeof *srcf);
+    srcdef = mig_calloc(src_n > 0u ? src_n : 1u, sizeof *srcdef);
     if (srcf == NULL || srcdef == NULL) {
         st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
         goto done;
@@ -767,7 +810,7 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
     }
     /* old_ret points into the world; copy it into the compile-time removed list (grown below). */
     cc.removed_cap = hw_ret_n + SU_MIGRATE_MAX_OPS;
-    cc.removed = malloc(cc.removed_cap * sizeof *cc.removed);
+    cc.removed = mig_malloc(cc.removed_cap * sizeof *cc.removed);
     if (cc.removed == NULL) {
         st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
         goto done;
@@ -878,7 +921,7 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
         }
     }
 
-    c = calloc(1u, sizeof *c);
+    c = mig_calloc(1u, sizeof *c);
     if (c == NULL) {
         st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
         goto done;
@@ -888,15 +931,15 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
     c->to_gen = to_gen;
     c->schema_version = su_world_schema_version(w);
     c->dst_n = cc.n;
-    c->dst = calloc(cc.n > 0u ? cc.n : 1u, sizeof *c->dst);
-    c->dst_def = calloc(cc.n > 0u ? cc.n : 1u, sizeof *c->dst_def);
+    c->dst = mig_calloc(cc.n > 0u ? cc.n : 1u, sizeof *c->dst);
+    c->dst_def = mig_calloc(cc.n > 0u ? cc.n : 1u, sizeof *c->dst_def);
     if (c->dst == NULL || c->dst_def == NULL) {
         st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
         goto done;
     }
     for (i = 0; i < cc.n; i++) {
         size_t nl = strlen(cc.f[i].name);
-        char *nm = malloc(nl + 1u);
+        char *nm = mig_malloc(nl + 1u);
         if (nm == NULL) {
             st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
             goto done;
@@ -910,7 +953,7 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
     }
     {
         const char *sid = su_world_schema_id(w);
-        c->schema_id = malloc(strlen(sid) + 1u);
+        c->schema_id = mig_malloc(strlen(sid) + 1u);
         if (c->schema_id == NULL) {
             st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
             goto done;
@@ -923,7 +966,7 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
 
     /* Retired IDs: old ones plus the ones this migration removes (ascending, unique). */
     c->retired_n = cc.removed_n;
-    c->retired = calloc(cc.removed_n > 0u ? cc.removed_n : 1u, sizeof *c->retired);
+    c->retired = mig_calloc(cc.removed_n > 0u ? cc.removed_n : 1u, sizeof *c->retired);
     if (c->retired == NULL) {
         st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
         goto done;
@@ -947,7 +990,7 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
 
     /* Source IDs (ascending) for membership and copies. */
     c->src_n = src_n;
-    c->src_ids = calloc(src_n > 0u ? src_n : 1u, sizeof *c->src_ids);
+    c->src_ids = mig_calloc(src_n > 0u ? src_n : 1u, sizeof *c->src_ids);
     if (c->src_ids == NULL) {
         st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
         goto done;
@@ -979,13 +1022,13 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
         }
         c->has_transform = 1;
         c->writes_n = xf.writes_n;
-        c->writes = malloc(xf.writes_n * sizeof *c->writes);
+        c->writes = mig_malloc(xf.writes_n * sizeof *c->writes);
         if (c->writes == NULL) {
             st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
             goto done;
         }
         memcpy(c->writes, xf.writes, xf.writes_n * sizeof *c->writes);
-        c->lir = malloc(in->lir_len > 0u ? in->lir_len : 1u);
+        c->lir = mig_malloc(in->lir_len > 0u ? in->lir_len : 1u);
         if (c->lir == NULL) {
             st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
             goto done;
@@ -999,7 +1042,7 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
             goto done;
         }
         /* Union of the source and destination tables. A field's name is its destination name when it exists. */
-        ent = calloc(src_n + cc.n + 1u, sizeof *ent);
+        ent = mig_calloc(src_n + cc.n + 1u, sizeof *ent);
         if (ent == NULL) {
             st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
             goto done;
@@ -1077,7 +1120,7 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
             goto done;
         }
         c->lineage_n = lin_n + 1u;
-        c->lineage = malloc(c->lineage_n * sizeof *c->lineage);
+        c->lineage = mig_malloc(c->lineage_n * sizeof *c->lineage);
         if (c->lineage == NULL) {
             st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
             goto done;
@@ -1166,7 +1209,7 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
     /* Per-system impact. */
     out->system_count = system_count;
     if (system_count > 0u) {
-        out->systems = calloc(system_count, sizeof *out->systems);
+        out->systems = mig_calloc(system_count, sizeof *out->systems);
         if (out->systems == NULL) {
             st = fail_plan(out, SU_E_RESOURCE_LIMIT, "out of memory");
             goto done;
@@ -1313,8 +1356,20 @@ static int in_writes(const SuMigrateCompiled *c, uint32_t id) {
     return id_in_list(c->writes, c->writes_n, id);
 }
 
+static uint32_t prepare_body(const SuWorld *old, const SuMigratePlan *p, SuMigrateHooks *hooks,
+                             SuWorld **out, SuMigrateTimings *timings);
+
 uint32_t su_migrate_prepare(const SuWorld *old, const SuMigratePlan *p, SuMigrateHooks *hooks,
                             SuWorld **out, SuMigrateTimings *timings) {
+    uint32_t st;
+    g_alloc_hooks = hooks;
+    st = prepare_body(old, p, hooks, out, timings);
+    g_alloc_hooks = NULL;
+    return st;
+}
+
+static uint32_t prepare_body(const SuWorld *old, const SuMigratePlan *p, SuMigrateHooks *hooks,
+                             SuWorld **out, SuMigrateTimings *timings) {
     SuMigrateCompiled *c;
     uint32_t st = SU_OK;
     uint64_t t0;
@@ -1361,8 +1416,8 @@ uint32_t su_migrate_prepare(const SuWorld *old, const SuMigratePlan *p, SuMigrat
 
     /* Entity scratch: alive and generation views of the stored rows. */
     MIG_POINT(hooks);
-    alive = malloc(hw > 0u ? (size_t)hw : 1u);
-    gen = malloc((hw > 0u ? (size_t)hw : 1u) * sizeof *gen);
+    alive = mig_malloc(hw > 0u ? (size_t)hw : 1u);
+    gen = mig_malloc((hw > 0u ? (size_t)hw : 1u) * sizeof *gen);
     if (alive == NULL || gen == NULL) {
         st = SU_E_RESOURCE_LIMIT;
         goto done;
@@ -1374,7 +1429,7 @@ uint32_t su_migrate_prepare(const SuWorld *old, const SuMigratePlan *p, SuMigrat
 
     /* One column buffer per destination field (hw rows; rows at or above high_water stay implicit zero). */
     MIG_POINT(hooks);
-    buf = calloc(c->dst_n > 0u ? c->dst_n : 1u, sizeof *buf);
+    buf = mig_calloc(c->dst_n > 0u ? c->dst_n : 1u, sizeof *buf);
     if (buf == NULL) {
         st = SU_E_RESOURCE_LIMIT;
         goto done;
@@ -1387,7 +1442,7 @@ uint32_t su_migrate_prepare(const SuWorld *old, const SuMigratePlan *p, SuMigrat
         uint32_t sidx = find_src_index(c, c->dst[j].id, &found);
         (void)sidx;
         MIG_POINT(hooks);
-        buf[j] = calloc(hw > 0u ? (size_t)hw : 1u, sizeof **buf);
+        buf[j] = mig_calloc(hw > 0u ? (size_t)hw : 1u, sizeof **buf);
         if (buf[j] == NULL) {
             st = SU_E_RESOURCE_LIMIT;
             goto done;
@@ -1453,8 +1508,8 @@ uint32_t su_migrate_prepare(const SuWorld *old, const SuMigratePlan *p, SuMigrat
             st = SU_E_RESOURCE_LIMIT;
             goto transform_cleanup;
         }
-        in_b = calloc(n_in > 0u ? n_in : 1u, sizeof *in_b);
-        out_b = calloc(n_out > 0u ? n_out : 1u, sizeof *out_b);
+        in_b = mig_calloc(n_in > 0u ? n_in : 1u, sizeof *in_b);
+        out_b = mig_calloc(n_out > 0u ? n_out : 1u, sizeof *out_b);
         if (in_b == NULL || out_b == NULL) {
             free(in_b);
             free(out_b);

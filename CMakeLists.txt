@@ -397,4 +397,8 @@ add_dependencies(test_migrate_runtime recovery_worker)
 add_test(NAME migration_runtime COMMAND test_migrate_runtime $<TARGET_FILE:recovery_worker>
          "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/migration_runtime_scratch"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# M2-01 fixes2 (N2): every allocation of the migration engine goes through the counted wrappers.
+add_test(NAME migration_alloc_points COMMAND python3 -I
+         "${CMAKE_CURRENT_SOURCE_DIR}/tests/migration-runtime/check_alloc_points.py"
+         "${CMAKE_CURRENT_SOURCE_DIR}/src/world/migration/su_migrate.c")
 # ---- END M2-01b migration runtime ----

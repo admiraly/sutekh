@@ -202,6 +202,11 @@ typedef struct AgentWorld {
     int pin_has;
     Ckpt pin;
     char pin_mig[65];      /* migration hash of the commit that pinned pin (reported by rollback) */
+    /* N1: the checkpoint the commit in progress would pin. It replaces pin only when that commit succeeds; a failed
+     * attempt (refused, undone, or interrupted) leaves the last committed pin in place. Cleared on every exit. */
+    int pin_try_has;
+    Ckpt pin_try;
+    char pin_try_mig[65];
     int migrated;
     uint32_t next_plan;
     PlanRec plan[AGENT_MAX_PLANS];
@@ -701,6 +706,9 @@ static int spool_referenced(const SuAgent *a, const char *sha, const char *ext) 
             continue;
         }
         if (w->pin_has && migop_refs_pin(&w->pin, sha, ext)) {
+            return 1;
+        }
+        if (w->pin_try_has && migop_refs_pin(&w->pin_try, sha, ext)) {
             return 1;
         }
         for (k = 0; k < AGENT_MAX_PLANS; k++) {
@@ -3961,12 +3969,30 @@ static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char
 #ifdef SU_TEST_FAULT_HOOKS
 static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c);
 
+/* The id of the world's most recent plan (plans are numbered plan-N per world), or NULL. */
+static const char *latest_plan_id(const AgentWorld *w) {
+    const char *best = NULL;
+    unsigned long best_n = 0;
+    uint32_t k;
+    for (k = 0; k < AGENT_MAX_PLANS; k++) {
+        if (w->plan[k].used) {
+            unsigned long n = strtoul(w->plan[k].id + 5, NULL, 10);
+            if (best == NULL || n > best_n) {
+                best = w->plan[k].id;
+                best_n = n;
+            }
+        }
+    }
+    return best;
+}
+
 /* M1-02c-3 test seam (SU_TEST_FAULT_HOOKS builds only). SU_TEST_INTERLEAVE selects one request the
  * supervisor issues itself, through route() as a client would, between admission and install:
  *   candidate  candidate.install of SU_TEST_INTERLEAVE_CANDIDATE at the world's current revision (a new
  *              semantic revision lands after admission);
- *   close      world.close of the world at its current revision.
- * The nested answer is discarded; the outer call's answer and the world state are what the test checks. */
+ *   close      world.close of the world at its current revision;
+ *   migrate    world.migrate_commit of the world's most recent plan, resubmitting the most recent passed candidate
+ *              that was never installed (M2-01 fixes2, BLK-3 (iii): a layout generation lands after admission). */
 static void test_interleave(SuAgent *a, const char *world_id) {
     const char *mode = getenv("SU_TEST_INTERLEAVE");
     const char *cid = getenv("SU_TEST_INTERLEAVE_CANDIDATE");
@@ -4018,6 +4044,30 @@ static void test_interleave(SuAgent *a, const char *world_id) {
         su_buf_str(&params_txt, "}");
         memset(&rq, 0, sizeof rq);
         snprintf(rq.method, sizeof rq.method, "world.close");
+    } else if (strcmp(mode, "migrate") == 0) {
+        const char *pid = latest_plan_id(w);
+        const char *mcid = NULL;
+        const char *msid = NULL;
+        for (k = 0; k < AGENT_MAX_CANDIDATES; k++) {
+            if (a->cand[k].used && strcmp(a->cand[k].eval_status, "passed") == 0 &&
+                strcmp(a->cand[k].install_state, "not_attempted") == 0) {
+                mcid = a->cand[k].id;
+                msid = a->cand[k].system_id;
+            }
+        }
+        if (pid == NULL || mcid == NULL || msid == NULL) {
+            su_buf_free(&params_txt);
+            return;
+        }
+        su_buf_str(&params_txt, ",\"plan_id\":");
+        su_buf_quoted(&params_txt, pid, strlen(pid));
+        su_buf_str(&params_txt, ",\"resubmit\":[{\"system_id\":");
+        su_buf_quoted(&params_txt, msid, strlen(msid));
+        su_buf_str(&params_txt, ",\"candidate_id\":");
+        su_buf_quoted(&params_txt, mcid, strlen(mcid));
+        su_buf_str(&params_txt, "}]}");
+        memset(&rq, 0, sizeof rq);
+        snprintf(rq.method, sizeof rq.method, "world.migrate_commit");
     } else {
         su_buf_free(&params_txt);
         return;
@@ -4781,6 +4831,8 @@ static uint32_t rollback_pinned(SuAgent *a, AgentWorld *w, AgentCall *c, const I
     if (rc == CK_BAD) {
         return call_fail(c, SU_E_INTERNAL, "rolled-back state diverged from the worker; world is unrecoverable");
     }
+    /* The restore replaces the schedule: the worker released the native kernels of the schedule it replaced. */
+    nat_clear(w);
     return SU_OK;
 }
 
@@ -4813,7 +4865,8 @@ static int test_post_ck_noroom(void) {
  * sync_after appended is removed and the supervisor records return to the pre-migration values, so the replacement
  * worker rebuilds the pinned pre-migration checkpoint and the replay log ends before the migration. Nothing is
  * acknowledged: the revision is the one before the commit and the world is the old world (contract section 1).
- * The pin no longer names a committed migration, so rollback is unavailable until the next commit. */
+ * The committed pin is untouched (N1): an undone attempt never replaced it, so rollback still restores the last
+ * committed migration. */
 static uint32_t undo_migration(SuAgent *a, AgentWorld *w, AgentCall *c, const InFlight *op, const PreMig *pre,
                                uint32_t code, const char *msg, const char *reason) {
     const LogOp *last;
@@ -4834,8 +4887,6 @@ static uint32_t undo_migration(SuAgent *a, AgentWorld *w, AgentCall *c, const In
     w->count = pre->count;
     memcpy(w->sys, pre->sys, sizeof w->sys);
     w->migrated = pre->migrated;
-    w->pin_has = 0;
-    w->pin_mig[0] = '\0';
     recover(a, c, op);
     if (w->unrecoverable) {
         return call_fail(c, SU_E_INTERNAL, "world is unrecoverable: the pre-migration state could not be rebuilt");
@@ -5095,7 +5146,8 @@ static uint32_t reject_from(AgentCall *c, Reply *r, SuBuf *resp) {
 /* world.migrate_commit {world_id, plan_id, expected_world_revision, resubmit: [{system_id, candidate_id}],
  * drop_systems?}. Every installed system is replaced by an evaluated candidate of the plan's target generation or
  * dropped (contract B2). See the section comment for the stages and the crash behaviour. */
-static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+/* The commit body. *wout is the world once it is known, so the wrapper can clear the staged pin on every exit. */
+static uint32_t migrate_commit_run(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c, AgentWorld **wout) {
     static const char *const allowed[] = {"world_id", "plan_id", "expected_world_revision", "resubmit", "drop_systems"};
     const char *world_id = NULL;
     const char *plan_id = NULL;
@@ -5146,6 +5198,7 @@ static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, Su
     if (st != SU_OK) {
         return st;
     }
+    *wout = w;
     pr = plan_find(w, plan_id);
     if (pr == NULL) {
         return call_fail(c, SU_E_INVALID_ARGUMENT, "unknown plan_id");
@@ -5217,9 +5270,10 @@ static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, Su
     if (rc == CK_BAD) {
         return call_fail(c, SU_E_INTERNAL, "checkpoint disagreed with the acknowledged state; world is unrecoverable");
     }
-    w->pin = w->ck[w->ck_count - 1];
-    w->pin_has = 1;
-    memcpy(w->pin_mig, pr->plan_hash, sizeof w->pin_mig);
+    /* N1: stage the pin; it becomes the committed pin only when the whole commit succeeds (see the wrapper). */
+    w->pin_try = w->ck[w->ck_count - 1];
+    w->pin_try_has = 1;
+    memcpy(w->pin_try_mig, pr->plan_hash, sizeof w->pin_try_mig);
     gc_spool(a);
 
     /* Prepare the successor aside: the worker builds and checks it; nothing installed changes. */
@@ -5377,6 +5431,13 @@ static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, Su
     }
     ck_ns = mono_ns() - t0;
     w->migrated = 1;
+    /* N1: the commit succeeded: the staged checkpoint becomes the rollback target of this migration. */
+    w->pin = w->pin_try;
+    w->pin_has = 1;
+    snprintf(w->pin_mig, sizeof w->pin_mig, "%s", w->pin_try_mig);
+    /* The swap released the old schedule and its native kernels (the worker: su_sched_free of the old schedule), so
+     * the records of the world's installed kernels no longer describe it (as candidate.install does). */
+    nat_clear(w);
 
     wrev(w, w->rev, rv, sizeof rv);
     su_buf_str(res, "{\"world_id\":");
@@ -5420,6 +5481,17 @@ static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, Su
     }
     su_buf_str(res, "]}");
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* world.migrate_commit. Whatever the outcome, the staged pin (N1) is cleared: it is only ever promoted by the body on
+ * success, so a refused, undone or interrupted commit leaves the last committed pin (the rollback target) unchanged. */
+static uint32_t h_world_migrate_commit(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c) {
+    AgentWorld *w = NULL;
+    uint32_t st = migrate_commit_run(a, params, res, c, &w);
+    if (w != NULL) {
+        w->pin_try_has = 0;
+    }
+    return st;
 }
 
 /* world.migrate_rollback {world_id, expected_world_revision}: restores the pinned pre-migration checkpoint as a new

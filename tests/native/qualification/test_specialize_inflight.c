@@ -535,6 +535,306 @@ static void scenario_interleave_close(void) {
     sess_stop(&s);
 }
 
+/* ---------- layout generation in flight (M2-01 fixes2, BLK-3 (iii)) ---------- */
+
+/* The raw text of member key (an object or an array) of a reply text, or 0 when absent or too long. */
+static int raw_member(const char *text, const char *key, char *out, size_t cap) {
+    char pat[96];
+    const char *p;
+    const char *q;
+    int depth = 0;
+    size_t n;
+
+    snprintf(pat, sizeof pat, "\"%s\":", key);
+    p = strstr(text, pat);
+    if (p == NULL) {
+        return 0;
+    }
+    p += strlen(pat);
+    if (*p != '[' && *p != '{') {
+        return 0;
+    }
+    for (q = p; *q != '\0'; q++) {
+        if (*q == '[' || *q == '{') {
+            depth++;
+        } else if (*q == ']' || *q == '}') {
+            depth--;
+            if (depth == 0) {
+                q++;
+                break;
+            }
+        }
+    }
+    n = (size_t)(q - p);
+    if (n + 1u > cap) {
+        return 0;
+    }
+    memcpy(out, p, n);
+    out[n] = '\0';
+    return 1;
+}
+
+/* The migration: a field no system uses (id 3, "bonus") and layout generation 1 -> 2. */
+static void write_migration(void) {
+    char path[1200];
+    FILE *f;
+    snprintf(path, sizeof path, "%s/m_gen2.json", g_proj);
+    f = fopen(path, "wb");
+    if (f == NULL) {
+        perror(path);
+        exit(2);
+    }
+    fputs("{\"migration_format\":\"0.1\",\"id\":\"m-gen2-bonus\",\"from_layout_generation\":1,"
+          "\"to_layout_generation\":2,\"ops\":[{\"op\":\"add_field\",\"field\":{\"id\":3,\"name\":\"bonus\","
+          "\"type\":\"u32\",\"default\":5}}]}",
+          f);
+    fclose(f);
+}
+
+/* world.migrate_plan of m_gen2.json; pid receives the plan id. Succeeds when the plan is valid. */
+static int plan_gen2(Sess *s, const char *wid, const char *rev, char *pid, size_t cap) {
+    Resp r;
+    char line[512];
+    const SuJsonValue *pl;
+    int ok;
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"mp\",\"method\":\"world.migrate_plan\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\",\"migration_path\":\"m_gen2.json\"}}",
+             wid, rev);
+    call(s, line, &r, 120000);
+    ok = resp_ok(&r) && str_of(member(r.root, "result"), "plan_id", pid, cap);
+    pl = member(member(r.root, "result"), "plan");
+    ok = ok && pl != NULL && member(pl, "valid") != NULL && member(pl, "valid")->type == SU_JSON_BOOL &&
+         member(pl, "valid")->u.boolean == 1;
+    resp_free(&r);
+    return ok;
+}
+
+/* world.migrate_commit of plan pid at rev, resubmitting candidate cid for demo.movement. r is the caller's reply. */
+static int commit_gen2(Sess *s, const char *wid, const char *pid, const char *rev, const char *cid, Resp *r) {
+    char line[1024];
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"mc\",\"method\":\"world.migrate_commit\",\"params\":{\"world_id\":\"%s\","
+             "\"plan_id\":\"%s\",\"expected_world_revision\":\"%s\",\"resubmit\":[{\"system_id\":\"demo.movement\","
+             "\"candidate_id\":\"%s\"}]}}",
+             wid, pid, rev, cid);
+    call(s, line, r, 120000);
+    return resp_ok(r);
+}
+
+/* world.step of ticks at rev; rev receives the new revision. */
+static int step_n(Sess *s, const char *wid, char *rev, size_t cap, uint64_t ticks) {
+    Resp r;
+    char line[512];
+    int ok;
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"st\",\"method\":\"world.step\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\",\"ticks\":%llu}}",
+             wid, rev, (unsigned long long)ticks);
+    call(s, line, &r, 120000);
+    ok = resp_ok(&r) && str_of(member(r.root, "result"), "world_revision", rev, cap);
+    resp_free(&r);
+    return ok;
+}
+
+/* The stored values of the unaffected fields (position_x, velocity_x) and the tick of wid (world.inspect). */
+static int columns_of(Sess *s, const char *wid, char *cols, size_t cap, uint64_t *tick) {
+    Resp r;
+    char line[512];
+    int ok;
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"wi\",\"method\":\"world.inspect\",\"params\":{\"world_id\":\"%s\","
+             "\"fields\":[\"position_x\",\"velocity_x\"],\"limit\":16}}",
+             wid);
+    call(s, line, &r, 120000);
+    ok = resp_ok(&r) && raw_member((const char *)r.text, "columns", cols, cap);
+    if (ok && tick != NULL) {
+        *tick = uint_of(member(r.root, "result"), "tick");
+    }
+    resp_free(&r);
+    return ok;
+}
+
+/* A layout generation lands between the admission of a native specialization (made at generation 1) and its install.
+ * The supervisor commits the migration in the seam (add a field no system uses; demo.movement resubmitted at
+ * generation 2). Expected: the install is refused (the revision moved); the world runs the VM tier at generation 2
+ * (the kernel of the replaced schedule is gone); a specialization made at generation 2 installs; and after the same
+ * ticks the unaffected columns and the tick equal those of a VM-only control world that received the same migration.
+ * The release of the old kernel is observed through the tier (the test worker is a separate process; su_nv_state is
+ * not visible from here). */
+static void scenario_interleave_migrate(void) {
+    Sess s;
+    char wid[64];
+    char wid2[64];
+    char rev0[65];
+    char rev1[65];
+    char rev2[65];
+    char cid[32];
+    char pid[32];
+    char pid2[32];
+    char tier[32];
+    char cols_a[4096];
+    char cols_b[4096];
+    Resp r;
+    uint64_t active;
+    uint64_t ta = 0;
+    uint64_t tb = 0;
+    long long start;
+
+    setenv("SU_TEST_INTERLEAVE", "migrate", 1);
+    s = sess_start(NULL, NULL, 120000, "ilm");
+    unsetenv("SU_TEST_INTERLEAVE");
+    CHECK(create_movement(&s, wid, sizeof wid, rev0, sizeof rev0));
+    active = active_pid(&s);
+    start = proc_starttime((pid_t)active);
+    copy_fixture("movement_gen2.capsule.json");
+    copy_fixture("movement_gen2.test.json");
+    write_migration();
+    CHECK(submit_and_eval(&s, "movement_gen2.capsule.json", "movement_gen2.test.json", cid, sizeof cid));
+    CHECK(plan_gen2(&s, wid, rev0, pid, sizeof pid));
+
+    /* Admission at generation 1; the seam commits the migration before the install, which is refused as stale. */
+    specialize(&s, wid, rev0, "scalar", &r);
+    CHECK(!resp_ok(&r));
+    CHECK(member(r.root, "error") != NULL);
+    CHECK(err_status(&r) == SU_E_STALE_REVISION);
+    resp_free(&r);
+    CHECK(world_rev(&s, wid, rev1, sizeof rev1));
+    CHECK(strcmp(rev1, rev0) != 0);
+    {
+        Resp ir;
+        inspect(&s, wid, &ir);
+        CHECK(resp_ok(&ir));
+        CHECK(tier_of(&ir, tier, sizeof tier) && strcmp(tier, "vm") == 0);
+        CHECK(uint_of(member(ir.root, "result"), "layout_generation") == 2u);
+        resp_free(&ir);
+    }
+    CHECK(active_pid(&s) == active);
+    CHECK(zombie_children(s.pid) == 0);
+
+    /* The released kernel is not brought back: a worker death while the world is idle recovers it at generation 2
+     * with the VM tier (the supervisor's records of the replaced schedule were cleared by the commit). */
+    CHECK(kill((pid_t)active, SIGKILL) == 0);
+    {
+        Resp ir;
+        /* The first request after the death reports SU_E_WORKER_FAILED (retry: true) and starts the replacement. */
+        inspect(&s, wid, &ir);
+        if (!resp_ok(&ir)) {
+            resp_free(&ir);
+            inspect(&s, wid, &ir);
+        }
+        CHECK(resp_ok(&ir));
+        CHECK(tier_of(&ir, tier, sizeof tier) && strcmp(tier, "vm") == 0);
+        CHECK(uint_of(member(ir.root, "result"), "layout_generation") == 2u);
+        resp_free(&ir);
+    }
+    active = active_pid(&s);
+    CHECK(active != 0u);
+    start = proc_starttime((pid_t)active);
+
+    /* A specialization made at generation 2 installs. */
+    specialize(&s, wid, rev1, "scalar", &r);
+    CHECK(resp_ok(&r));
+    CHECK(str_of(member(r.root, "result"), "execution_tier", tier, sizeof tier) && strcmp(tier, "native_scalar") == 0);
+    resp_free(&r);
+    CHECK(active_pid(&s) == active);
+    CHECK(proc_starttime((pid_t)active) == start);
+
+    /* Control: a second world, VM only, with the same migration (the seam is one-shot, so this commit is not seamed). */
+    CHECK(create_movement(&s, wid2, sizeof wid2, rev2, sizeof rev2));
+    CHECK(plan_gen2(&s, wid2, rev2, pid2, sizeof pid2));
+    CHECK(commit_gen2(&s, wid2, pid2, rev2, cid, &r));
+    CHECK(str_of(member(r.root, "result"), "world_revision", rev2, sizeof rev2));
+    resp_free(&r);
+
+    CHECK(step_n(&s, wid, rev1, sizeof rev1, 10));
+    CHECK(step_n(&s, wid2, rev2, sizeof rev2, 10));
+    CHECK(columns_of(&s, wid, cols_a, sizeof cols_a, &ta));
+    CHECK(columns_of(&s, wid2, cols_b, sizeof cols_b, &tb));
+    CHECK(ta == 10u && tb == 10u);
+    CHECK(strcmp(cols_a, cols_b) == 0);
+    {
+        Resp ir;
+        inspect(&s, wid, &ir);
+        CHECK(resp_ok(&ir));
+        CHECK(tier_of(&ir, tier, sizeof tier) && strcmp(tier, "native_scalar") == 0);
+        resp_free(&ir);
+    }
+    CHECK(active_pid(&s) == active);
+    CHECK(zombie_children(s.pid) == 0);
+    sess_stop(&s);
+}
+
+/* A generation-1 kernel is installed, the migration commits (the swap releases the kernel), and the worker then dies
+ * while the next step computes tick 1 (SUTEKH_TEST_KILL_AT_TICK seam, once). The recovery must not attribute the death
+ * to a kernel: the commit cleared the supervisor's records of the replaced schedule, so nothing is quarantined and the
+ * recovery object has no native member. The retry then steps the world. */
+static void scenario_migrate_step_death(void) {
+    Sess s;
+    char wid[64];
+    char rev[65];
+    char cid[32];
+    char pid[32];
+    char tok[1100];
+    char line[512];
+    char tier[32];
+    Resp r;
+    const SuJsonValue *rec;
+    const SuJsonValue *quar;
+
+    snprintf(tok, sizeof tok, "%s/token-migrate-step-kill", g_scratch);
+    {
+        FILE *f = fopen(tok, "wb");
+        if (f == NULL) {
+            perror(tok);
+            exit(2);
+        }
+        fputs("armed\n", f);
+        fclose(f);
+    }
+    setenv("SUTEKH_TEST_KILL_AT_TICK", "1", 1);
+    setenv("SUTEKH_TEST_KILL_TOKEN", tok, 1);
+    s = sess_start(NULL, NULL, 120000, "ilmd");
+    unsetenv("SUTEKH_TEST_KILL_AT_TICK");
+    unsetenv("SUTEKH_TEST_KILL_TOKEN");
+    CHECK(create_movement(&s, wid, sizeof wid, rev, sizeof rev));
+    copy_fixture("movement_gen2.capsule.json");
+    copy_fixture("movement_gen2.test.json");
+    write_migration();
+    CHECK(submit_and_eval(&s, "movement_gen2.capsule.json", "movement_gen2.test.json", cid, sizeof cid));
+
+    specialize(&s, wid, rev, "scalar", &r);
+    CHECK(resp_ok(&r));
+    CHECK(str_of(member(r.root, "result"), "execution_tier", tier, sizeof tier) && strcmp(tier, "native_scalar") == 0);
+    resp_free(&r);
+    CHECK(world_rev(&s, wid, rev, sizeof rev));
+
+    CHECK(plan_gen2(&s, wid, rev, pid, sizeof pid));
+    CHECK(commit_gen2(&s, wid, pid, rev, cid, &r));
+    CHECK(str_of(member(r.root, "result"), "world_revision", rev, sizeof rev));
+    resp_free(&r);
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"st\",\"method\":\"world.step\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\",\"ticks\":1}}",
+             wid, rev);
+    call(&s, line, &r, 120000);
+    CHECK(!resp_ok(&r));
+    CHECK(err_status(&r) == 15u);
+    rec = member(r.root, "recovery");
+    CHECK(rec != NULL);
+    CHECK(member(rec, "native") == NULL);
+    quar = member(rec, "quarantined");
+    CHECK(quar != NULL && quar->type == SU_JSON_ARRAY && quar->u.array.count == 0u);
+    resp_free(&r);
+
+    CHECK(step_n(&s, wid, rev, sizeof rev, 1));
+    sess_stop(&s);
+}
+
 int main(int argc, char **argv) {
     if (argc != 4) {
         fprintf(stderr, "usage: %s <test worker> <repo root> <scratch dir>\n", argv[0]);
@@ -553,6 +853,8 @@ int main(int argc, char **argv) {
 
     scenario_interleave_candidate();
     scenario_interleave_close();
+    scenario_interleave_migrate();
+    scenario_migrate_step_death();
 
     printf("test_specialize_inflight: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

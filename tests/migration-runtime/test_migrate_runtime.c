@@ -603,6 +603,8 @@ static void run_refusals(void) {
 
 /* Rollback: restores the pinned pre-migration checkpoint as a new revision; the columns return to the pin's and
  * the changes after the pin are reported as lost. */
+static int inspect_state(Session *s, const char *wid, char *schema, size_t scap, char *cols, size_t ccap);
+
 static void run_rollback(void) {
     Session s;
     Setup st;
@@ -614,11 +616,16 @@ static void run_rollback(void) {
     char pre_sha[65];
     char post_sha[65];
     char back_sha[65];
+    char pre_schema[4096];
+    char pre_cols[4096];
+    char back_schema[4096];
+    char back_cols[4096];
 
     s = session_start("spool-rollback");
     CHECK(setup_world(&s, &st));
     snprintf(rev, sizeof rev, "%s", st.rev);
     CHECK(digest(&s, st.wid, rev, pre_sha, NULL));
+    CHECK(inspect_state(&s, st.wid, pre_schema, sizeof pre_schema, pre_cols, sizeof pre_cols));
     CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
     resp_free(&r);
     CHECK(commit(&s, st.wid, pid, rev, st.cand, &r));
@@ -643,6 +650,11 @@ static void run_rollback(void) {
      * canonical bytes differ from the pre-migration digest by the revision and the retired-ID record. */
     CHECK(digest(&s, st.wid, rev, back_sha, NULL));
     CHECK(strcmp(back_sha, post_sha) != 0);
+    /* M2-01 fixes2: the restored schema and the stored values equal the pre-migration ones (the state, not only
+     * the digest, which moves with the revision). */
+    CHECK(inspect_state(&s, st.wid, back_schema, sizeof back_schema, back_cols, sizeof back_cols));
+    CHECK(strcmp(back_schema, pre_schema) == 0);
+    CHECK(strcmp(back_cols, pre_cols) == 0);
     /* A second rollback with no pin change is available again (the pin is retained). */
     session_stop(&s);
 }
@@ -992,6 +1004,342 @@ static void run_rollback_two_migrations(void) {
     session_stop(&s);
 }
 
+/* ---------- M2-01 fixes2: N1 (pin of a failed commit), N2 (allocation points), C1, rollback comparison ---------- */
+
+/* Writes a token file (the worker or supervisor test seam reads and removes it). */
+static void put_token(const char *path, const char *text) {
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        perror(path);
+        exit(2);
+    }
+    fputs(text, f);
+    fclose(f);
+}
+
+static int token_gone(const char *path) {
+    return access(path, F_OK) != 0;
+}
+
+/* The raw text of member key (an object or an array) of a JSON reply text, or 0 when absent or too long. */
+static int raw_member(const char *text, const char *key, char *out, size_t cap) {
+    char pat[96];
+    const char *p;
+    const char *q;
+    int depth = 0;
+    size_t n;
+
+    snprintf(pat, sizeof pat, "\"%s\":", key);
+    p = strstr(text, pat);
+    if (p == NULL) {
+        return 0;
+    }
+    p += strlen(pat);
+    if (*p != '[' && *p != '{') {
+        return 0;
+    }
+    for (q = p; *q != '\0'; q++) {
+        if (*q == '[' || *q == '{') {
+            depth++;
+        } else if (*q == ']' || *q == '}') {
+            depth--;
+            if (depth == 0) {
+                q++;
+                break;
+            }
+        }
+    }
+    n = (size_t)(q - p);
+    if (n + 1u > cap) {
+        return 0;
+    }
+    memcpy(out, p, n);
+    out[n] = '\0';
+    return 1;
+}
+
+/* The schema and the stored values of field position_x (world.inspect, at the world's current state). */
+static int inspect_state(Session *s, const char *wid, char *schema, size_t scap, char *cols, size_t ccap) {
+    Resp r;
+    char line[512];
+    int ok;
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"wi\",\"method\":\"world.inspect\",\"params\":{\"world_id\":\"%s\","
+             "\"fields\":[\"position_x\"],\"limit\":256}}",
+             wid);
+    call(s, line, &r);
+    ok = resp_ok(&r) && raw_member((const char *)r.text, "schema", schema, scap) &&
+         raw_member((const char *)r.text, "columns", cols, ccap);
+    resp_free(&r);
+    return ok;
+}
+
+/* Rollback at tick 63, below the checkpoint interval (64). The checkpoints are: the initial one, one at tick 2 (taken by
+ * the digest below: world.snapshot checkpoints the state), and the commit's pin at tick 63. The checkpoint before the
+ * pin is therefore the tick-2 state, a different state, so a rollback to it is detected (the tick and the columns
+ * differ). The state at tick 63 is read with world.inspect, which does not checkpoint, so the pin stays at tick 63. */
+static void run_rollback_deep(void) {
+    Session s;
+    Setup st;
+    Resp r;
+    char rev[48];
+    char pid[32];
+    char phash[65];
+    char pre_sha[65];
+    char back_sha[65];
+    char pre_schema[4096];
+    char pre_cols[4096];
+    char back_schema[4096];
+    char back_cols[4096];
+    char line[512];
+    uint64_t pre_tick = 0;
+    uint64_t back_tick = 0;
+    int valid = 0;
+
+    s = session_start("spool-rollback-deep");
+    CHECK(setup_world(&s, &st));
+    snprintf(rev, sizeof rev, "%s", st.rev);
+    CHECK(digest(&s, st.wid, rev, pre_sha, NULL));
+    CHECK(step(&s, st.wid, rev, sizeof rev, 61, &r));
+    pre_tick = uint_of(resp_result(&r), "tick");
+    resp_free(&r);
+    CHECK(pre_tick == 63u);
+    CHECK(inspect_state(&s, st.wid, pre_schema, sizeof pre_schema, pre_cols, sizeof pre_cols));
+    CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(valid == 1);
+    resp_free(&r);
+    CHECK(commit(&s, st.wid, pid, rev, st.cand, &r));
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"rb\",\"method\":\"world.migrate_rollback\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\"}}",
+             st.wid, rev);
+    call(&s, line, &r);
+    CHECK(resp_ok(&r));
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+    CHECK(digest(&s, st.wid, rev, back_sha, &back_tick));
+    CHECK(back_tick == pre_tick);
+    CHECK(inspect_state(&s, st.wid, back_schema, sizeof back_schema, back_cols, sizeof back_cols));
+    CHECK(strcmp(back_schema, pre_schema) == 0);
+    CHECK(strcmp(back_cols, pre_cols) == 0);
+    session_stop(&s);
+}
+
+/* N1: a failed second commit leaves the first commit's pin in place (the rollback target). The second commit fails
+ * either in its prepare (mode "prepare": the allocation seam refuses the prepare request's first point) or in its
+ * post-commit checkpoint (mode "noroom": the supervisor no-room seam, armed after the first commit). Afterwards the
+ * world is the state after the first commit, and rollback restores the state before it: the schema has no shield,
+ * no health, and the restored_from names the first plan. */
+static void run_failed_second_commit(const char *mode) {
+    Session s;
+    Setup st;
+    Resp r;
+    char rev[48];
+    char pid[32];
+    char phash[65];
+    char phash1[65];
+    char cand3[32];
+    char code[64];
+    char sha_after1[65];
+    char sha[65];
+    char tok[2200];
+    char restored[65];
+    char line[512];
+    char schema[4096];
+    char cols[4096];
+    int valid = 0;
+    int prep = strcmp(mode, "prepare") == 0;
+    const char *env_name = prep ? "SUTEKH_TEST_MIG_ALLOC_TOKEN" : "SUTEKH_TEST_POST_CK_NOROOM_TOKEN";
+
+    snprintf(tok, sizeof tok, "%s/token-n1-%s", g_scratch, mode);
+    unlink(tok);
+    setenv(env_name, tok, 1);
+    s = session_start(prep ? "spool-n1-prepare" : "spool-n1-noroom");
+    unsetenv(env_name);
+    CHECK(setup_world(&s, &st));
+    snprintf(rev, sizeof rev, "%s", st.rev);
+    CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash1, sizeof phash1, &valid, &r));
+    CHECK(valid == 1);
+    resp_free(&r);
+    CHECK(commit(&s, st.wid, pid, rev, st.cand, &r));
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+    CHECK(digest(&s, st.wid, rev, sha_after1, NULL));
+
+    CHECK(submit(&s, "sys_a_gen3.capsule.json", cand3, sizeof cand3));
+    CHECK(evaluate(&s, cand3, "sys_a_gen3.test.json"));
+    CHECK(plan(&s, st.wid, rev, "m_shield3.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(valid == 1);
+    resp_free(&r);
+    if (prep) {
+        put_token(tok, "1\n");
+    } else {
+        put_token(tok, "armed\n");
+    }
+    CHECK(!commit(&s, st.wid, pid, rev, cand3, &r));
+    CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_RESOURCE_LIMIT") == 0);
+    resp_free(&r);
+    CHECK(digest(&s, st.wid, rev, sha, NULL) && strcmp(sha, sha_after1) == 0);
+
+    /* Rollback after the failed attempt: the target is the first commit's pin. */
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"rb\",\"method\":\"world.migrate_rollback\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\"}}",
+             st.wid, rev);
+    call(&s, line, &r);
+    CHECK(resp_ok(&r));
+    CHECK(str_of(resp_result(&r), "restored_from", restored, sizeof restored) && strcmp(restored, phash1) == 0);
+    str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+    resp_free(&r);
+    CHECK(inspect_state(&s, st.wid, schema, sizeof schema, cols, sizeof cols));
+    CHECK(strstr(schema, "\"name\":\"health\"") == NULL);
+    CHECK(strstr(schema, "\"name\":\"shield\"") == NULL);
+    session_stop(&s);
+}
+
+/* N2: an allocation failure at each injection point of world.migrate_plan and of the commit's migrate.prepare request
+ * (the replan and the successor world) leaves the world bit-identical at its revision and active. Points are armed one
+ * at a time from 1 upward through the SUTEKH_TEST_MIG_ALLOC_TOKEN file; the first request without a failure succeeds.
+ * After the failed requests a kill and recovery still give the pre-migration digest, and the successful commit after
+ * two ticks reaches the control digest. */
+static void run_alloc_faults(const Outcome *ctl) {
+    Session s;
+    Setup st;
+    Resp r;
+    char rev[48];
+    char pid[32];
+    char phash[65];
+    char code[64];
+    char sha[65];
+    char tok[2200];
+    char line[512];
+    int valid = 0;
+    uint64_t n;
+    uint64_t k_plan = 0;
+    uint64_t k_prep = 0;
+
+    snprintf(tok, sizeof tok, "%s/token-mig-alloc", g_scratch);
+    unlink(tok);
+    setenv("SUTEKH_TEST_MIG_ALLOC_TOKEN", tok, 1);
+    s = session_start("spool-alloc");
+    unsetenv("SUTEKH_TEST_MIG_ALLOC_TOKEN");
+    CHECK(setup_world(&s, &st));
+    snprintf(rev, sizeof rev, "%s", st.rev);
+    CHECK(digest(&s, st.wid, rev, sha, NULL) && strcmp(sha, ctl->pre_digest) == 0);
+
+    for (n = 1; n <= 400u; n++) {
+        {
+            char num[32];
+            snprintf(num, sizeof num, "%llu\n", (unsigned long long)n);
+            put_token(tok, num);
+        }
+        if (plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r)) {
+            CHECK(valid == 1);
+            resp_free(&r);
+            k_plan = n - 1u;
+            break;
+        }
+        CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_RESOURCE_LIMIT") == 0);
+        CHECK(token_gone(tok));
+        CHECK(digest(&s, st.wid, rev, sha, NULL) && strcmp(sha, ctl->pre_digest) == 0);
+        resp_free(&r);
+    }
+    CHECK(k_plan >= 3u);
+
+    kill_active_worker(&s, st.wid, rev);
+    CHECK(digest(&s, st.wid, rev, sha, NULL) && strcmp(sha, ctl->pre_digest) == 0);
+
+    for (n = 1; n <= 400u; n++) {
+        char num[32];
+        snprintf(num, sizeof num, "%llu\n", (unsigned long long)n);
+        put_token(tok, num);
+        if (commit(&s, st.wid, pid, rev, st.cand, &r)) {
+            str_of(resp_result(&r), "world_revision", rev, sizeof rev);
+            resp_free(&r);
+            k_prep = n - 1u;
+            break;
+        }
+        CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_RESOURCE_LIMIT") == 0);
+        CHECK(token_gone(tok));
+        CHECK(digest(&s, st.wid, rev, sha, NULL) && strcmp(sha, ctl->pre_digest) == 0);
+        if (n == 1u) {
+            /* No commit was acknowledged, so there is no rollback target. */
+            snprintf(line, sizeof line,
+                     "{\"protocol\":\"0.1\",\"id\":\"rb\",\"method\":\"world.migrate_rollback\",\"params\":{\"world_id\":"
+                     "\"%s\",\"expected_world_revision\":\"%s\"}}",
+                     st.wid, rev);
+            call(&s, line, &r);
+            CHECK(!resp_ok(&r) && error_code(&r, code, sizeof code) && strcmp(code, "SU_E_STALE_REVISION") == 0);
+        }
+        resp_free(&r);
+    }
+    CHECK(k_prep >= 3u);
+
+    CHECK(step(&s, st.wid, rev, sizeof rev, 2, &r));
+    resp_free(&r);
+    CHECK(digest(&s, st.wid, rev, sha, NULL) && strcmp(sha, ctl->final_digest) == 0);
+    session_stop(&s);
+}
+
+/* C1: a commit that leaves an installed system neither resubmitted nor dropped is refused (systems_unresolved) and
+ * changes nothing; the same migration with that system dropped commits. */
+static void run_two_system_refusal(void) {
+    Session s;
+    Resp r;
+    char wid[24];
+    char rev[48];
+    char cand[32];
+    char pid[32];
+    char phash[65];
+    char code[64];
+    char sha0[65];
+    char sha[65];
+    char line[1024];
+    int valid = 0;
+
+    s = session_start("spool-c1");
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"cw\",\"method\":\"world.create\",\"params\":{\"fixture_path\":\"world4.json\","
+             "\"capsule_paths\":[\"sys_a.capsule.json\",\"sys_b.capsule.json\"]}}");
+    call(&s, line, &r);
+    CHECK(resp_ok(&r) && str_of(resp_result(&r), "world_id", wid, sizeof wid) &&
+          str_of(resp_result(&r), "world_revision", rev, sizeof rev));
+    resp_free(&r);
+    CHECK(step(&s, wid, rev, sizeof rev, 2, &r));
+    resp_free(&r);
+    CHECK(digest(&s, wid, rev, sha0, NULL));
+    CHECK(submit(&s, "sys_a_gen2.capsule.json", cand, sizeof cand) && evaluate(&s, cand, "sys_a_gen2.test.json"));
+
+    CHECK(plan(&s, wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
+    CHECK(valid == 1);
+    resp_free(&r);
+    CHECK(!commit(&s, wid, pid, rev, cand, &r));
+    CHECK(error_code(&r, code, sizeof code) && strcmp(code, "SU_E_UNSUPPORTED_MIGRATION") == 0);
+    CHECK(strstr((const char *)r.text, "systems_unresolved") != NULL);
+    resp_free(&r);
+    CHECK(digest(&s, wid, rev, sha, NULL) && strcmp(sha, sha0) == 0);
+
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"mp\",\"method\":\"world.migrate_plan\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\",\"migration_path\":\"m_add.json\",\"drop_systems\":[\"demo.drift\"]}}",
+             wid, rev);
+    call(&s, line, &r);
+    CHECK(resp_ok(&r) && str_of(resp_result(&r), "plan_id", pid, sizeof pid));
+    resp_free(&r);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"mc\",\"method\":\"world.migrate_commit\",\"params\":{\"world_id\":\"%s\","
+             "\"plan_id\":\"%s\",\"expected_world_revision\":\"%s\",\"resubmit\":[{\"system_id\":\"demo.movement\","
+             "\"candidate_id\":\"%s\"}],\"drop_systems\":[\"demo.drift\"]}}",
+             wid, pid, rev, cand);
+    call(&s, line, &r);
+    CHECK(resp_ok(&r));
+    resp_free(&r);
+    session_stop(&s);
+}
+
 int main(int argc, char **argv) {
     Outcome ctl;
     Outcome o1;
@@ -1017,6 +1365,9 @@ int main(int argc, char **argv) {
     copy_from("tests/reload", "world4.json");
     copy_from("tests/reload", "sys_a_gen3.capsule.json");
     copy_from("tests/reload", "sys_a_gen3.test.json");
+    copy_from("tests/reload", "sys_b.capsule.json");
+    copy_from("tests/reload", "sys_b.lir.json");
+    copy_from("tests/reload", "sys_b.test.json");
     overwrite_file("m_add.json",
                    "{\"migration_format\":\"0.1\",\"id\":\"m-add-health\",\"from_layout_generation\":1,"
                    "\"to_layout_generation\":2,\"ops\":[{\"op\":\"add_field\",\"field\":{\"id\":3,\"name\":\"health\","
@@ -1050,6 +1401,7 @@ int main(int argc, char **argv) {
     run_refusals();
     run_rollback();
     run_rollback_crash();
+    run_rollback_deep();
     overwrite_file("m_shield3.json",
                    "{\"migration_format\":\"0.1\",\"id\":\"m-shield3\",\"from_layout_generation\":2,"
                    "\"to_layout_generation\":3,\"ops\":[{\"op\":\"add_field\",\"field\":{\"id\":4,\"name\":\"shield\","
@@ -1060,6 +1412,10 @@ int main(int argc, char **argv) {
     run_id_retirement_after_checkpoint();
     run_rollback_two_migrations();
     run_candidate_refusals();
+    run_alloc_faults(&ctl);
+    run_failed_second_commit("prepare");
+    run_failed_second_commit("noroom");
+    run_two_system_refusal();
 
     printf("migrate_runtime: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

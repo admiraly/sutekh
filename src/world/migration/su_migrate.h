@@ -119,11 +119,13 @@ typedef struct SuMigratePlan {
     SuMigrateCompiled *impl;        /* owned */
 } SuMigratePlan;
 
-/* Failure injection for tests. fail_at = N makes the N-th injection point of prepare fail with
- * SU_E_RESOURCE_LIMIT (an allocation point); 0 disables. points counts the injection points passed. The
- * injection points are: each buffer allocation, the entity scratch, the transform verification, the VM context
- * and binding arrays, the successor world, and each column put. fail_transform makes the transform execution
- * fail with SU_E_CANDIDATE_FAILED. */
+/* Failure injection for tests (N2). fail_at = N makes the N-th injection point of the call fail with
+ * SU_E_RESOURCE_LIMIT; 0 disables. points counts the injection points passed. The injection points are every
+ * allocation the engine makes in su_migrate_plan_inject and su_migrate_prepare (the allocation is refused before it
+ * is made), plus the explicit points of prepare: the entity scratch, the transform verification, the VM context and
+ * binding arrays, the successor world, and each column put. Allocations inside the JSON, world, VM and LIR code are
+ * not counted. Production callers pass NULL, which counts nothing. fail_transform makes the transform execution
+ * fail with SU_E_CANDIDATE_FAILED. One hooks struct may serve a plan and a prepare in sequence (the counts go on). */
 typedef struct SuMigrateHooks {
     uint64_t fail_at;
     uint64_t points;
@@ -147,6 +149,12 @@ uint32_t su_migrate_plan(const SuWorld *w, const SuMigrateInputs *in,
                          const SuMigrateBudget *budget, SuMigratePlan *out);
 /* NULL-safe. */
 void su_migrate_plan_free(SuMigratePlan *p);
+
+/* su_migrate_plan with failure injection (N2). hooks may be NULL (the same as su_migrate_plan). */
+uint32_t su_migrate_plan_inject(const SuWorld *w, const SuMigrateInputs *in,
+                                const SuMigrateSystem *systems, uint32_t system_count,
+                                const char *const *drop_systems, uint32_t drop_count,
+                                const SuMigrateBudget *budget, SuMigrateHooks *hooks, SuMigratePlan *out);
 
 /* Builds the successor world aside. old is not modified. p must be valid and must still describe old (tick,
  * layout generation and recovery digest), else SU_E_STALE_REVISION. *out is NULL on failure. hooks and timings
