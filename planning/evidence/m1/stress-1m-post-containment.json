@@ -1,0 +1,292 @@
+{
+ "binary": {
+  "bytes": 272296,
+  "path_relative_to_repo": "../../../../../../tmp/claude-0/-home-user-sutekh/82533bc6-e6ca-564a-ba43-39dd3091bafa/scratchpad/m1-rel/sutekh",
+  "sha256": "2352b77bb563205042d8b36773246c4c6d8ee55b1bdc71ad33a11ccbaed2c3a4"
+ },
+ "configuration_in_source": {
+  "environment_overrides_present": [],
+  "fixture_cap": "SUTEKH_FIXTURE_MAX_BYTES (src/runtime/worker.c; default 64 MiB)",
+  "recovery_spool": "512 MiB default (src/platform/sutekh_main.c); SUTEKH_SPOOL_BYTES_MAX overrides",
+  "worker_address_space": "RLIMIT_AS 4 GiB default (src/platform/sutekh_main.c); SUTEKH_WORKER_AS_BYTES overrides"
+ },
+ "environment": {
+  "binary": {
+   "bytes": 272296,
+   "path": "/tmp/claude-0/-home-user-sutekh/82533bc6-e6ca-564a-ba43-39dd3091bafa/scratchpad/m1-rel/sutekh",
+   "sha256": "2352b77bb563205042d8b36773246c4c6d8ee55b1bdc71ad33a11ccbaed2c3a4"
+  },
+  "build": {
+   "build_dir_for_cache": "../../../../../../tmp/claude-0/-home-user-sutekh/82533bc6-e6ca-564a-ba43-39dd3091bafa/scratchpad/m1-rel",
+   "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+   "cmake": "cmake version 3.28.3",
+   "cmake_build_type": "Release",
+   "ninja": "1.11.1",
+   "profile_label": "release"
+  },
+  "container": {
+   "container_detected": false,
+   "evidence": []
+  },
+  "cpu": {
+   "hypervisor_flag": true,
+   "logical_processors": 4,
+   "model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+   "physical_cores": 4
+  },
+  "cpu_governor_cpu0": {
+   "reason": "cpufreq governor not exposed",
+   "value": null
+  },
+  "kernel": {
+   "release": "6.18.44-fc-v114",
+   "version": "#1 SMP PREEMPT_DYNAMIC @0"
+  },
+  "loadavg_before_run": [
+   2.8701171875,
+   4.130859375,
+   3.29638671875
+  ],
+  "memory_kB": {
+   "MemAvailable": 15454068,
+   "MemTotal": 16479424
+  },
+  "os": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "pmu": {
+   "reason": "not collected: no perf_event_open counters are used by this bench (PERFORMANCE.md section 5 makes them optional)",
+   "status": "unavailable"
+  },
+  "python": "3.13.16",
+  "shared_vm_note": "4 vCPU shared VM (hypervisor flag set). Timing here is not performance qualification (C10).",
+  "source": {
+   "dirty": true,
+   "dirty_entries": [
+    "?? planning/evidence/m1/native-throughput-post-containment.json"
+   ],
+   "git_head": "413145f59a43086efd7ab3d05d68a597bc37c34d",
+   "tree_CMakeLists": "c9aed9a48873d3ebf6dd82ef1b42ae483eee71a5",
+   "tree_include": "7f1c989cba2a4b7fe27b87daabed29562ba3893c",
+   "tree_src": "7e2288523251e3776029951db879fc74232de575"
+  }
+ },
+ "error": null,
+ "fixture": {
+  "bytes": 27833861,
+  "path": "build/bench-reload/world_1000000_seed1000000.json",
+  "rows": 1000000,
+  "seed": 1000000,
+  "sha256": "2f465ad976435e25f2757a763106eb4596052028fb24bf80f00223099f3526e5"
+ },
+ "generated_utc": "2026-10-12T01:46:26.306790+00:00",
+ "git": {
+  "dirty_tracked_files": false,
+  "head": "413145f59a43086efd7ab3d05d68a597bc37c34d"
+ },
+ "kind": "stress_1m_current_binary",
+ "nominal_column_bytes": 8000000,
+ "procedure": "bench/reload/bench_reload.py stress_mode, imported and not modified",
+ "report_format": "0.1",
+ "result": {
+  "fixture": {
+   "bytes": 27833861,
+   "path": "build/bench-reload/world_1000000_seed1000000.json",
+   "sha256": "2f465ad976435e25f2757a763106eb4596052028fb24bf80f00223099f3526e5"
+  },
+  "nominal_column_bytes": 8000000,
+  "phases": {
+   "edits": [
+    {
+     "candidate_id": "candidate-1",
+     "effective_tick": 20,
+     "evaluate_ms": 7.979523,
+     "evaluation_cases": 4,
+     "install_rpc_ms": 541.104809,
+     "source_bytes": 657,
+     "step_first_effect_ms": 199.323711,
+     "submit_ms": 0.386942,
+     "tick_after": 21,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 749.247058,
+     "txid": 2,
+     "verified": true,
+     "version": "v2"
+    },
+    {
+     "candidate_id": "candidate-2",
+     "effective_tick": 21,
+     "evaluate_ms": 8.179386,
+     "evaluation_cases": 3,
+     "install_rpc_ms": 562.709432,
+     "source_bytes": 483,
+     "step_first_effect_ms": 225.30748,
+     "submit_ms": 0.342078,
+     "tick_after": 22,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 796.912005,
+     "txid": 3,
+     "verified": true,
+     "version": "v1"
+    },
+    {
+     "candidate_id": "candidate-3",
+     "effective_tick": 22,
+     "evaluate_ms": 8.088941,
+     "evaluation_cases": 4,
+     "install_rpc_ms": 556.536405,
+     "source_bytes": 657,
+     "step_first_effect_ms": 242.497111,
+     "submit_ms": 0.372274,
+     "tick_after": 23,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 807.887747,
+     "txid": 4,
+     "verified": true,
+     "version": "v2"
+    },
+    {
+     "candidate_id": "candidate-4",
+     "effective_tick": 23,
+     "evaluate_ms": 7.256829,
+     "evaluation_cases": 3,
+     "install_rpc_ms": 591.496538,
+     "source_bytes": 483,
+     "step_first_effect_ms": 224.341036,
+     "submit_ms": 0.291542,
+     "tick_after": 24,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 823.779717,
+     "txid": 5,
+     "verified": true,
+     "version": "v1"
+    },
+    {
+     "candidate_id": "candidate-5",
+     "effective_tick": 24,
+     "evaluate_ms": 7.774228,
+     "evaluation_cases": 4,
+     "install_rpc_ms": 455.16231,
+     "source_bytes": 657,
+     "step_first_effect_ms": 208.212218,
+     "submit_ms": 0.547829,
+     "tick_after": 25,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 672.116575,
+     "txid": 6,
+     "verified": true,
+     "version": "v2"
+    },
+    {
+     "candidate_id": "candidate-6",
+     "effective_tick": 25,
+     "evaluate_ms": 7.854767,
+     "evaluation_cases": 3,
+     "install_rpc_ms": 434.30242,
+     "source_bytes": 483,
+     "step_first_effect_ms": 212.641911,
+     "submit_ms": 0.296922,
+     "tick_after": 26,
+     "tick_boundary_wait_ms": null,
+     "total_edit_to_first_effect_ms": 655.542554,
+     "txid": 7,
+     "verified": true,
+     "version": "v1"
+    }
+   ],
+   "restore": {
+    "host_ms": 1042.70209,
+    "restored_tick": 26
+   },
+   "snapshot": {
+    "bytes": 28092684,
+    "engine_capture_ns": null,
+    "host_ms": 215.211794,
+    "sha256": "ca6e95b2a8c13b4ba3362e57890510c2a8408095b2198eda0bcfec8e567c2802",
+    "tick": 26
+   },
+   "step_ms": [
+    261.858888,
+    241.723827,
+    184.695234,
+    263.215765,
+    223.948029,
+    191.689623,
+    192.288634,
+    187.418353,
+    151.910613,
+    152.03813,
+    152.364262,
+    153.871707,
+    154.004633,
+    153.173403,
+    219.279684,
+    168.495576,
+    166.969999,
+    276.715552,
+    216.346428,
+    217.067508
+   ],
+   "world_create_ms": 906.637871
+  },
+  "reason": null,
+  "rows": 1000000,
+  "seed": 1000000,
+  "status": "passed",
+  "supervisor_rss_after_create": {
+   "VmHWM_KiB": 29312,
+   "VmRSS_KiB": 2456,
+   "reason": null
+  },
+  "worker_rss_after_create": {
+   "VmHWM_KiB": 178556,
+   "VmRSS_KiB": 156344,
+   "reason": null
+  },
+  "worker_rss_after_steps": {
+   "VmHWM_KiB": 178556,
+   "VmRSS_KiB": 167660,
+   "reason": null
+  },
+  "worker_rss_end": {
+   "VmHWM_KiB": 262116,
+   "VmRSS_KiB": 167916,
+   "reason": null
+  }
+ },
+ "rows": 1000000,
+ "seed": 1000000,
+ "status": "passed",
+ "summary": {
+  "reason": null,
+  "refused_code": null,
+  "restore_host_ms": 1042.70209,
+  "snapshot": {
+   "bytes": 28092684,
+   "engine_capture_ns": null,
+   "host_ms": 215.211794
+  },
+  "status": "passed",
+  "step_ms": {
+   "max": 276.715552,
+   "median": 189.553988,
+   "n": 20,
+   "p95_nearest_rank": 263.215765
+  },
+  "timed_edit_samples": 6,
+  "worker_rss_after_create": {
+   "VmHWM_KiB": 178556,
+   "VmRSS_KiB": 156344,
+   "reason": null
+  },
+  "worker_rss_after_steps": {
+   "VmHWM_KiB": 178556,
+   "VmRSS_KiB": 167660,
+   "reason": null
+  },
+  "worker_rss_end": {
+   "VmHWM_KiB": 262116,
+   "VmRSS_KiB": 167916,
+   "reason": null
+  },
+  "world_create_ms": 906.637871
+ }
+}

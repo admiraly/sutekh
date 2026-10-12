@@ -346,6 +346,53 @@ Result: passed, on `build/sutekh` built by `tools/dev.py build --profile release
 - Stress is one run on one VM; no reboot or repeat; not a game-scale claim.
 - No token or tool-call values for any agent; no integration-latency values.
 
+## M1 residual evidence (post-containment, 2026-10-12)
+
+Measured on this tree (HEAD `58ee5c1` plus the uncommitted-then-committed mutant and test edits of this pass; see the
+handoff `planning/handoffs/2026-10-12-m1-residual.md`). Shared 4-vCPU VM, observation only (C10). Old evidence files were not
+overwritten; the new files are `*-post-containment.json`.
+
+- Native build latency, n = 7 per case, cold clean full build median (p95), `planning/evidence/m1/native-build-latency-post-containment.json`:
+  gcc Release 14.68 s (15.49 s); gcc Debug 11.88 s (15.84 s); clang Release 13.74 s (14.77 s); clang Debug 7.07 s (8.71 s).
+  Previous file (n = 7): gcc Release 12.73 s (16.57 s), gcc Debug 9.87 s (10.45 s), clang Release 11.08 s (14.69 s), clang Debug 7.80 s (11.16 s).
+- Isolated native throughput, median ns/row, 1,000,000 rows, aligned, `planning/evidence/m1/native-throughput-post-containment.json`:
+  movement: VM wrapper 8.83, scalar wrapper 1.38, scalar kernel 1.42, AVX2 wrapper 0.565, AVX2 kernel 0.567;
+  arith20: VM wrapper 50.80, scalar wrapper 6.64, scalar kernel 6.33, AVX2 wrapper 3.41, AVX2 kernel 3.05.
+  Previous (`native-throughput.json`): movement 7.31 / 1.17 / 1.20 / 0.548 / 0.553; arith20 53.78 / 6.35 / 6.34 / 3.15 / 2.68.
+  The driver runs in-process and does not use the worker containment, so the spread is VM noise, not containment cost.
+- 1,000,000-row stress, current default binary (`build/sutekh` equivalent, SUTEKH_NATIVE off), `planning/evidence/m1/stress-1m-post-containment.json`,
+  one run, status passed: world.create 906.6 ms (previous 797.2 ms); step median 189.6 ms, p95 263.2 ms, n = 20
+  (previous 192.5 ms and 200.2 ms); snapshot 215.2 ms host (previous 203.7 ms), 28,092,684 bytes (unchanged);
+  restore 1,042.7 ms host (previous 895.7 ms). Containment (seccomp, self-sandbox, Landlock, rlimits) is applied at worker
+  start and in the disposable child, so restore and step timings can move with the shared VM. This single run cannot
+  separate containment from noise; the restore and p95 rises are recorded, not explained.
+- Full harness, default Release, `run_m0.py --binary <rel>/sutekh`: passed 20, failed 0, unavailable 2 (TX3, TX4 native-only).
+  Self-test on the native gcc binary: 220 checks, 0 failures.
+
+Mutation table (repo scripts, scratch copies, native gcc or default Release as noted; each mutant built with -Werror):
+
+| Mutant | Script | Result | Caught by |
+|---|---|---|---|
+| M-ARCH | recovery | killed | ctest `containment` |
+| M-X32 | recovery | killed | ctest `containment` |
+| M-SOCKETPAIR | recovery | killed | ctest `containment` |
+| M-URING | recovery | killed | ctest `containment` |
+| M-EXECVE | recovery | killed | ctest `containment` |
+| M-CLONE | recovery | killed | ctest `containment` |
+| M-DIGEST-SHA | recovery | killed | ctest `hardening` |
+| M-DIGEST-REV | recovery | killed | ctest `hardening` |
+| M-DIGEST-TICK-RERUN (closure C M06) | recovery | killed | ctest `hardening` |
+| M-SPOOL-MODE | recovery | killed | ctest `hardening` |
+| M-INSTALL-REV | recovery | survived on first run; killed after the new entry check in `tests/reload/test_reload.c` | ctest `reload` |
+| M-QUAR-FIND | native | killed (first run INVALID: replacement text unescaped `&&`; fixed) | ctest `safe_retire`, `native_fault`, `specialize_*` (2 of 5 fail) |
+| M07 (closure C) | native | killed | ctest `safe_retire`, `specialize_inflight` (1 of 2 fails) |
+| M10 (closure C) | native | killed | ctest `safe_retire` |
+| M12 | native | killed | harness TX6 |
+
+Anchor for M-INSTALL-REV: the anchor occurs twice in `src/runtime/reload.c` (lines 134 and 191, both inside
+`su_reload_install`). The mutant targets line 134, the step-2 entry check; the step-8 admission recheck is left in place.
+Not run in this pass: M06 closure-C re-run beyond M-DIGEST-TICK-RERUN (the mutant above is that re-run), TSan, clang sanitizers.
+
 ## C07 containment coverage (M1 closure D)
 
 Precise statement, detail in `docs/AGENT_RPC.md` section 14.

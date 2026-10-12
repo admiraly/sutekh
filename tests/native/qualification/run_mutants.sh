@@ -212,6 +212,14 @@ mutant C4 src/agent/su_proc.c \
     '(void)rl;' \
     'containment'
 
+# M-QUAR-FIND: the quarantine lookup never matches (quar_find, su_agent.c). The replacement keeps every
+# operand in use, so the -Werror build of the mutant still succeeds.
+mutant M-QUAR-FIND src/agent/su_agent.c \
+    'if (a->quar[i].used && strcmp(a->quar[i].artifact_hash, hash) == 0) {' \
+    'if (a->quar\[i\]\.used && strcmp(a->quar\[i\]\.artifact_hash, hash) == 0) {' \
+    'if (a->quar[i].used \&\& strcmp(a->quar[i].artifact_hash, hash) == 0 \&\& 0) {' \
+    'safe_retire|native_fault|specialize_churn|specialize_inflight|specialize_admission'
+
 # M12: the active and disposable workers' address-space bound is 1 GiB instead of 4 GiB (binary level; the
 # harness TX6 checks the exact 4 GiB value in /proc/<pid>/limits).
 mutant M12 src/platform/sutekh_main.c \
