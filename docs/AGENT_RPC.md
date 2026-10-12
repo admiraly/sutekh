@@ -315,8 +315,8 @@ world.specialize admission) has RLIMIT_NOFILE 64 and the CPU bound of its reques
 `worker_file_bytes`, `worker_nofile` and `disposable_nofile` take 0 for these defaults.
 
 Network denial is a raw seccomp-bpf filter on x86-64 Linux (no libseccomp): `PR_SET_NO_NEW_PRIVS`, then
-`PR_SET_SECCOMP` with `socket`, `connect`, `accept`, `bind`, `listen`, `accept4` and `socketpair` returning `EPERM`.
-The child checks the filter by calling `socket(AF_INET)` before exec. Off x86-64, or when the filter cannot be
+`PR_SET_SECCOMP` with `socket`, `connect`, `accept`, `bind`, `listen`, `accept4`, `socketpair` and the three io_uring
+calls returning `EPERM` (section 14 lists the full set). The child checks the filter by calling `socket(AF_INET)` before exec. Off x86-64, or when the filter cannot be
 installed, the child tries `unshare(CLONE_NEWNET)`. Nothing is claimed that the child did not verify.
 
 The child writes what it enforced (getrlimit read-back and the network mode) to a close-on-exec status pipe before
@@ -351,7 +351,68 @@ an artifact from inside its own kernel call defers the unmapping until the call 
 committed and equals the VM (`safe_retire`, seam `SU_NV_FAULT_RELEASE_IN_CALL`). The quarantine table compares whole
 artifact hashes (`safe_retire`, `su_agent_test_quar_hit`).
 
-**Digest tick check (defense in depth, not separately tested).** `digest_matches` compares the tick as well as the
-revision. The tick comparison at the replay sites is implied by the snapshot digest comparison, because the snapshot
-bytes carry the tick (src/world/snapshot.c); the rollback site ignores a mismatch. That check is therefore not a
-separate behaviour, and no test was added for it.
+**Digest comparison (M1 closure D).** `digest_matches` (src/agent/su_agent.c) calls `su_agent_digest_fields_match`,
+which compares the revision, the tick and, when one is given, the snapshot SHA-256. Each field is tested directly by
+`hardening` (tests/recovery/test_hardening.c). The closure C argument that the tick comparison is implied by the SHA
+comparison still holds, and the tick is now tested as well.
+
+## 14. C07 containment coverage (M1 closure D)
+
+What each engine child enforces, where, and which test or harness check shows it. The filters are attack-surface
+reduction for the worker's own processes. They are not a sandbox against hostile native code (C07).
+
+**Network filter (every child, installed before exec; `src/agent/su_proc.c`).** Returns `EPERM`:
+- socket creation and use: `socket`, `connect`, `accept`, `bind`, `listen`, `socketpair`, `accept4`;
+- io_uring, which can open sockets without `socket(2)` (IORING_OP_SOCKET): `io_uring_setup`, `io_uring_enter`,
+  `io_uring_register`;
+- process inspection and injection, keys, BPF and perf, userfaultfd, roots, mounts, namespaces and handles, kernel
+  images and modules, reboot, swap, accounting: `ptrace`, `process_vm_readv`, `process_vm_writev`, `kcmp`, `keyctl`,
+  `add_key`, `request_key`, `bpf`, `perf_event_open`, `userfaultfd`, `pivot_root`, `chroot`, `mount`, `umount2`,
+  `setns`, `unshare`, `open_by_handle_at`, `name_to_handle_at`, `kexec_load`, `init_module`, `finit_module`,
+  `delete_module`, `reboot`, `swapon`, `swapoff`, `acct`.
+Kills the process (`SIGSYS`): any architecture other than x86-64, and any x32 syscall (number >= 0x40000000).
+Not denied, on purpose: `mmap` and `mprotect` (the AsmJit path maps code with PROT_EXEC after dropping PROT_WRITE)
+and `personality` (glibc and the sanitizers need it).
+
+**Worker self-sandbox (both worker roles, installed by the worker after startup; `src/agent/su_sandbox.c`).**
+`execve` and `execveat` return `EPERM`; `fork` and `vfork` return `EPERM`; `clone` returns `EPERM` unless `CLONE_THREAD`
+is set (the tick-worker pool creates threads); `clone3` returns `ENOSYS`, so glibc falls back to `clone`. The
+architecture and x32 kills apply here too. The state is reported in `internal.stats` (`self_sandbox`) and as
+`Seccomp_filters: 2` in `/proc/<pid>/status` (TX6). `SUTEKH_WORKER_SANDBOX=0` turns it off, and is honoured only in
+AddressSanitizer or ThreadSanitizer builds (their runtimes fork and ptrace); the sanitizer lane in this document uses it.
+On non-x86-64 hosts the self-sandbox is not installed and reports `unavailable` with the reason.
+
+**Filesystem writes (disposable children, applied before exec; `src/agent/su_proc.c`).** A Landlock ruleset handles
+every write-class access (write, truncate, create of files, directories, links and devices, remove, rename-out) and
+grants none, so no path is writable. Reads are not handled and stay allowed. The child reports the ABI and the outcome
+of `landlock_restrict_self`; the answer's containment object says `"fs_write_denied": "landlock"` when it applied and
+`"none"` with `fs_reason` otherwise (for example on a kernel without Landlock). The active worker keeps write access
+(`"none"`, reason stated), because the supervisor relies on it for persistent state.
+
+**Limits (every child).** RLIMIT_AS 4 GiB, RLIMIT_FSIZE 256 MiB (over-limit writes fail with `EFBIG`), RLIMIT_CORE 0,
+RLIMIT_NOFILE 1024 (active) or 64 (disposable), and a CPU bound for disposable children only. Environment: an
+allow-list (`SU_TEST_`, `SUTEKH_`, sanitizer options).
+
+**Evidence.** `containment` (network filter, Landlock, limits, control children), `hardening` (digest fields, spool
+directory mode), `recovery`, `tick_workers`, `scheduler`, native suites under `SUTEKH_NATIVE=ON`, and harness TX6
+(`/proc` limits, `Seccomp: 2`, `Seccomp_filters: 2`, the `candidate.evaluate` containment object, and the scrubbed
+environment). The release binary is checked for test-only seam strings (`check_release_seams.py`). Mutants that the
+tests kill: `tests/recovery/run_mutants.sh` (M-ARCH, M-X32, M-SOCKETPAIR, M-URING, M-EXECVE, M-CLONE, M-DIGEST-SHA,
+M-DIGEST-REV, M-SPOOL-MODE).
+
+**Contained.** Network creation and use by socket, socketpair and io_uring, including IORING_OP_SOCKET; the i386 and
+x32 entries of the same calls; process creation and program execution by a worker; ptrace and the other listed calls;
+file creation by a disposable child (project root and `/tmp` refused with `EACCES`); file size, open files, address space,
+core files, and for disposable children CPU time.
+
+**Not contained.**
+- Filesystem reads: any file the uid can read, including the supervisor's own files, is readable by a child.
+- Use of descriptors inherited across exec: the filters deny creating sockets, not using a socket already open.
+  The supervisor keeps its descriptors close-on-exec, and a child keeps only its stdin and stdout pipes.
+- CPU of the active worker: it has no CPU bound, by design, for long simulations.
+- Writes by the active worker: it keeps write access, so it is not read-only.
+- Side channels: timing, cache, and memory-layout observation are out of scope.
+- Code the process maps executable (mmap PROT_EXEC is allowed), and kernel bugs reachable from the allowed calls.
+- Non-x86-64 Linux: no seccomp filters and no self-sandbox (the network namespace fallback applies to networking only).
+- Windows: not implemented.
+
