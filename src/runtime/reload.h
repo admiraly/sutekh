@@ -37,6 +37,12 @@ uint32_t su_reload_load(const char *capsule_path, const char *source_path,
                         const char *expect_source_hash, const char *expect_capsule_hash,
                         SuLirModule **out, uint32_t *schema_version, uint32_t *layout_generation,
                         char *msg, size_t msg_cap);
+/* As su_reload_load. On a verification failure *diag receives the first error's location (code is then
+ * not SU_OK); otherwise *diag is left with code SU_OK. diag may be NULL. */
+uint32_t su_reload_load_diag(const char *capsule_path, const char *source_path,
+                             const char *expect_source_hash, const char *expect_capsule_hash,
+                             SuLirModule **out, uint32_t *schema_version, uint32_t *layout_generation,
+                             char *msg, size_t msg_cap, SuDiag *diag);
 void su_reload_module_free(SuLirModule *m);
 
 typedef struct SuReloadRequest {
@@ -70,6 +76,7 @@ typedef struct SuReloadResult {
     char previous_semantic_hash[65];
     char semantic_hash[65];
     char msg[256];             /* "txid=N state=S: reason" on failure */
+    SuDiag diag;               /* verification error location when the candidate failed verification */
     /* Timings on the monotonic clock (su_platform.h), set only when the install succeeded.
      * clock_ok is 0 when the clock was unreadable; the timings are then meaningless. */
     int clock_ok;

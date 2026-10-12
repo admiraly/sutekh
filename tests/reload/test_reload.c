@@ -33,7 +33,9 @@
 #include "agent/su_agent.h"
 #include "agent/su_proto.h"
 #include "ir/su_json.h"
+#include "ir/su_lir.h"
 #include "ir/su_sha256.h"
+#include "runtime/reload.h"
 #include "sutekh/status.h"
 
 static int g_checks = 0;
@@ -1404,6 +1406,28 @@ static void remove_root(void) {
     rmdir(g_root);
 }
 
+/* Verifier location for a worker-side failure (audit item 6, worker remainder): su_reload_load_diag fills
+ * the first error's JSON pointer and leaves the plain su_reload_load contract unchanged. */
+static void test_verify_location(const char *repo) {
+    char cap[4096];
+    char lir[4096];
+    char msg[256];
+    SuLirModule *m = NULL;
+    SuDiag d;
+    uint32_t sv = 0;
+    uint32_t gen = 0;
+    uint32_t st;
+
+    snprintf(cap, sizeof cap, "%s/tests/fixtures/ir02/cap_out_of_range.capsule.json", repo);
+    snprintf(lir, sizeof lir, "%s/tests/fixtures/ir02/cap_out_of_range.lir.json", repo);
+    st = su_reload_load_diag(cap, lir, NULL, NULL, &m, &sv, &gen, msg, sizeof msg, &d);
+    CHECK(st != SU_OK);
+    CHECK(d.code == st);
+    CHECK(d.json_pointer[0] != '\0');
+    CHECK(strncmp(msg, "verification failed", 19) == 0);
+    su_reload_module_free(m);
+}
+
 int main(int argc, char **argv) {
     static const char *helper_argv[2];
     char base[4000];
@@ -1447,6 +1471,7 @@ int main(int argc, char **argv) {
     cfg.worker_address_space_bytes = (uint64_t)4u * 1024u * 1024u * 1024u;
 #endif
 
+    test_verify_location(argv[2]);
     memset(&ids, 0, sizeof ids);
     s = session_start(&cfg);
     test_engine_info(&s);

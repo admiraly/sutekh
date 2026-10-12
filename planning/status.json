@@ -14,7 +14,7 @@
   "active_leases": [],
   "pending_jobs": [],
   "next_ready_tasks": [
-    "M1-00"
+    "M3-05"
   ],
   "note": "M0, M1, M2 closed by owner decision (see blocks). M3 in progress. accepted_source_revision/accepted_artifact_hash refer to the M0 closure only. Spec-conformance and regression audits under planning/audit/ list open deviations.",
   "repository_visibility": "public",
@@ -126,7 +126,7 @@
       "M3-03",
       "M3-04"
     ],
-    "note": "M3-05 next. engine accepts system_rev/capabilities (conformance fix). Q2 liveness refusal still to do in M3-05."
+    "note": "M3-05 next (OD-3, OD-3b, OD-3c, OD-20 accepted 2026-10-12). Owner delegated remaining approvals on 2026-10-12: OD-11 accepted as stated (native lane for M3-10 allowed now that M1 is owner-accepted); OD-15 not changed (recovery claim stays N<=65,536; raising the limit needs a snapshot-owner change not yet scoped); docs/AGENT_RPC.md edit for M3-05 approved, limited to recording the new control methods. Q2 liveness refusal still to do in M3-05."
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "m0_accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",

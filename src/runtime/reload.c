@@ -26,6 +26,14 @@ uint32_t su_reload_load(const char *capsule_path, const char *source_path,
                         const char *expect_source_hash, const char *expect_capsule_hash,
                         SuLirModule **out, uint32_t *schema_version, uint32_t *layout_generation,
                         char *msg, size_t msg_cap) {
+    return su_reload_load_diag(capsule_path, source_path, expect_source_hash, expect_capsule_hash, out,
+                               schema_version, layout_generation, msg, msg_cap, NULL);
+}
+
+uint32_t su_reload_load_diag(const char *capsule_path, const char *source_path,
+                             const char *expect_source_hash, const char *expect_capsule_hash,
+                             SuLirModule **out, uint32_t *schema_version, uint32_t *layout_generation,
+                             char *msg, size_t msg_cap, SuDiag *diag_out) {
     uint8_t *cap = NULL;
     uint8_t *lir = NULL;
     size_t cap_len = 0;
@@ -38,6 +46,9 @@ uint32_t su_reload_load(const char *capsule_path, const char *source_path,
     uint32_t st;
 
     *out = NULL;
+    if (diag_out != NULL) {
+        su_diag_init(diag_out);
+    }
     st = su_path_read_file(capsule_path, RELOAD_CAPSULE_MAX, &cap, &cap_len);
     if (st != SU_OK) {
         snprintf(msg, msg_cap, "cannot read capsule");
@@ -63,6 +74,9 @@ uint32_t su_reload_load(const char *capsule_path, const char *source_path,
     st = su_lir_verify(cap, cap_len, lir, lir_len, m, &diag);
     if (st != SU_OK) {
         snprintf(msg, msg_cap, "verification failed: %.200s", diag.message);
+        if (diag_out != NULL) {
+            *diag_out = diag;
+        }
         goto done;
     }
     if ((expect_source_hash != NULL && strcmp(expect_source_hash, m->source_hash_hex) != 0) ||
@@ -104,6 +118,7 @@ static void step(SuRegistry *reg, uint64_t txid, SuRevState to) {
 uint32_t su_reload_install(SuRegistry *reg, SuSchedule *s, const SuReloadRequest *req,
                            SuReloadResult *out) {
     SuLirModule *mod = NULL;
+    su_diag_init(&out->diag);
     SuSysEntry fresh;
     SuSysEntry old;
     char msg[256];
@@ -138,8 +153,8 @@ uint32_t su_reload_install(SuRegistry *reg, SuSchedule *s, const SuReloadRequest
     }
 
     /* 3. Verify the candidate bytes. */
-    st = su_reload_load(req->capsule_path, req->source_path, req->expect_source_hash,
-                        req->expect_capsule_hash, &mod, &sv, &gen, msg, sizeof msg);
+    st = su_reload_load_diag(req->capsule_path, req->source_path, req->expect_source_hash,
+                             req->expect_capsule_hash, &mod, &sv, &gen, msg, sizeof msg, &out->diag);
     if (st != SU_OK) {
         return reject(reg, out, txid, SU_REV_REJECTED, st, msg);
     }
