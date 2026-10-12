@@ -119,8 +119,9 @@
       "M3-03a",
       "M3-04a",
       "M3-01",
-      "M3-08a"
+      "M3-08a",
+      "M3-02"
     ],
-    "note": "M3-02 in progress; audits (spec conformance, regression) running"
+    "note": "M3-03 and M3-04 in progress; audits running; M3-02 Q2 (formation_slot liveness refusal at spawn) to be settled in M3-05"
   }
 }

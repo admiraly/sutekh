@@ -712,7 +712,7 @@
       "acceptance": [
         "10.1 known answers including the exact ring fixture; IR-vs-model differential; oracle budget (8); targeting metrics (4.2) at 1,024 queriers; model author does not read M3-04 sources."
       ],
-      "status": "planned"
+      "status": "integrated"
     },
     {
       "id": "M3-03a",
