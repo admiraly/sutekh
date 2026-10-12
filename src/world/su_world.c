@@ -1343,3 +1343,48 @@ const char *su_world_schema_id(const SuWorld *w) {
 uint32_t su_world_schema_version(const SuWorld *w) {
     return w != NULL ? w->schema_version : 0u;
 }
+
+/* ---- exact memory accounting (M3-08a) ----------------------------------- */
+
+uint32_t su_world_memory(const SuWorld *w, SuWorldMemory *out) {
+    uint64_t rows;
+    uint64_t col_bytes;
+    uint64_t fc;
+    uint64_t meta;
+    uint64_t rd;
+    uint64_t wr;
+    uint32_t i;
+    if (w == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memset(out, 0, sizeof *out);
+    /* Column length as su_alloc_column requests it (at least one element). */
+    rows = w->row_count > 0u ? w->row_count : 1u;
+    col_bytes = rows * SU_WORLD_ELEM_BYTES;
+    for (i = 0; i < w->field_count; i++) {
+        out->columns_committed += col_bytes;
+        out->columns_working += col_bytes;
+        if (w->staging[i] != NULL) {
+            out->columns_staging += col_bytes;
+        }
+    }
+    out->entity_table = su_ents_memory_bytes(w->ents_committed) + su_ents_memory_bytes(w->ents_working);
+
+    meta = (uint64_t)sizeof *w;
+    meta += (uint64_t)strlen(w->schema_id) + 1u;
+    fc = w->field_count > 0u ? w->field_count : 1u;
+    meta += fc * (sizeof *w->fields + 3u * sizeof *w->committed);
+    for (i = 0; i < w->field_count; i++) {
+        meta += (uint64_t)strlen(w->fields[i].name) + 1u;
+    }
+    rd = w->readable_count > 0u ? w->readable_count : 1u;
+    wr = w->writable_count > 0u ? w->writable_count : 1u;
+    meta += rd * sizeof *w->inv_bindings + wr * sizeof *w->out_bindings;
+    meta += (uint64_t)w->retired_count * sizeof *w->retired;
+    meta += (uint64_t)w->lineage_count * sizeof *w->lineage;
+    out->metadata = meta;
+
+    out->total = out->columns_committed + out->columns_working + out->columns_staging +
+                 out->entity_table + out->metadata;
+    return SU_OK;
+}

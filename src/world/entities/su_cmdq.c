@@ -1027,3 +1027,35 @@ int su_evlog_equal(const SuEventLog *a, const SuEventLog *b) {
     }
     return 1;
 }
+
+/* ---- exact memory accounting (M3-08a) ----------------------------------- */
+
+uint32_t su_cmdq_memory(const SuCmdQ *q, SuCmdQMemory *out) {
+    uint64_t nb;
+    uint64_t sbuf_n;
+    uint64_t ebuf_n;
+    if (q == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memset(out, 0, sizeof *out);
+    nb = q->nbuf;
+    /* Buffer sizes as allocated in su_cmdq_create: the prefix totals, at least one element. */
+    sbuf_n = q->off_s[nb] > 0u ? q->off_s[nb] : 1u;
+    ebuf_n = q->off_e[nb] > 0u ? q->off_e[nb] : 1u;
+    out->structural = sbuf_n * sizeof(SuStructCmd);
+    out->events = ebuf_n * sizeof(SuEvent);
+    /* m_cmd, t_cmd (SuStructCmd); rec (SuEvent) per structural slot; m_evt, t_evt, fin per event slot. */
+    out->scratch = 2u * q->per_tick_s * sizeof(SuStructCmd) + q->per_tick_s * sizeof(SuEvent) +
+                   3u * q->per_tick_e * sizeof(SuEvent);
+    out->bookkeeping = nb * sizeof(BufMeta) + 2u * (nb + 1u) * sizeof(uint64_t) +
+                       2u * nb * sizeof(uint64_t) + (uint64_t)sizeof *q;
+    out->total = out->structural + out->events + out->scratch + out->bookkeeping;
+    return SU_OK;
+}
+
+uint64_t su_evlog_memory_bytes(const SuEventLog *log) {
+    if (log == NULL) {
+        return 0u;
+    }
+    return (uint64_t)sizeof *log + log->capacity * sizeof(SuEvent);
+}

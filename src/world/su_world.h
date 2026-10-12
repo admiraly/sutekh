@@ -235,4 +235,23 @@ uint32_t su_world_restore_canonical(const SuWorldDesc *desc, const uint8_t *buf,
 /* Compares canonical encodings of two committed roots. *equal is 1 or 0. */
 uint32_t su_world_state_equal(const SuWorld *a, const SuWorld *b, int *equal);
 
+/* Exact per-root heap accounting (M3-08a, contract 9.3, OD-10). Each byte count is the sum of the
+ * sizes the world asked the allocator for and still holds (no RSS, no allocator overhead).
+ * columns_*: fields * max(capacity, 1) * 4 for committed, working, and staging (writable fields only).
+ * entity_table: committed and working entity tables (su_ents_memory_bytes of each).
+ * metadata: the world struct, schema and field name copies, the field table, the column pointer arrays,
+ *   the binding arrays, and the retired-ID and lineage arrays.
+ * total: the sum of the five categories above. Event log, spool and snapshot bytes are not owned by
+ *   the world root and are not included (see su_evlog_memory_bytes and the snapshot owner).
+ * SU_E_INVALID_ARGUMENT: NULL w or out. */
+typedef struct SuWorldMemory {
+    uint64_t columns_committed;
+    uint64_t columns_working;
+    uint64_t columns_staging;
+    uint64_t entity_table;
+    uint64_t metadata;
+    uint64_t total;
+} SuWorldMemory;
+uint32_t su_world_memory(const SuWorld *w, SuWorldMemory *out);
+
 #endif
