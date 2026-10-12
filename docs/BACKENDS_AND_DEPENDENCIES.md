@@ -49,7 +49,7 @@ Do not fetch dependencies at runtime in a shipped game. Development builds can o
 | No CPU/GPU autotuner in M0 | Selected | Representative GPU workloads and cost model exist |
 | Static SoA before auto-layout | Selected | Real access traces and migration tests exist |
 | AsmJit pin (M1) | Candidate: commit `0d7f01052f2d3f6d6b9bb6714ef32bd7b80177eb` (v1.23.0, zlib, C++20); not yet adopted | Owner approval of fetch-vs-vendor; M1-01 W^X and differential evidence |
-| Engine license | MIT, selected by owner on 7 October 2026 | Third-party components retain their own terms |
+| Engine license | PolyForm Perimeter 1.0.1, selected by owner (licence card, 12 October 2026); `LICENSE` is authoritative | Third-party components retain their own terms |
 | Repository / final name | Public `admiraly/sutekh`; final branding pending | Before commercial branding |
 
 Sources: [SOURCE_NOTES.md](SOURCE_NOTES.md).
