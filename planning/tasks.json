@@ -369,7 +369,7 @@
         "Durable deduplicated jobs and stale-result rejection.",
         "Actual ABI tests and compilation; no gameplay build dependency."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M1-01",
@@ -396,7 +396,7 @@
         "All supported opcodes match reference corpus.",
         "W^X, failure handling, source maps and actual platform calling convention."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M1-02",
@@ -423,7 +423,7 @@
         "No stale pointers after repeated swaps or in-flight jobs.",
         "Native worker crash recovery records replaced PID and correct checkpoint replay."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M1-03",
@@ -450,7 +450,7 @@
         "Zero/tails/unaligned/overflow corpus exact.",
         "Real isolated throughput and end-to-end cost; scalar fallback works."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M1-04",
@@ -477,7 +477,7 @@
         "Serial/parallel canonical results match for varied completion orders.",
         "Conflicts and ordering cycles rejected."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M1-05",
