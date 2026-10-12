@@ -70,9 +70,12 @@ add_test(NAME vm COMMAND test_vm WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 
 file(GLOB SU_AGENT_SOURCES CONFIGURE_DEPENDS src/agent/*.c)
 list(APPEND SU_AGENT_SOURCES src/runtime/worker.c src/runtime/registry.c src/runtime/schedule.c src/runtime/reload.c)
+# ---- BEGIN M2-00c3 entity tick (src/runtime/entity_tick.c) ----
+list(APPEND SU_AGENT_SOURCES src/runtime/entity_tick.c)
+# ---- END M2-00c3 entity tick ----
 add_library(su_agent STATIC ${SU_AGENT_SOURCES})
 target_include_directories(su_agent PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
-target_link_libraries(su_agent PUBLIC su_vm su_world su_ir su_platform su_snapshot su_jobs)
+target_link_libraries(su_agent PUBLIC su_vm su_world su_ir su_platform su_snapshot su_jobs su_cmdq)
 target_compile_definitions(su_agent PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(su_agent)
 
@@ -245,7 +248,7 @@ if(SUTEKH_NATIVE)
     # Only the test links it; sutekh is built from su_agent without SU_TEST_FAULT_HOOKS.
     add_library(su_agent_test STATIC ${SU_AGENT_SOURCES} src/runtime/native_versions.c)
     target_include_directories(su_agent_test PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
-    target_link_libraries(su_agent_test PUBLIC su_vm su_world su_ir su_platform su_snapshot su_native su_jobs)
+    target_link_libraries(su_agent_test PUBLIC su_vm su_world su_ir su_platform su_snapshot su_native su_jobs su_cmdq)
     target_compile_definitions(su_agent_test PRIVATE _POSIX_C_SOURCE=200809L SU_HAVE_NATIVE SU_TEST_FAULT_HOOKS)
     sutekh_apply_warnings(su_agent_test)
     # M1 closure C: safe retirement (in-flight count, retirement inside a kernel call) and the quarantine
@@ -348,3 +351,10 @@ target_link_libraries(test_world_ents PRIVATE su_world)
 sutekh_apply_warnings(test_world_ents)
 add_test(NAME world_entities COMMAND test_world_ents WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # ---- END M2-00c1 world integration ----
+
+# ---- BEGIN M2-00c3 entity tick integration (runtime/entity_tick.c over runtime/schedule.c) ----
+add_executable(test_entity_tick tests/entities/test_entity_tick.c)
+target_link_libraries(test_entity_tick PRIVATE su_agent su_world su_cmdq su_ents)
+sutekh_apply_warnings(test_entity_tick)
+add_test(NAME entity_tick COMMAND test_entity_tick WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# ---- END M2-00c3 entity tick integration ----

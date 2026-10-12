@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include "ir/su_lir.h"
+#include "runtime/entity_tick.h"
 #include "runtime/jobs/su_jobs.h"
 #include "sutekh/abi.h"
 #include "world/su_world.h"
@@ -53,6 +54,7 @@ typedef struct SuSchedule {
     SuSysEntry sys[SU_SCHED_MAX_SYSTEMS];
     uint32_t field_count;
     SuSchedField *fields;    /* owned union table, ascending field id */
+    SuEntRt *ent;            /* owned entity runtime (event log, caps); NULL until enabled (M2-00c3) */
 } SuSchedule;
 
 /* Test seam: called before each system of a tick. Returns nonzero to fail that system
@@ -106,6 +108,14 @@ uint32_t su_sched_run_ticks(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFa
 uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
                                 void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
                                 uint32_t *failed_index);
+
+/* Enables entity state for this schedule: an event log of event_log_max records and per-tick caps.
+ * Required before a schedule with uses_entity_ops systems can run (SU_E_INVALID_ARGUMENT otherwise).
+ * Replaces an existing entity runtime (its log is discarded; callers enable once at creation). */
+uint32_t su_sched_enable_entities(SuSchedule *s, uint64_t max_struct_tick, uint64_t max_events_tick,
+                                  uint64_t event_log_max);
+/* Runs one system of the schedule on the serial or chunked non-entity path (M0/M1 semantics). */
+uint32_t su_sched_run_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt);
 
 /* Swaps entry idx with *fresh (ownership of its module and context moves into the
  * schedule) and returns the replaced entry in *old for the caller to destroy. */

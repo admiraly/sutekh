@@ -38,7 +38,24 @@ void su_sched_free(SuSchedule *s) {
         su_sched_entry_destroy(&s->sys[i]);
     }
     free(s->fields);
+    su_ent_rt_destroy(s->ent);
     memset(s, 0, sizeof *s);
+}
+
+uint32_t su_sched_enable_entities(SuSchedule *s, uint64_t max_struct_tick, uint64_t max_events_tick,
+                                  uint64_t event_log_max) {
+    SuEntRt *rt = NULL;
+    uint32_t st;
+    if (s == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    st = su_ent_rt_create(max_struct_tick, max_events_tick, event_log_max, &rt);
+    if (st != SU_OK) {
+        return st;
+    }
+    su_ent_rt_destroy(s->ent);
+    s->ent = rt;
+    return SU_OK;
 }
 
 int su_sched_find(const SuSchedule *s, const char *system_id) {
@@ -239,12 +256,32 @@ static uint32_t run_one_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSc
     return su_vm_run_system(w, s->sys[i].ctx);
 }
 
+uint32_t su_sched_run_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt) {
+    if (w == NULL || s == NULL || i >= s->count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return run_one_system(w, s, i, opt);
+}
+
 uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
                                 void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
                                 uint32_t *failed_index) {
     uint64_t t;
+    uint32_t k;
+    int has_entity_ops = 0;
     *done = 0;
     *failed_index = UINT32_MAX;
+    for (k = 0; k < s->count; k++) {
+        if (s->sys[k].mod->uses_entity_ops) {
+            has_entity_ops = 1;
+        }
+    }
+    if (has_entity_ops) {
+        if (s->ent == NULL) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        return su_ent_run_ticks(w, s, s->ent, ticks, fault, fault_ctx, opt, done, failed_index);
+    }
     for (t = 0; t < ticks; t++) {
         uint32_t st = su_world_begin_tick(w);
         uint32_t i;
@@ -256,6 +293,10 @@ uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSch
                 st = SU_E_CANDIDATE_FAILED;
             } else {
                 st = run_one_system(w, s, i, opt);
+            }
+            if (st == SU_OK) {
+                /* Dead rows are canonically zero after every system's commit (contract B1). */
+                st = su_world_zero_dead(w);
             }
             if (st != SU_OK) {
                 break;
