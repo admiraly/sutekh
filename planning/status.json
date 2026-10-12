@@ -52,26 +52,28 @@
     ]
   },
   "m2": {
-    "state": "implemented_audited_pending_owner_acceptance",
+    "state": "implemented_audited_waiting_owner_decisions",
     "audits": [
       "planning/audit/M2-00-audit.md",
       "planning/audit/M2-audit.md",
-      "planning/audit/M2-reaudit.md"
+      "planning/audit/M2-reaudit.md",
+      "planning/audit/M2-final-recheck.md"
     ],
     "fix_handoffs": [
       "planning/handoffs/2026-10-12-m2-00-fixes.md",
       "planning/handoffs/2026-10-12-m2-01-fixes.md",
-      "planning/handoffs/2026-10-12-m2-01-fixes2.md"
+      "planning/handoffs/2026-10-12-m2-01-fixes2.md",
+      "planning/handoffs/2026-10-12-m2-01-fixes3.md"
     ],
-    "verified_by_orchestrator": "default release ctest 21/21, native ctest 33/33, harness default 23 passed/0 failed (3 native-only unavailable), harness native 26/0 per fix agent and orchestrator at prior head",
+    "verified_by_orchestrator": "at head after fixes3: default release ctest 22/22; native ctest 34/34; native harness passed 26/failed 0/unavailable 0",
     "open": [
-      "no independent re-check of fixes2 (BLK-3 iii, N1, N2, N3) yet",
-      "N5 id reuse after undone commit: owner decision",
-      "N4 recovery exhaustion inside undo documented not unified",
-      "gap c rollback digest needs contract-level digest change",
-      "no harness case for native in-flight migration",
-      "docs/AGENT_RPC.md not updated for fixes2",
-      "TSan not run on specialize_inflight"
+      "owner decision N5 (field ids of an undone commit reusable)",
+      "owner decision N4 (recovery exhaustion inside undo; documented)",
+      "owner acceptance of deviation: post-commit failure is an undo, not LOG_ROLLBACK",
+      "rollback digest equality needs contract-level digest change (waiver or change)",
+      "1M-row timing is an observation only",
+      "TSan: 4 worker tests fail under TSan from the 4 GiB RLIMIT_AS guard (environmental per fix agent); proposed guard change not made",
+      "no independent re-check of fixes3"
     ],
     "note": "M2 closure not declared; owner acceptance not given."
   }
