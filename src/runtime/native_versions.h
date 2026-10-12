@@ -20,6 +20,7 @@
 #include <stdint.h>
 
 #include "ir/su_lir.h"
+#include "runtime/jobs/su_jobs.h"
 #include "world/su_world.h"
 
 #define SU_NV_MAX_ARTIFACTS 32u
@@ -49,6 +50,12 @@ uint32_t su_nv_install(uint64_t seq);
 /* Runs the installed kernel on the world's open tick (binding selection and commit as
  * su_vm_run_system). SU_E_INTERNAL when seq does not name an installed artifact. */
 uint32_t su_nv_run_system(uint64_t seq, SuWorld *w);
+
+/* As su_nv_run_system, over the canonical chunks of the world's rows (su_jobs boundaries, which depend
+ * only on the row count) with `workers` threads. Every chunk runs the same kernel on sliced column
+ * views; the commit happens once, after all chunks succeed. Lowest failing chunk decides the status.
+ * `fault` is the test seam of su_jobs (NULL outside tests). workers == 1 is su_nv_run_system. */
+uint32_t su_nv_run_system_chunked(uint64_t seq, SuWorld *w, uint32_t workers, SuJobsFault fault, void *fault_ctx);
 
 /* Detaches the handle. Frees now when no call is in flight, else marks RETIRING and frees
  * when the last call returns. Unknown or already retired handles are a no-op. */
@@ -80,7 +87,9 @@ enum {
     SU_NV_FAULT_WRONG_WORLD = 2,  /* flips one output bit in world runs only (own test cases) */
     SU_NV_FAULT_CRASH = 3,        /* SIGSEGV before the kernel call */
     SU_NV_FAULT_HANG = 4,         /* never returns from the kernel call */
-    SU_NV_FAULT_DELAY = 5         /* sleeps delay_ms before the kernel call, then runs it */
+    SU_NV_FAULT_DELAY = 5,        /* sleeps delay_ms before the kernel call, then runs it */
+    SU_NV_FAULT_RELEASE_IN_CALL = 6 /* one shot, world path: su_nv_release of the running artifact from
+                                       inside its kernel call; see su_nv_test_release_observation */
 };
 void su_nv_test_arm(uint32_t mode, uint32_t delay_ms);
 
@@ -103,5 +112,8 @@ uint32_t su_nv_code_bytes(uint64_t seq, uint64_t *out);
 /* Test-only: holds an in-flight count so that a release can be observed deferring. */
 void su_nv_test_enter(uint64_t seq);
 void su_nv_test_leave(uint64_t seq);
+/* Test-only: the state, in-flight count and live-artifact count observed right after the
+ * SU_NV_FAULT_RELEASE_IN_CALL release (fired = 0 when the seam did not run). */
+void su_nv_test_release_observation(uint32_t *fired, uint32_t *state, uint32_t *inflight, uint32_t *live);
 
 #endif

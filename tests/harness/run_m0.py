@@ -2766,6 +2766,54 @@ def rlimit_as_mismatches(limits_text: str, bound: int = RLIMIT_AS_BOUND) -> list
     return ["no Max address space line in /proc limits"]
 
 
+def limit_soft(limits_text: str, key: str):
+    """Soft limit of one /proc/<pid>/limits row named by key (for example "Max file size"): an int,
+    the string "unlimited", or None when the row is missing or not a number."""
+    for line in limits_text.splitlines():
+        if line.startswith(key):
+            parts = line[len(key):].split()
+            if not parts:
+                return None
+            if parts[0] == "unlimited":
+                return "unlimited"
+            return int(parts[0]) if parts[0].isdigit() else None
+    return None
+
+
+def exact_limit_mismatches(limits_text: str, key: str, expected) -> list:
+    """The soft limit of one /proc limits row must equal expected exactly (an int or "unlimited")."""
+    got = limit_soft(limits_text, key)
+    if got != expected:
+        return [f"{key} soft limit is {got!r}, expected {expected!r}"]
+    return []
+
+
+def seccomp_mismatches(status: bytes, mode: int = 2) -> list:
+    """The process's own /proc/<pid>/status must report Seccomp mode `mode` (2 = filter)."""
+    for line in status.decode("utf-8", "replace").splitlines():
+        if line.startswith("Seccomp:"):
+            val = line.split(":", 1)[1].strip()
+            return [] if val == str(mode) else [f"Seccomp mode is {val!r}, expected {mode}"]
+    return ["no Seccomp line in /proc status"]
+
+
+def containment_mismatches(cont, expected_as: int, expected_fsize: int, expected_nofile: int) -> list:
+    """The containment object of a disposable worker answer (candidate.evaluate) must report the
+    limits the engine asked for, and seccomp as the enforced network denial."""
+    if not isinstance(cont, dict):
+        return ["containment object is missing from the answer"]
+    out = []
+    if cont.get("reported") is not True:
+        out.append(f"containment not reported by the child: {cont.get('reason')!r}")
+    for key, want in (("rlimit_as", expected_as), ("rlimit_fsize", expected_fsize),
+                      ("rlimit_nofile", expected_nofile)):
+        if cont.get(key) != want:
+            out.append(f"containment {key} is {cont.get(key)!r}, expected {want!r}")
+    if cont.get("no_network") != "seccomp":
+        out.append(f"containment no_network is {cont.get('no_network')!r}, expected 'seccomp'")
+    return out
+
+
 def environ_secret_mismatches(environ: bytes, name: str = SECRET_NAME) -> list:
     """A child's environment (NUL-separated /proc/<pid>/environ) must not carry the named variable."""
     prefix = name.encode("ascii") + b"="
@@ -2931,8 +2979,25 @@ def tx6(t: TestCtx):
         limits = _proc_read(f"/proc/{worker_pid}/limits")
         if limits is None:
             raise NotRun("active worker /proc limits are not readable on this platform")
+        limits_txt = limits.decode("utf-8", "replace")
         t.check_mismatches("TX6 (b) active worker RLIMIT_AS is limited to <= 4 GiB",
-                           rlimit_as_mismatches(limits.decode("utf-8", "replace")))
+                           rlimit_as_mismatches(limits_txt))
+        # Exact values: the default is 4 GiB (C07). The active worker has no CPU bound (long runs),
+        # RLIMIT_FSIZE 256 MiB (spool and snapshots), RLIMIT_NOFILE 1024.
+        t.check_mismatches("TX6 (b) active worker RLIMIT_AS is exactly 4 GiB",
+                           exact_limit_mismatches(limits_txt, "Max address space", RLIMIT_AS_BOUND))
+        t.check_mismatches("TX6 (b) active worker RLIMIT_FSIZE is exactly 256 MiB",
+                           exact_limit_mismatches(limits_txt, "Max file size", 256 * 1024 * 1024))
+        t.check_mismatches("TX6 (b) active worker RLIMIT_NOFILE is exactly 1024",
+                           exact_limit_mismatches(limits_txt, "Max open files", 1024))
+        t.check_mismatches("TX6 (b) active worker has no CPU limit (long-running simulation)",
+                           exact_limit_mismatches(limits_txt, "Max cpu time", "unlimited"))
+        if platform.machine() == "x86_64":
+            active_status = _proc_read(f"/proc/{worker_pid}/status")
+            if active_status is None:
+                raise NotRun("active worker /proc status is not readable on this platform")
+            t.check_mismatches("TX6 (b) active worker runs under a seccomp filter (no sockets)",
+                               seccomp_mismatches(active_status))
         # (c) SECRET_X is absent from the active worker's environment
         active_env = _proc_read(f"/proc/{worker_pid}/environ")
         if active_env is None:
@@ -2977,7 +3042,8 @@ def tx6(t: TestCtx):
                             continue
                         env_b = _proc_read(f"/proc/{kid}/environ")
                         if env_b is not None:
-                            out[kid] = {"environ": env_b, "limits": _proc_read(f"/proc/{kid}/limits")}
+                            out[kid] = {"environ": env_b, "limits": _proc_read(f"/proc/{kid}/limits"),
+                                        "status": _proc_read(f"/proc/{kid}/status")}
                     time.sleep(0.001)
 
             th = threading.Thread(target=poll, daemon=True)
@@ -2990,6 +3056,12 @@ def tx6(t: TestCtx):
                 stop.set()
                 th.join(5)
             t.check("TX6 (c) evaluation answered", True, bool(ev.get("ok")))
+            # The engine's own record of the disposable child's containment must match what the child
+            # reads back in /proc (checked per observed child above).
+            if ev.get("ok") and platform.machine() == "x86_64":
+                t.check_mismatches("TX6 (c) candidate.evaluate reports the disposable containment",
+                                   containment_mismatches((ev.get("result") or {}).get("containment"),
+                                                          RLIMIT_AS_BOUND, 256 * 1024 * 1024, 64))
         finally:
             shutil.rmtree(cap8_dir, ignore_errors=True)
         if not seen:
@@ -2998,8 +3070,18 @@ def tx6(t: TestCtx):
             t.check_mismatches(f"TX6 (c) disposable worker {kid} environment is scrubbed",
                                environ_secret_mismatches(rec["environ"]))
             if rec["limits"] is not None:
+                dl = rec["limits"].decode("utf-8", "replace")
                 t.check_mismatches(f"TX6 (b) disposable worker {kid} RLIMIT_AS is limited",
-                                   rlimit_as_mismatches(rec["limits"].decode("utf-8", "replace")))
+                                   rlimit_as_mismatches(dl))
+                t.check_mismatches(f"TX6 (b) disposable worker {kid} RLIMIT_AS is exactly 4 GiB",
+                                   exact_limit_mismatches(dl, "Max address space", RLIMIT_AS_BOUND))
+                t.check_mismatches(f"TX6 (b) disposable worker {kid} RLIMIT_FSIZE is exactly 256 MiB",
+                                   exact_limit_mismatches(dl, "Max file size", 256 * 1024 * 1024))
+                t.check_mismatches(f"TX6 (b) disposable worker {kid} RLIMIT_NOFILE is exactly 64",
+                                   exact_limit_mismatches(dl, "Max open files", 64))
+                if rec.get("status") is not None and platform.machine() == "x86_64":
+                    t.check_mismatches(f"TX6 (b) disposable worker {kid} runs under a seccomp filter",
+                                       seccomp_mismatches(rec["status"]))
         t.details["disposable_workers_observed"] = len(seen)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -3305,6 +3387,35 @@ def self_test() -> int:
     ok("reference evaluator: wrap at 2^32", ref.known_answer_result("add_u32", 0xFFFFFFFF, 1) == 0)
 
     ok("oversize line is one byte over 1 MiB", len(make_oversize_line(MAX_MESSAGE + 1)) == MAX_MESSAGE + 1)
+
+    # TX6 containment helpers (M1 closure C).
+    lim_txt = ("Limit                     Soft Limit           Hard Limit           Units     \n"
+               "Max address space         4294967296           4294967296           bytes     \n"
+               "Max file size             268435456            268435456            bytes     \n"
+               "Max open files            64                   64                   files     \n"
+               "Max cpu time              unlimited            unlimited            seconds   \n")
+    ok("limit_soft reads an integer soft limit", limit_soft(lim_txt, "Max address space") == 4294967296)
+    ok("limit_soft reads unlimited", limit_soft(lim_txt, "Max cpu time") == "unlimited")
+    ok("limit_soft missing row is None", limit_soft(lim_txt, "Max core file size") is None)
+    ok("exact limit: equal passes", exact_limit_mismatches(lim_txt, "Max open files", 64) == [])
+    ok("exact limit: one more fails", exact_limit_mismatches(lim_txt, "Max open files", 1024) != [])
+    ok("exact limit: 1 GiB is not 4 GiB", exact_limit_mismatches(
+        lim_txt.replace("4294967296", "1073741824"), "Max address space", RLIMIT_AS_BOUND) != [])
+    ok("exact limit: unlimited expected", exact_limit_mismatches(lim_txt, "Max cpu time", "unlimited") == [])
+    ok("seccomp mode 2 passes", seccomp_mismatches(b"Name:\tx\nSeccomp:\t2\n") == [])
+    ok("seccomp mode 0 fails", seccomp_mismatches(b"Name:\tx\nSeccomp:\t0\n") != [])
+    ok("seccomp line absent fails", seccomp_mismatches(b"Name:\tx\n") != [])
+    cont_ok = {"reported": True, "rlimit_as": RLIMIT_AS_BOUND, "rlimit_fsize": 268435456,
+               "rlimit_nofile": 64, "no_network": "seccomp", "reason": "seccomp"}
+    ok("containment: matching object passes",
+       containment_mismatches(cont_ok, RLIMIT_AS_BOUND, 268435456, 64) == [])
+    ok("containment: wrong nofile fails",
+       containment_mismatches(cont_ok, RLIMIT_AS_BOUND, 268435456, 1024) != [])
+    ok("containment: network none fails",
+       containment_mismatches({**cont_ok, "no_network": "none"}, RLIMIT_AS_BOUND, 268435456, 64) != [])
+    ok("containment: unreported fails",
+       containment_mismatches({**cont_ok, "reported": False}, RLIMIT_AS_BOUND, 268435456, 64) != [])
+    ok("containment: missing object fails", containment_mismatches(None, RLIMIT_AS_BOUND, 268435456, 64) != [])
 
     def run_fixture_check(rel):
         path = os.path.join(REPO, rel)

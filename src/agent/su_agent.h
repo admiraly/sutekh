@@ -30,6 +30,10 @@ typedef struct SuAgentConfig {
     uint32_t request_timeout_ms;
     /* RLIMIT_AS for worker children. 0 leaves it unchanged. Set 0 under ASan. */
     uint64_t worker_address_space_bytes;
+    /* Containment (C07). Every child also gets network denial. 0 selects the default shown. */
+    uint64_t worker_file_bytes;   /* RLIMIT_FSIZE of every child: 256 MiB */
+    uint32_t worker_nofile;       /* RLIMIT_NOFILE of the active worker: 1024 */
+    uint32_t disposable_nofile;   /* RLIMIT_NOFILE of disposable workers: 64 */
 
     /* Recovery limits (M1-02). 0 selects the default shown. */
     uint32_t checkpoint_interval_ticks; /* 64: a checkpoint once this many ticks were accepted */

@@ -2147,6 +2147,128 @@ static uint32_t h_world_close(WorkerState *s, const SuJsonValue *params, SuBuf *
 /* internal.stats {}: counts this worker holds, read from the structures themselves. The
  * supervisor never forwards it (it is not advertised); the control tests use it to check
  * that world.close releases worlds, checkpoints and registry records. */
+#ifdef SU_TEST_FAULT_HOOKS
+#include <sys/socket.h>
+/* Test-only containment probe (C07), compiled only into test workers. It runs inside whatever child
+ * the test spawned, so it reports what that child actually enforces: socket(2) errno, bytes written
+ * to a file in SU_TEST_CONTAINMENT_DIR until a write fails, descriptors opened until open(2) fails, and
+ * the child's own /proc/self/status Seccomp line and /proc/self/limits text. */
+static uint32_t h_internal_test_containment(SuBuf *res) {
+    static char buf[65536];
+    static char proc[8192];
+    const char *dir = getenv("SU_TEST_CONTAINMENT_DIR");
+    char path[600];
+    uint64_t written = 0;
+    uint64_t opened = 0;
+    int werr = 0;
+    int ferr = 0;
+    int serr = 0;
+    int sfd;
+    int fd;
+    int k;
+    ssize_t n;
+    size_t nread = 0;
+    const char *sec;
+    size_t i;
+
+    if (dir == NULL || strlen(dir) > 400u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    sfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sfd >= 0) {
+        close(sfd);
+    } else {
+        serr = errno;
+    }
+    snprintf(path, sizeof path, "%s/probe.bin", dir);
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        return SU_E_INTERNAL;
+    }
+    memset(buf, 'x', sizeof buf);
+    for (k = 0; k < 128; k++) {
+        n = write(fd, buf, sizeof buf);
+        if (n < 0) {
+            werr = errno;
+            break;
+        }
+        written += (uint64_t)n;
+    }
+    close(fd);
+    {
+        int fds[256];
+        int nfd = 0;
+        while (nfd < 256) {
+            int g = open("/dev/null", O_RDONLY);
+            if (g < 0) {
+                ferr = errno;
+                break;
+            }
+            fds[nfd++] = g;
+        }
+        opened = (uint64_t)nfd;
+        for (i = 0; i < (size_t)nfd; i++) {
+            close(fds[i]);
+        }
+    }
+    fd = open("/proc/self/status", O_RDONLY);
+    if (fd >= 0) {
+        while (nread + 1u < sizeof proc) {
+            n = read(fd, proc + nread, sizeof proc - 1u - nread);
+            if (n <= 0) {
+                break;
+            }
+            nread += (size_t)n;
+        }
+        proc[nread] = '\0';
+        close(fd);
+    } else {
+        proc[0] = '\0';
+    }
+    sec = strstr(proc, "\nSeccomp:");
+    su_buf_str(res, "{\"socket_errno\":");
+    su_buf_u64(res, (uint64_t)serr);
+    su_buf_str(res, ",\"socket_created\":");
+    su_buf_str(res, serr == 0 ? "true" : "false");
+    su_buf_str(res, ",\"bytes_written\":");
+    su_buf_u64(res, written);
+    su_buf_str(res, ",\"write_errno\":");
+    su_buf_u64(res, (uint64_t)werr);
+    su_buf_str(res, ",\"fds_opened\":");
+    su_buf_u64(res, opened);
+    su_buf_str(res, ",\"open_errno\":");
+    su_buf_u64(res, (uint64_t)ferr);
+    su_buf_str(res, ",\"seccomp_line\":");
+    if (sec != NULL) {
+        const char *e = strchr(sec + 1, '\n');
+        size_t len = e != NULL ? (size_t)(e - (sec + 1)) : strlen(sec + 1);
+        su_buf_quoted(res, sec + 1, len);
+    } else {
+        su_buf_str(res, "null");
+    }
+    fd = open("/proc/self/limits", O_RDONLY);
+    nread = 0;
+    if (fd >= 0) {
+        while (nread + 1u < sizeof proc) {
+            n = read(fd, proc + nread, sizeof proc - 1u - nread);
+            if (n <= 0) {
+                break;
+            }
+            nread += (size_t)n;
+        }
+        proc[nread] = '\0';
+        close(fd);
+    } else {
+        proc[0] = '\0';
+        nread = 0;
+    }
+    su_buf_str(res, ",\"limits\":");
+    su_buf_quoted(res, proc, nread);
+    su_buf_str(res, "}");
+    return SU_OK;
+}
+#endif
+
 static uint32_t h_internal_stats(WorkerState *s, SuBuf *res) {
     SuCheckpointStats cs;
     uint32_t worlds = 0;
@@ -2827,6 +2949,13 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
         st = h_internal_specialize_admit(s, req.params, &res, &f);
     } else if (strcmp(req.method, "internal.specialize.install") == 0) {
         st = h_internal_specialize_install(s, req.params, &res, &f);
+#endif
+#ifdef SU_TEST_FAULT_HOOKS
+    } else if (strcmp(req.method, "internal.test.containment") == 0) {
+        st = h_internal_test_containment(&res);
+        if (st != SU_OK) {
+            fail(&f, st, "containment probe failed");
+        }
 #endif
     } else if (strcmp(req.method, "internal.stats") == 0) {
         st = h_internal_stats(s, &res);

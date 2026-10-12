@@ -61,9 +61,10 @@ typedef int (*SuSchedFault)(uint32_t system_index, void *ctx);
 
 /* Tick execution options (M1 closure B). workers == 1 (default) runs every system serially
  * through its VM context or native kernel, exactly as before. workers > 1 runs a system whose
- * world has at least chunk_min_rows rows through su_jobs_run_system_chunked (VM tier only; a
- * native kernel runs as one call on the whole range). chunk_fault is a test seam (NULL outside
- * tests) that fails one chunk with SU_E_CANDIDATE_FAILED. */
+ * world has at least chunk_min_rows rows through su_jobs_run_system_chunked (VM tier) or
+ * su_nv_run_system_chunked (native tier): the same canonical chunks on sliced column views.
+ * chunk_fault is a test seam (NULL outside tests) that fails one chunk with SU_E_CANDIDATE_FAILED.
+ * Tick workers stay opt-in: the default (1) is the serial path. */
 typedef struct SuSchedTickOpts {
     uint32_t workers;          /* 1..SU_JOBS_MAX_WORKERS */
     uint64_t chunk_min_rows;   /* chunked execution only when rows >= this */

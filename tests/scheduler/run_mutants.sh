@@ -70,3 +70,6 @@ mutant no_conflict_check runtime/jobs/su_effects.c \
 # No ordering-cycle rejection (Kahn then stalls and reports an internal error).
 mutant no_cycle_check runtime/jobs/su_effects.c \
     's/if \(g->reach\[i \* n \+ i\] != 0u\) \{/if (0) {/'
+# N>1 row order (VM chunks): chunk k >= 1 reads the input rows of chunk k-1 while it writes its own output rows.
+mutant vm_row_order_input_offset runtime/jobs/su_jobs.c \
+    's/slice_binding\(&j->base_in\[i\], &si\[i\], begin, len\);/slice_binding(&j->base_in[i], &si[i], chunk >= 1u ? begin - j->chunk_rows : begin, len);/'
