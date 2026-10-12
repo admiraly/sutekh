@@ -27,6 +27,7 @@ _REF = os.path.normpath(os.path.join(_HERE, "..", "ref"))
 if _REF not in sys.path:
     sys.path.insert(0, _REF)
 
+import spawn_batch_limits as limits  # noqa: E402
 from digest import digest_record, state_digest  # noqa: E402
 from model import FIELD_NAMES, World, tick, validate_spawn, ModelError  # noqa: E402
 
@@ -42,7 +43,6 @@ WRITABLE_FIELDS = frozenset((
     "pos_x", "pos_y", "speed", "range_sq", "reload", "damage", "flight", "order_mode", "order_x",
     "order_y", "formation_slot", "formation_gen", "formation_ox", "formation_oy",
 ))
-SPAWN_BATCH_MAX = 1024  # contract D6 / OD-3b
 U32_MAX = 0xFFFFFFFF
 NONE = 0xFFFFFFFF
 
@@ -194,15 +194,24 @@ class ModelBackend(Backend):
         w = self.world
         if name == CMD_SPAWN_BATCH:
             rows = args.get("rows")
-            if not isinstance(rows, list) or not (1 <= len(rows) <= SPAWN_BATCH_MAX):
+            if not isinstance(rows, list):
                 raise ModelError("SU_E_TYPE", "rows")
-            # Batch atomicity (D3): validate every row, then check free slots, then mutate.
+            try:
+                limits.check_row_count(len(rows))
+            except limits.BatchRefused as exc:
+                raise ModelError(exc.code, "rows", exc.detail)
+            # Batch atomicity (D3): validate every row, then prechecks, then mutate.
+            specs = []
             for r in rows:
-                validate_spawn(r, w.cap)
-            if len(rows) > w.cap - sum(w.alive):
-                raise ModelError("SU_E_RESOURCE_LIMIT", "world", "no free slots for batch")
+                if not isinstance(r, dict) or not isinstance(r.get("values"), dict):
+                    raise ModelError("SU_E_TYPE", "rows", "each row needs values")
+                specs.append(validate_spawn(r["values"], w.cap))
+            try:
+                limits.check_prechecks(len(rows), w.cap, sum(w.alive), w.hw)
+            except limits.BatchRefused as exc:
+                raise ModelError(exc.code, "world", exc.detail)
             for r in rows:
-                w.spawn(r)
+                w.spawn(r["values"])
         elif name == CMD_DESPAWN:
             w.despawn(_handle(args.get("entity")))
         elif name == CMD_SET_FIELDS:
@@ -225,7 +234,7 @@ def _handle(v) -> int:
 
 def _set_fields(w: World, args: dict) -> None:
     ents = args.get("entities")
-    if not isinstance(ents, list) or not (1 <= len(ents) <= SPAWN_BATCH_MAX):
+    if not isinstance(ents, list) or not (1 <= len(ents) <= limits.ROWS_MAX):
         raise ModelError("SU_E_TYPE", "entities")
     seen, plans = set(), []
     for e in ents:
