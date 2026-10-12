@@ -1,4 +1,4 @@
-/* Sutekh M0 fixed-row SoA u32 world. See su_world.h for the protocol. */
+/* Sutekh fixed-capacity SoA u32 world with the generational entity table. See su_world.h. */
 #include "world/su_world.h"
 
 #include <stdint.h>
@@ -9,9 +9,14 @@
 #define SU_WORLD_PHASE_TICK UINT32_C(1)
 #define SU_WORLD_ACCESS_MASK (SU_ACCESS_READ | SU_ACCESS_WRITE)
 #define SU_WORLD_ELEM_BYTES UINT32_C(4)
-#define SU_WORLD_STATE_VERSION UINT32_C(1)
+#define SU_WORLD_STATE_VERSION UINT32_C(2)
+#define SU_WORLD_STATE_VERSION_V1 UINT32_C(1)
 #define SU_WORLD_MAGIC "SUWSTATE"
 #define SU_WORLD_MAGIC_BYTES 9u /* 8 ASCII bytes + 0x00 */
+#define SU_WORLD_V2_HEADER_BYTES (SU_WORLD_MAGIC_BYTES + 4u + 8u + 4u)
+#define SU_WORLD_ENTS_HEADER_BYTES 60u     /* su_ents canonical header */
+#define SU_WORLD_ENTS_HW_OFF 36u           /* u64 high_water inside the su_ents header */
+#define SU_WORLD_ENTS_RECORD_BYTES 9u
 
 typedef struct SuWorldField {
     uint32_t id;
@@ -24,13 +29,15 @@ struct SuWorld {
     char *schema_id;
     uint32_t schema_version;
     uint32_t layout_generation;
-    uint64_t row_count;
+    uint64_t row_count;       /* capacity: column length and entity table capacity */
+    uint64_t initial_rows;    /* desc.row_count: slots alive at creation */
     uint64_t tick;
     uint32_t phase;
     uint32_t field_count;
     uint32_t readable_count;
     uint32_t writable_count;
-    uint32_t *entity_ids;
+    SuEnts *ents_committed;   /* entity table, committed root */
+    SuEnts *ents_working;     /* entity table, working root (copied at begin_tick) */
     SuWorldField *fields;     /* verified table: sorted ascending by id */
     uint32_t **committed;     /* per table index */
     uint32_t **working;       /* per table index */
@@ -129,6 +136,14 @@ static void su_put_u64(uint8_t *p, uint64_t v) {
     su_put_u32(p + 4, (uint32_t)(v >> 32));
 }
 
+static uint32_t su_rd_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint64_t su_rd_u64(const uint8_t *p) {
+    return (uint64_t)su_rd_u32(p) | ((uint64_t)su_rd_u32(p + 4) << 32);
+}
+
 /* Index of a field by ID in the verified table, or -1. */
 static long su_find_id(const SuWorld *w, uint32_t field_id) {
     uint32_t lo = 0;
@@ -145,6 +160,54 @@ static long su_find_id(const SuWorld *w, uint32_t field_id) {
         }
     }
     return -1;
+}
+
+/* Zeroes slot in every column of root cols. */
+static void su_zero_slot(const SuWorld *w, uint32_t **cols, uint32_t slot) {
+    uint32_t i;
+    for (i = 0; i < w->field_count; i++) {
+        cols[i][slot] = 0u;
+    }
+}
+
+/* Zeroes every column value of every dead slot in cols, using table e. Full chunks are skipped. */
+static void su_zero_dead_rows(const SuWorld *w, const SuEnts *e, uint32_t **cols) {
+    uint32_t chunks = su_ents_chunk_count(e);
+    uint32_t c;
+    for (c = 0; c < chunks; c++) {
+        uint64_t base = (uint64_t)c * SU_CHUNK_SLOTS;
+        uint64_t len = w->row_count - base;
+        uint32_t alive = 0;
+        const uint64_t *words = NULL;
+        uint32_t word_count = 0;
+        uint32_t wi;
+        if (len > SU_CHUNK_SLOTS) {
+            len = SU_CHUNK_SLOTS;
+        }
+        (void)su_ents_chunk_alive_count(e, c, &alive);
+        if ((uint64_t)alive == len) {
+            continue;
+        }
+        (void)su_ents_chunk_alive_bits(e, c, &words, &word_count);
+        for (wi = 0; wi < word_count; wi++) {
+            uint64_t lo = (uint64_t)wi * 64u;
+            uint64_t bits = len - lo;
+            uint64_t mask;
+            uint64_t dead;
+            uint32_t k;
+            if (bits > 64u) {
+                bits = 64u;
+            }
+            mask = bits == 64u ? UINT64_C(0xFFFFFFFFFFFFFFFF) : ((UINT64_C(1) << bits) - 1u);
+            dead = ~words[wi] & mask;
+            for (k = 0; dead != 0u && k < 64u; k++) {
+                if ((dead >> k) & 1u) {
+                    su_zero_slot(w, cols, (uint32_t)(base + lo + k));
+                    dead &= ~(UINT64_C(1) << k);
+                }
+            }
+        }
+    }
 }
 
 /* ---- lifetime --------------------------------------------------------- */
@@ -172,7 +235,8 @@ void su_world_destroy(SuWorld *w) {
     free(w->working);
     free(w->staging);
     free(w->fields);
-    free(w->entity_ids);
+    su_ents_destroy(w->ents_committed);
+    su_ents_destroy(w->ents_working);
     free(w->schema_id);
     free(w->inv_bindings);
     free(w->out_bindings);
@@ -180,16 +244,22 @@ void su_world_destroy(SuWorld *w) {
 }
 
 uint32_t su_world_create(const SuWorldDesc *desc, SuWorld **out) {
+    return su_world_create_ex(desc, 0u, out);
+}
+
+uint32_t su_world_create_ex(const SuWorldDesc *desc, uint64_t max_entities, SuWorld **out) {
     SuWorld *w = NULL;
     size_t id_len = 0;
     size_t n_rows = 0;
     size_t entity_bytes = 0;
+    uint64_t capacity;
     uint32_t i;
     uint32_t j;
     uint32_t st;
     uint32_t readable = 0;
     uint32_t writable = 0;
     uint32_t *sorted_ids = NULL;
+    SuEntsDesc ed;
 
     if (out == NULL) {
         return SU_E_INVALID_ARGUMENT;
@@ -198,9 +268,10 @@ uint32_t su_world_create(const SuWorldDesc *desc, SuWorld **out) {
     if (desc == NULL) {
         return SU_E_INVALID_ARGUMENT;
     }
-    if (desc->row_count > SU_LIMIT_ROWS) {
+    if (desc->row_count > SU_LIMIT_ROWS || max_entities > SU_LIMIT_ROWS) {
         return SU_E_RESOURCE_LIMIT;
     }
+    capacity = max_entities > desc->row_count ? max_entities : desc->row_count;
     if (desc->field_count > SU_LIMIT_FIELDS) {
         return SU_E_RESOURCE_LIMIT;
     }
@@ -275,7 +346,8 @@ uint32_t su_world_create(const SuWorldDesc *desc, SuWorld **out) {
     }
     w->schema_version = desc->schema_version;
     w->layout_generation = desc->layout_generation;
-    w->row_count = desc->row_count;
+    w->row_count = capacity;
+    w->initial_rows = desc->row_count;
     w->readable_count = readable;
     w->writable_count = writable;
 
@@ -284,14 +356,18 @@ uint32_t su_world_create(const SuWorldDesc *desc, SuWorld **out) {
         goto fail_alloc;
     }
 
-    w->entity_ids = malloc(entity_bytes > 0 ? entity_bytes : SU_WORLD_ELEM_BYTES);
-    if (w->entity_ids == NULL) {
-        goto fail_alloc;
+    /* Entity table: initial rows alive with generation 1, the rest free. */
+    memset(&ed, 0, sizeof ed);
+    ed.max_entities = capacity;
+    ed.initial_alive = desc->row_count;
+    ed.external_ids = desc->row_count > 0u ? desc->entity_ids : NULL;
+    st = su_ents_create(&ed, &w->ents_committed);
+    if (st != SU_OK) {
+        goto fail_status;
     }
-    if (n_rows > 0) {
-        memcpy(w->entity_ids, desc->entity_ids, entity_bytes);
-    } else {
-        w->entity_ids[0] = 0u;
+    st = su_ents_clone(w->ents_committed, &w->ents_working);
+    if (st != SU_OK) {
+        goto fail_status;
     }
 
     /* Fields: copy, then sort into the verified table. */
@@ -343,6 +419,7 @@ uint32_t su_world_create(const SuWorldDesc *desc, SuWorld **out) {
         goto fail_alloc;
     }
 
+    /* Initial entity IDs live in the entity table (external ids); columns start zeroed. */
     *out = w;
     return SU_OK;
 
@@ -377,6 +454,14 @@ int su_world_in_tick(const SuWorld *w) {
     return w != NULL && w->phase == SU_WORLD_PHASE_TICK;
 }
 
+const SuEnts *su_world_entities_committed(const SuWorld *w) {
+    return w != NULL ? w->ents_committed : NULL;
+}
+
+const SuEnts *su_world_entities_working(const SuWorld *w) {
+    return w != NULL ? w->ents_working : NULL;
+}
+
 /* ---- tick control ----------------------------------------------------- */
 
 uint32_t su_world_begin_tick(SuWorld *w) {
@@ -392,6 +477,9 @@ uint32_t su_world_begin_tick(SuWorld *w) {
         if (bytes > 0) {
             memcpy(w->working[i], w->committed[i], bytes);
         }
+    }
+    if (su_ents_copy(w->ents_working, w->ents_committed) != SU_OK) {
+        return SU_E_INTERNAL;
     }
     w->phase = SU_WORLD_PHASE_TICK;
     return SU_OK;
@@ -438,20 +526,34 @@ uint32_t su_world_commit_staging(SuWorld *w, const uint32_t *field_ids, uint32_t
     return SU_OK;
 }
 
+uint32_t su_world_zero_dead(SuWorld *w) {
+    if (w == NULL || w->phase != SU_WORLD_PHASE_TICK) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    su_zero_dead_rows(w, w->ents_working, w->working);
+    return SU_OK;
+}
+
 uint32_t su_world_publish(SuWorld *w) {
     uint32_t i;
     size_t bytes = 0;
+    SuEnts *swap;
     if (w == NULL || w->phase != SU_WORLD_PHASE_TICK) {
         return SU_E_INVALID_ARGUMENT;
     }
     if (su_mul_size((size_t)w->row_count, SU_WORLD_ELEM_BYTES, &bytes) != SU_OK) {
         return SU_E_INTERNAL;
     }
+    /* Dead rows are canonically zero in the published root. */
+    su_zero_dead_rows(w, w->ents_working, w->working);
     for (i = 0; i < w->field_count; i++) {
         if (bytes > 0) {
             memcpy(w->committed[i], w->working[i], bytes);
         }
     }
+    swap = w->ents_committed;
+    w->ents_committed = w->ents_working;
+    w->ents_working = swap;
     w->tick++;
     w->phase = SU_WORLD_PHASE_IDLE;
     return SU_OK;
@@ -461,9 +563,8 @@ uint32_t su_world_abort(SuWorld *w) {
     if (w == NULL) {
         return SU_E_INVALID_ARGUMENT;
     }
-    /* Committed is never written during a tick, so discarding the open tick
-     * leaves it bit-identical. Working and staging are rebuilt by the next
-     * begin_tick. */
+    /* Committed columns and the committed table are never written during a tick, so discarding the
+     * open tick leaves them bit-identical. Working columns and table are rebuilt by begin_tick. */
     w->phase = SU_WORLD_PHASE_IDLE;
     return SU_OK;
 }
@@ -529,18 +630,109 @@ uint32_t su_world_build_outputs(SuWorld *w, SuOutputs *out) {
     return SU_OK;
 }
 
+uint32_t su_world_alive_view(const SuWorld *w, uint32_t base, uint32_t n, uint8_t *alive) {
+    const SuEnts *e;
+    uint32_t k;
+    if (w == NULL || (uint64_t)base + (uint64_t)n > w->row_count || (n > 0u && alive == NULL)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    e = w->phase == SU_WORLD_PHASE_TICK ? w->ents_working : w->ents_committed;
+    for (k = 0; k < n; k++) {
+        alive[k] = su_ents_slot_alive(e, base + k) ? 1u : 0u;
+    }
+    return SU_OK;
+}
+
+uint32_t su_world_generation_view(const SuWorld *w, uint32_t base, uint32_t n, uint32_t *generation) {
+    const SuEnts *e;
+    uint32_t k;
+    if (w == NULL || (uint64_t)base + (uint64_t)n > w->row_count || (n > 0u && generation == NULL)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    e = w->phase == SU_WORLD_PHASE_TICK ? w->ents_working : w->ents_committed;
+    for (k = 0; k < n; k++) {
+        uint32_t st = su_ents_slot_generation(e, base + k, &generation[k]);
+        if (st != SU_OK) {
+            return st;
+        }
+    }
+    return SU_OK;
+}
+
+/* ---- control-plane entity mutations ----------------------------------- */
+
+uint32_t su_world_spawn(SuWorld *w, const SuWorldSpawnValue *values, uint32_t count,
+                        uint32_t external_id, SuEntity *out) {
+    uint32_t k;
+    uint32_t m;
+    uint32_t slot;
+    SuEntity h;
+    uint32_t st;
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = SU_ENTITY_INVALID;
+    if (w == NULL || w->phase != SU_WORLD_PHASE_IDLE) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (count > 0u && values == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (count > w->field_count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (k = 0; k < count; k++) {
+        if (su_find_id(w, values[k].field_id) < 0) {
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        for (m = 0; m < k; m++) {
+            if (values[m].field_id == values[k].field_id) {
+                return SU_E_INVALID_ARGUMENT;
+            }
+        }
+    }
+    /* Allocation is the only step that can fail; nothing has changed yet. */
+    st = su_ents_alloc(w->ents_committed, external_id, &h);
+    if (st != SU_OK) {
+        return st;
+    }
+    slot = SU_ENTITY_SLOT(h);
+    su_zero_slot(w, w->committed, slot);
+    for (k = 0; k < count; k++) {
+        w->committed[su_find_id(w, values[k].field_id)][slot] = values[k].value;
+    }
+    *out = h;
+    return SU_OK;
+}
+
+uint32_t su_world_despawn(SuWorld *w, SuEntity handle) {
+    uint32_t st;
+    uint32_t slot;
+    if (w == NULL || w->phase != SU_WORLD_PHASE_IDLE) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    st = su_ents_validate(w->ents_committed, handle);
+    if (st != SU_OK) {
+        return st;
+    }
+    slot = SU_ENTITY_SLOT(handle);
+    su_zero_slot(w, w->committed, slot);
+    return su_ents_despawn(w->ents_committed, handle);
+}
+
 /* ---- fixture init and inspection -------------------------------------- */
 
 uint32_t su_world_init_committed(SuWorld *w, uint32_t field_id, const uint32_t *values, uint64_t count) {
     long idx;
     size_t bytes = 0;
+    uint32_t s;
     if (w == NULL || (values == NULL && count > 0u)) {
         return SU_E_INVALID_ARGUMENT;
     }
     if (w->phase != SU_WORLD_PHASE_IDLE || w->tick != 0u) {
         return SU_E_INVALID_ARGUMENT;
     }
-    if (count != w->row_count) {
+    if (count != w->row_count && count != w->initial_rows) {
         return SU_E_INVALID_ARGUMENT;
     }
     idx = su_find_id(w, field_id);
@@ -553,7 +745,23 @@ uint32_t su_world_init_committed(SuWorld *w, uint32_t field_id, const uint32_t *
     if (bytes > 0) {
         memcpy(w->committed[idx], values, bytes);
     }
+    /* Dead rows stay canonically zero. */
+    for (s = 0; s < (uint32_t)w->row_count; s++) {
+        if (!su_ents_slot_alive(w->ents_committed, s)) {
+            w->committed[idx][s] = 0u;
+        }
+    }
     return SU_OK;
+}
+
+uint32_t su_world_adopt_entities(SuWorld *w, const SuEnts *t) {
+    if (w == NULL || t == NULL || w->phase != SU_WORLD_PHASE_IDLE || w->tick != 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (su_ents_capacity(t) != su_ents_capacity(w->ents_committed)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return su_ents_copy(w->ents_committed, t);
 }
 
 uint32_t su_world_read_committed(const SuWorld *w, uint32_t field_id, const uint32_t **data, uint64_t *row_count) {
@@ -588,31 +796,30 @@ uint32_t su_world_read_committed_by_name(const SuWorld *w, const char *name, con
 /* ---- canonical state -------------------------------------------------- */
 
 static uint32_t su_canonical_size_internal(const SuWorld *w, size_t *size) {
-    size_t rows = (size_t)w->row_count;
-    size_t total = SU_WORLD_MAGIC_BYTES + 4u + 8u + 8u + 4u;
-    size_t entity_bytes = 0;
+    size_t hw = su_ents_high_water(w->ents_committed);
+    size_t total = SU_WORLD_V2_HEADER_BYTES;
+    size_t ents = 0;
+    size_t per_field = 0;
     uint32_t st;
     uint32_t i;
 
-    st = su_mul_size(rows, SU_WORLD_ELEM_BYTES, &entity_bytes);
+    st = su_ents_canonical_size(w->ents_committed, &ents);
     if (st != SU_OK) {
         return st;
     }
-    st = su_add_size(total, entity_bytes, &total);
+    st = su_add_size(total, ents, &total);
     if (st != SU_OK) {
         return st;
     }
-    /* Per field: u32 id + u32 elem_type + values. */
+    st = su_mul_size(hw, SU_WORLD_ELEM_BYTES, &per_field);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = su_add_size(per_field, 8u, &per_field);
+    if (st != SU_OK) {
+        return st;
+    }
     for (i = 0; i < w->field_count; i++) {
-        size_t per_field = 0;
-        st = su_mul_size(rows, SU_WORLD_ELEM_BYTES, &per_field);
-        if (st != SU_OK) {
-            return st;
-        }
-        st = su_add_size(per_field, 8u, &per_field);
-        if (st != SU_OK) {
-            return st;
-        }
         st = su_add_size(total, per_field, &total);
         if (st != SU_OK) {
             return st;
@@ -632,10 +839,11 @@ uint32_t su_world_canonical_size(const SuWorld *w, size_t *size) {
 uint32_t su_world_canonical_write(const SuWorld *w, uint8_t *buf, size_t cap, size_t *written) {
     size_t need = 0;
     size_t off = 0;
-    size_t rows;
+    size_t ents_len = 0;
+    size_t hw;
     uint32_t st;
     uint32_t i;
-    uint64_t r;
+    uint32_t r;
 
     if (w == NULL || written == NULL) {
         return SU_E_INVALID_ARGUMENT;
@@ -648,7 +856,7 @@ uint32_t su_world_canonical_write(const SuWorld *w, uint8_t *buf, size_t cap, si
     if (buf == NULL || cap < need) {
         return SU_E_INVALID_ARGUMENT;
     }
-    rows = (size_t)w->row_count;
+    hw = su_ents_high_water(w->ents_committed);
 
     memcpy(buf, SU_WORLD_MAGIC, SU_WORLD_MAGIC_BYTES);
     off += SU_WORLD_MAGIC_BYTES;
@@ -656,25 +864,173 @@ uint32_t su_world_canonical_write(const SuWorld *w, uint8_t *buf, size_t cap, si
     off += 4u;
     su_put_u64(buf + off, w->tick);
     off += 8u;
-    su_put_u64(buf + off, w->row_count);
-    off += 8u;
     su_put_u32(buf + off, w->field_count);
     off += 4u;
-    for (r = 0; r < (uint64_t)rows; r++) {
-        su_put_u32(buf + off, w->entity_ids[r]);
-        off += 4u;
+    st = su_ents_canonical_write(w->ents_committed, buf + off, cap - off, &ents_len);
+    if (st != SU_OK) {
+        return st;
     }
+    off += ents_len;
     for (i = 0; i < w->field_count; i++) {
         su_put_u32(buf + off, w->fields[i].id);
         off += 4u;
         su_put_u32(buf + off, w->fields[i].type);
         off += 4u;
-        for (r = 0; r < (uint64_t)rows; r++) {
+        for (r = 0; r < (uint32_t)hw; r++) {
             su_put_u32(buf + off, w->committed[i][r]);
             off += 4u;
         }
     }
     return SU_OK;
+}
+
+/* Restore from canonical bytes, version 1 (M0 layout, all slots alive) or version 2. */
+uint32_t su_world_restore_canonical(const SuWorldDesc *desc, const uint8_t *buf, size_t len, SuWorld **out) {
+    SuWorld *w = NULL;
+    SuEnts *t = NULL;
+    uint32_t version;
+    uint32_t i;
+    uint32_t st;
+    uint64_t tick;
+    uint64_t rows;
+    uint32_t fc;
+    size_t off;
+    size_t ents_len = 0;
+    size_t hw_size = 0;
+
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    if (desc == NULL || buf == NULL || len < SU_WORLD_MAGIC_BYTES + 4u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (memcmp(buf, SU_WORLD_MAGIC, SU_WORLD_MAGIC_BYTES) != 0) {
+        return SU_E_PARSE;
+    }
+    version = su_rd_u32(buf + SU_WORLD_MAGIC_BYTES);
+
+    if (version == SU_WORLD_STATE_VERSION_V1) {
+        size_t hdr = SU_WORLD_MAGIC_BYTES + 4u + 8u + 8u + 4u;
+        size_t vals;
+        if (len < hdr) {
+            return SU_E_PARSE;
+        }
+        tick = su_rd_u64(buf + SU_WORLD_MAGIC_BYTES + 4u);
+        rows = su_rd_u64(buf + SU_WORLD_MAGIC_BYTES + 12u);
+        fc = su_rd_u32(buf + SU_WORLD_MAGIC_BYTES + 20u);
+        if (rows != desc->row_count || fc != desc->field_count) {
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        if (rows > SU_LIMIT_ROWS) {
+            return SU_E_PARSE;
+        }
+        vals = (size_t)rows * 4u;
+        if (len != hdr + vals + (size_t)fc * (8u + vals)) {
+            return SU_E_PARSE;
+        }
+        off = hdr;
+        for (i = 0; i < rows; i++) {
+            if (su_rd_u32(buf + off + 4u * i) != desc->entity_ids[i]) {
+                return SU_E_SCHEMA_MISMATCH;
+            }
+        }
+        off += vals;
+        st = su_world_create(desc, &w);
+        if (st != SU_OK) {
+            return st;
+        }
+        if (w->row_count != rows) {
+            st = SU_E_SCHEMA_MISMATCH;
+            goto fail;
+        }
+        for (i = 0; i < fc; i++) {
+            if (su_rd_u32(buf + off) != w->fields[i].id || su_rd_u32(buf + off + 4u) != w->fields[i].type) {
+                st = SU_E_SCHEMA_MISMATCH;
+                goto fail;
+            }
+            off += 8u;
+            memcpy(w->committed[i], buf + off, vals);
+            off += vals;
+        }
+        w->tick = tick;
+        *out = w;
+        return SU_OK;
+    }
+
+    if (version != SU_WORLD_STATE_VERSION) {
+        return SU_E_PARSE;
+    }
+    if (len < SU_WORLD_V2_HEADER_BYTES + SU_WORLD_ENTS_HEADER_BYTES) {
+        return SU_E_PARSE;
+    }
+    tick = su_rd_u64(buf + SU_WORLD_MAGIC_BYTES + 4u);
+    fc = su_rd_u32(buf + SU_WORLD_MAGIC_BYTES + 12u);
+    if (fc != desc->field_count) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    {
+        uint64_t hw = su_rd_u64(buf + SU_WORLD_V2_HEADER_BYTES + SU_WORLD_ENTS_HW_OFF);
+        if (hw > SU_LIMIT_ROWS) {
+            return SU_E_PARSE;
+        }
+        ents_len = SU_WORLD_ENTS_HEADER_BYTES + (size_t)hw * SU_WORLD_ENTS_RECORD_BYTES;
+        hw_size = (size_t)hw;
+    }
+    if (len - SU_WORLD_V2_HEADER_BYTES < ents_len) {
+        return SU_E_PARSE;
+    }
+    st = su_ents_canonical_parse(buf + SU_WORLD_V2_HEADER_BYTES, ents_len, &t);
+    if (st != SU_OK) {
+        return st == SU_E_RESOURCE_LIMIT ? st : SU_E_PARSE;
+    }
+    if (su_ents_capacity(t) < desc->row_count) {
+        st = SU_E_SCHEMA_MISMATCH;
+        goto fail;
+    }
+    off = SU_WORLD_V2_HEADER_BYTES + ents_len;
+    {
+        size_t per_field = 8u + 4u * hw_size;
+        if (len != off + (size_t)fc * per_field) {
+            st = SU_E_PARSE;
+            goto fail;
+        }
+    }
+
+    st = su_world_create_ex(desc, su_ents_capacity(t), &w);
+    if (st != SU_OK) {
+        goto fail;
+    }
+    st = su_world_adopt_entities(w, t);
+    if (st != SU_OK) {
+        goto fail;
+    }
+    for (i = 0; i < fc; i++) {
+        uint32_t r;
+        if (su_rd_u32(buf + off) != w->fields[i].id || su_rd_u32(buf + off + 4u) != w->fields[i].type) {
+            st = SU_E_SCHEMA_MISMATCH;
+            goto fail;
+        }
+        off += 8u;
+        for (r = 0; r < (uint32_t)hw_size; r++) {
+            uint32_t v = su_rd_u32(buf + off);
+            if (v != 0u && !su_ents_slot_alive(t, r)) {
+                st = SU_E_TYPE;
+                goto fail;
+            }
+            w->committed[i][r] = v;
+            off += 4u;
+        }
+    }
+    w->tick = tick;
+    st = SU_OK;
+    *out = w;
+    w = NULL;
+
+fail:
+    su_ents_destroy(t);
+    su_world_destroy(w);
+    return st;
 }
 
 uint32_t su_world_state_equal(const SuWorld *a, const SuWorld *b, int *equal) {
