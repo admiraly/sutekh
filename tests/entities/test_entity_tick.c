@@ -554,21 +554,26 @@ static void test_fault_after_system(void) {
     opt.chunk_min_rows = 1u;
     CHECK_ST(build_sched2(s, 4096u, 4096u, 1u << 20), SU_OK);
     CHECK_ST(init_world(w, N_ROWS), SU_OK);
-    CHECK_ST(su_sched_run_ticks_opt(w, s, 1u, NULL, NULL, &opt, &done, &fi), SU_OK);
-    CHECK(done == 1u && su_world_tick(w) == 1u);
 
+    /* The first tick is the faulty one: the initial rows give system 0 despawns and events to commit. */
     wb0 = world_bytes(w, &wl0);
     lb0 = log_bytes(su_ent_rt_log(s->ent), &ll0);
     fc.armed = 1u;
     CHECK_ST(su_sched_run_ticks_opt(w, s, 1u, fault_at, &fc, &opt, &done, &fi), SU_E_CANDIDATE_FAILED);
-    CHECK(done == 0u && fi == 1u && su_world_tick(w) == 1u);
+    CHECK(done == 0u && fi == 1u && su_world_tick(w) == 0u);
+    CHECK(fc.armed == 1u);
     wb1 = world_bytes(w, &wl1);
     lb1 = log_bytes(su_ent_rt_log(s->ent), &ll1);
     CHECK(wb0 != NULL && wb1 != NULL && wl0 == wl1 && memcmp(wb0, wb1, wl0) == 0);
     CHECK(lb0 != NULL && lb1 != NULL && ll0 == ll1 && memcmp(lb0, lb1, (size_t)ll0) == 0);
+    free(wb1);
+    free(lb1);
+    wb1 = NULL;
+    lb1 = NULL;
+
     fc.armed = 0u;
     CHECK_ST(su_sched_run_ticks_opt(w, s, 1u, fault_at, &fc, &opt, &done, &fi), SU_OK);
-    CHECK(done == 1u && su_world_tick(w) == 2u);
+    CHECK(done == 1u && su_world_tick(w) == 1u);
     free(wb0);
     free(wb1);
     free(lb0);
