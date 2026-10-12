@@ -401,4 +401,6 @@ add_test(NAME migration_runtime COMMAND test_migrate_runtime $<TARGET_FILE:recov
 add_test(NAME migration_alloc_points COMMAND python3 -I
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/migration-runtime/check_alloc_points.py"
          "${CMAKE_CURRENT_SOURCE_DIR}/src/world/migration/su_migrate.c")
+add_test(NAME migration_alloc_points_selftest COMMAND python3 -I
+         "${CMAKE_CURRENT_SOURCE_DIR}/tests/migration-runtime/check_alloc_points.py" --self-test)
 # ---- END M2-01b migration runtime ----

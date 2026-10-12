@@ -444,6 +444,22 @@ static int tier_of(const Resp *r, char *out, size_t cap) {
     return str_of(man->u.array.items[0], "execution_tier", out, cap);
 }
 
+/* M2-01 fixes3: the native registry of the worker, read through the test supervisor's internal.stats (the kernels live
+ * in the worker process). registry_live and registry_released are process totals; world_artifacts counts the artifacts
+ * the used worlds' schedules reference (seq and registry state of the first four). */
+#define NAT_INSTALLED 3u /* SU_NV_STATE_INSTALLED (runtime/native_versions.h) */
+
+typedef struct NatStat {
+    uint64_t live;
+    uint64_t released;
+    uint64_t world_artifacts;
+    uint64_t n;
+    uint64_t seq[4];
+    uint64_t state[4];
+} NatStat;
+
+static int native_stat(Sess *s, NatStat *out);
+
 /* ---------- in-flight scenarios (the supervisor issues the interleaved request once) ---------- */
 
 /* A new semantic revision (candidate.install of movement_v2) lands between admission and install of a
@@ -740,6 +756,12 @@ static void scenario_interleave_migrate(void) {
     CHECK(resp_ok(&r));
     CHECK(str_of(member(r.root, "result"), "execution_tier", tier, sizeof tier) && strcmp(tier, "native_scalar") == 0);
     resp_free(&r);
+    {
+        /* Bindings regenerated: the world's only artifact is the one compiled for layout generation 2 (installed). */
+        NatStat ng;
+        CHECK(native_stat(&s, &ng));
+        CHECK(ng.world_artifacts == 1u && ng.n == 1u && ng.state[0] == NAT_INSTALLED);
+    }
     CHECK(active_pid(&s) == active);
     CHECK(proc_starttime((pid_t)active) == start);
 
@@ -768,6 +790,138 @@ static void scenario_interleave_migrate(void) {
     sess_stop(&s);
 }
 
+/* Reads NatStat (see above) through the test supervisor's internal.stats. Returns 0 when the answer has no native object. */
+static int native_stat(Sess *s, NatStat *out) {
+    Resp r;
+    const SuJsonValue *nat = NULL;
+    const SuJsonValue *arr = NULL;
+    uint64_t i;
+    int ok;
+
+    memset(out, 0, sizeof *out);
+    call(s, "{\"protocol\":\"0.1\",\"id\":\"ns\",\"method\":\"internal.stats\",\"params\":{}}", &r, 120000);
+    ok = resp_ok(&r);
+    if (ok) {
+        nat = member(member(r.root, "result"), "native");
+    }
+    ok = nat != NULL;
+    if (ok) {
+        out->live = uint_of(nat, "registry_live");
+        out->released = uint_of(nat, "registry_released");
+        out->world_artifacts = uint_of(nat, "world_artifacts");
+        arr = member(nat, "artifacts");
+        if (arr != NULL && arr->type == SU_JSON_ARRAY) {
+            out->n = arr->u.array.count;
+            for (i = 0; i < arr->u.array.count && i < 4u; i++) {
+                out->seq[i] = uint_of(arr->u.array.items[i], "seq");
+                out->state[i] = uint_of(arr->u.array.items[i], "state");
+            }
+        }
+    }
+    resp_free(&r);
+    return ok;
+}
+
+/* A generation-1 kernel is installed and the migration commits (the swap releases it). A generation-2 kernel is installed
+ * for the committed layout, and the migration is rolled back: the restore releases that kernel and clears the
+ * supervisor's native records, so the worker death that follows (SUTEKH_TEST_KILL_AT_TICK seam, once) has no native
+ * member in its recovery object. Records that survived the rollback would be attributed to the death (MIG-X10). */
+static void scenario_rollback_native(void) {
+    Sess s;
+    char wid[64];
+    char rev[65];
+    char cid[32];
+    char pid[32];
+    char tok[1100];
+    char line[512];
+    char tier[32];
+    Resp r;
+    const SuJsonValue *rec;
+    NatStat pre;
+    NatStat post;
+    NatStat g2;
+
+    snprintf(tok, sizeof tok, "%s/token-rollback-native-kill", g_scratch);
+    {
+        FILE *f = fopen(tok, "wb");
+        if (f == NULL) {
+            perror(tok);
+            exit(2);
+        }
+        fputs("armed\n", f);
+        fclose(f);
+    }
+    setenv("SUTEKH_TEST_KILL_AT_TICK", "1", 1);
+    setenv("SUTEKH_TEST_KILL_TOKEN", tok, 1);
+    s = sess_start(NULL, NULL, 120000, "rbn");
+    unsetenv("SUTEKH_TEST_KILL_AT_TICK");
+    unsetenv("SUTEKH_TEST_KILL_TOKEN");
+    CHECK(create_movement(&s, wid, sizeof wid, rev, sizeof rev));
+    copy_fixture("movement_gen2.capsule.json");
+    copy_fixture("movement_gen2.test.json");
+    write_migration();
+    CHECK(submit_and_eval(&s, "movement_gen2.capsule.json", "movement_gen2.test.json", cid, sizeof cid));
+
+    specialize(&s, wid, rev, "scalar", &r);
+    CHECK(resp_ok(&r));
+    CHECK(str_of(member(r.root, "result"), "execution_tier", tier, sizeof tier) && strcmp(tier, "native_scalar") == 0);
+    resp_free(&r);
+    CHECK(world_rev(&s, wid, rev, sizeof rev));
+    CHECK(native_stat(&s, &pre));
+    CHECK(pre.world_artifacts == 1u && pre.n == 1u && pre.state[0] == NAT_INSTALLED);
+
+    /* Commit (the gen-1 kernel is released), then a gen-2 kernel for the committed layout is installed. */
+    CHECK(plan_gen2(&s, wid, rev, pid, sizeof pid));
+    CHECK(commit_gen2(&s, wid, pid, rev, cid, &r));
+    CHECK(str_of(member(r.root, "result"), "world_revision", rev, sizeof rev));
+    resp_free(&r);
+    specialize(&s, wid, rev, "scalar", &r);
+    CHECK(resp_ok(&r));
+    CHECK(str_of(member(r.root, "result"), "execution_tier", tier, sizeof tier) && strcmp(tier, "native_scalar") == 0);
+    resp_free(&r);
+    CHECK(world_rev(&s, wid, rev, sizeof rev));
+    CHECK(native_stat(&s, &g2));
+    CHECK(g2.world_artifacts == 1u && g2.n == 1u && g2.state[0] == NAT_INSTALLED);
+    CHECK(g2.seq[0] != pre.seq[0]); /* bindings regenerated: a new artifact for the new layout */
+
+    /* Rollback releases the gen-2 kernel of the schedule it replaces. */
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"rb\",\"method\":\"world.migrate_rollback\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\"}}",
+             wid, rev);
+    call(&s, line, &r, 120000);
+    CHECK(resp_ok(&r));
+    CHECK(str_of(member(r.root, "result"), "world_revision", rev, sizeof rev));
+    resp_free(&r);
+    CHECK(native_stat(&s, &post));
+    CHECK(post.world_artifacts == 0u && post.n == 0u);
+    CHECK(post.live + g2.world_artifacts == g2.live);
+    CHECK(post.released == g2.released + g2.world_artifacts);
+    {
+        Resp ir;
+        inspect(&s, wid, &ir);
+        CHECK(resp_ok(&ir));
+        CHECK(tier_of(&ir, tier, sizeof tier) && strcmp(tier, "vm") == 0);
+        CHECK(uint_of(member(ir.root, "result"), "layout_generation") == 1u);
+        resp_free(&ir);
+    }
+
+    /* The worker dies at tick 1 after the rollback: the recovery object has no native member. */
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"st\",\"method\":\"world.step\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\",\"ticks\":1}}",
+             wid, rev);
+    call(&s, line, &r, 120000);
+    CHECK(!resp_ok(&r));
+    CHECK(err_status(&r) == 15u);
+    rec = member(r.root, "recovery");
+    CHECK(rec != NULL);
+    CHECK(member(rec, "native") == NULL);
+    resp_free(&r);
+    CHECK(step_n(&s, wid, rev, sizeof rev, 1));
+    sess_stop(&s);
+}
+
 /* A generation-1 kernel is installed, the migration commits (the swap releases the kernel), and the worker then dies
  * while the next step computes tick 1 (SUTEKH_TEST_KILL_AT_TICK seam, once). The recovery must not attribute the death
  * to a kernel: the commit cleared the supervisor's records of the replaced schedule, so nothing is quarantined and the
@@ -784,6 +938,9 @@ static void scenario_migrate_step_death(void) {
     Resp r;
     const SuJsonValue *rec;
     const SuJsonValue *quar;
+    uint64_t pre_live = 0;
+    uint64_t pre_released = 0;
+    uint64_t pre_world = 0;
 
     snprintf(tok, sizeof tok, "%s/token-migrate-step-kill", g_scratch);
     {
@@ -811,11 +968,29 @@ static void scenario_migrate_step_death(void) {
     CHECK(str_of(member(r.root, "result"), "execution_tier", tier, sizeof tier) && strcmp(tier, "native_scalar") == 0);
     resp_free(&r);
     CHECK(world_rev(&s, wid, rev, sizeof rev));
+    {
+        /* M2-01 fixes3: the generation-1 kernel is installed before the commit (old-artifact release, kill X14). */
+        NatStat nb;
+        CHECK(native_stat(&s, &nb));
+        CHECK(nb.world_artifacts == 1u && nb.n == 1u && nb.state[0] == NAT_INSTALLED);
+        pre_live = nb.live;
+        pre_released = nb.released;
+        pre_world = nb.world_artifacts;
+    }
 
     CHECK(plan_gen2(&s, wid, rev, pid, sizeof pid));
     CHECK(commit_gen2(&s, wid, pid, rev, cid, &r));
     CHECK(str_of(member(r.root, "result"), "world_revision", rev, sizeof rev));
     resp_free(&r);
+    {
+        /* The swap released the old schedule's kernel: the registry lost it, the world holds none, and the release is
+         * counted. Read before the seam kills the worker, so the answer comes from the worker that did the swap. */
+        NatStat na;
+        CHECK(native_stat(&s, &na));
+        CHECK(na.world_artifacts == 0u && na.n == 0u);
+        CHECK(na.live + pre_world == pre_live);
+        CHECK(na.released == pre_released + pre_world);
+    }
 
     snprintf(line, sizeof line,
              "{\"protocol\":\"0.1\",\"id\":\"st\",\"method\":\"world.step\",\"params\":{\"world_id\":\"%s\","
@@ -855,6 +1030,7 @@ int main(int argc, char **argv) {
     scenario_interleave_close();
     scenario_interleave_migrate();
     scenario_migrate_step_death();
+    scenario_rollback_native();
 
     printf("test_specialize_inflight: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

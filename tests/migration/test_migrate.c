@@ -671,25 +671,47 @@ static void test_transform_docs(void) {
 
 /* Failure injection at every allocation point of prepare (contract section 10): each N fails cleanly, the old
  * world keeps its recovery digest, and the first N past the last point succeeds. */
-static void test_failure_injection(void) {
+/* One document swept at every allocation point of its plan (su_migrate_plan_inject) and of its prepare. Each failing
+ * N leaves the world bit-identical (digest), and the first N past the last point succeeds. The plan that succeeds is
+ * the one prepared. m_mixed carries the transform (the writes array, the capsule synthesis and the lir copy are plan
+ * points); m_rename and m_remove exercise the rename and removal paths. Returns the number of plan points. */
+static uint64_t sweep_document(SuWorld *base, const char *mig, int with_xf, uint64_t *prepare_points) {
     Docs d;
-    SuWorld *base = load_base();
     SuMigratePlan plan;
     SuMigrateInputs in;
     SuMigrateBudget b = big_budget();
     uint8_t d0[32];
     uint64_t n;
+    uint64_t plan_total = 0;
     uint64_t total = 0;
-    CHECK(base != NULL);
-    if (base == NULL) {
-        return;
-    }
-    CHECK(load_docs(&d, "m_mixed.json", 1));
+
+    CHECK(load_docs(&d, mig, with_xf));
     in = inputs_of(&d);
-    CHECK_ST(su_migrate_plan(base, &in, NULL, 0, NULL, 0, &b, &plan), SU_OK);
-    CHECK(plan.valid == 1);
     CHECK(digest_of(base, d0));
+    /* Plan sweep: a failing point refuses the plan with SU_E_RESOURCE_LIMIT and changes nothing. */
+    memset(&plan, 0, sizeof plan);
     for (n = 1; n < 100000u; n++) {
+        SuMigrateHooks h;
+        uint8_t now[32];
+        uint32_t st;
+        memset(&h, 0, sizeof h);
+        h.fail_at = n;
+        memset(&plan, 0, sizeof plan);
+        st = su_migrate_plan_inject(base, &in, NULL, 0, NULL, 0, &b, &h, &plan);
+        if (st == SU_OK) {
+            plan_total = h.points;
+            CHECK(plan.valid == 1);
+            CHECK(n > plan_total); /* the success is past the last point */
+            break;
+        }
+        CHECK(st == SU_E_RESOURCE_LIMIT);
+        CHECK(h.points >= n);
+        CHECK(digest_of(base, now));
+        CHECK(memcmp(now, d0, 32u) == 0);
+    }
+    CHECK(plan_total >= 3u);
+    /* Prepare sweep with the plan that succeeded. */
+    for (n = 1; n < 100000u && plan.impl != NULL; n++) {
         SuMigrateHooks h;
         SuWorld *cand = NULL;
         uint8_t now[32];
@@ -710,12 +732,12 @@ static void test_failure_injection(void) {
         CHECK(digest_of(base, now));
         CHECK(memcmp(now, d0, 32u) == 0);
     }
-    CHECK(total >= 8u); /* the injection points cover the entity scratch, buffers, transform and columns */
-    if (g_checks > 0u) {
-        printf("migration failure injection: %llu allocation points in prepare\n", (unsigned long long)total);
+    CHECK(total >= 3u);
+    if (prepare_points != NULL) {
+        *prepare_points = total;
     }
-    /* A failing transform is reported as a candidate failure and leaves the world unchanged. */
-    {
+    if (with_xf) {
+        /* A failing transform is reported as a candidate failure and leaves the world unchanged. */
         SuMigrateHooks h;
         SuWorld *cand = NULL;
         uint8_t now[32];
@@ -728,6 +750,26 @@ static void test_failure_injection(void) {
     }
     su_migrate_plan_free(&plan);
     docs_free(&d);
+    return plan_total;
+}
+
+static void test_failure_injection(void) {
+    SuWorld *base = load_base();
+    uint64_t plan_mixed = 0;
+    uint64_t prep_mixed = 0;
+    CHECK(base != NULL);
+    if (base == NULL) {
+        return;
+    }
+    (void)sweep_document(base, "m_add.json", 0, NULL);
+    (void)sweep_document(base, "m_rename.json", 0, NULL);
+    (void)sweep_document(base, "m_remove.json", 0, NULL);
+    plan_mixed = sweep_document(base, "m_mixed.json", 1, &prep_mixed);
+    CHECK(prep_mixed >= 8u); /* the injection points cover the entity scratch, buffers, transform and columns */
+    if (g_checks > 0u) {
+        printf("migration failure injection: %llu allocation points in plan (m_mixed), %llu in prepare (m_mixed)\n",
+               (unsigned long long)plan_mixed, (unsigned long long)prep_mixed);
+    }
     su_world_destroy(base);
 }
 

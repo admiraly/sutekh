@@ -5553,11 +5553,47 @@ static uint32_t h_world_migrate_rollback(SuAgent *a, const SuJsonValue *params, 
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
+#ifdef SU_TEST_FAULT_HOOKS
+/* Test-only (M2-01 fixes3): internal.stats {} forwarded to the active worker. Read-only, not advertised (it is not in
+ * k_capabilities). The answer is the worker's envelope, relayed unchanged; the native registry state it reports is
+ * the worker's (the kernels live in the worker process). */
+static uint32_t h_test_stats(SuAgent *a, SuBuf *res, AgentCall *c) {
+    SuBuf req;
+    SuBuf resp;
+    InFlight op;
+    uint32_t st;
+
+    st = preflight(a, c);
+    if (st != SU_OK) {
+        return st;
+    }
+    req_begin(&req, c->id, "internal.stats");
+    req_end(&req);
+    su_buf_init(&resp);
+    memset(&op, 0, sizeof op);
+    op.kind = OPK_READ;
+    st = roundtrip(a, c->id, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+#endif
+
 static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c) {
     const SuJsonValue *p = req->params;
     if (strcmp(req->method, "engine.info") == 0) {
         return h_engine_info(a, p, res, c);
     }
+#ifdef SU_TEST_FAULT_HOOKS
+    if (strcmp(req->method, "internal.stats") == 0) {
+        return h_test_stats(a, res, c);
+    }
+#endif
     if (strcmp(req->method, "capsule.submit") == 0) {
         return h_capsule_submit(a, p, res, c);
     }

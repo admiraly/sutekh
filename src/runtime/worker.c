@@ -3144,6 +3144,63 @@ static uint32_t h_internal_test_containment(SuBuf *res) {
 }
 #endif
 
+/* internal.stats "native" object (M2-01 fixes3, read-only): the native registry of this process and the artifacts that
+ * the schedules of the used worlds reference. registry_live counts the live handles of the process; a kernel released
+ * by a schedule replacement shows as a drop of registry_live and a rise of registry_released. Each artifact row is
+ * {slot, seq, state (SU_NV_STATE_*), inflight}. Builds without native code report zeros and no rows. */
+static void h_native_stats(const WorkerState *s, SuBuf *res) {
+#ifdef SU_HAVE_NATIVE
+    uint32_t i;
+    uint32_t k;
+    uint32_t rows = 0;
+    uint32_t emitted = 0;
+
+    for (i = 0; i < WORKER_MAX_WORLDS; i++) {
+        if (!s->worlds[i].used) {
+            continue;
+        }
+        for (k = 0; k < s->worlds[i].sched.count; k++) {
+            rows += s->worlds[i].sched.sys[k].native_seq != 0u ? 1u : 0u;
+        }
+    }
+    su_buf_str(res, "{\"registry_live\":");
+    su_buf_u64(res, su_nv_live_count());
+    su_buf_str(res, ",\"registry_released\":");
+    su_buf_u64(res, su_nv_released_count());
+    su_buf_str(res, ",\"world_artifacts\":");
+    su_buf_u64(res, rows);
+    su_buf_str(res, ",\"artifacts\":[");
+    for (i = 0; i < WORKER_MAX_WORLDS; i++) {
+        if (!s->worlds[i].used) {
+            continue;
+        }
+        for (k = 0; k < s->worlds[i].sched.count; k++) {
+            uint64_t seq = s->worlds[i].sched.sys[k].native_seq;
+            if (seq == 0u) {
+                continue;
+            }
+            if (emitted > 0u) {
+                su_buf_str(res, ",");
+            }
+            su_buf_str(res, "{\"slot\":");
+            su_buf_u64(res, i);
+            su_buf_str(res, ",\"seq\":");
+            su_buf_u64(res, seq);
+            su_buf_str(res, ",\"state\":");
+            su_buf_u64(res, su_nv_state(seq));
+            su_buf_str(res, ",\"inflight\":");
+            su_buf_u64(res, su_nv_inflight(seq));
+            su_buf_str(res, "}");
+            emitted++;
+        }
+    }
+    su_buf_str(res, "]}");
+#else
+    (void)s;
+    su_buf_str(res, "{\"registry_live\":0,\"registry_released\":0,\"world_artifacts\":0,\"artifacts\":[]}");
+#endif
+}
+
 static uint32_t h_internal_stats(WorkerState *s, SuBuf *res) {
     SuCheckpointStats cs;
     uint32_t worlds = 0;
@@ -3187,6 +3244,8 @@ static uint32_t h_internal_stats(WorkerState *s, SuBuf *res) {
     su_buf_u64(res, installed);
     su_buf_str(res, ",\"world_seq\":");
     su_buf_u64(res, s->next_id);
+    su_buf_str(res, ",\"native\":");
+    h_native_stats(s, res);
     su_buf_str(res, "}");
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
