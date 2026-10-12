@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/syscall.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -174,6 +175,10 @@ typedef struct ContainWire {
     uint64_t rl_cpu;
     uint64_t rl_fsize;
     uint64_t rl_nofile;
+    uint32_t fs_tried;      /* 1 when the Landlock route was attempted */
+    uint32_t fs_mode;       /* SU_PROC_FS_* */
+    int32_t fs_abi;         /* Landlock ABI reported by the kernel, 0 when unavailable */
+    int32_t fs_errno;       /* errno of the step that failed, 0 when applied */
 } ContainWire;
 
 static uint64_t rl_soft(int resource) {
@@ -185,16 +190,31 @@ static uint64_t rl_soft(int resource) {
 }
 
 #ifdef SU_HAVE_SECCOMP_X64
-/* Syscalls denied with EPERM: every call that creates, connects or accepts a socket. x86-64 ABI
- * numbers: socket 41, connect 42, accept 43, bind 49, listen 50, socketpair 53, accept4 288. The
- * filter kills the process on any other architecture and on x32 syscalls (nr >= 0x40000000),
- * which could otherwise name the same calls under another number. */
-#define SU_DENIED_NR_COUNT 7u
-static const uint32_t g_denied_nr[SU_DENIED_NR_COUNT] = {41u, 42u, 43u, 49u, 50u, 53u, 288u};
+/* x86-64 syscall numbers (checked against asm/unistd_64.h). The network filter returns EPERM for:
+ * every call that creates, binds, connects or accepts a socket (socket 41, connect 42, accept 43, bind 49,
+ * listen 50, socketpair 53, accept4 288), and every io_uring entry point (io_uring_setup 425,
+ * io_uring_enter 426, io_uring_register 427), because io_uring opens sockets (IORING_OP_SOCKET) without
+ * calling socket(2). It also returns EPERM for kernel interfaces a sandboxed child has no use for:
+ * process inspection and injection (ptrace 101, process_vm_readv 310, process_vm_writev 311, kcmp 312),
+ * kernel keys (keyctl 250, add_key 248, request_key 249), BPF and perf (bpf 321, perf_event_open 298),
+ * userfaultfd 323, namespaces, mounts and roots (mount 165, umount2 166, pivot_root 155, chroot 161,
+ * setns 308, unshare 272, open_by_handle_at 304, name_to_handle_at 303), kernel images and modules
+ * (kexec_load 246, init_module 175, finit_module 313, delete_module 176), reboot 169, swap 167/168 and
+ * acct 163. personality is not denied: glibc and the sanitizers depend on it.
+ * Any architecture other than x86-64 is killed, and so is any x32 syscall (nr >= 0x40000000). */
+static const uint32_t g_denied_nr[] = {
+    41u,  42u,  43u,  49u,  50u,  53u,  288u,            /* socket family */
+    425u, 426u, 427u,                                     /* io_uring */
+    101u, 310u, 311u, 312u,                               /* process inspection and injection */
+    248u, 249u, 250u, 321u, 298u, 323u,                   /* keys, bpf, perf, userfaultfd */
+    155u, 161u, 165u, 166u, 272u, 303u, 304u, 308u,       /* roots, mounts, namespaces, handles */
+    163u, 167u, 168u, 169u, 175u, 176u, 246u, 313u};      /* accounting, swap, reboot, modules, kexec */
+#define SU_DENIED_NR_COUNT (sizeof g_denied_nr / sizeof g_denied_nr[0])
 
 /* Builds the filter into prog (cap instructions). Returns its length, 0 when cap is too small.
- * Layout: 0 load arch; 1 arch == x86-64 ? skip to 3 : 2; 2 kill; 3 load nr; 4 nr >= 0x40000000
- * ? kill; 5..5+n-1 nr == denied ? errno; 5+n allow; 5+n+1 errno(EPERM); 5+n+2 kill. */
+ * Layout: 0 load arch; 1 arch == x86-64 ? skip to 3 : 2; 2 kill (wrong arch); 3 load nr;
+ * 4 nr >= 0x40000000 ? kill (x32); 5..5+n-1 nr == denied ? errno; 5+n allow; 5+n+1 errno(EPERM);
+ * 5+n+2 kill. */
 static size_t build_socket_filter(struct sock_filter *prog, size_t cap) {
     const size_t n = SU_DENIED_NR_COUNT;
     const size_t allow_at = 5u + n;
@@ -207,10 +227,10 @@ static size_t build_socket_filter(struct sock_filter *prog, size_t cap) {
     }
     prog[i++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, 4u); /* seccomp_data.arch */
     prog[i++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1u, 0u);
-    prog[i++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS);
+    prog[i++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS); /* wrong arch */
     prog[i++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, 0u); /* seccomp_data.nr */
     prog[i] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x40000000u,
-                                           (unsigned char)(kill_at - i - 1u), 0u);
+                                           (unsigned char)(kill_at - i - 1u), 0u); /* x32 */
     i++;
     for (k = 0; k < n; k++) {
         prog[i] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, g_denied_nr[k],
@@ -226,7 +246,7 @@ static size_t build_socket_filter(struct sock_filter *prog, size_t cap) {
 /* Installs the filter and verifies that socket(2) now fails with EPERM. Returns 0 when enforced,
  * otherwise an errno (1 when the probe socket was created anyway, which means not enforced). */
 static int install_socket_filter(void) {
-    struct sock_filter prog[5u + SU_DENIED_NR_COUNT + 4u];
+    struct sock_filter prog[8u + SU_DENIED_NR_COUNT];
     struct sock_fprog fp;
     size_t len = build_socket_filter(prog, sizeof prog / sizeof prog[0]);
     int fd;
@@ -247,6 +267,118 @@ static int install_socket_filter(void) {
         return 1;
     }
     return errno == EPERM ? 0 : errno;
+}
+#endif
+
+/* ---- Landlock write denial (Linux, raw syscalls; no library) ----------------------------------
+ * A ruleset that handles every write-class access and grants none (except one optional test
+ * directory) denies those accesses everywhere. Reads are not handled, so they stay allowed. The
+ * ruleset is applied in the child before exec and survives exec. The child reports the outcome of
+ * landlock_restrict_self; the containment tests then check the denials from inside the worker. */
+#if defined(__linux__)
+#ifndef SYS_landlock_create_ruleset
+#define SYS_landlock_create_ruleset 444
+#endif
+#ifndef SYS_landlock_add_rule
+#define SYS_landlock_add_rule 445
+#endif
+#ifndef SYS_landlock_restrict_self
+#define SYS_landlock_restrict_self 446
+#endif
+#define SU_LL_CREATE_VERSION_FLAG (1u << 0)
+#define SU_LL_RULE_PATH_BENEATH 1
+#define SU_LL_FS_WRITE_FILE (1ull << 1)
+#define SU_LL_FS_REMOVE_DIR (1ull << 4)
+#define SU_LL_FS_REMOVE_FILE (1ull << 5)
+#define SU_LL_FS_MAKE_CHAR (1ull << 6)
+#define SU_LL_FS_MAKE_DIR (1ull << 7)
+#define SU_LL_FS_MAKE_REG (1ull << 8)
+#define SU_LL_FS_MAKE_SOCK (1ull << 9)
+#define SU_LL_FS_MAKE_FIFO (1ull << 10)
+#define SU_LL_FS_MAKE_BLOCK (1ull << 11)
+#define SU_LL_FS_MAKE_SYM (1ull << 12)
+#define SU_LL_FS_REFER (1ull << 13)    /* ABI 2 */
+#define SU_LL_FS_TRUNCATE (1ull << 14) /* ABI 3 */
+
+struct su_ll_ruleset_attr {
+    uint64_t handled_access_fs;
+};
+struct __attribute__((packed)) su_ll_path_beneath {
+    uint64_t allowed_access;
+    int32_t parent_fd;
+};
+
+/* ABI version the kernel reports, or -errno when Landlock is unavailable. Child only. */
+static long child_landlock_abi(void) {
+    long r = syscall(SYS_landlock_create_ruleset, NULL, 0, SU_LL_CREATE_VERSION_FLAG);
+    return r < 0 ? -(long)errno : r;
+}
+
+/* Child only, between fork and exec. Returns 1 when the ruleset is applied, else 0 with *err set. */
+static int child_landlock(const char *writable_dir, int32_t *abi_out, int *err_out) {
+    struct su_ll_ruleset_attr attr;
+    uint64_t handled;
+    long abi = child_landlock_abi();
+    long rs;
+    *abi_out = 0;
+    *err_out = 0;
+    if (abi <= 0) {
+        *err_out = abi < 0 ? (int)-abi : ENOSYS;
+        return 0;
+    }
+    *abi_out = (int32_t)abi;
+    handled = SU_LL_FS_WRITE_FILE | SU_LL_FS_REMOVE_DIR | SU_LL_FS_REMOVE_FILE | SU_LL_FS_MAKE_CHAR |
+              SU_LL_FS_MAKE_DIR | SU_LL_FS_MAKE_REG | SU_LL_FS_MAKE_SOCK | SU_LL_FS_MAKE_FIFO |
+              SU_LL_FS_MAKE_BLOCK | SU_LL_FS_MAKE_SYM;
+    if (abi >= 2) {
+        handled |= SU_LL_FS_REFER;
+    }
+    if (abi >= 3) {
+        handled |= SU_LL_FS_TRUNCATE;
+    }
+    attr.handled_access_fs = handled;
+    rs = syscall(SYS_landlock_create_ruleset, &attr, sizeof attr, 0);
+    if (rs < 0) {
+        *err_out = errno;
+        return 0;
+    }
+    if (writable_dir != NULL) {
+        struct su_ll_path_beneath pb;
+        int dfd = open(writable_dir, O_PATH | O_DIRECTORY | O_CLOEXEC);
+        if (dfd < 0) {
+            *err_out = errno;
+            close((int)rs);
+            return 0;
+        }
+        pb.allowed_access = handled;
+        pb.parent_fd = dfd;
+        if (syscall(SYS_landlock_add_rule, (int)rs, SU_LL_RULE_PATH_BENEATH, &pb, 0) != 0) {
+            *err_out = errno;
+            close(dfd);
+            close((int)rs);
+            return 0;
+        }
+        close(dfd);
+    }
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1UL, 0UL, 0UL, 0UL) != 0) {
+        *err_out = errno;
+        close((int)rs);
+        return 0;
+    }
+    if (syscall(SYS_landlock_restrict_self, (int)rs, 0u) != 0) {
+        *err_out = errno;
+        close((int)rs);
+        return 0;
+    }
+    close((int)rs);
+    return 1;
+}
+#else
+static int child_landlock(const char *writable_dir, int32_t *abi_out, int *err_out) {
+    (void)writable_dir;
+    *abi_out = 0;
+    *err_out = ENOSYS;
+    return 0;
 }
 #endif
 
@@ -328,6 +460,16 @@ static void child_contain(const SuProcLimits *limits, int status_fd) {
             }
         }
     }
+    if (limits != NULL && limits->deny_fs_writes) {
+        int32_t abi = 0;
+        int e = 0;
+        w.fs_tried = 1u;
+        if (child_landlock(limits->writable_dir, &abi, &e)) {
+            w.fs_mode = SU_PROC_FS_LANDLOCK;
+        }
+        w.fs_abi = abi;
+        w.fs_errno = e;
+    }
     w.rl_as = rl_soft(RLIMIT_AS);
     w.rl_cpu = rl_soft(RLIMIT_CPU);
     w.rl_fsize = rl_soft(RLIMIT_FSIZE);
@@ -371,6 +513,18 @@ static void read_containment(SuProc *p, int status_fd, const SuProcLimits *limit
     p->containment.rlimit_fsize = w.rl_fsize;
     p->containment.rlimit_nofile = w.rl_nofile;
     p->containment.net_mode = w.net_mode;
+    p->containment.fs_mode = w.fs_mode;
+    p->containment.fs_abi = w.fs_abi;
+    if (!limits->deny_fs_writes) {
+        snprintf(p->containment.fs_reason, sizeof p->containment.fs_reason, "file writes not restricted (not requested)");
+    } else if (w.fs_mode == SU_PROC_FS_LANDLOCK) {
+        snprintf(p->containment.fs_reason, sizeof p->containment.fs_reason,
+                 "landlock ABI %d applied: file creation, writes, removal and truncation denied; reads not restricted%s",
+                 (int)w.fs_abi, limits->writable_dir != NULL ? " (test seam: one directory writable)" : "");
+    } else {
+        snprintf(p->containment.fs_reason, sizeof p->containment.fs_reason,
+                 "file writes not restricted: landlock %s", strerror(w.fs_errno));
+    }
     if (!limits->deny_network) {
         snprintf(p->containment.reason, sizeof p->containment.reason, "network denial not requested");
     } else if (w.net_mode == SU_PROC_NET_SECCOMP) {

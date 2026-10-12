@@ -58,4 +58,9 @@ typedef struct SuAgentConfig {
 /* Returns 0 on EOF, -1 on configuration or I/O failure before serving. */
 int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg);
 
+/* Checkpoint digest comparison (M1 closure D): 1 when the revision string, the tick and, when sha_want is not
+ * NULL, the snapshot SHA-256 hex all match; 0 otherwise. Exposed so the tests can exercise each field. */
+int su_agent_digest_fields_match(const char *rev_got, const char *rev_want, uint64_t tick_got, uint64_t tick_want,
+                                 const char *sha_got, const char *sha_want);
+
 #endif

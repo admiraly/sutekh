@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE /* syscall(2) for the test-only io_uring probe */
 
 #include "runtime/worker.h"
 
@@ -13,6 +14,7 @@
 
 #include "agent/su_path.h"
 #include "agent/su_proto.h"
+#include "agent/su_sandbox.h"
 #include "ir/su_json.h"
 #include "ir/su_lir.h"
 #include "ir/su_sha256.h"
@@ -108,6 +110,7 @@ typedef struct WorkerState {
     WorkerWorld worlds[WORKER_MAX_WORLDS];
     uint64_t next_id;
     SuRegistry reg;       /* version registry: every revision this worker has seen */
+    SuSandboxState sandbox; /* worker self-sandbox (execve, fork and clone denial), set at startup */
     SuWorkerHooks hooks;
     SuCheckpointStore *store; /* bounded snapshot store; retain SU_CHECKPOINT_DEFAULT_RETAIN */
     CkptRec ckpts[SU_CHECKPOINT_DEFAULT_RETAIN];
@@ -2148,6 +2151,199 @@ static uint32_t h_world_close(WorkerState *s, const SuJsonValue *params, SuBuf *
  * supervisor never forwards it (it is not advertised); the control tests use it to check
  * that world.close releases worlds, checkpoints and registry records. */
 #ifdef SU_TEST_FAULT_HOOKS
+#include <linux/io_uring.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#ifndef __NR_io_uring_setup
+#define __NR_io_uring_setup 425
+#endif
+#ifndef __NR_io_uring_enter
+#define __NR_io_uring_enter 426
+#endif
+/* M1 closure D: io_uring escape probe (test seam only). Sets up a ring with a raw io_uring_setup and submits
+ * one IORING_OP_SOCKET (AF_INET, SOCK_STREAM). *setup_errno is 0 when the ring exists, otherwise errno.
+ * *op_res is the completion result (a socket fd, which is closed, or -errno), or -1000 when not attempted. */
+static void test_uring_socket(int *setup_errno, long *op_res) {
+    struct io_uring_params p;
+    size_t sq_sz;
+    size_t cq_sz;
+    size_t sqe_sz;
+    void *sqp = MAP_FAILED;
+    void *cqp = MAP_FAILED;
+    void *sqep = MAP_FAILED;
+    int rfd;
+    *setup_errno = 0;
+    *op_res = -1000;
+    memset(&p, 0, sizeof p);
+    rfd = (int)syscall(__NR_io_uring_setup, 4u, &p);
+    if (rfd < 0) {
+        *setup_errno = errno;
+        return;
+    }
+    sq_sz = p.sq_off.array + p.sq_entries * sizeof(uint32_t);
+    cq_sz = p.cq_off.cqes + p.cq_entries * sizeof(struct io_uring_cqe);
+    if ((p.features & IORING_FEAT_SINGLE_MMAP) && cq_sz > sq_sz) {
+        sq_sz = cq_sz;
+    }
+    sqe_sz = p.sq_entries * sizeof(struct io_uring_sqe);
+    sqp = mmap(NULL, sq_sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, rfd, IORING_OFF_SQ_RING);
+    sqep = mmap(NULL, sqe_sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, rfd, IORING_OFF_SQES);
+    if (p.features & IORING_FEAT_SINGLE_MMAP) {
+        cqp = sqp;
+    } else {
+        cqp = mmap(NULL, cq_sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, rfd, IORING_OFF_CQ_RING);
+    }
+    if (sqp != MAP_FAILED && sqep != MAP_FAILED && cqp != MAP_FAILED) {
+        uint32_t *sq_tail = (uint32_t *)((char *)sqp + p.sq_off.tail);
+        uint32_t sq_mask = *(uint32_t *)((char *)sqp + p.sq_off.ring_mask);
+        uint32_t *sq_array = (uint32_t *)((char *)sqp + p.sq_off.array);
+        struct io_uring_sqe *sqes = (struct io_uring_sqe *)sqep;
+        uint32_t *cq_head = (uint32_t *)((char *)cqp + p.cq_off.head);
+        uint32_t *cq_tail = (uint32_t *)((char *)cqp + p.cq_off.tail);
+        uint32_t cq_mask = *(uint32_t *)((char *)cqp + p.cq_off.ring_mask);
+        struct io_uring_cqe *cqes = (struct io_uring_cqe *)((char *)cqp + p.cq_off.cqes);
+        uint32_t tail = __atomic_load_n(sq_tail, __ATOMIC_RELAXED);
+        uint32_t slot = tail & sq_mask;
+        memset(&sqes[0], 0, sizeof sqes[0]);
+        sqes[0].opcode = IORING_OP_SOCKET;
+        sqes[0].fd = AF_INET;
+        sqes[0].off = SOCK_STREAM;
+        sqes[0].len = 0;
+        sq_array[slot] = 0;
+        __atomic_store_n(sq_tail, tail + 1u, __ATOMIC_RELEASE);
+        if (syscall(__NR_io_uring_enter, rfd, 1u, 1u, IORING_ENTER_GETEVENTS, NULL, 0) < 0) {
+            *op_res = -(long)errno;
+        } else {
+            uint32_t head = __atomic_load_n(cq_head, __ATOMIC_ACQUIRE);
+            if (__atomic_load_n(cq_tail, __ATOMIC_ACQUIRE) != head) {
+                int32_t res = cqes[head & cq_mask].res;
+                *op_res = (long)res;
+                if (res >= 0) {
+                    close((int)res);
+                }
+            }
+        }
+    } else {
+        *op_res = -(long)ENOMEM;
+    }
+    if (sqep != MAP_FAILED) {
+        munmap(sqep, sqe_sz);
+    }
+    if (cqp != MAP_FAILED && cqp != sqp) {
+        munmap(cqp, cq_sz);
+    }
+    if (sqp != MAP_FAILED) {
+        munmap(sqp, sq_sz);
+    }
+    close(rfd);
+}
+
+/* M1 closure D: child-side sandbox probe (test seam). Under the worker self-sandbox, execve("/bin/true") and
+ * fork() must fail with EPERM. Reports both errnos; no process is created when they are denied. */
+static uint32_t h_internal_test_sandbox(SuBuf *res) {
+    char *argv[] = {NULL};
+    char *envp[] = {NULL};
+    int exec_errno;
+    int fork_errno = 0;
+    pid_t pid;
+    (void)execve("/bin/true", argv, envp);
+    exec_errno = errno;
+    pid = fork();
+    if (pid < 0) {
+        fork_errno = errno;
+    } else if (pid == 0) {
+        _exit(0);
+    } else {
+        int status = 0;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+        }
+    }
+    su_buf_str(res, "{\"execve_errno\":");
+    su_buf_u64(res, (uint64_t)exec_errno);
+    su_buf_str(res, ",\"fork_errno\":");
+    su_buf_u64(res, (uint64_t)fork_errno);
+    su_buf_str(res, "}");
+    return SU_OK;
+}
+
+/* M1 closure D: file creation probe (test seam). Tries to create and then remove one file in each of the
+ * directories named by SU_TEST_FS_PROJECT, SU_TEST_FS_TMP and SU_TEST_CONTAINMENT_DIR. Reports errno per dir
+ * (0 = created). A directory variable that is unset reports -1. */
+static void fs_create_probe(const char *dir, uint64_t *out) {
+    char path[600];
+    int fd;
+    if (dir == NULL || strlen(dir) > 500u) {
+        *out = (uint64_t)-1;
+        return;
+    }
+    snprintf(path, sizeof path, "%s/sutekh-fs-probe-%ld.tmp", dir, (long)getpid());
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) {
+        *out = (uint64_t)errno;
+        return;
+    }
+    close(fd);
+    unlink(path);
+    *out = 0u;
+}
+
+static uint32_t h_internal_test_fs(SuBuf *res) {
+    uint64_t proj;
+    uint64_t tmp;
+    uint64_t scratch;
+    fs_create_probe(getenv("SU_TEST_FS_PROJECT"), &proj);
+    fs_create_probe(getenv("SU_TEST_FS_TMP"), &tmp);
+    fs_create_probe(getenv("SU_TEST_CONTAINMENT_DIR"), &scratch);
+    su_buf_str(res, "{\"project_errno\":");
+    su_buf_u64(res, proj);
+    su_buf_str(res, ",\"tmp_errno\":");
+    su_buf_u64(res, tmp);
+    su_buf_str(res, ",\"scratch_errno\":");
+    su_buf_u64(res, scratch);
+    su_buf_str(res, "}");
+    return SU_OK;
+}
+
+/* M1 closure D: foreign-ABI and x32 socket calls (test seam). Each issues socket(AF_INET, SOCK_STREAM) through
+ * an entry the x86-64 filter must refuse: int 0x80 (i386 ABI, eax 359) and the x32 number 0x40000000|41. Under
+ * the filter the process is killed (SIGSYS) before the call returns, so an answer means the call ran. */
+static uint32_t h_internal_test_i386_socket(SuBuf *res) {
+#if defined(__x86_64__)
+    long ret = -1;
+    __asm__ volatile("int $0x80" : "=a"(ret) : "a"(359L), "b"(2L), "c"(1L), "d"(0L) : "memory");
+    if (ret >= 0) {
+        close((int)ret);
+    }
+    su_buf_str(res, "{\"returned\":");
+    su_buf_u64(res, (uint64_t)ret);
+    su_buf_str(res, "}");
+    return SU_OK;
+#else
+    (void)res;
+    return SU_E_UNSUPPORTED_METHOD;
+#endif
+}
+
+static uint32_t h_internal_test_x32_socket(SuBuf *res) {
+#if defined(__x86_64__)
+    long ret = syscall(0x40000000L | 41L, 2L, 1L, 0L);
+    if (ret >= 0) {
+        close((int)ret);
+    }
+    su_buf_str(res, "{\"returned\":");
+    su_buf_u64(res, (uint64_t)ret);
+    su_buf_str(res, "}");
+    return SU_OK;
+#else
+    (void)res;
+    return SU_E_UNSUPPORTED_METHOD;
+#endif
+}
+#endif
+
+#ifdef SU_TEST_FAULT_HOOKS
 #include <sys/socket.h>
 /* Test-only containment probe (C07), compiled only into test workers. It runs inside whatever child
  * the test spawned, so it reports what that child actually enforces: socket(2) errno, bytes written
@@ -2226,7 +2422,42 @@ static uint32_t h_internal_test_containment(SuBuf *res) {
         proc[0] = '\0';
     }
     sec = strstr(proc, "\nSeccomp:");
-    su_buf_str(res, "{\"socket_errno\":");
+    {
+        int pair_errno = 0;
+        int uring_errno = 0;
+        long uring_res = -1000;
+        const char *filt = strstr(proc, "\nSeccomp_filters:");
+        int sv[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0) {
+            close(sv[0]);
+            close(sv[1]);
+        } else {
+            pair_errno = errno;
+        }
+        test_uring_socket(&uring_errno, &uring_res);
+        su_buf_str(res, "{\"socketpair_errno\":");
+        su_buf_u64(res, (uint64_t)pair_errno);
+        su_buf_str(res, ",\"uring_setup_errno\":");
+        su_buf_u64(res, (uint64_t)uring_errno);
+        su_buf_str(res, ",\"uring_socket_result\":");
+        su_buf_str(res, uring_res == -1000 ? "null" : "");
+        if (uring_res != -1000) {
+            char num[32];
+            snprintf(num, sizeof num, "%ld", uring_res);
+            su_buf_str(res, num);
+        }
+        su_buf_str(res, ",\"seccomp_filters_line\":");
+        if (filt != NULL) {
+            const char *e = strchr(filt + 1, '\n');
+            size_t len = e != NULL ? (size_t)(e - (filt + 1)) : strlen(filt + 1);
+            su_buf_quoted(res, filt + 1, len);
+        } else {
+            su_buf_str(res, "null");
+        }
+        su_buf_str(res, ",\"seccomp_filters_present\":");
+        su_buf_str(res, filt != NULL ? "true" : "false");
+    }
+    su_buf_str(res, ",\"socket_errno\":");
     su_buf_u64(res, (uint64_t)serr);
     su_buf_str(res, ",\"socket_created\":");
     su_buf_str(res, serr == 0 ? "true" : "false");
@@ -2287,7 +2518,13 @@ static uint32_t h_internal_stats(WorkerState *s, SuBuf *res) {
     if (su_checkpoint_stats(s->store, &cs) != SU_OK) {
         return SU_E_INTERNAL;
     }
-    su_buf_str(res, "{\"worlds\":");
+    su_buf_str(res, "{\"self_sandbox\":{\"state\":\"");
+    su_buf_str(res, su_sandbox_state_name(s->sandbox.state));
+    su_buf_str(res, "\",\"filters\":");
+    su_buf_u64(res, s->sandbox.filters);
+    su_buf_str(res, ",\"reason\":");
+    su_buf_quoted(res, s->sandbox.reason, strlen(s->sandbox.reason));
+    su_buf_str(res, "},\"worlds\":");
     su_buf_u64(res, worlds);
     su_buf_str(res, ",\"checkpoints\":");
     su_buf_u64(res, cs.retained_count);
@@ -2956,6 +3193,14 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
         if (st != SU_OK) {
             fail(&f, st, "containment probe failed");
         }
+    } else if (strcmp(req.method, "internal.test.sandbox") == 0) {
+        st = h_internal_test_sandbox(&res);
+    } else if (strcmp(req.method, "internal.test.fs") == 0) {
+        st = h_internal_test_fs(&res);
+    } else if (strcmp(req.method, "internal.test.i386_socket") == 0) {
+        st = h_internal_test_i386_socket(&res);
+    } else if (strcmp(req.method, "internal.test.x32_socket") == 0) {
+        st = h_internal_test_x32_socket(&res);
 #endif
     } else if (strcmp(req.method, "internal.stats") == 0) {
         st = h_internal_stats(s, &res);
@@ -3010,6 +3255,7 @@ int su_worker_main_with_hooks(int in_fd, int out_fd, const SuWorkerHooks *hooks)
         return 1;
     }
     su_reg_init(&s->reg);
+    su_sandbox_worker_install(&s->sandbox);
     if (hooks != NULL) {
         s->hooks = *hooks;
     }

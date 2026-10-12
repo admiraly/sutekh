@@ -20,6 +20,11 @@ typedef struct SuProcLimits {
     uint32_t nofile;              /* RLIMIT_NOFILE; 0 leaves it unchanged */
     int deny_network;             /* nonzero: socket creation and connection are denied in the child
                                      (seccomp on x86-64 Linux, else a network namespace when privileged) */
+    int deny_fs_writes;           /* nonzero: the child cannot create, remove, rename or truncate any file
+                                     (Landlock, applied before exec and verified by the child's restrict call).
+                                     Reads are not restricted. */
+    const char *writable_dir;     /* TEST SEAM ONLY, NULL in production: with deny_fs_writes, this one directory
+                                     keeps write access so the containment probes can write a bounded file. */
 } SuProcLimits;
 
 /* Network denial actually enforced in the child, verified in the child before exec. */
@@ -33,6 +38,12 @@ enum {
  * reported is 0 when the child never reached exec (no status was received) or no limits were given.
  * Limit values are soft limits; SU_PROC_UNLIMITED means RLIM_INFINITY. */
 #define SU_PROC_UNLIMITED UINT64_MAX
+/* Filesystem write denial enforced in the child (Landlock), verified by the child before exec. */
+enum {
+    SU_PROC_FS_NONE = 0,     /* not requested, or not enforced (reason says why) */
+    SU_PROC_FS_LANDLOCK = 1  /* every write-class access is handled and no rule grants it (except writable_dir) */
+};
+
 typedef struct SuProcContainment {
     int reported;
     uint64_t rlimit_as;
@@ -40,7 +51,10 @@ typedef struct SuProcContainment {
     uint64_t rlimit_fsize;
     uint64_t rlimit_nofile;
     uint32_t net_mode;       /* SU_PROC_NET_* */
+    uint32_t fs_mode;        /* SU_PROC_FS_* */
+    int32_t fs_abi;          /* Landlock ABI version the kernel reports (0 when unavailable) */
     char reason[200];        /* why net_mode is what it is, in plain words */
+    char fs_reason[160];     /* why fs_mode is what it is, in plain words */
 } SuProcContainment;
 
 /* How the last su_proc_request that failed ended the child (set only on failure). */

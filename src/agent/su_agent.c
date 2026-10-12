@@ -450,6 +450,9 @@ static void child_limits(const SuAgent *a, SuProcLimits *lim, int disposable) {
         lim->nofile = a->cfg.worker_nofile == 0 ? AGENT_DEFAULT_WORKER_NOFILE : a->cfg.worker_nofile;
     }
     lim->deny_network = 1;
+    /* Only disposable children are read-only (they compute and return; they keep no state on disk). The
+     * active worker keeps its ordinary write access. */
+    lim->deny_fs_writes = disposable ? 1 : 0;
 }
 
 static void put_limit(SuBuf *b, int reported, uint64_t v) {
@@ -479,7 +482,18 @@ static void put_containment(SuBuf *b, const SuProcContainment *c) {
     put_limit(b, c->reported, c->rlimit_nofile);
     su_buf_str(b, ",\"no_network\":\"");
     su_buf_str(b, net_names[mode]);
-    su_buf_str(b, "\",\"reason\":");
+    su_buf_str(b, "\",\"fs_write_denied\":\"");
+    su_buf_str(b, c->reported && c->fs_mode == SU_PROC_FS_LANDLOCK ? "landlock" : "none");
+    su_buf_str(b, "\",\"fs_abi\":");
+    su_buf_str(b, c->reported && c->fs_mode == SU_PROC_FS_LANDLOCK ? "" : "null");
+    if (c->reported && c->fs_mode == SU_PROC_FS_LANDLOCK) {
+        char abi[16];
+        snprintf(abi, sizeof abi, "%d", (int)c->fs_abi);
+        su_buf_str(b, abi);
+    }
+    su_buf_str(b, ",\"fs_reason\":");
+    su_buf_quoted(b, c->fs_reason, strlen(c->fs_reason));
+    su_buf_str(b, ",\"reason\":");
     su_buf_quoted(b, c->reason, strlen(c->reason));
     su_buf_str(b, "}");
 }
@@ -982,6 +996,12 @@ static int read_digest(SuAgent *a, const AgentWorld *w, char rev_out[AGENT_REV_C
     return rc;
 }
 
+int su_agent_digest_fields_match(const char *rev_got, const char *rev_want, uint64_t tick_got, uint64_t tick_want,
+                                 const char *sha_got, const char *sha_want) {
+    return strcmp(rev_got, rev_want) == 0 && tick_got == tick_want &&
+           (sha_want == NULL || strcmp(sha_got, sha_want) == 0);
+}
+
 /* Digest of w compared with the expected revision, tick and sha256 (sha NULL: not compared).
  * Returns 0 when they match, 1 when the worker died, 2 on any mismatch or rejection. */
 static int digest_matches(SuAgent *a, const AgentWorld *w, uint64_t rev, uint64_t tick, const char *sha,
@@ -1006,7 +1026,7 @@ static int digest_matches(SuAgent *a, const AgentWorld *w, uint64_t rev, uint64_
         *got_tick = t;
     }
     wrev(w, rev, want, sizeof want);
-    return strcmp(rev_got, want) == 0 && t == tick && (sha == NULL || strcmp(got, sha) == 0) ? 0 : 2;
+    return su_agent_digest_fields_match(rev_got, want, t, tick, got, sha) ? 0 : 2;
 }
 
 /* After an operation the worker acknowledged, or partially applied: digests the committed state
