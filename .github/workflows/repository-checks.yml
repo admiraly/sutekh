@@ -34,6 +34,9 @@ jobs:
         run: python tools/validate_pack.py --check-report
       - name: Run validator regression tests
         run: python -I tests/tools/test_validate_pack.py
+      # The broker runs on Linux only: tools/broker/broker.py imports fcntl and resource and
+      # relies on POSIX process groups (start_new_session, killpg) and RLIMIT_AS, none of which
+      # exist on Windows. Porting it is a feature, not a fix, so this step stays Linux-only.
       - name: Run broker, BFME registry and bench client tests
         if: runner.os == 'Linux'
         run: |
