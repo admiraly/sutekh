@@ -83,6 +83,7 @@ add_test(NAME vm COMMAND test_vm WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 
 file(GLOB SU_AGENT_SOURCES CONFIGURE_DEPENDS src/agent/*.c)
 list(APPEND SU_AGENT_SOURCES src/runtime/worker.c src/runtime/registry.c src/runtime/schedule.c src/runtime/reload.c)
+list(APPEND SU_AGENT_SOURCES src/runtime/rts/control_domains.c)
 # ---- BEGIN M2-00c3 entity tick (src/runtime/entity_tick.c) ----
 list(APPEND SU_AGENT_SOURCES src/runtime/entity_tick.c)
 # ---- BEGIN M3-04a host entries (src/runtime/rts/host_decl.c) ----
