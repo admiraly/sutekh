@@ -49,6 +49,7 @@ typedef uint64_t SuEntity;
 #define SU_EVENT_REJECTED          UINT32_C(0xFFFFFFFF) /* a structural request that was refused */
 #define SU_EVENT_SPAWNED           UINT32_C(0xFFFFFFFE) /* host spawn applied (a = slot, b = generation) */
 #define SU_EVENT_DESPAWNED         UINT32_C(0xFFFFFFFD) /* despawn applied (a = slot, b = old generation) */
+#define SU_EVENT_MIGRATED          UINT32_C(0xFFFFFFFC) /* schema migration committed (a = from layout generation, b = to) */
 
 /* One queued structural request. 32 bytes, no implicit padding. Canonical commit order is the
  * lexicographic order of (system_index, slot, seq): independent of worker count, chunking and
