@@ -6,7 +6,7 @@
   "current_milestone": "M3",
   "accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "runtime_tests": "head: default ctest 25/25, native ctest 36/36 (at M3-04a), harness default 23/0 (3 native-only unavailable), native 26/0; see per-milestone blocks",
+  "runtime_tests": "head 2026-10-12 (after spec-conformance decisions change): release ctest 32/32; harness default: TX9 fixed to per-system budget sizing, see planning/handoffs/2026-10-12-spec-conformance-decisions.md; native lane not rerun for this change",
   "engine_benchmarks": "run_provisional_shared_vm_not_qualification",
   "original_bfme_compatibility": "not_run",
   "remote_repository": "https://github.com/admiraly/sutekh",
