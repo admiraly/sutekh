@@ -3467,31 +3467,35 @@ ENT_CHUNK_SLOTS = 1024            # SU_CHUNK_SLOTS
 ENT_DEFAULT_TICK_CAP = 4096       # world.create default max_struct_per_tick and max_events_per_tick
 
 
-def ent_budget_total(rows: int, systems: int, per_row: int, tick_cap: int) -> int:
-    """Entries per storage class that world.create admission sums (src/runtime/entity_tick.c su_ent_budget):
-    for every (system, chunk), min(chunk rows * per_row cap, tick cap); summed over the chunks, times the
-    number of systems. per_row is the largest declared cap over the systems (su_ent_budget takes the max), so
-    despawn_move (4 and 4) and guard (1 and 1) give per_row 4 for a two-system world."""
+def ent_budget_total(rows: int, caps: list) -> int:
+    """Entries per storage class that world.create admission sums (src/runtime/entity_tick.c su_ent_budget).
+    Since M3-05 slice 1 (OD-20) each system is sized by its own per-row cap: for every system and every chunk,
+    min(chunk rows * that system's per-row cap, tick cap), summed over systems and chunks. caps is a list of
+    (per_row, tick_cap) pairs, one per system. The two TX9 systems declare per-row caps 4 (despawn_move) and
+    1 (guard), each with the default tick cap 4,096."""
     total = 0
-    for start in range(0, rows, ENT_CHUNK_SLOTS):
-        size = min(ENT_CHUNK_SLOTS, rows - start)
-        total += min(size * per_row, tick_cap)
-    return total * systems
+    for per_row, tick_cap in caps:
+        for start in range(0, rows, ENT_CHUNK_SLOTS):
+            size = min(ENT_CHUNK_SLOTS, rows - start)
+            total += min(size * per_row, tick_cap)
+    return total
 
 
 def tx9(t: TestCtx):
     """Admission through the control plane (extra check; not a TEST_SPEC id; audit MX19). world.create of an
-    entity world with the two IR 0.2 systems (declared per-row caps 4 and 4) is refused with SU_E_RESOURCE_LIMIT
-    when the buffers one tick would allocate exceed SU_CMDQ_MAX_ENTRIES (4,194,304) in a class. The numbers:
-    2 systems x (524,288 rows / 1,024 per chunk = 512 full chunks x min(1024 x 4, 4096) = 4,096) = 4,194,304
-    (accepted, exactly at the budget); 524,287 rows: 4,194,296 (accepted); 524,289 rows: 4,194,312 (refused);
-    1,000,000 rows: 8,000,000 (refused, the 1M-row world of the contract). Refusal creates no world and leaves
-    the session working; accepted worlds close cleanly. Default caps are used throughout."""
-    expected = {524287: 4194296, 524288: 4194304, 524289: 4194312, 1000000: 8000000}
-    cases = ((524287, True), (524288, True), (524289, False), (1000000, False))
+    entity world with the two IR 0.2 systems (despawn_move: per-row caps 4 and 4; guard: 1 and 1) is refused with
+    SU_E_RESOURCE_LIMIT when the buffers one tick would allocate exceed SU_CMDQ_MAX_ENTRIES (4,194,304) in a class.
+    Each system is sized by its own cap (OD-20), so the per-class sum is
+    sum over systems of sum over chunks of min(chunk rows * cap, 4,096):
+    838,860 rows: 4,194,300 (accepted, the largest such world); 838,861 rows: 4,194,305 (refused);
+    1,000,000 rows: 5,000,000 (refused). Refusal creates no world and leaves the session working; accepted
+    worlds close cleanly. Default caps are used throughout."""
+    caps = [(4, 4096), (1, 4096)]
+    expected = {838860: 4194300, 838861: 4194305, 1000000: 5000000}
+    cases = ((838860, True), (838861, False), (1000000, False))
     for rows, want_total in expected.items():
         t.check(f"TX9 budget arithmetic: 2 systems, {rows} rows = {want_total} entries per class",
-                want_total, ent_budget_total(rows, 2, 4, ENT_DEFAULT_TICK_CAP))
+                want_total, ent_budget_total(rows, caps))
     t.check("TX9 budget: 4,194,304 is the per-class limit the worker enforces", 4194304, ENT_BUDGET_ENTRIES)
     scratch = _write_scratch_dir(t, "m2-ent-admit-")
     systems_rels = [ENT_CAP_MOVE, ENT_CAP_GUARD]
@@ -4116,14 +4120,13 @@ def self_test_entities(ok) -> None:
            for tid, _n, req, _f in TESTS))
     ok("entity TX8 is registered and needs events.read", any(tid == "TX8" and "events.read" in req
                                                           for tid, _n, req, _f in TESTS))
-    ok("entity budget: 524,288 rows over two systems is exactly the per-class limit",
-       ent_budget_total(524288, 2, 4, ENT_DEFAULT_TICK_CAP) == ENT_BUDGET_ENTRIES)
-    ok("entity budget: 524,289 rows over two systems is over the limit",
-       ent_budget_total(524289, 2, 4, ENT_DEFAULT_TICK_CAP) > ENT_BUDGET_ENTRIES)
+    ok("entity budget: 838,860 rows over two systems (caps 4 and 1) is the largest accepted world",
+       ent_budget_total(838860, [(4, ENT_DEFAULT_TICK_CAP), (1, ENT_DEFAULT_TICK_CAP)]) <= ENT_BUDGET_ENTRIES
+       and ent_budget_total(838861, [(4, ENT_DEFAULT_TICK_CAP), (1, ENT_DEFAULT_TICK_CAP)]) > ENT_BUDGET_ENTRIES)
     ok("entity budget: one system is limited by its own per-row cap",
-       ent_budget_total(1000000, 1, 4, ENT_DEFAULT_TICK_CAP) == 4000000)
+       ent_budget_total(1000000, [(4, ENT_DEFAULT_TICK_CAP)]) == 4000000)
     ok("entity budget: the tick cap bounds a chunk",
-       ent_budget_total(1024, 1, 64, ENT_DEFAULT_TICK_CAP) == ENT_DEFAULT_TICK_CAP)
+       ent_budget_total(1024, [(64, ENT_DEFAULT_TICK_CAP)]) == ENT_DEFAULT_TICK_CAP)
     ok("entity TX9 is registered and needs world.create", any(tid == "TX9" and "world.create" in req
                                                            for tid, _n, req, _f in TESTS))
     ok("entity methods are documented in the method table",
