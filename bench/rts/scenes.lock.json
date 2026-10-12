@@ -1,0 +1,383 @@
+{
+  "canon_format": "rts-scene-canon/0.1",
+  "format": "rts-scene-lock/0.1",
+  "generator": "bench/rts/gen/rtsgen.py",
+  "generator_version": "0.1",
+  "numeric_profile": "rts_u32_v1",
+  "prng": "splitmix64_v1",
+  "profile_path": "profiles/rts/schema/rts_u32_v1.json",
+  "scenes": [
+    {
+      "capacity": 16,
+      "generator": "duel.fixture.v1",
+      "name": "duel16",
+      "params": {
+        "layout": "duel16.v1",
+        "uses_prng": false
+      },
+      "rows": 16,
+      "scene_digest": "sha256:2fbc8d26e724cb185917d0c4c8995041c2c771d3d63f60b586cf8fdff4d2aee4",
+      "schema_digest": "sha256:4506e08520602d72e99cab594fcacd1be7ff086e0c92c779b6298a2391fa1ef0",
+      "seed": 0
+    },
+    {
+      "capacity": 1024,
+      "generator": "mixed.battle.v1",
+      "name": "mixed-1024",
+      "params": {
+        "bands": {
+          "team0_x": [
+            1024,
+            8191
+          ],
+          "team1_x": [
+            24576,
+            31743
+          ]
+        },
+        "formation": {
+          "cols": 4,
+          "origin": -48,
+          "pitch": 32
+        },
+        "group_size": 17,
+        "kinds": [
+          "rifle",
+          "bow",
+          "melee"
+        ],
+        "members": 16,
+        "orders": "anchor and remainder attack-move to the opposite band centre; members order_mode 0",
+        "remainder_order_mode": 2,
+        "uses_prng": true,
+        "weapons": {
+          "bow": {
+            "damage": 5,
+            "flight": 5,
+            "hp": 10,
+            "range_sq": 262144,
+            "reload": 10,
+            "speed": 64
+          },
+          "melee": {
+            "damage": 2,
+            "flight": 1,
+            "hp": 20,
+            "range_sq": 256,
+            "reload": 2,
+            "speed": 128
+          },
+          "rifle": {
+            "damage": 3,
+            "flight": 2,
+            "hp": 12,
+            "range_sq": 65536,
+            "reload": 6,
+            "speed": 96
+          }
+        }
+      },
+      "rows": 1024,
+      "scene_digest": "sha256:a43264adb3291a55a61c81da1c7dbce886984d5e1c73b897394f6e9104002b20",
+      "schema_digest": "sha256:4506e08520602d72e99cab594fcacd1be7ff086e0c92c779b6298a2391fa1ef0",
+      "seed": 81985529216486895
+    },
+    {
+      "capacity": 16384,
+      "generator": "mixed.battle.v1",
+      "name": "mixed-16384",
+      "params": {
+        "bands": {
+          "team0_x": [
+            1024,
+            8191
+          ],
+          "team1_x": [
+            24576,
+            31743
+          ]
+        },
+        "formation": {
+          "cols": 4,
+          "origin": -48,
+          "pitch": 32
+        },
+        "group_size": 17,
+        "kinds": [
+          "rifle",
+          "bow",
+          "melee"
+        ],
+        "members": 16,
+        "orders": "anchor and remainder attack-move to the opposite band centre; members order_mode 0",
+        "remainder_order_mode": 2,
+        "uses_prng": true,
+        "weapons": {
+          "bow": {
+            "damage": 5,
+            "flight": 5,
+            "hp": 10,
+            "range_sq": 262144,
+            "reload": 10,
+            "speed": 64
+          },
+          "melee": {
+            "damage": 2,
+            "flight": 1,
+            "hp": 20,
+            "range_sq": 256,
+            "reload": 2,
+            "speed": 128
+          },
+          "rifle": {
+            "damage": 3,
+            "flight": 2,
+            "hp": 12,
+            "range_sq": 65536,
+            "reload": 6,
+            "speed": 96
+          }
+        }
+      },
+      "rows": 16384,
+      "scene_digest": "sha256:b361fa314da3b1353103ac563c40ff8393b182d1d22d5b0290484e845d23309b",
+      "schema_digest": "sha256:4506e08520602d72e99cab594fcacd1be7ff086e0c92c779b6298a2391fa1ef0",
+      "seed": 18364758544493064720
+    },
+    {
+      "capacity": 1024,
+      "generator": "congested.blob.v1",
+      "name": "congested-1024",
+      "params": {
+        "box": {
+          "centre": [
+            16384,
+            16384
+          ],
+          "x": [
+            15360,
+            17407
+          ],
+          "y": [
+            15360,
+            17407
+          ]
+        },
+        "formation": {
+          "cols": 4,
+          "origin": -48,
+          "pitch": 32
+        },
+        "group_size": 17,
+        "kinds": [
+          "rifle",
+          "bow",
+          "melee"
+        ],
+        "members": 16,
+        "orders": "anchor and remainder attack-move to the box centre; members order_mode 0",
+        "remainder_order_mode": 2,
+        "teams": "interleaved: group parity for groups, slot parity for remainder",
+        "uses_prng": true,
+        "weapons": {
+          "bow": {
+            "damage": 5,
+            "flight": 5,
+            "hp": 10,
+            "range_sq": 262144,
+            "reload": 10,
+            "speed": 64
+          },
+          "melee": {
+            "damage": 2,
+            "flight": 1,
+            "hp": 20,
+            "range_sq": 256,
+            "reload": 2,
+            "speed": 128
+          },
+          "rifle": {
+            "damage": 3,
+            "flight": 2,
+            "hp": 12,
+            "range_sq": 65536,
+            "reload": 6,
+            "speed": 96
+          }
+        }
+      },
+      "rows": 1024,
+      "scene_digest": "sha256:2da63ba5180e47d8babb31eeca5a417d8e5d91f4eacbc344e14b58633801661b",
+      "schema_digest": "sha256:4506e08520602d72e99cab594fcacd1be7ff086e0c92c779b6298a2391fa1ef0",
+      "seed": 6840123409045700830
+    },
+    {
+      "capacity": 16384,
+      "generator": "congested.blob.v1",
+      "name": "congested-16384",
+      "params": {
+        "box": {
+          "centre": [
+            16384,
+            16384
+          ],
+          "x": [
+            15360,
+            17407
+          ],
+          "y": [
+            15360,
+            17407
+          ]
+        },
+        "formation": {
+          "cols": 4,
+          "origin": -48,
+          "pitch": 32
+        },
+        "group_size": 17,
+        "kinds": [
+          "rifle",
+          "bow",
+          "melee"
+        ],
+        "members": 16,
+        "orders": "anchor and remainder attack-move to the box centre; members order_mode 0",
+        "remainder_order_mode": 2,
+        "teams": "interleaved: group parity for groups, slot parity for remainder",
+        "uses_prng": true,
+        "weapons": {
+          "bow": {
+            "damage": 5,
+            "flight": 5,
+            "hp": 10,
+            "range_sq": 262144,
+            "reload": 10,
+            "speed": 64
+          },
+          "melee": {
+            "damage": 2,
+            "flight": 1,
+            "hp": 20,
+            "range_sq": 256,
+            "reload": 2,
+            "speed": 128
+          },
+          "rifle": {
+            "damage": 3,
+            "flight": 2,
+            "hp": 12,
+            "range_sq": 65536,
+            "reload": 6,
+            "speed": 96
+          }
+        }
+      },
+      "rows": 16384,
+      "scene_digest": "sha256:4aa1e365be847074c94fd3450cd5c1cfe01973afab17fa7fddd7822382d25709",
+      "schema_digest": "sha256:4506e08520602d72e99cab594fcacd1be7ff086e0c92c779b6298a2391fa1ef0",
+      "seed": 13907095858110791681
+    },
+    {
+      "capacity": 16384,
+      "generator": "sparse.field.v1",
+      "name": "sparse-16384",
+      "params": {
+        "formations": "none",
+        "kinds": [
+          "rifle",
+          "bow",
+          "melee"
+        ],
+        "orders": "attack-move to the domain centre",
+        "team1_one_in": 8,
+        "uniform_domain": [
+          0,
+          32767
+        ],
+        "uses_prng": true,
+        "weapons": {
+          "bow": {
+            "damage": 5,
+            "flight": 5,
+            "hp": 10,
+            "range_sq": 262144,
+            "reload": 10,
+            "speed": 64
+          },
+          "melee": {
+            "damage": 2,
+            "flight": 1,
+            "hp": 20,
+            "range_sq": 256,
+            "reload": 2,
+            "speed": 128
+          },
+          "rifle": {
+            "damage": 3,
+            "flight": 2,
+            "hp": 12,
+            "range_sq": 65536,
+            "reload": 6,
+            "speed": 96
+          }
+        }
+      },
+      "rows": 16384,
+      "scene_digest": "sha256:3c5f0b1cee48d1ef6ef0c69cda4f24a66c3005b1bd5d861504e6d7aa37f5332f",
+      "schema_digest": "sha256:4506e08520602d72e99cab594fcacd1be7ff086e0c92c779b6298a2391fa1ef0",
+      "seed": 841540765103467469
+    },
+    {
+      "capacity": 65536,
+      "generator": "sparse.field.v1",
+      "name": "sparse-65536",
+      "params": {
+        "formations": "none",
+        "kinds": [
+          "rifle",
+          "bow",
+          "melee"
+        ],
+        "orders": "attack-move to the domain centre",
+        "team1_one_in": 8,
+        "uniform_domain": [
+          0,
+          32767
+        ],
+        "uses_prng": true,
+        "weapons": {
+          "bow": {
+            "damage": 5,
+            "flight": 5,
+            "hp": 10,
+            "range_sq": 262144,
+            "reload": 10,
+            "speed": 64
+          },
+          "melee": {
+            "damage": 2,
+            "flight": 1,
+            "hp": 20,
+            "range_sq": 256,
+            "reload": 2,
+            "speed": 128
+          },
+          "rifle": {
+            "damage": 3,
+            "flight": 2,
+            "hp": 12,
+            "range_sq": 65536,
+            "reload": 6,
+            "speed": 96
+          }
+        }
+      },
+      "rows": 65536,
+      "scene_digest": "sha256:9aa0475061041426b146fb1df8827aee98815ff60f0dc3067396b420c8493710",
+      "schema_digest": "sha256:4506e08520602d72e99cab594fcacd1be7ff086e0c92c779b6298a2391fa1ef0",
+      "seed": 1152921504606846977
+    }
+  ],
+  "schema_digest": "sha256:4506e08520602d72e99cab594fcacd1be7ff086e0c92c779b6298a2391fa1ef0"
+}
