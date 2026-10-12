@@ -67,6 +67,13 @@ uint32_t su_rts_ctl_check_value(const char *name, uint32_t value) {
     return SU_E_TYPE;
 }
 
+uint32_t su_rts_ctl_check_formation_slot(uint32_t value, uint32_t capacity) {
+    if (value == SU_RTS_NONE) {
+        return SU_OK;
+    }
+    return value < capacity ? SU_OK : SU_E_TYPE;
+}
+
 uint32_t su_rts_ctl_check_row(uint32_t kind, uint32_t range_sq, uint32_t formation_slot,
                               uint32_t formation_gen) {
     if (kind == 2u && range_sq != 0u) {
