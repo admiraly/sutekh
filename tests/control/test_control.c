@@ -955,6 +955,110 @@ static void test_world_close_worker(const char *helper, const char *root) {
     p.alive = 0;
 }
 
+/* M2-00 audit MX21: entity worlds are released by world.close. 1,000 create/spawn/close cycles of an entity
+ * world on one worker: after every close the worker holds no world, no entity runtime, no checkpoint and no
+ * registry record, and the counters at the end equal the counters before the first cycle (flat). */
+#define ENT_CLOSE_CYCLES 1000
+static void test_entity_close_cycles(const char *helper, const char *root) {
+    SuProc p;
+    SuProcLimits lim;
+    const char *argv[2];
+    char fx[PATH_MAX_TEST + 128];
+    char cap[PATH_MAX_TEST + 128];
+    char src[PATH_MAX_TEST + 128];
+    char wid[32];
+    char rev[64];
+    char id[24];
+    char line[2048];
+    Resp r;
+    uint64_t base_worlds;
+    uint64_t base_ent;
+    uint64_t base_ck;
+    uint64_t base_reg;
+    uint64_t base_bytes;
+    int i;
+
+    snprintf(fx, sizeof fx, "%s/tests/fixtures/entities/actors_3.json", root);
+    snprintf(cap, sizeof cap, "%s/tests/fixtures/entities/despawn_move.capsule.json", root);
+    snprintf(src, sizeof src, "%s/tests/fixtures/entities/despawn_move.lir.json", root);
+    argv[0] = helper;
+    argv[1] = NULL;
+    memset(&lim, 0, sizeof lim);
+#if defined(TEST_UNDER_ASAN)
+    lim.address_space_bytes = 0;
+#else
+    lim.address_space_bytes = (uint64_t)4u * 1024u * 1024u * 1024u;
+#endif
+    memset(&p, 0, sizeof p);
+    if (su_proc_spawn(&p, argv, &lim) != SU_OK) {
+        CHECK(0);
+        return;
+    }
+    base_worlds = worker_stat(&p, "worlds");
+    base_ent = worker_stat(&p, "entity_runtimes");
+    base_ck = worker_stat(&p, "checkpoints");
+    base_reg = worker_stat(&p, "registry_in_use");
+    base_bytes = worker_stat(&p, "checkpoint_bytes");
+    CHECK(base_worlds == 0u && base_ent == 0u);
+
+    for (i = 0; i < ENT_CLOSE_CYCLES; i++) {
+        uint64_t got_ent;
+        snprintf(id, sizeof id, "ec%d", i);
+        if (!worker_create(&p, id, fx, cap, src, wid, sizeof wid, rev, sizeof rev)) {
+            CHECK(0);
+            break;
+        }
+        if (i == 0) {
+            CHECK(worker_stat(&p, "entity_runtimes") == 1u);
+        }
+        /* One despawn of fixture row 0 (handle slot 0, generation 1), then the close at the revision it
+         * returned. The fixture has no free slot, so spawning is refused by design. */
+        snprintf(line, sizeof line,
+                 "{\"protocol\":\"0.1\",\"id\":\"es\",\"method\":\"world.despawn\",\"params\":{\"world_id\":\"%s\","
+                 "\"expected_world_revision\":\"%s\",\"entity\":4294967296}}",
+                 wid, rev);
+        CHECK(wire_call(&p, line, &r) == 0);
+        CHECK_OK(r);
+        if (resp_ok(&r)) {
+            CHECK(str_copy(su_json_member(resp_result(&r), "world_revision"), rev, sizeof rev));
+        }
+        resp_free(&r);
+        snprintf(line, sizeof line,
+                 "{\"protocol\":\"0.1\",\"id\":\"ecl\",\"method\":\"world.close\",\"params\":{\"world_id\":\"%s\","
+                 "\"expected_world_revision\":\"%s\"}}",
+                 wid, rev);
+        CHECK(wire_call(&p, line, &r) == 0);
+        CHECK_OK(r);
+        CHECK(uint_of(su_json_member(resp_result(&r), "released"), "systems") == 1u);
+        resp_free(&r);
+        got_ent = worker_stat(&p, "entity_runtimes");
+        CHECK(got_ent == base_ent);
+        CHECK(worker_stat(&p, "worlds") == base_worlds);
+        if (i == 0 || i == ENT_CLOSE_CYCLES - 1) {
+            CHECK(worker_stat(&p, "checkpoints") == base_ck);
+            CHECK(worker_stat(&p, "registry_in_use") == base_reg);
+        }
+    }
+    /* Flat at the end: the same counters as before the first cycle; the worker minted one id per cycle. */
+    CHECK(worker_stat(&p, "worlds") == base_worlds);
+    CHECK(worker_stat(&p, "entity_runtimes") == base_ent);
+    CHECK(worker_stat(&p, "checkpoints") == base_ck);
+    CHECK(worker_stat(&p, "checkpoint_bytes") == base_bytes);
+    CHECK(worker_stat(&p, "registry_in_use") == base_reg);
+    CHECK(worker_stat(&p, "world_seq") == (uint64_t)ENT_CLOSE_CYCLES);
+
+    /* Clean shutdown: EOF on stdin; the worker exits 0 (LeakSanitizer exits nonzero). */
+    close(p.in_fd);
+    p.in_fd = -1;
+    {
+        int status = 0;
+        CHECK(waitpid(p.pid, &status, 0) == p.pid);
+        CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    }
+    p.pid = 0;
+    su_proc_kill(&p); /* pid is 0: frees the line reader and the pipes only */
+}
+
 int main(int argc, char **argv) {
     static const char *const fallback_root = ".";
     const char *helper;
@@ -1023,6 +1127,7 @@ int main(int argc, char **argv) {
     test_source_path(&s, &cfg, scratch_dir, root);
     session_stop(&s);
     test_world_close_worker(helper, root);
+    test_entity_close_cycles(helper, root);
 
     test_symlink_escape(&cfg, scratch_dir, root);
 

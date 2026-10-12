@@ -1,0 +1,7 @@
+{
+  "test_format": "0.1",
+  "system_id": "demo.const",
+  "capsule": "const_store.capsule.json",
+  "world": "actors_3.json",
+  "cases": []
+}

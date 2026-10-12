@@ -425,6 +425,10 @@ static void run_out_free(RunOut *r) {
 }
 
 /* Runs TICKS ticks with the given worker count; fills r with the final canonical bytes. */
+/* Completion-order seam for run_workers (audit blocker 1): seeded == 0 keeps the pool's natural order. */
+static int g_seeded = 0;
+static uint64_t g_seed = 0;
+
 static uint32_t run_workers(uint32_t workers, RunOut *r, SuSchedule **keep_sched, SuWorld **keep_world) {
     SuSchedule *s = malloc(sizeof *s);
     SuWorld *w = make_world(N_ROWS, MAX_ENT);
@@ -446,6 +450,8 @@ static uint32_t run_workers(uint32_t workers, RunOut *r, SuSchedule **keep_sched
     memset(&opt, 0, sizeof opt);
     opt.workers = workers;
     opt.chunk_min_rows = 1u;
+    opt.seeded_completion = g_seeded;
+    opt.completion_seed = g_seed;
     if (st == SU_OK) {
         st = su_sched_run_ticks_opt(w, s, TICKS, NULL, NULL, &opt, &done, &fi);
     }
@@ -626,33 +632,64 @@ static void test_oracle(void) {
     su_world_destroy(w);
 }
 
+/* Compares one run with the reference run: canonical state bytes and event log bytes. */
+static void expect_same_run(const RunOut *ref, const RunOut *got) {
+    CHECK(ref->world != NULL && got->world != NULL);
+    CHECK(ref->log != NULL && got->log != NULL);
+    if (ref->world != NULL && got->world != NULL) {
+        CHECK(ref->world_len == got->world_len);
+        CHECK(ref->world_len == got->world_len && memcmp(ref->world, got->world, ref->world_len) == 0);
+    }
+    if (ref->log != NULL && got->log != NULL) {
+        CHECK(ref->log_len == got->log_len);
+        CHECK(ref->log_len == got->log_len && memcmp(ref->log, got->log, (size_t)ref->log_len) == 0);
+    }
+}
+
+/* Canonical merge equality for N = 1, 2, 4, 8 (contract r2 section 6), then the same worlds with forced
+ * chunk completion orders (seeded permutations of the chunks of every system in every tick): the state and
+ * the event log must not depend on the completion order. */
 static void test_workers_equal(void) {
+    static const uint32_t counts[] = {2u, 4u, 8u};
+    static const uint64_t seeds[] = {1u, 7u, 12345u};
     RunOut r1;
-    RunOut r2;
-    RunOut r4;
+    RunOut rn;
     uint32_t st;
+    size_t k;
 
     st = run_workers(1u, &r1, NULL, NULL);
     CHECK_ST(st, SU_OK);
-    st = run_workers(2u, &r2, NULL, NULL);
-    CHECK_ST(st, SU_OK);
-    st = run_workers(4u, &r4, NULL, NULL);
-    CHECK_ST(st, SU_OK);
-    CHECK(r1.world != NULL && r2.world != NULL && r4.world != NULL);
-    CHECK(r1.log != NULL && r2.log != NULL && r4.log != NULL);
-    if (r1.world != NULL && r2.world != NULL && r4.world != NULL) {
-        CHECK(r1.world_len == r2.world_len && r1.world_len == r4.world_len);
-        CHECK(memcmp(r1.world, r2.world, r1.world_len) == 0);
-        CHECK(memcmp(r1.world, r4.world, r1.world_len) == 0);
+    for (k = 0; k < sizeof counts / sizeof counts[0]; k++) {
+        st = run_workers(counts[k], &rn, NULL, NULL);
+        CHECK_ST(st, SU_OK);
+        expect_same_run(&r1, &rn);
+        run_out_free(&rn);
     }
-    if (r1.log != NULL && r2.log != NULL && r4.log != NULL) {
-        CHECK(r1.log_len == r2.log_len && r1.log_len == r4.log_len);
-        CHECK(memcmp(r1.log, r2.log, (size_t)r1.log_len) == 0);
-        CHECK(memcmp(r1.log, r4.log, (size_t)r1.log_len) == 0);
+    /* Forced completion orders: the chunks of a system finish in a seeded order, and the merge is canonical. */
+    {
+        uint32_t perm[5];
+        int identity = 1;
+        uint32_t j;
+        su_jobs_seeded_permutation(5u, seeds[0], perm);
+        for (j = 0; j < 5u; j++) {
+            identity = identity && perm[j] == j;
+        }
+        CHECK(identity == 0); /* the seam really reorders: 5 chunks (5000 rows) are not in index order */
     }
+    g_seeded = 1;
+    for (k = 0; k < sizeof seeds / sizeof seeds[0]; k++) {
+        size_t m;
+        for (m = 0; m < sizeof counts / sizeof counts[0] + 1u; m++) {
+            uint32_t n = m == 0u ? 1u : counts[m - 1u];
+            g_seed = seeds[k];
+            st = run_workers(n, &rn, NULL, NULL);
+            CHECK_ST(st, SU_OK);
+            expect_same_run(&r1, &rn);
+            run_out_free(&rn);
+        }
+    }
+    g_seeded = 0;
     run_out_free(&r1);
-    run_out_free(&r2);
-    run_out_free(&r4);
 }
 
 /* A per-tick cap of 1 despawn overflows in the first tick that kills two rows: the tick aborts and

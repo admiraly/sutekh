@@ -247,7 +247,7 @@ static int call(Session *s, const char *line, Resp *r) {
 
 /* ---------- project copy ---------- */
 
-static void copy_file(const char *name) {
+static void copy_from(const char *dir, const char *name) {
     char src[4400];
     char dst[4400];
     FILE *fi;
@@ -255,7 +255,7 @@ static void copy_file(const char *name) {
     char buf[4096];
     size_t n;
 
-    snprintf(src, sizeof src, "%s/tests/reload/%s", g_root, name);
+    snprintf(src, sizeof src, "%s/%s/%s", g_root, dir, name);
     snprintf(dst, sizeof dst, "%s/%s", g_proj, name);
     fi = fopen(src, "rb");
     fo = fopen(dst, "wb");
@@ -337,6 +337,10 @@ static int create_world_sys_b(Session *s, char *wid, size_t wcap, char *rev, siz
 }
 
 /* Steps a world. Returns 1 when the worker accepted the step. rev is updated on success. */
+static void copy_file(const char *name) {
+    copy_from("tests/reload", name);
+}
+
 static int step(Session *s, const char *wid, char *rev, size_t rcap, uint64_t ticks, Resp *r) {
     char line[512];
     int ok;
@@ -798,6 +802,153 @@ static void scenario_mid_step(void) {
  * operation, quarantines the installed revision, reverts the world to the newest checkpoint that
  * predates it, and reports the quarantine on the candidate. The crash seam only fires while the
  * quarantined source is installed. */
+/* ---------- entity despawn history (M2-00 audit MX18) ---------- */
+
+/* world.spawn between ticks; on success fills the handle, slot and generation and updates rev. */
+static int ent_spawn(Session *s, const char *wid, char *rev, size_t rcap, const char *values, uint64_t *handle,
+                     uint64_t *slot, uint64_t *gen) {
+    Resp r;
+    char line[768];
+    int ok;
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"es\",\"method\":\"world.spawn\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\",\"values\":%s}}",
+             wid, rev, values);
+    call(s, line, &r);
+    ok = resp_ok(&r) && str_of(resp_result(&r), "world_revision", rev, rcap);
+    if (ok) {
+        *handle = uint_of(resp_result(&r), "entity");
+        *slot = uint_of(resp_result(&r), "slot");
+        *gen = uint_of(resp_result(&r), "generation");
+    }
+    resp_free(&r);
+    return ok;
+}
+
+/* world.despawn of a handle between ticks: returns 1 on success and updates rev. */
+static int ent_despawn(Session *s, const char *wid, char *rev, size_t rcap, uint64_t handle) {
+    Resp r;
+    char line[512];
+    int ok;
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"ed\",\"method\":\"world.despawn\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\",\"entity\":%llu}}",
+             wid, rev, (unsigned long long)handle);
+    call(s, line, &r);
+    ok = resp_ok(&r) && str_of(resp_result(&r), "world_revision", rev, rcap);
+    resp_free(&r);
+    return ok;
+}
+
+/* The whole events.read reply line (no worker pid in it), for an exact comparison of two sessions. */
+static void ent_events_text(Session *s, const char *wid, char *out, size_t cap) {
+    Resp r;
+    char line[512];
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"ev\",\"method\":\"events.read\",\"params\":{\"world_id\":\"%s\","
+             "\"cursor\":0,\"max\":256}}",
+             wid);
+    call(s, line, &r);
+    snprintf(out, cap, "%s", r.text != NULL ? (const char *)r.text : "");
+    resp_free(&r);
+}
+
+/* Entity creation for both sessions (same fixture and capsule as the harness TX7 world). */
+static int create_entity_world(Session *s, char *wid, size_t wcap, char *rev, size_t rcap) {
+    Resp r;
+    int ok;
+    call(s,
+         "{\"protocol\":\"0.1\",\"id\":\"cw\",\"method\":\"world.create\",\"params\":{\"fixture_path\":"
+         "\"actors_3.json\",\"capsule_path\":\"despawn_move.capsule.json\",\"max_entities\":8}}",
+         &r);
+    ok = resp_ok(&r) && str_of(resp_result(&r), "world_id", wid, wcap) &&
+         str_of(resp_result(&r), "world_revision", rev, rcap);
+    resp_free(&r);
+    return ok;
+}
+
+/* Despawn history with no checkpoint after it. Checkpoints are disabled (interval far above the ticks
+ * used), so the creation capture is the only checkpoint and every control-plane spawn and despawn lives
+ * in the replay log. Slot 3 is spawned, despawned, reused (generation 2) and despawned again; slot 4 is
+ * spawned. The worker is killed after the last despawn: the replacement must rebuild handles, generations,
+ * the event log and the canonical digest exactly as the uninterrupted control session. */
+static void scenario_despawn_replay(void) {
+    Opts o = default_opts();
+    Pair p;
+    Resp r;
+    char ev_c[16384];
+    char ev_r[16384];
+    char dig_c[65];
+    char dig_r[65];
+    char line[512];
+    uint64_t hA = 0;
+    uint64_t hB = 0;
+    uint64_t hC = 0;
+    uint64_t sA = 0;
+    uint64_t sB = 0;
+    uint64_t gA = 0;
+    uint64_t gB = 0;
+    uint64_t gC = 0;
+    uint64_t sC = 0;
+    uint64_t t_c = 0;
+    uint64_t t_r = 0;
+    uint64_t old_pid;
+    char wid_r[24];
+    char rev_r[48];
+
+    o.interval = 1000000u;
+    pair_open(&p, &o, "despawn");
+    CHECK(create_entity_world(&p.ctl, p.wid, sizeof p.wid, p.crev, sizeof p.crev));
+    CHECK(create_entity_world(&p.rec, wid_r, sizeof wid_r, rev_r, sizeof rev_r));
+    CHECK(strcmp(p.wid, wid_r) == 0 && strcmp(p.crev, rev_r) == 0);
+    snprintf(p.rrev, sizeof p.rrev, "%s", rev_r);
+
+    /* Slot 3, generation 1; despawned (control plane). */
+    CHECK(ent_spawn(&p.ctl, p.wid, p.crev, sizeof p.crev, "{\"position_x\":4,\"velocity_x\":0}", &hA, &sA, &gA));
+    CHECK(ent_spawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, "{\"position_x\":4,\"velocity_x\":0}", &hB, &sB, &gB));
+    CHECK(hA == hB && sA == 3u && gA == 1u && sB == sA && gB == gA);
+    CHECK(ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, hA));
+    CHECK(ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, hB));
+    CHECK(strcmp(p.crev, p.rrev) == 0);
+    /* Slot 3 reused with generation 2, slot 4 new, then the generation-2 handle is despawned. */
+    CHECK(ent_spawn(&p.ctl, p.wid, p.crev, sizeof p.crev, "{\"position_x\":1}", &hA, &sA, &gA));
+    CHECK(ent_spawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, "{\"position_x\":1}", &hB, &sB, &gB));
+    CHECK(hA == hB && sA == 3u && gA == 2u && sB == sA && gB == gA);
+    CHECK(ent_spawn(&p.ctl, p.wid, p.crev, sizeof p.crev, "{}", &hC, &sC, &gC));
+    CHECK(ent_spawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, "{}", &hB, &sB, &gB));
+    CHECK(hC == hB && sC == 4u && gC == 1u && sB == sC && gB == gC);
+    CHECK(ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, hA));
+    CHECK(ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, hA));
+    CHECK(strcmp(p.crev, p.rrev) == 0);
+
+    /* Kill the recovered session's worker after the last despawn; the next request reports the recovery. */
+    old_pid = pair_kill(&p);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"in\",\"method\":\"world.inspect\",\"params\":{\"world_id\":\"%s\","
+             "\"limit\":1}}",
+             p.wid);
+    call(&p.rec, line, &r);
+    expect_worker_failed(&r);
+    expect_recovery(&r, old_pid, 1);
+    resp_free(&r);
+    CHECK(worker_pid_of(&p.rec) != old_pid);
+
+    /* Same canonical digest and tick as the control; same event log; the generation-1 handle of slot 3
+     * and the live handle of slot 4 are judged the same by both sessions. */
+    CHECK(digest(&p.ctl, p.wid, p.crev, dig_c, &t_c));
+    CHECK(digest(&p.rec, p.wid, p.rrev, dig_r, &t_r));
+    CHECK(strcmp(dig_c, dig_r) == 0 && t_c == t_r);
+    ent_events_text(&p.ctl, p.wid, ev_c, sizeof ev_c);
+    ent_events_text(&p.rec, p.wid, ev_r, sizeof ev_r);
+    CHECK(strlen(ev_c) > 0 && strcmp(ev_c, ev_r) == 0);
+    CHECK(ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, hA) == 0);
+    CHECK(ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, hA) == 0);
+    CHECK(strcmp(p.crev, p.rrev) == 0);
+    pair_step(&p, 2);
+    pair_check(&p);
+    pair_close(&p);
+}
+
 static void scenario_quarantine(void) {
     Opts o = default_opts();
     Resp r;
@@ -1116,6 +1267,11 @@ int main(int argc, char **argv) {
     sigemptyset(&ign.sa_mask);
     sigaction(SIGPIPE, &ign, NULL);
 
+    copy_from("tests/fixtures/entities", "actors_3.json");
+    copy_from("tests/fixtures/entities", "despawn_move.capsule.json");
+    copy_from("tests/fixtures/entities", "despawn_move.lir.json");
+
+    scenario_despawn_replay();
     scenario_after_step();
     scenario_after_install();
     scenario_replay_install(0);
