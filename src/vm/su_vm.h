@@ -24,6 +24,32 @@ uint32_t su_vm_context_create(const SuLirModule *module, uint32_t layout_generat
 /* NULL-safe. Does not free the module. */
 void su_vm_context_destroy(SuExecContext *ctx);
 
+/* IR 0.2 (M2-00c2). The emitter receives every despawn_self / emit_event that fires, in row order
+ * and, within a row, in instruction order. seq is the 0-based per-row counter shared by both ops.
+ * A callback returns 0 when the record was buffered, nonzero on buffer overflow; the VM then fails
+ * the call with SU_E_RESOURCE_LIMIT and failed_insn set. The records already emitted are NOT
+ * retracted: the caller discards its buffers when the call fails. */
+typedef struct SuVmEmitter {
+    void *user;
+    int (*emit_despawn)(void *user, uint32_t slot, uint32_t seq, uint64_t expected_handle);
+    int (*emit_event)(void *user, uint32_t slot, uint32_t seq, uint32_t kind, uint32_t a, uint32_t b);
+} SuVmEmitter;
+
+/* Sets the entity view used by the NEXT invocations until replaced. Defaults (never set): every row
+ * alive, generation 1, base_slot 0 (so slot_u32 = row index), tick_u32 = 0.
+ *   alive        NULL = all rows alive; otherwise one byte per row of the call (nonzero = alive). A
+ *                dead row is skipped entirely: no staged writes, no emissions. The caller guarantees
+ *                the array covers the call's row_count (the VM cannot check it).
+ *   generations  NULL = 1 for every row; otherwise one u32 per row of the call.
+ *   base_slot    slot_u32 = base_slot + row index (chunk offset), wrapping u32.
+ *   tick_low     the value tick_u32 yields: committed_tick + 1 (mod 2^32), supplied by the caller.
+ *   emitter      NULL = none. Required (else SU_E_INVALID_ARGUMENT) by a module that contains
+ *                despawn_self or emit_event. Both callbacks must be non-NULL when emitter is given.
+ * Returns SU_OK or SU_E_INVALID_ARGUMENT (NULL ctx or incomplete emitter). */
+uint32_t su_vm_context_set_entity_view(SuExecContext *ctx, const uint8_t *alive,
+                                       const uint32_t *generations, uint32_t base_slot,
+                                       uint32_t tick_low, const SuVmEmitter *emitter);
+
 /* Row limit used by the wrapper (default SU_LIMIT_ROWS). Returns
  * SU_E_INVALID_ARGUMENT on NULL ctx. */
 uint32_t su_vm_context_set_row_limit(SuExecContext *ctx, uint64_t limit);

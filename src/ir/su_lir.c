@@ -6,12 +6,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sutekh/entities.h"
 #include "su_json.h"
 #include "su_sha256.h"
 
 #define SU_NUMERIC_PROFILE "u32_mod_v1"
-#define SU_IR_VERSION "0.1"
+#define SU_IR_VERSION_01 "0.1"
 #define SU_CAPSULE_FORMAT "0.1"
+#define SU_CAP_DECL_MAX 64u /* max_struct_per_row / max_events_per_row range 0..64 (M2 contract section 2) */
 
 typedef struct Str {
     const char *p;
@@ -79,6 +81,24 @@ static const OpSpec OPS[] = {
      {{"src", SU_TYPE_U32}, {0, 0}, {0, 0}}, 2, "field"},
 };
 
+/* IR 0.2 operations (valid only in ir_version "0.2"; SU_E_UNKNOWN_OPCODE in 0.1). Operand mapping
+ * in SuInsn is documented next to the SU_OP_* constants in include/sutekh/ir.h: for emit_event the
+ * JSON key "cond" is the dst field, "kind" the constant a, "a"/"b" the payload registers b/c. */
+static const OpSpec OPS02[] = {
+    {"slot_u32", SU_OP_SLOT_U32, SU_TYPE_U32, 2,
+     {{"op", K_NAME}, {"dst", K_NAME}, {0, 0}, {0, 0}, {0, 0}}, 0, {{0, 0}}, 0, NULL},
+    {"gen_u32", SU_OP_GEN_U32, SU_TYPE_U32, 2,
+     {{"op", K_NAME}, {"dst", K_NAME}, {0, 0}, {0, 0}, {0, 0}}, 0, {{0, 0}}, 0, NULL},
+    {"tick_u32", SU_OP_TICK_U32, SU_TYPE_U32, 2,
+     {{"op", K_NAME}, {"dst", K_NAME}, {0, 0}, {0, 0}, {0, 0}}, 0, {{0, 0}}, 0, NULL},
+    {"despawn_self", SU_OP_DESPAWN_SELF, 0, 2,
+     {{"op", K_NAME}, {"cond", K_NAME}, {0, 0}, {0, 0}, {0, 0}}, 1,
+     {{"cond", SU_TYPE_BOOL}, {0, 0}, {0, 0}}, 0, NULL},
+    {"emit_event", SU_OP_EMIT_EVENT, 0, 5,
+     {{"op", K_NAME}, {"cond", K_NAME}, {"kind", K_U32}, {"a", K_NAME}, {"b", K_NAME}}, 3,
+     {{"cond", SU_TYPE_BOOL}, {"a", SU_TYPE_U32}, {"b", SU_TYPE_U32}}, 0, NULL},
+};
+
 typedef struct CapInfo {
     Str system;
     Str schema_id;
@@ -86,6 +106,12 @@ typedef struct CapInfo {
     const SuJsonValue *fields;
     uint64_t max_instructions;
     uint64_t max_rows;
+    int has_ir_version;          /* capsule top-level "ir_version" present */
+    uint32_t ir_version_minor;   /* declared (1 when absent) */
+    int declares_struct_cap;     /* limits.max_struct_per_row present */
+    int declares_event_cap;      /* limits.max_events_per_row present */
+    uint32_t max_struct_per_row;
+    uint32_t max_events_per_row;
 } CapInfo;
 
 typedef struct IrInfo {
@@ -93,6 +119,7 @@ typedef struct IrInfo {
     Str query;
     Str profile;
     const SuJsonValue *insns;
+    uint32_t ir_minor;           /* 1 for "0.1", 2 for "0.2" */
 } IrInfo;
 
 typedef struct CapField {
@@ -211,8 +238,8 @@ static uint32_t u32_of(const SuJsonValue *v) {
 
 /* Checks an object's members against a spec: unknown keys, wrong JSON types
  * and missing required keys (all keys are required). */
-static uint32_t check_keys(SuDiag *d, const SuJsonValue *obj, const char *base,
-                           const KeySpec *spec, size_t nspec) {
+static uint32_t check_keys_opt(SuDiag *d, const SuJsonValue *obj, const char *base,
+                               const KeySpec *spec, size_t nspec, size_t nreq) {
     size_t i, j;
     char ptr[320];
 
@@ -238,13 +265,20 @@ static uint32_t check_keys(SuDiag *d, const SuJsonValue *obj, const char *base,
             return set_diag(d, SU_E_TYPE, ptr, "key '%s' has the wrong JSON type or value", ks->name);
         }
     }
-    for (j = 0; j < nspec; j++) {
+    for (j = 0; j < nreq; j++) {
         if (su_json_member(obj, spec[j].name) == NULL) {
             ptr_child(ptr, sizeof ptr, base, spec[j].name, strlen(spec[j].name));
             return set_diag(d, SU_E_TYPE, ptr, "missing required key '%s'", spec[j].name);
         }
     }
     return SU_OK;
+}
+
+/* All listed keys required, except that the first spec entries are required and the rest optional
+ * (used for the IR 0.2 additions only; the 0.1 key sets are unchanged). */
+static uint32_t check_keys(SuDiag *d, const SuJsonValue *obj, const char *base,
+                           const KeySpec *spec, size_t nspec) {
+    return check_keys_opt(d, obj, base, spec, nspec, nspec);
 }
 
 static int ident_ok(Str s) {
@@ -287,10 +321,12 @@ static uint32_t stage1_limits(SuDiag *d, const SuJsonValue *cap_root, const SuJs
 /* ---------- stage 4: top-level and nested shape ---------- */
 
 static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
+    /* Required keys first (nine), then the optional IR 0.2 "ir_version". */
     static const KeySpec top[] = {
         {"capsule_format", K_STRING}, {"system_id", K_NAME}, {"source", K_NAME},
         {"schema", K_OBJECT}, {"numeric_profile", K_STRING}, {"fields", K_ARRAY},
-        {"schedule", K_OBJECT}, {"limits", K_OBJECT}, {"tests", K_ARRAY}};
+        {"schedule", K_OBJECT}, {"limits", K_OBJECT}, {"tests", K_ARRAY},
+        {"ir_version", K_STRING}};
     static const KeySpec schema_keys[] = {
         {"id", K_NAME}, {"version", K_U32_POS}, {"layout_generation", K_U32_POS}};
     static const KeySpec field_keys[] = {
@@ -298,15 +334,29 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
     static const KeySpec sched_keys[] = {
         {"phase", K_NAME}, {"after", K_ARRAY}, {"before", K_ARRAY}, {"parallel", K_STRING}};
     static const KeySpec limit_keys[] = {
-        {"max_instructions", K_UINT}, {"max_rows", K_UINT}, {"allocation", K_STRING}};
+        {"max_instructions", K_UINT}, {"max_rows", K_UINT}, {"allocation", K_STRING},
+        {"max_struct_per_row", K_UINT}, {"max_events_per_row", K_UINT}};
     const SuJsonValue *v, *arr;
     uint32_t rc;
     size_t i;
     uint64_t u;
 
-    rc = check_keys(d, root, "", top, sizeof top / sizeof top[0]);
+    rc = check_keys_opt(d, root, "", top, sizeof top / sizeof top[0], 9u);
     if (rc != SU_OK) {
         return rc;
+    }
+    v = su_json_member(root, "ir_version");
+    if (v != NULL) {
+        ci->has_ir_version = 1;
+        if (str_is(jstr(v), SU_IR_VERSION_01)) {
+            ci->ir_version_minor = 1u;
+        } else if (str_is(jstr(v), SU_IR_VERSION_STRING_0_2)) {
+            ci->ir_version_minor = 2u;
+        } else {
+            return set_diag(d, SU_E_TYPE, "/ir_version", "unsupported capsule ir_version");
+        }
+    } else {
+        ci->ir_version_minor = 1u;
     }
     v = su_json_member(root, "capsule_format");
     if (!str_is(jstr(v), SU_CAPSULE_FORMAT)) {
@@ -372,7 +422,7 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
     }
 
     v = su_json_member(root, "limits");
-    rc = check_keys(d, v, "/limits", limit_keys, sizeof limit_keys / sizeof limit_keys[0]);
+    rc = check_keys_opt(d, v, "/limits", limit_keys, sizeof limit_keys / sizeof limit_keys[0], 3u);
     if (rc != SU_OK) {
         return rc;
     }
@@ -389,6 +439,24 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
     }
     if (!str_is(jstr(su_json_member(v, "allocation")), "forbidden")) {
         return set_diag(d, SU_E_TYPE, "/limits/allocation", "M0 requires allocation \"forbidden\"");
+    }
+    /* IR 0.2 per-row caps: optional, integers 0..64, default 0. Declared-ness is recorded here and
+     * the 0.1 rule is applied once the IR version is known (see su_lir_verify). */
+    if (su_json_member(v, "max_struct_per_row") != NULL) {
+        su_json_get_uint(su_json_member(v, "max_struct_per_row"), &u);
+        if (u > SU_CAP_DECL_MAX) {
+            return set_diag(d, SU_E_TYPE, "/limits/max_struct_per_row", "max_struct_per_row must be 0..64");
+        }
+        ci->declares_struct_cap = 1;
+        ci->max_struct_per_row = (uint32_t)u;
+    }
+    if (su_json_member(v, "max_events_per_row") != NULL) {
+        su_json_get_uint(su_json_member(v, "max_events_per_row"), &u);
+        if (u > SU_CAP_DECL_MAX) {
+            return set_diag(d, SU_E_TYPE, "/limits/max_events_per_row", "max_events_per_row must be 0..64");
+        }
+        ci->declares_event_cap = 1;
+        ci->max_events_per_row = (uint32_t)u;
     }
 
     arr = su_json_member(root, "tests");
@@ -411,7 +479,11 @@ static uint32_t check_ir(SuDiag *d, const SuJsonValue *root, IrInfo *ii) {
     if (rc != SU_OK) {
         return rc;
     }
-    if (!str_is(jstr(su_json_member(root, "ir_version")), SU_IR_VERSION)) {
+    if (str_is(jstr(su_json_member(root, "ir_version")), SU_IR_VERSION_01)) {
+        ii->ir_minor = 1u;
+    } else if (str_is(jstr(su_json_member(root, "ir_version")), SU_IR_VERSION_STRING_0_2)) {
+        ii->ir_minor = 2u;
+    } else {
         return set_diag(d, SU_E_TYPE, "/ir_version", "unsupported ir_version");
     }
     if (!str_is(jstr(su_json_member(root, "numeric_profile")), SU_NUMERIC_PROFILE)) {
@@ -463,7 +535,30 @@ static uint32_t check_schema_semantics(SuDiag *d, const CapInfo *ci, const IrInf
         return set_diag(d, SU_E_SCHEMA_MISMATCH, "/numeric_profile",
                         "IR numeric_profile differs from capsule numeric_profile");
     }
+    /* An absent capsule ir_version means "0.1" (M0 capsules). */
+    if (ci->ir_version_minor != ii->ir_minor) {
+        return set_diag(d, SU_E_SCHEMA_MISMATCH, "/ir_version",
+                        "IR ir_version differs from capsule ir_version");
+    }
     return SU_OK;
+}
+
+/* Counts instructions whose "op" equals name (no validation: only used when the IR is 0.2). */
+static uint32_t count_op(const IrInfo *ii, const char *name) {
+    uint32_t n = 0;
+    size_t i;
+    for (i = 0; i < ii->insns->u.array.count; i++) {
+        const SuJsonValue *ins = ii->insns->u.array.items[i];
+        const SuJsonValue *opv;
+        if (ins->type != SU_JSON_OBJECT) {
+            continue;
+        }
+        opv = su_json_member(ins, "op");
+        if (opv != NULL && opv->type == SU_JSON_STRING && str_is(jstr(opv), name)) {
+            n++;
+        }
+    }
+    return n;
 }
 
 static int cmp_field(const void *a, const void *b) {
@@ -494,12 +589,24 @@ static int find_reg(const RegDef *regs, uint32_t nr, Str name, uint32_t *idx) {
     return 0;
 }
 
-static const OpSpec *find_op(Str name) {
+/* Looks an op up in the 0.1 table, then the 0.2 table. An op from the 0.2 table is returned only
+ * when the module is 0.2 (ir_minor >= 2); otherwise NULL, which the caller reports as an unknown
+ * opcode (SU_E_UNKNOWN_OPCODE). */
+static const OpSpec *find_op(Str name, uint32_t ir_minor) {
     size_t i;
     for (i = 0; i < sizeof OPS / sizeof OPS[0]; i++) {
         size_t n = strlen(OPS[i].name);
         if (n == name.n && memcmp(OPS[i].name, name.p, n) == 0) {
             return &OPS[i];
+        }
+    }
+    if (ir_minor < 2u) {
+        return NULL;
+    }
+    for (i = 0; i < sizeof OPS02 / sizeof OPS02[0]; i++) {
+        size_t n = strlen(OPS02[i].name);
+        if (n == name.n && memcmp(OPS02[i].name, name.p, n) == 0) {
+            return &OPS02[i];
         }
     }
     return NULL;
@@ -514,6 +621,8 @@ typedef struct Body {
     RegDef *regs;
     uint32_t nregs;
     SuInsn *out;
+    uint32_t ir_minor;   /* 1 or 2 */
+    uint32_t uses_ops;   /* any 0.2 op seen */
 } Body;
 
 static uint32_t check_instructions(SuDiag *d, const IrInfo *ii, Body *b) {
@@ -541,7 +650,7 @@ static uint32_t check_instructions(SuDiag *d, const IrInfo *ii, Body *b) {
             ptr_child(ptr, sizeof ptr, base, "op", 2);
             return set_diag(d, SU_E_TYPE, ptr, "op must be a string");
         }
-        spec = find_op(jstr(opv));
+        spec = find_op(jstr(opv), b->ir_minor);
         ptr_child(ptr, sizeof ptr, base, "op", 2);
         if (spec == NULL) {
             return set_diag(d, SU_E_UNKNOWN_OPCODE, ptr, "unknown opcode '%.*s'",
@@ -551,6 +660,15 @@ static uint32_t check_instructions(SuDiag *d, const IrInfo *ii, Body *b) {
         rc = check_keys(d, ins, base, spec->keys, spec->nkeys);
         if (rc != SU_OK) {
             return rc;
+        }
+        if (spec->code == SU_OP_EMIT_EVENT &&
+            u32_of(su_json_member(ins, "kind")) >= SU_EVENT_KIND_RESERVED_MIN) {
+            ptr_child(ptr, sizeof ptr, base, "kind", 4);
+            return set_diag(d, SU_E_TYPE, ptr, "emit_event kind must be below 0x%08X (reserved range)",
+                            (unsigned)SU_EVENT_KIND_RESERVED_MIN);
+        }
+        if (spec->code >= SU_OP_SLOT_U32) {
+            b->uses_ops = 1u;
         }
 
         /* Undefined registers. */
@@ -649,6 +767,17 @@ static uint32_t check_instructions(SuDiag *d, const IrInfo *ii, Body *b) {
             in.b = idx[1];
             in.c = idx[2];
             break;
+        case SU_OP_DESPAWN_SELF:
+            /* dst = cond register (a source here); a, b, c stay NONE. */
+            in.dst = idx[0];
+            break;
+        case SU_OP_EMIT_EVENT:
+            /* dst = cond register; a = kind constant; b, c = payload registers A, B. */
+            in.dst = idx[0];
+            in.a = u32_of(su_json_member(ins, "kind"));
+            in.b = idx[1];
+            in.c = idx[2];
+            break;
         default:
             in.a = idx[0];
             in.b = idx[1];
@@ -687,7 +816,8 @@ static void compute_semantic(SuLirModule *m, Str profile, Str system, Str query)
 
     su_sha256_init(&c);
     su_sha256_update(&c, prefix, sizeof prefix);
-    hash_u32(&c, SU_ARTIFACT_FORMAT_VERSION);
+    /* The artifact format is a parameter of this encoding: 1 for 0.1 modules, 2 for 0.2. */
+    hash_u32(&c, m->artifact_format);
     hash_str(&c, sp);
     hash_str(&c, ss);
     hash_str(&c, sq);
@@ -696,6 +826,16 @@ static void compute_semantic(SuLirModule *m, Str profile, Str system, Str query)
         hash_u32(&c, m->fields[i].id);
         hash_u32(&c, m->fields[i].type);
         hash_u32(&c, m->fields[i].access);
+    }
+    if (m->ir_version_minor >= 2u) {
+        /* 0.2 only: ir_version string, then the per-row caps. 0.1 hashes do not include these. */
+        static const char ver02[] = SU_IR_VERSION_STRING_0_2;
+        Str sv;
+        sv.p = ver02;
+        sv.n = sizeof ver02 - 1u;
+        hash_str(&c, sv);
+        hash_u32(&c, m->max_struct_per_row);
+        hash_u32(&c, m->max_events_per_row);
     }
     hash_u32(&c, m->insn_count);
     for (i = 0; i < m->insn_count; i++) {
@@ -818,6 +958,17 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     if (rc != SU_OK) {
         goto done;
     }
+    /* IR 0.1 has no per-row caps: a capsule that declares them is a type error (stage 4). */
+    if (ii.ir_minor == 1u && ci.declares_struct_cap) {
+        rc = set_diag(d, SU_E_TYPE, "/limits/max_struct_per_row",
+                      "max_struct_per_row requires ir_version 0.2");
+        goto done;
+    }
+    if (ii.ir_minor == 1u && ci.declares_event_cap) {
+        rc = set_diag(d, SU_E_TYPE, "/limits/max_events_per_row",
+                      "max_events_per_row requires ir_version 0.2");
+        goto done;
+    }
     diag_system(d, ii.system);
 
     /* Stage 5: schema semantics and IR/capsule agreement. */
@@ -832,6 +983,24 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
                       ninsn, (unsigned long long)ci.max_instructions);
         goto done;
     }
+    /* IR 0.2 worst case per row (straight-line IR, conditions ignored): one structural request per
+     * despawn_self, one event per emit_event. Declared caps below that are a resource error. */
+    if (ii.ir_minor >= 2u) {
+        uint32_t nd = count_op(&ii, "despawn_self");
+        uint32_t ne = count_op(&ii, "emit_event");
+        if (nd > ci.max_struct_per_row) {
+            rc = set_diag(d, SU_E_RESOURCE_LIMIT, "/limits/max_struct_per_row",
+                          "IR has %u despawn_self per row; capsule limits.max_struct_per_row is %u",
+                          (unsigned)nd, (unsigned)ci.max_struct_per_row);
+            goto done;
+        }
+        if (ne > ci.max_events_per_row) {
+            rc = set_diag(d, SU_E_RESOURCE_LIMIT, "/limits/max_events_per_row",
+                          "IR has %u emit_event per row; capsule limits.max_events_per_row is %u",
+                          (unsigned)ne, (unsigned)ci.max_events_per_row);
+            goto done;
+        }
+    }
 
     /* Verified field table: capsule fields sorted ascending by id. */
     nf = ci.fields->u.array.count;
@@ -844,6 +1013,7 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
         goto done;
     }
     b.nf = nf;
+    b.ir_minor = ii.ir_minor;
     for (i = 0; i < nf; i++) {
         const SuJsonValue *fv = ci.fields->u.array.items[i];
         const SuJsonValue *rv = su_json_member(fv, "read");
@@ -872,7 +1042,11 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
 
     /* Build the module. */
     memset(&m, 0, sizeof m);
-    m.artifact_format = SU_ARTIFACT_FORMAT_VERSION;
+    m.artifact_format = ii.ir_minor >= 2u ? SU_ARTIFACT_FORMAT_VERSION_0_2 : SU_ARTIFACT_FORMAT_VERSION;
+    m.ir_version_minor = ii.ir_minor;
+    m.max_struct_per_row = ci.max_struct_per_row;
+    m.max_events_per_row = ci.max_events_per_row;
+    m.uses_entity_ops = b.uses_ops;
     m.system_id = dup_str(ii.system);
     m.query = dup_str(ii.query);
     m.numeric_profile = dup_str(ii.profile);

@@ -2,7 +2,10 @@
   "type": "object",
   "properties": {
     "ir_version": {
-      "const": "0.1"
+      "enum": [
+        "0.1",
+        "0.2"
+      ]
     },
     "system_id": {
       "type": "string",
@@ -250,6 +253,107 @@
               "op",
               "field",
               "src"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "slot_u32"
+              },
+              "dst": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              }
+            },
+            "required": [
+              "op",
+              "dst"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "gen_u32"
+              },
+              "dst": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              }
+            },
+            "required": [
+              "op",
+              "dst"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "tick_u32"
+              },
+              "dst": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              }
+            },
+            "required": [
+              "op",
+              "dst"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "despawn_self"
+              },
+              "cond": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              }
+            },
+            "required": [
+              "op",
+              "cond"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "emit_event"
+              },
+              "cond": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "kind": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967039
+              },
+              "a": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "b": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              }
+            },
+            "required": [
+              "op",
+              "cond",
+              "kind",
+              "a",
+              "b"
             ],
             "additionalProperties": false
           }

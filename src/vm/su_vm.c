@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sutekh/entities.h"
+
 #define SU_VM_ACCESS_MASK (SU_ACCESS_READ | SU_ACCESS_WRITE)
 #define SU_VM_NO_FAILED_INSN UINT32_MAX
 
@@ -21,6 +23,15 @@ struct SuExecContext {
     uint32_t readable_count;       /* module fields with SU_ACCESS_READ */
     uint32_t writable_count;       /* module fields with SU_ACCESS_WRITE */
     uint32_t last_failed_insn;
+    /* IR 0.2 entity view (su_vm_context_set_entity_view). Defaults: all alive, gen 1, base 0. */
+    const uint8_t *alive;          /* borrowed; NULL = all rows alive */
+    const uint32_t *generations;   /* borrowed; NULL = 1 */
+    uint32_t base_slot;
+    uint32_t tick_low;
+    SuVmEmitter emitter;           /* copied; valid when has_emitter */
+    int has_emitter;
+    int needs_emitter;             /* module contains despawn_self or emit_event */
+    uint32_t row_seq;              /* per-row emission counter, reset for each live row */
     /* Register file, sized from module->register_count. */
     uint32_t *reg_val;
     uint8_t *reg_tag;
@@ -59,7 +70,9 @@ static int su_reg_ok(uint32_t reg, uint32_t count) {
     return reg < count;
 }
 
-static int su_insn_known(uint32_t op) {
+/* IR 0.2 opcodes are known only in 0.2 modules (minor >= 2); hand-built modules that leave
+ * ir_version_minor at 0 are treated as 0.1. */
+static int su_insn_known(uint32_t op, uint32_t minor) {
     switch (op) {
     case SU_OP_CONST_U32:
     case SU_OP_LOAD_U32:
@@ -71,6 +84,12 @@ static int su_insn_known(uint32_t op) {
     case SU_OP_SELECT_U32:
     case SU_OP_STORE_U32:
         return 1;
+    case SU_OP_SLOT_U32:
+    case SU_OP_GEN_U32:
+    case SU_OP_TICK_U32:
+    case SU_OP_DESPAWN_SELF:
+    case SU_OP_EMIT_EVENT:
+        return minor >= 2u;
     default:
         return 0;
     }
@@ -80,10 +99,20 @@ static int su_insn_known(uint32_t op) {
 static int su_insn_shape_ok(const SuInsn *ins, const SuLirModule *m) {
     uint32_t rc = m->register_count;
     uint32_t fc = m->field_count;
-    if (!su_insn_known(ins->op)) {
+    if (!su_insn_known(ins->op, m->ir_version_minor)) {
         return 0;
     }
     switch (ins->op) {
+    case SU_OP_SLOT_U32:
+    case SU_OP_GEN_U32:
+    case SU_OP_TICK_U32:
+        return su_reg_ok(ins->dst, rc);
+    case SU_OP_DESPAWN_SELF:
+        return su_reg_ok(ins->dst, rc);
+    case SU_OP_EMIT_EVENT:
+        /* a is the kind constant (never an index); the verifier keeps it below the reserved range. */
+        return su_reg_ok(ins->dst, rc) && su_reg_ok(ins->b, rc) && su_reg_ok(ins->c, rc) &&
+               ins->a < SU_EVENT_KIND_RESERVED_MIN;
     case SU_OP_CONST_U32:
         return su_reg_ok(ins->dst, rc);
     case SU_OP_LOAD_U32:
@@ -192,6 +221,11 @@ uint32_t su_vm_context_create(const SuLirModule *m, uint32_t layout_generation,
     c->layout_generation = layout_generation;
     c->row_limit = (m->max_rows != 0 && m->max_rows < SU_LIMIT_ROWS) ? m->max_rows : SU_LIMIT_ROWS;
     c->last_failed_insn = SU_VM_NO_FAILED_INSN;
+    for (i = 0; i < m->insn_count; i++) {
+        if (m->insns[i].op == SU_OP_DESPAWN_SELF || m->insns[i].op == SU_OP_EMIT_EVENT) {
+            c->needs_emitter = 1;
+        }
+    }
 
     c->reg_val = su_vm_calloc(m->register_count, sizeof *c->reg_val);
     c->reg_tag = su_vm_calloc(m->register_count, sizeof *c->reg_tag);
@@ -228,6 +262,28 @@ uint32_t su_vm_context_create(const SuLirModule *m, uint32_t layout_generation,
     }
 
     *out = c;
+    return SU_OK;
+}
+
+uint32_t su_vm_context_set_entity_view(SuExecContext *ctx, const uint8_t *alive,
+                                       const uint32_t *generations, uint32_t base_slot,
+                                       uint32_t tick_low, const SuVmEmitter *emitter) {
+    if (ctx == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (emitter != NULL && (emitter->emit_despawn == NULL || emitter->emit_event == NULL)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    ctx->alive = alive;
+    ctx->generations = generations;
+    ctx->base_slot = base_slot;
+    ctx->tick_low = tick_low;
+    ctx->has_emitter = emitter != NULL;
+    if (emitter != NULL) {
+        ctx->emitter = *emitter;
+    } else {
+        memset(&ctx->emitter, 0, sizeof ctx->emitter);
+    }
     return SU_OK;
 }
 
@@ -423,6 +479,53 @@ static uint32_t su_exec_insn(SuExecContext *ctx, const SuInsn *ins, size_t r) {
         ctx->stored[ins->a] = 1u;
         return SU_OK;
     }
+    case SU_OP_SLOT_U32:
+        su_write_reg(ctx, ins->dst, SU_TYPE_U32, ctx->base_slot + (uint32_t)r);
+        return SU_OK;
+    case SU_OP_GEN_U32:
+        su_write_reg(ctx, ins->dst, SU_TYPE_U32,
+                     ctx->generations != NULL ? ctx->generations[r] : SU_GEN_FIRST);
+        return SU_OK;
+    case SU_OP_TICK_U32:
+        su_write_reg(ctx, ins->dst, SU_TYPE_U32, ctx->tick_low);
+        return SU_OK;
+    case SU_OP_DESPAWN_SELF: {
+        uint32_t go = 0;
+        uint32_t slot = ctx->base_slot + (uint32_t)r;
+        uint32_t gen = ctx->generations != NULL ? ctx->generations[r] : SU_GEN_FIRST;
+        if (!su_read_bool(ctx, ins->dst, &go)) {
+            return SU_E_INTERNAL;
+        }
+        if (go == 0u) {
+            return SU_OK;
+        }
+        if (ctx->emitter.emit_despawn(ctx->emitter.user, slot, ctx->row_seq,
+                                      SU_ENTITY_MAKE(slot, gen)) != 0) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        ctx->row_seq++;
+        return SU_OK;
+    }
+    case SU_OP_EMIT_EVENT: {
+        uint32_t go = 0;
+        uint32_t pa = 0;
+        uint32_t pb = 0;
+        uint32_t slot = ctx->base_slot + (uint32_t)r;
+        if (!su_read_bool(ctx, ins->dst, &go)) {
+            return SU_E_INTERNAL;
+        }
+        if (go == 0u) {
+            return SU_OK;
+        }
+        if (!su_read_u32(ctx, ins->b, &pa) || !su_read_u32(ctx, ins->c, &pb)) {
+            return SU_E_INTERNAL;
+        }
+        if (ctx->emitter.emit_event(ctx->emitter.user, slot, ctx->row_seq, ins->a, pa, pb) != 0) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        ctx->row_seq++;
+        return SU_OK;
+    }
     default:
         return SU_E_INTERNAL;
     }
@@ -434,6 +537,11 @@ static uint32_t su_exec_rows(SuExecContext *ctx, uint64_t rows, SuOutputs *out) 
     for (r = 0; r < rows; r++) {
         uint32_t i;
         uint32_t k;
+        /* A dead row is skipped entirely: no staged writes, no emissions, no store check. */
+        if (ctx->alive != NULL && ctx->alive[r] == 0u) {
+            continue;
+        }
+        ctx->row_seq = 0u;
         for (k = 0; k < ctx->writable_count; k++) {
             ctx->stored[ctx->write_fields[k]] = 0u;
         }
@@ -480,6 +588,9 @@ uint32_t su_vm_invoke_v1(SuExecContext *ctx, const SuInvocation *input, SuOutput
     }
     if ((input->binding_count > 0u && input->bindings == NULL) ||
         (out->binding_count > 0u && out->bindings == NULL)) {
+        return fail_out(ctx, out, SU_E_INVALID_ARGUMENT);
+    }
+    if (ctx->needs_emitter && !ctx->has_emitter) {
         return fail_out(ctx, out, SU_E_INVALID_ARGUMENT);
     }
 
