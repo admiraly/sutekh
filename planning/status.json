@@ -16,7 +16,7 @@
   "next_ready_tasks": [
     "M1-00"
   ],
-  "note": "M0 closed by owner decision with documented caveats; see docs/IMPLEMENTATION_STATUS.md and planning/audit/.",
+  "note": "M0 closed by owner decision. M1 implemented and audited; owner acceptance pending. M2 work proceeds as a contingent draft (additive, disabled by default) per AGENT_PROTOCOL section 2.",
   "repository_visibility": "public",
   "license_spdx_expression": "LicenseRef-PolyForm-Perimeter-1.0.1",
   "distribution_model": "source-available; not OSI Open Source",
@@ -31,6 +31,24 @@
       "Two timing targets are not_comparable: preview target assumes a reusable worker (engine uses disposable workers by design); native incremental-check target needs a reference machine.",
       "All timings from a shared 4-vCPU VM; not performance qualification (constitution C10).",
       "POSIX only; Windows not implemented. Worker death loses its worlds (recovery is M1). world.restore is O(tick). A worker holds at most 4 worlds and no world.close exists."
+    ]
+  },
+  "m1": {
+    "state": "implemented_and_independently_audited_pending_owner_acceptance",
+    "audited_revision": "4a6994e459d91261c1bad0257f69b8a66cc86b53",
+    "audits": [
+      "planning/audit/M1-audit.md",
+      "planning/audit/M1-reaudit.md",
+      "planning/audit/M1-final-audit.md"
+    ],
+    "blockers_from_last_audit": "closed by closure-D (see docs/IMPLEMENTATION_STATUS.md and planning/handoffs/2026-10-12-m1-closure-d.md); no further independent audit has re-verified closure-D",
+    "caveats": [
+      "All timings are shared-VM observations (C10).",
+      "Containment is Linux x86-64 only; filesystem reads, inherited descriptors, active-worker CPU/writes, side channels and kernel bugs through allowed calls are not contained.",
+      "Win64 evidence is wine/mingw only; Windows-native not run.",
+      "Tick workers are opt-in (SUTEKH_TICK_WORKERS default 1).",
+      "Multi-agent experiment: tokens, tool calls and integration latency are null; outcome classes are orchestrator judgement.",
+      "Unrun audit mutants: INSTALL-REV, DIGEST-TICK-RERUN, QUAR-FIND."
     ]
   }
 }
