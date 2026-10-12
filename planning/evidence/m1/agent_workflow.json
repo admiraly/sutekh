@@ -1,7 +1,7 @@
 {
   "report_format": "0.1",
   "kind": "workflow_observation",
-  "head": "fd51a60b350e683e52fd0e2294cf40798fb8ae3e",
+  "head": "2e8646652d89ad3022718503528ae491008aea1f",
   "summary": {
     "usage_input": "present",
     "tokens": {
