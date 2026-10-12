@@ -281,3 +281,15 @@ sutekh_apply_warnings(test_recovery)
 add_test(NAME recovery COMMAND test_recovery $<TARGET_FILE:recovery_worker> "${CMAKE_CURRENT_SOURCE_DIR}"
          "${CMAKE_BINARY_DIR}/recovery_scratch" $<TARGET_FILE:sutekh>
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# M1 closure C: C07 containment observed from inside the child (rlimits, seccomp network denial,
+# RLIMIT_FSIZE and RLIMIT_NOFILE). The probe method exists only in test workers (SU_TEST_FAULT_HOOKS).
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/containment_scratch")
+add_executable(test_containment tests/recovery/test_containment.c)
+target_link_libraries(test_containment PRIVATE su_agent)
+target_compile_definitions(test_containment PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_containment)
+add_dependencies(test_containment recovery_worker)
+add_test(NAME containment COMMAND test_containment $<TARGET_FILE:recovery_worker>
+         "${CMAKE_BINARY_DIR}/containment_scratch"
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

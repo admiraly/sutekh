@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include "agent/su_proc.h"
@@ -5,14 +6,24 @@
 #include <errno.h>
 #include <stdint.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__linux__) && defined(__x86_64__)
+#  include <linux/audit.h>
+#  include <linux/filter.h>
+#  include <linux/seccomp.h>
+#  define SU_HAVE_SECCOMP_X64 1
+#endif
 
 #include "sutekh/status.h"
 
@@ -145,9 +156,242 @@ void su_proc_kill(SuProc *p) {
     p->alive = 0;
 }
 
+/* ---- containment (constitution C07) -----------------------------------------------------------
+ * The child applies its limits between fork and exec. Only async-signal-safe calls run there
+ * (setrlimit, prctl, signal, socket, unshare, write; no malloc, no stdio). It verifies what it
+ * enforced and writes one fixed-size record to a close-on-exec status pipe. The supervisor reads
+ * that record and gets EOF exactly when the child has exec'd (or exited without exec). */
+#define SU_PROC_WIRE_MAGIC 0x53554350u /* "SUCP" */
+
+typedef struct ContainWire {
+    uint32_t magic;
+    uint32_t net_mode;      /* SU_PROC_NET_* as verified in the child */
+    uint32_t seccomp_tried; /* 1 when the seccomp route was attempted */
+    int32_t seccomp_errno;  /* 0 when the filter is installed and verified */
+    uint32_t netns_tried;   /* 1 when unshare(CLONE_NEWNET) was attempted */
+    int32_t netns_errno;    /* 0 when the namespace was created */
+    uint64_t rl_as;         /* getrlimit read-back, soft limits (RLIM_INFINITY = UINT64_MAX) */
+    uint64_t rl_cpu;
+    uint64_t rl_fsize;
+    uint64_t rl_nofile;
+} ContainWire;
+
+static uint64_t rl_soft(int resource) {
+    struct rlimit rl;
+    if (getrlimit(resource, &rl) != 0) {
+        return SU_PROC_UNLIMITED - 1u; /* distinct from unlimited: the read-back failed */
+    }
+    return rl.rlim_cur == RLIM_INFINITY ? SU_PROC_UNLIMITED : (uint64_t)rl.rlim_cur;
+}
+
+#ifdef SU_HAVE_SECCOMP_X64
+/* Syscalls denied with EPERM: every call that creates, connects or accepts a socket. x86-64 ABI
+ * numbers: socket 41, connect 42, accept 43, bind 49, listen 50, socketpair 53, accept4 288. The
+ * filter kills the process on any other architecture and on x32 syscalls (nr >= 0x40000000),
+ * which could otherwise name the same calls under another number. */
+#define SU_DENIED_NR_COUNT 7u
+static const uint32_t g_denied_nr[SU_DENIED_NR_COUNT] = {41u, 42u, 43u, 49u, 50u, 53u, 288u};
+
+/* Builds the filter into prog (cap instructions). Returns its length, 0 when cap is too small.
+ * Layout: 0 load arch; 1 arch == x86-64 ? skip to 3 : 2; 2 kill; 3 load nr; 4 nr >= 0x40000000
+ * ? kill; 5..5+n-1 nr == denied ? errno; 5+n allow; 5+n+1 errno(EPERM); 5+n+2 kill. */
+static size_t build_socket_filter(struct sock_filter *prog, size_t cap) {
+    const size_t n = SU_DENIED_NR_COUNT;
+    const size_t allow_at = 5u + n;
+    const size_t errno_at = allow_at + 1u;
+    const size_t kill_at = errno_at + 1u;
+    size_t i = 0;
+    size_t k;
+    if (cap < kill_at + 1u) {
+        return 0;
+    }
+    prog[i++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, 4u); /* seccomp_data.arch */
+    prog[i++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1u, 0u);
+    prog[i++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS);
+    prog[i++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, 0u); /* seccomp_data.nr */
+    prog[i] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x40000000u,
+                                           (unsigned char)(kill_at - i - 1u), 0u);
+    i++;
+    for (k = 0; k < n; k++) {
+        prog[i] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, g_denied_nr[k],
+                                               (unsigned char)(errno_at - i - 1u), 0u);
+        i++;
+    }
+    prog[i++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
+    prog[i++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM);
+    prog[i++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS);
+    return i;
+}
+
+/* Installs the filter and verifies that socket(2) now fails with EPERM. Returns 0 when enforced,
+ * otherwise an errno (1 when the probe socket was created anyway, which means not enforced). */
+static int install_socket_filter(void) {
+    struct sock_filter prog[5u + SU_DENIED_NR_COUNT + 4u];
+    struct sock_fprog fp;
+    size_t len = build_socket_filter(prog, sizeof prog / sizeof prog[0]);
+    int fd;
+    if (len == 0u) {
+        return ENOSYS;
+    }
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1UL, 0UL, 0UL, 0UL) != 0) {
+        return errno;
+    }
+    fp.len = (unsigned short)len;
+    fp.filter = prog;
+    if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &fp) != 0) {
+        return errno;
+    }
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd >= 0) {
+        close(fd);
+        return 1;
+    }
+    return errno == EPERM ? 0 : errno;
+}
+#endif
+
+static void write_wire(int fd, const ContainWire *w) {
+    const uint8_t *p = (const uint8_t *)w;
+    size_t left = sizeof *w;
+    while (left > 0u) {
+        ssize_t r = write(fd, p, left);
+        if (r < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return;
+        }
+        p += r;
+        left -= (size_t)r;
+    }
+}
+
+/* Child only, between fork and exec. */
+static void child_contain(const SuProcLimits *limits, int status_fd) {
+    ContainWire w;
+    memset(&w, 0, sizeof w);
+    w.magic = SU_PROC_WIRE_MAGIC;
+    w.net_mode = SU_PROC_NET_NONE;
+    if (limits != NULL && limits->address_space_bytes > 0) {
+        struct rlimit rl;
+        rl.rlim_cur = (rlim_t)limits->address_space_bytes;
+        rl.rlim_max = (rlim_t)limits->address_space_bytes;
+        setrlimit(RLIMIT_AS, &rl);
+    }
+    if (limits != NULL && limits->cpu_seconds > 0) {
+        struct rlimit rl;
+        rl.rlim_cur = (rlim_t)limits->cpu_seconds;
+        rl.rlim_max = (rlim_t)limits->cpu_seconds + 1u;
+        setrlimit(RLIMIT_CPU, &rl);
+    }
+    if (limits != NULL && limits->file_bytes > 0) {
+        struct rlimit rl;
+        rl.rlim_cur = (rlim_t)limits->file_bytes;
+        rl.rlim_max = (rlim_t)limits->file_bytes;
+        setrlimit(RLIMIT_FSIZE, &rl);
+        /* Over-limit writes fail with EFBIG; SIGXFSZ (default: terminate) is ignored. The
+         * disposition survives exec, so the worker sees the error, not a signal. */
+        signal(SIGXFSZ, SIG_IGN);
+    }
+    if (limits != NULL && limits->nofile > 0) {
+        struct rlimit rl;
+        rl.rlim_cur = (rlim_t)limits->nofile;
+        rl.rlim_max = (rlim_t)limits->nofile;
+        setrlimit(RLIMIT_NOFILE, &rl);
+    }
+    {
+        struct rlimit core;
+        core.rlim_cur = 0;
+        core.rlim_max = 0;
+        setrlimit(RLIMIT_CORE, &core);
+    }
+    if (limits != NULL && limits->deny_network) {
+#ifdef SU_HAVE_SECCOMP_X64
+        int e;
+        w.seccomp_tried = 1u;
+        e = install_socket_filter();
+        w.seccomp_errno = e;
+        if (e == 0) {
+            w.net_mode = SU_PROC_NET_SECCOMP;
+        }
+#else
+        w.seccomp_tried = 0u;
+        w.seccomp_errno = ENOSYS;
+#endif
+        if (w.net_mode != SU_PROC_NET_SECCOMP) {
+            w.netns_tried = 1u;
+            if (unshare(CLONE_NEWNET) == 0) {
+                w.net_mode = SU_PROC_NET_NETNS;
+                w.netns_errno = 0;
+            } else {
+                w.netns_errno = errno;
+            }
+        }
+    }
+    w.rl_as = rl_soft(RLIMIT_AS);
+    w.rl_cpu = rl_soft(RLIMIT_CPU);
+    w.rl_fsize = rl_soft(RLIMIT_FSIZE);
+    w.rl_nofile = rl_soft(RLIMIT_NOFILE);
+    write_wire(status_fd, &w);
+}
+
+/* Parent: reads the child's status record up to EOF and closes the status pipe. */
+static void read_containment(SuProc *p, int status_fd, const SuProcLimits *limits) {
+    ContainWire w;
+    uint8_t *dst = (uint8_t *)&w;
+    size_t got = 0;
+    memset(&w, 0, sizeof w);
+    memset(&p->containment, 0, sizeof p->containment);
+    p->containment.net_mode = SU_PROC_NET_NONE;
+    /* The child always writes its record (even with no limits), so this side always drains the pipe.
+     * Closing it early would give the child SIGPIPE before exec. */
+    while (got < sizeof w) {
+        ssize_t r = read(status_fd, dst + got, sizeof w - got);
+        if (r < 0 && errno == EINTR) {
+            continue;
+        }
+        if (r <= 0) {
+            break;
+        }
+        got += (size_t)r;
+    }
+    close(status_fd);
+    if (limits == NULL) {
+        snprintf(p->containment.reason, sizeof p->containment.reason, "no containment requested");
+        return;
+    }
+    if (got != sizeof w || w.magic != SU_PROC_WIRE_MAGIC) {
+        snprintf(p->containment.reason, sizeof p->containment.reason,
+                 "child status not received: the child did not reach exec");
+        return;
+    }
+    p->containment.reported = 1;
+    p->containment.rlimit_as = w.rl_as;
+    p->containment.rlimit_cpu = w.rl_cpu;
+    p->containment.rlimit_fsize = w.rl_fsize;
+    p->containment.rlimit_nofile = w.rl_nofile;
+    p->containment.net_mode = w.net_mode;
+    if (!limits->deny_network) {
+        snprintf(p->containment.reason, sizeof p->containment.reason, "network denial not requested");
+    } else if (w.net_mode == SU_PROC_NET_SECCOMP) {
+        snprintf(p->containment.reason, sizeof p->containment.reason,
+                 "seccomp filter installed; socket creation denied with EPERM (verified in the child)");
+    } else if (w.net_mode == SU_PROC_NET_NETNS) {
+        snprintf(p->containment.reason, sizeof p->containment.reason,
+                 "seccomp not enforced (%s); network namespace created",
+                 w.seccomp_tried ? strerror(w.seccomp_errno) : "not x86-64 Linux");
+    } else {
+        snprintf(p->containment.reason, sizeof p->containment.reason,
+                 "no network denial enforced: seccomp %s; unshare(CLONE_NEWNET) %s",
+                 w.seccomp_tried ? strerror(w.seccomp_errno) : "not available on this platform",
+                 strerror(w.netns_errno));
+    }
+}
+
 uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *limits) {
     int pin[2] = {-1, -1};
     int pout[2] = {-1, -1};
+    int pst[2] = {-1, -1};
     size_t argc = 0;
     pid_t pid;
 
@@ -159,6 +403,7 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
     p->exit_code = 0;
     p->term_signal = 0;
     memset(&p->reader, 0, sizeof p->reader);
+    memset(&p->containment, 0, sizeof p->containment);
 
     if (argv == NULL || argv[0] == NULL || strchr(argv[0], '/') == NULL) {
         return SU_E_WORKER_FAILED;
@@ -180,12 +425,22 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
         close(pin[1]);
         return SU_E_WORKER_FAILED;
     }
-    /* Parent-side ends and every pipe end are close-on-exec, so a later child
-     * does not inherit another worker's pipes. dup2 in the child clears it. */
+    if (pipe(pst) != 0) {
+        close(pin[0]);
+        close(pin[1]);
+        close(pout[0]);
+        close(pout[1]);
+        return SU_E_WORKER_FAILED;
+    }
+    /* Parent-side ends and every pipe end are close-on-exec, so a later child does not inherit
+     * another worker's pipes. dup2 in the child clears it. The status pipe's write end stays open
+     * in the child until its exec, so the parent sees EOF exactly then. */
     fcntl(pin[0], F_SETFD, FD_CLOEXEC);
     fcntl(pin[1], F_SETFD, FD_CLOEXEC);
     fcntl(pout[0], F_SETFD, FD_CLOEXEC);
     fcntl(pout[1], F_SETFD, FD_CLOEXEC);
+    fcntl(pst[0], F_SETFD, FD_CLOEXEC);
+    fcntl(pst[1], F_SETFD, FD_CLOEXEC);
 
     char **child_env = scrubbed_env();
     if (child_env == NULL) {
@@ -193,6 +448,8 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
         close(pin[1]);
         close(pout[0]);
         close(pout[1]);
+        close(pst[0]);
+        close(pst[1]);
         return SU_E_RESOURCE_LIMIT;
     }
     pid = fork();
@@ -202,6 +459,8 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
         close(pin[1]);
         close(pout[0]);
         close(pout[1]);
+        close(pst[0]);
+        close(pst[1]);
         return SU_E_WORKER_FAILED;
     }
     if (pid == 0) {
@@ -222,18 +481,8 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
         if (pin[1] > 2) close(pin[1]);
         if (pout[0] > 2) close(pout[0]);
         if (pout[1] > 2) close(pout[1]);
-        if (limits != NULL && limits->address_space_bytes > 0) {
-            struct rlimit rl;
-            rl.rlim_cur = (rlim_t)limits->address_space_bytes;
-            rl.rlim_max = (rlim_t)limits->address_space_bytes;
-            setrlimit(RLIMIT_AS, &rl);
-        }
-        if (limits != NULL && limits->cpu_seconds > 0) {
-            struct rlimit rl;
-            rl.rlim_cur = (rlim_t)limits->cpu_seconds;
-            rl.rlim_max = (rlim_t)limits->cpu_seconds + 1u;
-            setrlimit(RLIMIT_CPU, &rl);
-        }
+        if (pst[0] > 2) close(pst[0]);
+        child_contain(limits, pst[1]);
         execve(argv[0], (char *const *)argv, child_env);
         _exit(127);
     }
@@ -241,6 +490,8 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
 
     close(pin[0]);
     close(pout[1]);
+    close(pst[1]);
+    read_containment(p, pst[0], limits);
     p->pid = pid;
     p->in_fd = pin[1];
     p->out_fd = pout[0];

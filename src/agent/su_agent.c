@@ -185,6 +185,7 @@ typedef struct AgentCandidate {
     uint64_t eval_total;
     uint64_t eval_passed;
     uint64_t worker_pid;      /* pid of the last worker that evaluated or installed it; 0 = none */
+    SuProcContainment eval_contain; /* containment of the last disposable evaluation worker */
     char install_state[16];   /* not_attempted | installed | rejected | quarantined */
     uint64_t install_txid;
     uint64_t install_tick;    /* effective tick of the last installation */
@@ -431,6 +432,58 @@ static uint64_t wid_num(const char *id) {
 
 /* ---------- worker process and round trips ---------- */
 
+/* Containment defaults (constitution C07, docs/AGENT_RPC.md section 12). 0 in SuAgentConfig selects them. */
+#define AGENT_DEFAULT_WORKER_FILE_BYTES (UINT64_C(256) * 1024u * 1024u)
+#define AGENT_DEFAULT_WORKER_NOFILE 1024u
+#define AGENT_DEFAULT_DISPOSABLE_NOFILE 64u
+
+/* Limits for a child of the supervisor. Every child gets the address-space bound, the file-size
+ * bound and network denial. The active worker has no CPU bound (it runs long simulations) and 1024
+ * open files; a disposable worker has a CPU bound (the caller sets it) and 64 open files. */
+static void child_limits(const SuAgent *a, SuProcLimits *lim, int disposable) {
+    memset(lim, 0, sizeof *lim);
+    lim->address_space_bytes = a->cfg.worker_address_space_bytes;
+    lim->file_bytes = a->cfg.worker_file_bytes == 0 ? AGENT_DEFAULT_WORKER_FILE_BYTES : a->cfg.worker_file_bytes;
+    if (disposable) {
+        lim->nofile = a->cfg.disposable_nofile == 0 ? AGENT_DEFAULT_DISPOSABLE_NOFILE : a->cfg.disposable_nofile;
+    } else {
+        lim->nofile = a->cfg.worker_nofile == 0 ? AGENT_DEFAULT_WORKER_NOFILE : a->cfg.worker_nofile;
+    }
+    lim->deny_network = 1;
+}
+
+static void put_limit(SuBuf *b, int reported, uint64_t v) {
+    if (!reported) {
+        su_buf_str(b, "null");
+    } else if (v == SU_PROC_UNLIMITED) {
+        su_buf_str(b, "\"unlimited\"");
+    } else {
+        su_buf_u64(b, v);
+    }
+}
+
+/* JSON object for a child's containment record: the enforced soft limits and the network mode. Limits
+ * the child did not report are null, never a guessed value. */
+static void put_containment(SuBuf *b, const SuProcContainment *c) {
+    static const char *const net_names[] = {"none", "seccomp", "netns"};
+    uint32_t mode = c->reported && c->net_mode <= SU_PROC_NET_NETNS ? c->net_mode : SU_PROC_NET_NONE;
+    su_buf_str(b, "{\"reported\":");
+    su_buf_str(b, c->reported ? "true" : "false");
+    su_buf_str(b, ",\"rlimit_as\":");
+    put_limit(b, c->reported, c->rlimit_as);
+    su_buf_str(b, ",\"rlimit_cpu\":");
+    put_limit(b, c->reported, c->rlimit_cpu);
+    su_buf_str(b, ",\"rlimit_fsize\":");
+    put_limit(b, c->reported, c->rlimit_fsize);
+    su_buf_str(b, ",\"rlimit_nofile\":");
+    put_limit(b, c->reported, c->rlimit_nofile);
+    su_buf_str(b, ",\"no_network\":\"");
+    su_buf_str(b, net_names[mode]);
+    su_buf_str(b, "\",\"reason\":");
+    su_buf_quoted(b, c->reason, strlen(c->reason));
+    su_buf_str(b, "}");
+}
+
 static uint32_t ensure_worker(SuAgent *a) {
     SuProcLimits lim;
     if (a->worker.alive) {
@@ -439,8 +492,7 @@ static uint32_t ensure_worker(SuAgent *a) {
     if (a->cfg.worker_argv == NULL) {
         return SU_E_WORKER_FAILED;
     }
-    memset(&lim, 0, sizeof lim);
-    lim.address_space_bytes = a->cfg.worker_address_space_bytes;
+    child_limits(a, &lim, 0);
     if (su_proc_spawn(&a->worker, a->cfg.worker_argv, &lim) != SU_OK) {
         return SU_E_WORKER_FAILED;
     }
@@ -2221,8 +2273,7 @@ static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBu
         su_buf_free(&req);
         return call_fail(c, SU_E_WORKER_FAILED, "no worker executable is configured");
     }
-    memset(&plim, 0, sizeof plim);
-    plim.address_space_bytes = a->cfg.worker_address_space_bytes;
+    child_limits(a, &plim, 1);
     plim.cpu_seconds = (uint32_t)(timeout / 1000u) + 2u;
     if (su_proc_spawn(&p, a->cfg.worker_argv, &plim) != SU_OK) {
         su_buf_free(&req);
@@ -2230,6 +2281,7 @@ static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBu
         snprintf(cd->eval_status, sizeof cd->eval_status, "worker_failed");
         return call_fail(c, SU_E_WORKER_FAILED, "evaluation worker could not be started");
     }
+    cd->eval_contain = p.containment;
     {
         const uint8_t *line = NULL;
         size_t len = 0;
@@ -2270,6 +2322,8 @@ static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBu
     su_buf_quoted(res, cd->id, strlen(cd->id));
     su_buf_str(res, ",\"evaluation_id\":");
     su_buf_quoted(res, eval_id, strlen(eval_id));
+    su_buf_str(res, ",\"containment\":");
+    put_containment(res, &cd->eval_contain);
     if (!ok_v->u.boolean) {
         const SuJsonValue *e = su_json_member(root, "error");
         const SuJsonValue *m = e != NULL && e->type == SU_JSON_OBJECT ? su_json_member(e, "message") : NULL;
@@ -2324,6 +2378,22 @@ static uint32_t h_candidate_evaluate(SuAgent *a, const SuJsonValue *params, SuBu
 /* Relays a worker response line unchanged. */
 static void relay(SuBuf *res, const SuBuf *resp, AgentCall *c) {
     su_buf_put(res, resp->data, resp->len);
+    c->relay = 1;
+}
+
+/* Relays a successful worker envelope {"protocol":..,"id":..,"ok":true,"result":{..}} with a
+ * "containment" member added to its result object. The result object is the envelope's last member,
+ * so the envelope ends in "}}"; those two closing braces are replaced. Other answers relay unchanged. */
+static void relay_with_containment(SuBuf *res, const SuBuf *resp, int ok, const SuProcContainment *ct,
+                                   AgentCall *c) {
+    if (!ok || resp->len < 3u || resp->data[resp->len - 1u] != '}' || resp->data[resp->len - 2u] != '}') {
+        relay(res, resp, c);
+        return;
+    }
+    su_buf_put(res, resp->data, resp->len - 2u);
+    su_buf_str(res, ",\"containment\":");
+    put_containment(res, ct);
+    su_buf_str(res, "}}");
     c->relay = 1;
 }
 
@@ -3515,6 +3585,7 @@ static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char
     SuBuf det;
     SuProc p;
     SuProcLimits plim;
+    SuProcContainment adm_contain; /* the disposable admission worker's containment */
     Reply r;
     char ident_sem[65];
     char ident_src[65];
@@ -3627,14 +3698,14 @@ static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char
         return call_fail(c, SU_E_RESOURCE_LIMIT, "specialization request too large");
     }
     su_buf_init(&det);
-    memset(&plim, 0, sizeof plim);
-    plim.address_space_bytes = a->cfg.worker_address_space_bytes;
+    child_limits(a, &plim, 1);
     plim.cpu_seconds = (uint32_t)(timeout / 1000u) + 2u;
     if (su_proc_spawn(&p, a->cfg.worker_argv, &plim) != SU_OK) {
         su_buf_free(&req);
         su_buf_free(&det);
         return call_fail(c, SU_E_WORKER_FAILED, "admission worker could not be started");
     }
+    adm_contain = p.containment;
     su_buf_init(&adm);
     {
         const uint8_t *line = NULL;
@@ -3768,6 +3839,7 @@ static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char
         su_buf_free(&resp);
         return worker_died(a, c, NULL);
     }
+    int inst_ok = 0;
     {
         Reply ir;
         char tier[16];
@@ -3777,9 +3849,10 @@ static uint32_t specialize_pipeline(SuAgent *a, const char *world_id, const char
         if (w != NULL && ir.ok && jstr(ir.result, "execution_tier", tier, sizeof tier)) {
             nat_note_install(w, system_id, backend, hash, tier);
         }
+        inst_ok = ir.ok;
         reply_free(&ir);
     }
-    relay(res, &resp, c);
+    relay_with_containment(res, &resp, inst_ok, &adm_contain, c);
     su_buf_free(&resp);
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }

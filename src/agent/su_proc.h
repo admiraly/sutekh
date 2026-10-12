@@ -15,7 +15,33 @@
 typedef struct SuProcLimits {
     uint64_t address_space_bytes; /* RLIMIT_AS; 0 leaves it unchanged */
     uint32_t cpu_seconds;         /* RLIMIT_CPU; 0 leaves it unchanged */
+    uint64_t file_bytes;          /* RLIMIT_FSIZE; 0 leaves it unchanged. SIGXFSZ is ignored, so an
+                                     oversized write fails with EFBIG instead of killing the child. */
+    uint32_t nofile;              /* RLIMIT_NOFILE; 0 leaves it unchanged */
+    int deny_network;             /* nonzero: socket creation and connection are denied in the child
+                                     (seccomp on x86-64 Linux, else a network namespace when privileged) */
 } SuProcLimits;
+
+/* Network denial actually enforced in the child, verified in the child before exec. */
+enum {
+    SU_PROC_NET_NONE = 0,
+    SU_PROC_NET_SECCOMP = 1, /* seccomp-bpf filter; socket(2) verified to fail with EPERM */
+    SU_PROC_NET_NETNS = 2    /* unshare(CLONE_NEWNET) succeeded in the child */
+};
+
+/* Containment facts the child reports before exec (read back with getrlimit after setrlimit).
+ * reported is 0 when the child never reached exec (no status was received) or no limits were given.
+ * Limit values are soft limits; SU_PROC_UNLIMITED means RLIM_INFINITY. */
+#define SU_PROC_UNLIMITED UINT64_MAX
+typedef struct SuProcContainment {
+    int reported;
+    uint64_t rlimit_as;
+    uint64_t rlimit_cpu;
+    uint64_t rlimit_fsize;
+    uint64_t rlimit_nofile;
+    uint32_t net_mode;       /* SU_PROC_NET_* */
+    char reason[200];        /* why net_mode is what it is, in plain words */
+} SuProcContainment;
 
 /* How the last su_proc_request that failed ended the child (set only on failure). */
 enum {
@@ -33,6 +59,7 @@ typedef struct SuProc {
     int end_kind;   /* SU_PROC_END_* */
     int exit_code;
     int term_signal;
+    SuProcContainment containment; /* set by su_proc_spawn */
     SuLineReader reader;
 } SuProc;
 
