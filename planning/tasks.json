@@ -760,7 +760,7 @@
       "acceptance": [
         "10.4 negatives; regenerate-equality; measured instruction counts recorded; 5.5 record fields and 3.2 after lists."
       ],
-      "status": "planned"
+      "status": "integrated"
     },
     {
       "id": "M3-04a",

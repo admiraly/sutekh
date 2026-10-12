@@ -59,7 +59,7 @@ def verdict(validator, instance: Any) -> bool:
     return not any(True for _ in validator.iter_errors(instance))
 
 
-NEW_VARIANT_DIRS = ("tests/schema", "capsules/rts/host")
+NEW_VARIANT_DIRS = ("tests/schema", "capsules/rts")
 
 
 def capsule_files() -> list[Path]:

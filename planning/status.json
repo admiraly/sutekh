@@ -122,9 +122,10 @@
       "M3-04a",
       "M3-01",
       "M3-08a",
-      "M3-02"
+      "M3-02",
+      "M3-03"
     ],
-    "note": "M3-03 and M3-04 in progress; audits running; M3-02 Q2 (formation_slot liveness refusal at spawn) to be settled in M3-05"
+    "note": "M3-04 in progress; open: engine verifier must accept system_rev/capabilities in IR capsules (conformance-fix task); numeric_profile u32_mod_v1"
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "m0_accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
