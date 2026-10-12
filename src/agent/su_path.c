@@ -121,7 +121,8 @@ uint32_t su_path_read_file(const char *path, size_t max_bytes, uint8_t **data, s
 
     *data = NULL;
     *len = 0;
-    fd = open(path, O_RDONLY | O_CLOEXEC);
+    /* O_NONBLOCK keeps open() from blocking on a FIFO before the S_ISREG check rejects it. */
+    fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
     if (fd < 0) {
         return SU_E_IO;
     }
