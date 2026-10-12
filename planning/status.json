@@ -34,7 +34,7 @@
     ]
   },
   "m1": {
-    "state": "implemented_and_independently_audited_pending_owner_acceptance",
+    "state": "closed_owner_accepted",
     "audited_revision": "4a6994e459d91261c1bad0257f69b8a66cc86b53",
     "audits": [
       "planning/audit/M1-audit.md",
@@ -49,7 +49,11 @@
       "Tick workers are opt-in (SUTEKH_TICK_WORKERS default 1).",
       "Multi-agent experiment: tokens, tool calls and integration latency are null; outcome classes are orchestrator judgement.",
       "Unrun audit mutants: INSTALL-REV, DIGEST-TICK-RERUN, QUAR-FIND."
-    ]
+    ],
+    "owner_acceptance": {
+      "date": "2026-10-12",
+      "statement": "accept all, keep going"
+    }
   },
   "m2": {
     "state": "closed_owner_accepted",
@@ -82,5 +86,39 @@
       ],
       "m1_note": "M1 owner acceptance was not given in this statement and remains pending"
     }
+  },
+  "m3": {
+    "state": "in_progress",
+    "owner_decisions": {
+      "date": "2026-10-12",
+      "statement": "accept all, keep going",
+      "accepted": [
+        "OD-1",
+        "OD-1b",
+        "OD-3",
+        "OD-3b",
+        "OD-3c",
+        "OD-9 (incl. formation_gen rule; numeric_profile u32_mod_v1 retained in host records; hp bound and flight/reload/damage domains as proposed)",
+        "OD-14",
+        "OD-16",
+        "OD-17",
+        "OD-19",
+        "OD-20",
+        "OD-21",
+        "write-only host operators store every row themselves (no working accessor)",
+        "1M-row timings observation only",
+        "TSan environmental failures documented",
+        "stray remote session archived"
+      ],
+      "not_decided": [
+        "OD-15 snapshot limit change: not proposed, recovery claim stays N<=65,536"
+      ]
+    },
+    "integrated": [
+      "M3-00",
+      "M3-03a",
+      "M3-04a"
+    ],
+    "note": "M3-01, M3-02, M3-08a in progress"
   }
 }
