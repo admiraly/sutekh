@@ -1,7 +1,7 @@
 {
   "report_format": "0.1",
   "kind": "workflow_observation",
-  "head": "2e8646652d89ad3022718503528ae491008aea1f",
+  "head": "8ff0035b0ae233174a8275f92db97b0f5a100dc6",
   "summary": {
     "usage_input": "present",
     "tokens": {
@@ -14,7 +14,7 @@
       "total": null,
       "median": null
     },
-    "tasks_total": 39,
+    "tasks_total": 40,
     "implementation_tasks": 33,
     "review_or_audit_tasks": 6,
     "impl_accepted_as_is": 23,
@@ -43,6 +43,7 @@
       "single orchestrator session, model tier fixed (Haiku-class workers), one repository; no controlled comparison and no baseline of other agent counts",
       "launch is a proxy (worktree creation); finish is last commit; integration latency is only derivable when the integrator made derivable from git history; it was not recorded at merge time, so it is null for all rows",
       "outcome classes are the orchestrator's judgement, recorded in agent_outcomes.json before this script ran",
+      "agents that made no commits leave no branch and are NOT counted here (at least one agent, a5fb35f59ee26ddd1 in agent_outcomes.json, produced no work), so rework is understated",
       "tokens and tool calls come only from planning/evidence/m1/agent_usage.json (harness values copied by the orchestrator); null where absent",
       "this is an observation and does not justify raising the agent count by itself; verification debt and rework rate are the gating metrics"
     ]
@@ -666,6 +667,22 @@
       "agent_wall_s": 1582,
       "commits": 4,
       "diffstat": "18 files changed, 2137 insertions(+), 36 deletions(-)",
+      "integrated_utc": null,
+      "integration_latency_s": null,
+      "tokens": null,
+      "tool_calls": null,
+      "harness_duration_ms": null
+    },
+    {
+      "agent": "aa917e9146fc85178",
+      "task": "UNCLASSIFIED",
+      "kind": "unknown",
+      "outcome": "unclassified",
+      "launch_proxy_utc": "2026-10-12T00:47:13+00:00",
+      "last_commit_utc": null,
+      "agent_wall_s": null,
+      "commits": 0,
+      "diffstat": null,
       "integrated_utc": null,
       "integration_latency_s": null,
       "tokens": null,

@@ -142,6 +142,7 @@ def main():
             "single orchestrator session, model tier fixed (Haiku-class workers), one repository; no controlled comparison and no baseline of other agent counts",
             "launch is a proxy (worktree creation); finish is last commit; integration latency is only derivable when the integrator made derivable from git history; it was not recorded at merge time, so it is null for all rows",
             "outcome classes are the orchestrator's judgement, recorded in agent_outcomes.json before this script ran",
+            "agents that made no commits leave no branch and are NOT counted here (at least one agent, a5fb35f59ee26ddd1 in agent_outcomes.json, produced no work), so rework is understated",
             "tokens and tool calls come only from planning/evidence/m1/agent_usage.json (harness values copied by the orchestrator); null where absent",
             "this is an observation and does not justify raising the agent count by itself; verification debt and rework rate are the gating metrics"
         ],
