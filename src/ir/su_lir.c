@@ -994,6 +994,17 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     cr = su_json_parse(capsule, capsule_len, &lim, &cdoc, &cerr);
     lr = su_json_parse(lir, lir_len, &lim, &ldoc, &lerr);
 
+    /* An allocation failure inside the parser leaves no document root; report it before
+     * any shape check dereferences that root. */
+    if (cr == SU_E_INTERNAL) {
+        rc = from_json(d, &cerr, "capsule: ");
+        goto done;
+    }
+    if (lr == SU_E_INTERNAL) {
+        rc = from_json(d, &lerr, "lir: ");
+        goto done;
+    }
+
     /* Stage 1: limits (capsule first). */
     if (cr == SU_E_RESOURCE_LIMIT) {
         rc = from_json(d, &cerr, "capsule: ");

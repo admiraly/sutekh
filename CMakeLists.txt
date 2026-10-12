@@ -195,6 +195,12 @@ sutekh_apply_warnings(test_snapshot_cp)
 add_test(NAME snapshot_cp COMMAND test_snapshot_cp $<TARGET_FILE:worker_stub> "${CMAKE_CURRENT_SOURCE_DIR}"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Regression: su_lir_verify reports parser allocation failures instead of dereferencing NULL.
+add_executable(test_lir_oom tests/ir/test_lir_oom.c)
+target_link_libraries(test_lir_oom PRIVATE su_ir)
+target_link_options(test_lir_oom PRIVATE -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc)
+add_test(NAME lir_oom COMMAND test_lir_oom WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
 # Regression: su_path_read_file must not block on a FIFO inside the project root.
 add_executable(test_path_fifo tests/agent/test_path_fifo.c src/agent/su_path.c)
 target_include_directories(test_path_fifo PRIVATE include src)
