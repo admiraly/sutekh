@@ -506,7 +506,7 @@
         "Actual Linux/Windows results distinguished from not-run environments.",
         "Queue/rework/accepted-task metrics before increasing agent count."
       ],
-      "status": "submitted"
+      "status": "integrated"
     },
     {
       "id": "M2-00",

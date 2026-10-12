@@ -3,10 +3,10 @@
   "project": "Sutekh",
   "spec_date": "2026-10-06",
   "engine_implemented": true,
-  "current_milestone": "M1",
+  "current_milestone": "M3",
   "accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "runtime_tests": "passed_dev_and_release (ctest 7/7; harness T00-T15 16/16)",
+  "runtime_tests": "head: default ctest 25/25, native ctest 36/36 (at M3-04a), harness default 23/0 (3 native-only unavailable), native 26/0; see per-milestone blocks",
   "engine_benchmarks": "run_provisional_shared_vm_not_qualification",
   "original_bfme_compatibility": "not_run",
   "remote_repository": "https://github.com/admiraly/sutekh",
@@ -16,7 +16,7 @@
   "next_ready_tasks": [
     "M1-00"
   ],
-  "note": "M0 closed by owner decision. M1 implemented and audited; owner acceptance pending. M2 work proceeds as a contingent draft (additive, disabled by default) per AGENT_PROTOCOL section 2.",
+  "note": "M0, M1, M2 closed by owner decision (see blocks). M3 in progress. accepted_source_revision/accepted_artifact_hash refer to the M0 closure only. Spec-conformance and regression audits under planning/audit/ list open deviations.",
   "repository_visibility": "public",
   "license_spdx_expression": "LicenseRef-PolyForm-Perimeter-1.0.1",
   "distribution_model": "source-available; not OSI Open Source",
@@ -53,7 +53,8 @@
     "owner_acceptance": {
       "date": "2026-10-12",
       "statement": "accept all, keep going"
-    }
+    },
+    "note": "Owner accepted 2026-10-12 ('accept all, keep going'); audits had said cannot-close with caveats recorded in the m1 block."
   },
   "m2": {
     "state": "closed_owner_accepted",
@@ -123,5 +124,8 @@
       "M3-02"
     ],
     "note": "M3-03 and M3-04 in progress; audits running; M3-02 Q2 (formation_slot liveness refusal at spawn) to be settled in M3-05"
-  }
+  },
+  "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
+  "m0_accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
+  "head_at_last_status_update": "eb4e07db59f936c611e04597ad2029a037a023f0"
 }
