@@ -16,6 +16,7 @@ The 1,000,000-row fixture (about 20 MB) is written under <repo>/build/bench_ir02
 Standard library only.
 """
 import argparse
+import collections
 import hashlib
 import json
 import os
@@ -23,6 +24,7 @@ import platform
 import statistics
 import subprocess
 import sys
+import threading
 import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -59,6 +61,16 @@ class Client:
         self.proc = subprocess.Popen([binary, "serve"], cwd=REPO, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.seq = 0
+        # Drain stderr continuously; an unread pipe would block the server once its buffer fills.
+        self._err = collections.deque(maxlen=60)
+        threading.Thread(target=self._drain_err, daemon=True).start()
+
+    def _drain_err(self):
+        for raw in iter(self.proc.stderr.readline, b""):
+            self._err.append(raw.decode("utf-8", "replace"))
+
+    def stderr_tail(self):
+        return "".join(self._err)[-800:]
 
     def request(self, method, params):
         self.seq += 1
@@ -68,7 +80,7 @@ class Client:
         self.proc.stdin.flush()
         raw = self.proc.stdout.readline()
         if not raw:
-            raise RuntimeError("serve closed stdout: " + self.proc.stderr.read().decode("utf-8", "replace")[-400:])
+            raise RuntimeError("serve closed stdout: " + self.stderr_tail())
         return json.loads(raw.decode("utf-8"))
 
     def ok(self, method, params):
