@@ -44,6 +44,11 @@ typedef struct SuLirField {
     char *name;      /* owned, NUL-terminated; not part of the semantic hash */
 } SuLirField;
 
+/* Capability bits of SuLirModule.capabilities (audit item 4, C04). A capability names an IR 0.2
+ * operation that needs a grant: "despawn_self" and "emit_event". */
+#define SU_LIR_CAP_DESPAWN_SELF 0x1u
+#define SU_LIR_CAP_EMIT_EVENT 0x2u
+
 typedef struct SuLirModule {
     uint32_t artifact_format;    /* SU_ARTIFACT_FORMAT_VERSION */
     char *system_id;             /* owned */
@@ -58,6 +63,10 @@ typedef struct SuLirModule {
     uint32_t max_struct_per_row; /* capsule limits.max_struct_per_row (0.2; 0 when absent) */
     uint32_t max_events_per_row; /* capsule limits.max_events_per_row (0.2; 0 when absent) */
     uint32_t uses_entity_ops;    /* 1 when any 0.2 op (slot/gen/tick/despawn_self/emit_event) appears */
+    uint32_t has_system_rev;     /* capsule "system_rev" present (recorded and shown in the manifest; not in the hashes) */
+    uint32_t system_rev;         /* the declared revision (>= 1) when has_system_rev */
+    uint32_t has_capabilities;   /* capsule "capabilities" present: the grants are enforced (else M0-M2 behaviour) */
+    uint32_t capabilities;       /* granted SU_LIR_CAP_* bits when has_capabilities */
     SuInsn *insns;               /* field operands are table indices */
     uint8_t source_hash[32];
     char source_hash_hex[65];

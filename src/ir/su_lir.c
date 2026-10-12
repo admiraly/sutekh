@@ -14,6 +14,9 @@
 #define SU_IR_VERSION_01 "0.1"
 #define SU_CAPSULE_FORMAT "0.1"
 #define SU_CAP_DECL_MAX 64u /* max_struct_per_row / max_events_per_row range 0..64 (M2 contract section 2) */
+/* Capability names accepted in a capsule's "capabilities" array (audit item 4). */
+#define SU_CAP_NAME_DESPAWN_SELF "despawn_self"
+#define SU_CAP_NAME_EMIT_EVENT "emit_event"
 
 typedef struct Str {
     const char *p;
@@ -112,6 +115,10 @@ typedef struct CapInfo {
     int declares_event_cap;      /* limits.max_events_per_row present */
     uint32_t max_struct_per_row;
     uint32_t max_events_per_row;
+    int has_system_rev;          /* top-level "system_rev" present */
+    uint32_t system_rev;
+    int has_capabilities;        /* top-level "capabilities" present */
+    uint32_t capabilities;       /* SU_LIR_CAP_* bits of the listed names */
 } CapInfo;
 
 typedef struct IrInfo {
@@ -321,12 +328,13 @@ static uint32_t stage1_limits(SuDiag *d, const SuJsonValue *cap_root, const SuJs
 /* ---------- stage 4: top-level and nested shape ---------- */
 
 static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
-    /* Required keys first (nine), then the optional IR 0.2 "ir_version". */
+    /* Required keys first (nine), then the optional keys: IR 0.2 "ir_version", and the M3-03a
+     * "capabilities" and "system_rev" (audit item 4). */
     static const KeySpec top[] = {
         {"capsule_format", K_STRING}, {"system_id", K_NAME}, {"source", K_NAME},
         {"schema", K_OBJECT}, {"numeric_profile", K_STRING}, {"fields", K_ARRAY},
         {"schedule", K_OBJECT}, {"limits", K_OBJECT}, {"tests", K_ARRAY},
-        {"ir_version", K_STRING}};
+        {"ir_version", K_STRING}, {"capabilities", K_ARRAY}, {"system_rev", K_U32_POS}};
     static const KeySpec schema_keys[] = {
         {"id", K_NAME}, {"version", K_U32_POS}, {"layout_generation", K_U32_POS}};
     static const KeySpec field_keys[] = {
@@ -357,6 +365,39 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
         }
     } else {
         ci->ir_version_minor = 1u;
+    }
+    v = su_json_member(root, "system_rev");
+    if (v != NULL) {
+        uint64_t sr = 0;
+        su_json_get_uint(v, &sr);
+        ci->has_system_rev = 1;
+        ci->system_rev = (uint32_t)sr;
+    }
+    v = su_json_member(root, "capabilities");
+    if (v != NULL) {
+        size_t k;
+        ci->has_capabilities = 1;
+        for (k = 0; k < v->u.array.count; k++) {
+            const SuJsonValue *it = v->u.array.items[k];
+            uint32_t bit;
+            if (it->type != SU_JSON_STRING) {
+                return set_diag(d, SU_E_TYPE, "/capabilities", "capabilities must be an array of strings");
+            }
+            if (str_is(jstr(it), SU_CAP_NAME_DESPAWN_SELF)) {
+                bit = SU_LIR_CAP_DESPAWN_SELF;
+            } else if (str_is(jstr(it), SU_CAP_NAME_EMIT_EVENT)) {
+                bit = SU_LIR_CAP_EMIT_EVENT;
+            } else {
+                return set_diag(d, SU_E_CAPABILITY_DENIED, "/capabilities",
+                                "unknown capability '%.*s'; known: despawn_self, emit_event",
+                                clampi(it->u.string.len), it->u.string.data);
+            }
+            if ((ci->capabilities & bit) != 0u) {
+                return set_diag(d, SU_E_TYPE, "/capabilities", "capability '%.*s' is listed twice",
+                                clampi(it->u.string.len), it->u.string.data);
+            }
+            ci->capabilities |= bit;
+        }
     }
     v = su_json_member(root, "capsule_format");
     if (!str_is(jstr(v), SU_CAPSULE_FORMAT)) {
@@ -1000,6 +1041,22 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
                           (unsigned)ne, (unsigned)ci.max_events_per_row);
             goto done;
         }
+        /* Grants (audit item 4, C04): an operation whose capability the capsule does not list is refused.
+         * Only a capsule that carries "capabilities" is checked; a capsule without the key keeps the
+         * M0-M2 behaviour (planning/audit/spec-conformance-audit.md item 4). Listed-but-unused grants are
+         * allowed. */
+        if (ci.has_capabilities) {
+            if (nd > 0u && (ci.capabilities & SU_LIR_CAP_DESPAWN_SELF) == 0u) {
+                rc = set_diag(d, SU_E_CAPABILITY_DENIED, "/instructions",
+                              "despawn_self requires capability \"despawn_self\", which the capsule does not list");
+                goto done;
+            }
+            if (ne > 0u && (ci.capabilities & SU_LIR_CAP_EMIT_EVENT) == 0u) {
+                rc = set_diag(d, SU_E_CAPABILITY_DENIED, "/instructions",
+                              "emit_event requires capability \"emit_event\", which the capsule does not list");
+                goto done;
+            }
+        }
     }
 
     /* Verified field table: capsule fields sorted ascending by id. */
@@ -1045,6 +1102,10 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     m.artifact_format = ii.ir_minor >= 2u ? SU_ARTIFACT_FORMAT_VERSION_0_2 : SU_ARTIFACT_FORMAT_VERSION;
     m.ir_version_minor = ii.ir_minor;
     m.max_struct_per_row = ci.max_struct_per_row;
+    m.has_system_rev = (uint32_t)ci.has_system_rev;
+    m.system_rev = ci.system_rev;
+    m.has_capabilities = (uint32_t)ci.has_capabilities;
+    m.capabilities = ci.capabilities;
     m.max_events_per_row = ci.max_events_per_row;
     m.uses_entity_ops = b.uses_ops;
     m.system_id = dup_str(ii.system);

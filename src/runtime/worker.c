@@ -488,6 +488,11 @@ static void write_manifest(SuBuf *res, const SuSchedule *s) {
         su_buf_u64(res, e->txid);
         su_buf_str(res, ",\"system_revision\":");
         su_buf_u64(res, e->system_rev);
+        if (e->mod != NULL && e->mod->has_system_rev != 0u) {
+            /* The capsule's declared system_rev (audit item 4). Absent when the capsule declares none. */
+            su_buf_str(res, ",\"declared_system_rev\":");
+            su_buf_u64(res, e->mod->system_rev);
+        }
         su_buf_str(res, ",\"installed_tick\":");
         su_buf_u64(res, e->installed_tick);
 #ifdef SU_HAVE_NATIVE

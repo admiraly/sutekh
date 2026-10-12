@@ -609,6 +609,21 @@ static void create_many(Session *s, const char *fixture, const char *a, const ch
     rpc(s, line, r);
 }
 
+/* Entry i of the semantic_manifest of a world.create response, or NULL. */
+static const SuJsonValue *manifest_item(const Resp *r, uint32_t i) {
+    const SuJsonValue *man = resp_result(r) != NULL ? su_json_member(resp_result(r), "semantic_manifest") : NULL;
+    if (man == NULL || man->type != SU_JSON_ARRAY || i >= man->u.array.count) {
+        return NULL;
+    }
+    return man->u.array.items[i];
+}
+
+/* The declared_system_rev of manifest entry i, or 0 when absent. */
+static uint64_t manifest_declared_rev(const Resp *r, uint32_t i) {
+    const SuJsonValue *item = manifest_item(r, i);
+    return item != NULL ? jnum(item, "declared_system_rev") : 0;
+}
+
 static uint64_t active_pid(Session *s) {
     Resp r;
     uint64_t pid = 0;
@@ -689,6 +704,13 @@ static void test_submit_and_evaluate(Session *s, Ids *id) {
     CHECK_CODE(r, SU_E_UNKNOWN_OPCODE);
     resp_free(&r);
 
+    /* An unknown capability is refused at submission (audit item 4). */
+    rpc(s,
+        "{\"protocol\":\"0.1\",\"id\":\"bc\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"sys_a_badcap.capsule.json\"}}",
+        &r);
+    CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
+    resp_free(&r);
+
     evaluate(s, id->cand_a, "sys_a.test.json", &r);
     CHECK_OK(r);
     jstr(resp_result(&r), "status", status, sizeof status);
@@ -751,14 +773,16 @@ static void test_world_create(Session *s, Ids *id) {
     char rev[64];
     char want[80];
 
-    /* Backward-compatible single capsule_path. */
-    create_one(s, "world4.json", "sys_a.capsule.json", &r);
+    /* Backward-compatible single capsule_path. The capsule declares system_rev 7 (audit item 4): the
+     * manifest shows it. A capsule without the key shows no declared_system_rev (world1 below). */
+    create_one(s, "world4.json", "sys_a_rev.capsule.json", &r);
     CHECK_OK(r);
     jstr(resp_result(&r), "world_id", id->world0, sizeof id->world0);
     jstr(resp_result(&r), "world_revision", rev, sizeof rev);
     snprintf(want, sizeof want, "%s.r1", id->world0);
     CHECK(strcmp(rev, want) == 0);
     CHECK(jnum(resp_result(&r), "tick") == 0);
+    CHECK(manifest_declared_rev(&r, 0) == 7);
     resp_free(&r);
     read_manifest(s, id->world0, &m);
     CHECK(m.n == 1);
@@ -773,6 +797,7 @@ static void test_world_create(Session *s, Ids *id) {
     jstr(resp_result(&r), "world_id", id->world1, sizeof id->world1);
     CHECK(jnum(resp_result(&r), "row_count") == 4);
     CHECK(jnum(resp_result(&r), "worker_pid") == g_pid);
+    CHECK(manifest_item(&r, 0) != NULL && su_json_member(manifest_item(&r, 0), "declared_system_rev") == NULL);
     resp_free(&r);
     read_manifest(s, id->world1, &m);
     CHECK(m.n == 2);
