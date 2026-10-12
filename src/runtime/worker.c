@@ -2953,6 +2953,7 @@ static uint32_t h_internal_test_containment(SuBuf *res) {
 static uint32_t h_internal_stats(WorkerState *s, SuBuf *res) {
     SuCheckpointStats cs;
     uint32_t worlds = 0;
+    uint32_t ent_runtimes = 0;
     uint32_t in_use = 0;
     uint32_t installed = 0;
     uint64_t records = 0;
@@ -2960,6 +2961,8 @@ static uint32_t h_internal_stats(WorkerState *s, SuBuf *res) {
 
     for (i = 0; i < WORKER_MAX_WORLDS; i++) {
         worlds += s->worlds[i].used ? 1u : 0u;
+        /* Live entity runtimes (M2-00): an entity runtime exists only in a used world with entities on. */
+        ent_runtimes += (s->worlds[i].used && su_ent_rt_log(s->worlds[i].sched.ent) != NULL) ? 1u : 0u;
     }
     for (i = 0; i < SU_CHECKPOINT_DEFAULT_RETAIN; i++) {
         records += s->ckpts[i].used ? 1u : 0u;
@@ -2976,6 +2979,8 @@ static uint32_t h_internal_stats(WorkerState *s, SuBuf *res) {
     su_buf_quoted(res, s->sandbox.reason, strlen(s->sandbox.reason));
     su_buf_str(res, "},\"worlds\":");
     su_buf_u64(res, worlds);
+    su_buf_str(res, ",\"entity_runtimes\":");
+    su_buf_u64(res, ent_runtimes);
     su_buf_str(res, ",\"checkpoints\":");
     su_buf_u64(res, cs.retained_count);
     su_buf_str(res, ",\"checkpoint_bytes\":");

@@ -72,6 +72,10 @@ typedef struct SuSchedTickOpts {
     uint64_t chunk_min_rows;   /* chunked execution only when rows >= this */
     SuJobsFault chunk_fault;   /* test seam, may be NULL */
     void *chunk_ctx;
+    /* Test seam (M2-00 audit blocker 1): nonzero forces the chunk completion order of every entity system
+     * in every tick to a seeded permutation (su_jobs_pool_run order). The merge must not depend on it. */
+    int seeded_completion;
+    uint64_t completion_seed;
 } SuSchedTickOpts;
 
 void su_sched_init(SuSchedule *s);

@@ -391,7 +391,7 @@ static uint32_t ent_sys_bind(EntSys *e) {
 
 /* Runs every chunk of one entity system into the queue. Returns SU_OK when all chunks succeeded.
  * On failure the lowest failing chunk's status is returned and nothing is committed. */
-static uint32_t ent_sys_run(EntSys *e, SuJobPool *pool, uint64_t chunks) {
+static uint32_t ent_sys_run(EntSys *e, SuJobPool *pool, uint64_t chunks, const uint32_t *order) {
     uint32_t st;
     uint64_t c;
 
@@ -400,7 +400,7 @@ static uint32_t ent_sys_run(EntSys *e, SuJobPool *pool, uint64_t chunks) {
         return st;
     }
     if (chunks > 0u) {
-        st = su_jobs_pool_run(pool, (uint32_t)chunks, ent_chunk, e, NULL, NULL);
+        st = su_jobs_pool_run(pool, (uint32_t)chunks, ent_chunk, e, order, NULL);
         if (st != SU_OK) {
             return st;
         }
@@ -454,6 +454,7 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
     SuJobPool *pool = NULL;
     EntSys *es = NULL;
     uint32_t *status = NULL;
+    uint32_t *perm = NULL; /* test seam: forced chunk completion order (opt->seeded_completion) */
     uint64_t rows;
     uint64_t chunks;
     uint64_t t;
@@ -502,7 +503,10 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
     }
     es = calloc(s->count > 0u ? s->count : 1u, sizeof *es);
     status = calloc(chunks > 0u ? (size_t)chunks : 1u, sizeof *status);
-    if (es == NULL || status == NULL) {
+    if (opt != NULL && opt->seeded_completion && chunks > 0u) {
+        perm = calloc((size_t)chunks, sizeof *perm);
+    }
+    if (es == NULL || status == NULL || (opt != NULL && opt->seeded_completion && chunks > 0u && perm == NULL)) {
         st = SU_E_RESOURCE_LIMIT;
         goto out;
     }
@@ -529,8 +533,15 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
                 break;
             }
             if (s->sys[i].mod->uses_entity_ops) {
+                const uint32_t *order = NULL;
                 es[i].tick_low = tick_low;
-                st = ent_sys_run(&es[i], pool, chunks);
+                if (perm != NULL) {
+                    /* A different seeded completion order for every (tick, system): the merge must not care. */
+                    su_jobs_seeded_permutation((uint32_t)chunks, opt->completion_seed + t * 1000003u + i * 7919u,
+                                               perm);
+                    order = perm;
+                }
+                st = ent_sys_run(&es[i], pool, chunks, order);
             } else {
                 st = su_sched_run_system(w, s, i, opt);
             }
@@ -574,6 +585,7 @@ out:
     }
     free(es);
     free(status);
+    free(perm);
     su_jobs_pool_destroy(pool);
     su_cmdq_destroy(q);
     return st;
