@@ -34,10 +34,11 @@ jobs:
         run: python tools/validate_pack.py --check-report
       - name: Run validator regression tests
         run: python -I tests/tools/test_validate_pack.py
-      - name: Run broker and BFME registry tests
+      - name: Run broker, BFME registry and bench client tests
         if: runner.os == 'Linux'
         run: |
           python -I tests/broker/test_broker.py
           python -I tests/bfme/test_registry.py
+          python -I tests/bench/test_ir02_stderr.py
       - name: Check repository licensing
         run: python tools/check_repository_license.py
