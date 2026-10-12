@@ -564,34 +564,6 @@
       "status": "integrated"
     },
     {
-      "id": "M3-00",
-      "milestone": "M3",
-      "goal": "Build synthetic RTS microcosm with mixed/congested workloads.",
-      "depends_on": [
-        "M2-01"
-      ],
-      "base_revision": null,
-      "write_scope": [
-        "profiles/rts/",
-        "capsules/rts/",
-        "bench/rts/"
-      ],
-      "read_scope": [
-        "AGENTS.md",
-        "ENGINE_CONSTITUTION.md",
-        "ARCHITECTURE.md",
-        "LIVE_IR_SPEC.md",
-        "docs/TEST_SPEC.md"
-      ],
-      "change_class": "gameplay",
-      "requires_native_validation": false,
-      "acceptance": [
-        "Movement/formation/target/projectile/damage/death reference tests.",
-        "End-to-end tick/stress/replay measurements; no BFME fidelity claim."
-      ],
-      "status": "planned"
-    },
-    {
       "id": "M4-00",
       "milestone": "M4",
       "goal": "Establish BFME variant/evidence registry and one behavior adapter slice.",
@@ -671,6 +643,346 @@
       "acceptance": [
         "Committed snapshot boundary, resource retirement and device capability tests.",
         "No synchronous broad asset cook/shader build on ordinary gameplay edit."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-00",
+      "milestone": "M3",
+      "goal": "Freeze the M3 RTS microcosm contract (r4); owner accepts or rejects OD-1 to OD-21.",
+      "depends_on": [
+        "M2-01"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md"
+      ],
+      "read_scope": [
+        "AGENTS.md",
+        "ENGINE_CONSTITUTION.md",
+        "planning/audit/M3-00-contract-r3-review.md"
+      ],
+      "change_class": "docs_tooling",
+      "requires_native_validation": false,
+      "acceptance": [
+        "Owner accepts or rejects each open OD in section 13 and the items in section 17."
+      ],
+      "status": "integrated"
+    },
+    {
+      "id": "M3-01",
+      "milestone": "M3",
+      "goal": "RTS schema, single normative Python scene generator, scene lock.",
+      "depends_on": [
+        "M3-00"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "profiles/rts/schema/",
+        "bench/rts/gen/",
+        "bench/rts/scenes.lock.json"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": false,
+      "acceptance": [
+        "Generator reproducible; digests stable; PRNG and field-order mutants change digests; remainder rule 7.3; anchor idle values 7.3."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-02",
+      "milestone": "M3",
+      "goal": "Independent Python reference model, IR evaluator and targeting oracle.",
+      "depends_on": [
+        "M3-00"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "bench/rts/ref/",
+        "tests/rts/ref/"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": false,
+      "acceptance": [
+        "10.1 known answers including the exact ring fixture; IR-vs-model differential; oracle budget (8); targeting metrics (4.2) at 1,024 queriers; model author does not read M3-04 sources."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-03a",
+      "milestone": "M3",
+      "goal": "Capsule schema edit (OD-16): system_rev, capabilities, host variant, rts_u32_v1 profile name, host limits values.",
+      "depends_on": [
+        "M3-00"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "schemas/capsule.schema.json"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md",
+        "schemas/capsule.schema.json"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": false,
+      "acceptance": [
+        "Existing IR capsules validate unchanged; IR and host variants validate; rts_u32_v1 accepted; max_rows above 1,000,000 refused; unknown top-level key refused; no other key changes."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-03",
+      "milestone": "M3",
+      "goal": "IR systems goal, combat, move and damage; IR authoring tool; IR capsule records.",
+      "depends_on": [
+        "M3-01",
+        "M3-02",
+        "M3-03a",
+        "M2-01"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "capsules/rts/ (IR records only)",
+        "bench/rts/gen_ir.py"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md",
+        "LIVE_IR_SPEC.md"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": false,
+      "acceptance": [
+        "10.4 negatives; regenerate-equality; measured instruction counts recorded; 5.5 record fields and 3.2 after lists."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-04a",
+      "milestone": "M3",
+      "goal": "Scheduler host-entry kind (OD-1b): dispatch, declared effects, restore, handler refusals, host capsule records, host registry.",
+      "depends_on": [
+        "M3-00",
+        "M3-03a"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/runtime/schedule.h",
+        "src/runtime/schedule.c",
+        "src/runtime/jobs/su_effects.h",
+        "src/runtime/jobs/su_effects.c",
+        "src/runtime/worker.c (functions listed in 14, M3-04a)",
+        "src/runtime/rts/host_decl.c",
+        "src/runtime/rts/host_decl.h",
+        "src/runtime/rts/host_registry.c",
+        "src/runtime/rts/host_registry.h",
+        "capsules/rts/host/",
+        "tests/scheduler/test_host_entry.c",
+        "tests/rts/host/"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md",
+        "src/runtime/reload.c"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": true,
+      "acceptance": [
+        "IR entries unchanged (T-HOST-01); T-HOST-02..13; targeted compile with and without SU_HAVE_NATIVE; existing scheduler, tick-worker, entity-tick and reload tests pass unchanged."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-04",
+      "milestone": "M3",
+      "goal": "Host operators rts.spatial and rts.scatter (spatial index, gather, scatter) and their production descriptors.",
+      "depends_on": [
+        "M3-01",
+        "M3-02",
+        "M3-04a"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "profiles/rts/native/",
+        "tests/rts/native/",
+        "src/runtime/rts/host_registry.c (two production entries only)"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md",
+        "capsules/rts/host/"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "10.1 SPATIAL, GATHER, SCATTER; ASan and UBSan; instrumented store-set check (4.4); fault seams (N9); descriptors equal the M3-04a host records (T-HOST-05)."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-05",
+      "milestone": "M3",
+      "goal": "world.set_fields and world.spawn_batch; spawn defaults and batch atomicity; admission prechecks; structural buffer caps (OD-20); replay record and replay; checkpoint recovery.",
+      "depends_on": [
+        "M3-03",
+        "M3-04",
+        "M3-04a"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/runtime/worker.c (handler functions only)",
+        "src/agent/su_agent.c (forwarding and recovery-log entries only)",
+        "src/world/entities/su_cmdq.c",
+        "src/world/entities/su_cmdq.h",
+        "src/runtime/entity_tick.c (su_ent_run_ticks caps only)",
+        "tests/rts/replay/",
+        "tests/entities/ (one new cmdq test file)",
+        "bench/rts/replay/",
+        "bench/rts/load/",
+        "docs/AGENT_RPC.md (with approval)"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md",
+        "docs/AGENT_RPC.md"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": true,
+      "acceptance": [
+        "T-RTS-LOAD-1 (a)-(g); T-RTS-CTRL-1; T-RTS-REPLAY-1..3; T-RTS-CAPS-1..3 (CAPS-3 confirmed at 699,051 before the patch); high-water and spool prechecks; config check (9.4); recovery-log entries; OD-3c exclusion recorded. Needs OD-3, OD-3b, OD-3c and OD-20 approval."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-06",
+      "milestone": "M3",
+      "goal": "End-to-end suite, golden scenes, edge fixtures, mutation campaign, targeting gates.",
+      "depends_on": [
+        "M3-02",
+        "M3-05"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "tests/rts/e2e/",
+        "tests/rts/fixtures/"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": true,
+      "acceptance": [
+        "C equals Python digests for committed scenes within oracle limits; 10.6 gates with the thin-margin rule; listed mutants detected or recorded as equivalent or unrun; M3-M27 detected by the per-tick model comparison (15)."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-07",
+      "milestone": "M3",
+      "goal": "Agent-authored behaviours experiment: B3, B2, B1 through the candidate pipeline.",
+      "depends_on": [
+        "M3-06"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "bench/rts/agent_experiments/"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md",
+        "AGENT_PROTOCOL.md"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": false,
+      "acceptance": [
+        "Records per section 11; hidden fixtures written by a different party; each fixture fails on the baseline and on the last accepted candidate; no direct edits to capsules/rts/ on the canonical branch."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-08a",
+      "milestone": "M3",
+      "goal": "Exact per-root memory accounting API (OD-10); optional for M3-08.",
+      "depends_on": [
+        "M3-00"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "src/world/ (accounting API only)"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Per-category bytes match the 9.3 table within stated tolerance; without it 9.3 figures stay estimates. Needs owner approval (OD-10)."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-08",
+      "milestone": "M3",
+      "goal": "Stress curves and memory methodology; spool comment correction.",
+      "depends_on": [
+        "M3-06"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "bench/rts/stress/",
+        "src/platform/sutekh_main.c (comment at lines 81-83 only)"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": false,
+      "acceptance": [
+        "Raw logs with hashes, hardware blocks, named limits and null reasons; no predeclared unit-count claims; recovery claim per 12; comment matches 9.3 (588,630 rows at default settings)."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-09",
+      "milestone": "M3",
+      "goal": "Independent review of any M3 performance optimization.",
+      "depends_on": [
+        "M3-08"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "planning/audit/"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md"
+      ],
+      "change_class": "gameplay",
+      "requires_native_validation": true,
+      "acceptance": [
+        "C10 evidence present; reviewer differs from author; digests unchanged."
+      ],
+      "status": "planned"
+    },
+    {
+      "id": "M3-10",
+      "milestone": "M3",
+      "goal": "Optional native lane for goal, combat and move.",
+      "depends_on": [
+        "M3-03",
+        "M3-06"
+      ],
+      "base_revision": null,
+      "write_scope": [
+        "backends/native/"
+      ],
+      "read_scope": [
+        "planning/contracts/M3_RTS_CONTRACT.md"
+      ],
+      "change_class": "native_core",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Differential against reference VM across row tails and dead rows; capability fallback. Requires M1 owner acceptance (OD-11)."
       ],
       "status": "planned"
     }

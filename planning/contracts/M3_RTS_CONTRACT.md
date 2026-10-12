@@ -1,20 +1,53 @@
-# M3-00 contract r3: RTS microcosm (synthetic hordes, formations, movement, targeting, projectiles, damage, spatial load)
+# M3-00 contract r4: RTS microcosm (synthetic hordes, formations, movement, targeting, projectiles, damage, spatial load)
 
-Status: DRAFT r3 for owner review. Design only; no product code is part of this contract. Builds on M2-00 (generational entities, IR 0.2, per-chunk struct/event buffers, snapshot 0.2) and M2-01 (migrations, snapshot 0.3, recovery log). Nothing here is accepted until the owner accepts this revision. Implementation of any task below is gated on M2 owner acceptance (`planning/status.json` shows M2 `implemented_audited_pending_owner_acceptance`).
+Status: DRAFT r4 for owner review (r4 resolves the r3 review, `planning/audit/M3-00-contract-r3-review.md`, items A1-A5, E, D1-D3, the lease items and the non-blocking items; see R.0). Design only; no product code is part of this contract. Builds on M2-00 (generational entities, IR 0.2, per-chunk struct/event buffers, snapshot 0.2) and M2-01 (migrations, snapshot 0.3, recovery log). Nothing here is accepted until the owner accepts this revision. Implementation of any task below is gated on M2 owner acceptance (`planning/status.json` shows M2 `implemented_audited_pending_owner_acceptance`).
 
 Scope: a synthetic, non-BFME RTS profile. No original game assets, no BFME behaviour claim (C18, C19; M4 owns compatibility). Headers `include/sutekh/abi.h`, `ir.h`, `entities.h`, `status.h` are NOT changed by this contract. `src/runtime/schedule.h` is changed only by the additive host-entry kind in OD-1b, and only after owner approval. `src/ir/su_lir.h` is NOT changed (the host declaration module is built with the existing public struct, section 3.1). Every shared-interface change listed in section 13 requires its owner's approval.
 
-Review input: `planning/audit/M3-00-contract-review.md` (r1, accept after fixes) and `planning/audit/M3-00-contract-rereview.md` (r2, accept after fixes; blocking items A-D). Section R lists how each item is resolved in r3.
+Review input: `planning/audit/M3-00-contract-review.md` (r1, accept after fixes), `planning/audit/M3-00-contract-rereview.md` (r2, accept after fixes; blocking items A-D) and `planning/audit/M3-00-contract-r3-review.md` (r3, accept after fixes; blocking A1-A5, E, D1-D3). Section R lists how each item is resolved: R.0 (r4), R.1 (r3), R.2 (r2).
+
+Owner-decision status: an OD marked "provisional (orchestrator, pending owner)" is resolved here by following the contract's recommendation. It is not an owner approval and does not authorise the shared-interface change it names.
 
 ---
 
 ## R. Changelog
 
-### R.1 r2 to r3 (this revision)
+### R.0 r3 to r4 (this revision)
+
+Input: `planning/audit/M3-00-contract-r3-review.md` (verdict: accept after fixes). Each item was checked against the tree at r4 time (line numbers below are from that check). Ids are stable; new ids are OD-20, OD-21 and T-HOST-11..13, M3-M32..M34.
+
+| id | finding | resolution in r4 | where |
+|---|---|---|---|
+| A1 | restore cannot rebuild a host entry | `rebuild_schedule` (`worker.c:2171`) gets a host branch chosen by a `kind` field in `CkptSys`; a host entry is rebuilt from the registry descriptor and its capsule, never from `paths.source` | 3.1 "Restore" |
+| A2 | other sites reload or lower entries | refusals written for `h_internal_specialize_install` (`worker.c:3705`, before `spec_prepare` at `:3770`), `h_internal_specialize_admit` (`:3445`, before `su_reload_load` at `:3510`), `h_candidate_evaluate` (`:1834`, before `:1868`) and `h_internal_world_migrate_prepare` (`:4223`, before the rebuild at `:4359`). `native_versions.c` is removed from every lease and from the refusal list | 3.1 "Refusals" and "Other reload sites", 14 |
+| A3 | host hashes undefined | `semantic_hash` and `capsule_hash` defined in 3.1 "Host identity"; `source_hash` of a host entry is the SHA-256 of the empty string | 3.1 "Host identity" |
+| A4 | staging and invocation scope | `run_host` copies working to staging for every row of every declared write field before `run`; invocation and outputs are restricted to the declared sets | 3.1 "Dispatch" |
+| A5 | leases too narrow | M3-04a, M3-04, M3-05, M3-08 leases rewritten in 14 (M3-04 host registry file, M3-05 `worker.c`, `su_cmdq.*`, `entity_tick.c`, M3-08 `sutekh_main.c`) | 14 |
+| E | cmdq sizing: `su_ent_run_ticks` passes `s->count` systems and one global per-row cap; ceiling is 699,050 and per-row memory is 844 B, not 400 | ceiling stated as the honest current limit (9.5); fix adopted (per-system caps, only entity-op systems get structural buffers), assigned to M3-05 with `su_cmdq.*` and `entity_tick.c` in its lease; memory table recomputed (9.3: 844 B now, 684 B with the fix) | 9.5, 9.3, 10.3 (T-RTS-CAPS-3), 13 OD-20 |
+| D1 | spawn defaults | required named fields at spawn: `reload`, `damage`, `flight` (omitted = `SU_E_TYPE`); `formation_slot` omitted = NONE (handler default); `formation_ox/oy` required when `formation_slot != NONE`; `target_slot`, `dmg_target`, `proj_target` omitted = NONE (handler default) | 2.2 "Spawn defaults" |
+| D2 | rules over the resulting row | `set_fields` rules are checked on the committed row with the payload applied | 2.2 "Resulting-row rules" |
+| D3 | batch atomicity | `spawn_batch` validates every row and prechecks free slots and high water before the first `su_world_spawn`; test T-RTS-LOAD-1(g) | 2.2, 10.3, 12 |
+| D4 | `hp` row | kind 2 is "0 only"; the 65,535 bound applies to kind 1 | 2.2 |
+| minor | `target_*` "0 or NONE" ambiguous | at spawn a named `target_slot`, `dmg_target`, `proj_target` must be NONE; idle semantics otherwise unchanged | 2.2 |
+| lease | M3-05 lacks `worker.c`; M3-04 lacks host registry; M3-08 lacks `sutekh_main.c`; replay recorder unassigned | fixed in 14; replay recorder and replayer assigned to `bench/rts/replay/` (M3-05) | 14 |
+| review sec. 8 (N-1..N-9) | N-1 spool N (588,630, see corrections), N-2 snapshot bound text, N-3 `world.create` refusal test, N-4 capsule host keys, N-5 R.1 wording, N-6 combat-before-move documentary, N-7 B1 edges, N-8 proof reference, N-9 CTRL test cases | see below | 9.3, 9.4, 9.5, 10.3, 3.2, 5.5, 12 |
+| review sec. 7 and 9 (N-j, N-n, M3-03 tool, OD-14) | OD-14 added to 17; tasks.json split written as Appendix A (not applied to `planning/tasks.json`); `gen_ir.py` stated as an IR authoring tool | 13, 14, 17, Appendix A |
+
+Corrections found while verifying (not in the review):
+- **Spool bound (N-1).** The review gives 588,631. Under the 12 formula `2 * (446 N + 90 * event_log_max) + 16384 <= 536,870,912` with `event_log_max` = 65,536 (`SU_CMDQ_DEFAULT_EVENT_LOG_MAX`), the largest N is **588,630** (588,631 gives 536,871,716, over the cap). r4 uses 588,630 everywhere. The r3 figure 588,650 was also wrong.
+- **N-5 target.** The effect derivation reads only LOAD and STORE, but the R.1 claim "derivation consumes `e->mod->fields[k].access`" was wrong; the union comes from `su_sched_finalize`. Corrected in R.1 below.
+- **Capsule schema (new, M3-03a).** `schemas/capsule.schema.json` pins `numeric_profile` to `u32_mod_v1` (const), requires `schedule.parallel` = `"serial"` (const), requires `schedule.before`, caps `limits.max_rows` at 1,000,000, and its `fields` items use `read`/`write` booleans. The RTS profile name `rts_u32_v1` and the host variant need M3-03a to change these (5.5). Not in the review.
+- **N-7 correction.** The review says B1's `damage` after `combat` "holds transitively through scatter". That is true. B1's `damage` after `goal` and after `move` is not transitive (no path from goal or move to damage in 3.2), so those two edges must be declared explicitly. Corrected in 3.2.
+- **SU_LIMIT_ROWS (non-blocking, now a decision).** `SU_LIMIT_ROWS` is a compile-time macro (`include/sutekh/ir.h:20`) and is the upper bound of `max_entities` (`worker.c:895`, `su_world.c:317`); the comment "runtime may configure it" is not how the code works. RTS capacity above 1,000,000 needs a header change (OD-21).
+- **Spawn defaults.** The schema default of every field is 0 (`su_world.c:~750` copies `fields[k].def`). D1 is implemented as handler-applied defaults in `h_world_spawn` before `su_world_spawn`, so the schema descriptor and `su_world_spawn` do not change.
+
+Renumbering: none. Owner-decision status: OD-1b, OD-3, OD-3b, OD-3c, OD-9 (kind-2 text and proposed bound), OD-14, OD-16, OD-17, OD-19, OD-20, OD-21 are resolved in r4 by the contract's recommendation and are marked provisional (orchestrator, pending owner) in 13.
+
+### R.1 r2 to r3 (r4 corrects the N-5 sentence below)
 
 Code facts used, checked against the tree at r3 time:
 - `src/runtime/schedule.h`: `SuSysEntry` holds `SuLirModule *mod` and `SuExecContext *ctx`; `su_sched_add` builds the VM context through `su_vm_context_create` (`schedule.c:114`). `su_vm_context_create` (`src/vm/su_vm.c:178`) rejects any field with `access == 0` (`su_vm.c:203`), so a host declaration cannot be given to it.
-- `src/runtime/jobs/su_effects.c`: `su_effects_derive` (`:39`) derives reads and writes from LOAD/STORE only; `su_effects_build` step 1 (`:254` area) calls `su_effects_check_declared` on every entry, which fails with `SU_E_SCHEMA_MISMATCH` when declared access differs from derived access. A module with no instructions therefore fails for any declared access. Derivation consumes `e->mod->fields[k].access` for the union.
+- `src/runtime/jobs/su_effects.c`: `su_effects_derive` (`:39`) derives reads and writes from LOAD/STORE only; `su_effects_build` step 1 (`:254` area) calls `su_effects_check_declared` on every entry, which fails with `SU_E_SCHEMA_MISMATCH` when declared access differs from derived access. A module with no instructions therefore fails for any declared access. (r4 correction, N-5: `su_effects_derive` does not consume `e->mod->fields[k].access`; the union of declared access comes from `su_sched_finalize`.)
 - `src/runtime/worker.c:514` (`read_schedule_facts`) reads `phase`, `after`, `before` from the **capsule file** of each system (`paths[i].capsule`), called from `check_system_effects` (`:594-660`). `in[i].declared_parallel = 1` for every system (`:638`), so every same-phase conflicting pair needs an ordering path. `worker.c:700-733` loads each system with `su_reload_load(capsule, source)`, which requires a `.lir.json`.
 - `schemas/capsule.schema.json`: top-level `additionalProperties: false`; keys present are `capsule_format, fields, ir_version, limits, numeric_profile, schedule, schema, source, system_id, tests`. `system_rev` and `capabilities` are absent.
 - `src/runtime/entity_tick.c:546` runs non-entity systems through `su_sched_run_system`, which reaches `run_one_system` (`schedule.c:246`). `entity_tick.c:483-515` creates per-chunk contexts only for systems with `uses_entity_ops`.
@@ -78,7 +111,8 @@ Resolutions F1-F9 and N1-N16 of the r1 review, as written in r2, stand except wh
 | D8 | **Numeric profile `rts_u32_v1`**: all fields u32; coordinates 0..32767; squared distances < 2^31; no division in IR; host operators use compare, add, sub, shifts and an exact integer square root. | No float (C08); no overflow in distance math by construction. |
 | D9 | **Six scheduled systems** under the existing `SU_SCHED_MAX_SYSTEMS` = 8: `rts.spatial` and `rts.scatter` are host entries (new kind, OD-1b); `rts.goal`, `rts.combat`, `rts.move` are IR 0.1; `rts.damage` is IR 0.2. | Schedule capacity unchanged. Only the entry kind is added, additively. |
 | D10 | **One normative scene generator**: Python `bench/rts/gen/` (M3-01). No C scene generator in M3. | Removes the two-generator contradiction (F8). The engine-loaded state is checked against the generator digest. |
-| D11 | **RTS world caps and the stall rule**: `max_struct_per_tick = max_events_per_tick = capacity`, requiring capacity <= 1,048,576. Control-plane records are excluded from `max_events_per_tick` (OD-3c). Under this configuration the tick merge cannot exceed the cap (proof in 9.4). | Deaths per tick are at most the alive rows at tick start (at most capacity), and control records never enter the tick-merge count. The earlier "no stall by construction" wording was wrong under OD-3c (audit B); this is the corrected rule. |
+| D11 | **RTS world caps and the stall rule**: `max_struct_per_tick = max_events_per_tick = capacity`. Capacity is at most `SU_LIMIT_ROWS` (1,000,000 by default; OD-21). The cmdq accepts up to 1,048,576 per tick only with the per-system caps of OD-20 (9.5). Control-plane records are excluded from `max_events_per_tick` (OD-3c). Under this configuration the tick merge cannot exceed the cap (proof in 9.4). | Deaths per tick are at most the alive rows at tick start (at most capacity), and control records never enter the tick-merge count. The earlier "no stall by construction" wording was wrong under OD-3c (audit B); this is the corrected rule. |
+| D12 | **Structural buffers only for entity-op systems** (r4, E): the cmdq sizes structural buffers per system from that system's own per-row cap, so systems without `uses_entity_ops` get none. | Without this, the RTS schedule's six systems each reserve a full structural buffer per row, which caps capacity at 699,050 (9.5). |
 
 ---
 
@@ -140,7 +174,7 @@ All fields are `u32`, stored as SoA columns, chunked by `SU_CHUNK_SLOTS` (1024).
 
 Layout arithmetic: 39 fields x 4 bytes = 156 bytes per row per root. Memory accounting (9.3) uses this table.
 
-Canonical state (M2-00 encoding v2) covers all 39 fields plus the entity table and event log. The schema descriptor hash (M2-01 section 6) covers the sorted `(id, type, name, default)` list. Field defaults are all 0 (M3 has no migration). Spawn requests name every field whose intended value is not 0; the scene generator writes `NONE` explicitly into `target_slot`, `dmg_target`, `proj_target` and `formation_slot` where NONE is intended (2.2 idle-value rule).
+Canonical state (M2-00 encoding v2) covers all 39 fields plus the entity table and event log. The schema descriptor hash (M2-01 section 6) covers the sorted `(id, type, name, default)` list. Field defaults in the schema are all 0 (M3 has no migration; `su_world.c` copies `fields[k].def` for unnamed fields). The control plane applies the spawn rules of 2.2 in the handler before calling `su_world_spawn`, so the descriptor and `su_world_spawn` are unchanged (r4, D1).
 
 ### 2.1 Numeric profile `rts_u32_v1`
 - Domain: all positions and orders in `[0, 32767]`. Violations are rejected by the control plane (`SU_E_TYPE`, path = field name; 2.2). Host operators treat out-of-domain as `SU_E_INTERNAL`.
@@ -156,24 +190,35 @@ Applies to `world.spawn`, `world.spawn_batch` and `world.set_fields`. Every viol
 |---|---|---|---|---|
 | `kind` | yes | no (immutable) | {1, 2} (0 never valid) | `SU_E_TYPE` |
 | `team` | yes | no (immutable) | {0, 1} | `SU_E_TYPE` |
-| `hp` | yes | no (written only by damage and spawn) | kind 1: 1..65535; kind 2: 0 (**proposed bound 65535, OD-9**) | `SU_E_TYPE` |
+| `hp` | yes | no (written only by damage and spawn) | kind 1: 1..65535 (**proposed bound, OD-9**); kind 2: 0 only | `SU_E_TYPE` |
 | `pos_x`, `pos_y` | yes | yes | 0..32767 | `SU_E_TYPE` |
 | `speed` | yes | yes | 0..1024 | `SU_E_TYPE` |
 | `range_sq` | yes | yes | 0 or 1..262144; kind 2 requires 0 | `SU_E_TYPE` |
-| `reload` | yes | yes | 1..1024, every row (anchors included, so N1 holds for all rows) | `SU_E_TYPE` |
-| `damage` | yes | yes | 1..65535, every row | `SU_E_TYPE` |
-| `flight` | yes | yes | 1..64, every row (`flight = 0` would leave `proj_active` set forever) | `SU_E_TYPE` |
+| `reload` | yes, required | yes | 1..1024, every row (anchors included, so N1 holds for all rows) | `SU_E_TYPE` |
+| `damage` | yes, required | yes | 1..65535, every row | `SU_E_TYPE` |
+| `flight` | yes, required | yes | 1..64, every row (`flight = 0` would leave `proj_active` set forever) | `SU_E_TYPE` |
 | `order_mode` | yes | yes | 0, 1, 2 (other values fall through to attack-move in the r2 formulas, so they are refused) | `SU_E_TYPE` |
 | `order_x`, `order_y` | yes | yes | 0..32767 (checked even when `order_mode = 0`) | `SU_E_TYPE` |
-| `formation_slot` | yes | yes | NONE, or 0..capacity-1 | `SU_E_TYPE` |
-| `formation_gen` | yes | yes | u32; must be 0 when `formation_slot` = NONE | `SU_E_TYPE` |
-| `formation_ox`, `formation_oy` | yes | yes | 0..32767 (offset + BIAS) | `SU_E_TYPE` |
-| `cooldown`, `goal_*`, `anchor_*`, `target_*`, `truncated`, `proj_*`, `dmg_*`, `incoming` (system-owned) | idle value only: 0, except `target_slot`, `dmg_target`, `proj_target` which accept 0 or NONE | **no** | not writable | `SU_E_TYPE` |
+| `formation_slot` | yes, omitted = NONE (D1) | yes | NONE, or 0..capacity-1 | `SU_E_TYPE` |
+| `formation_gen` | yes; required when `formation_slot` != NONE, omitted = 0 when NONE (D1) | yes | u32; must be 0 when `formation_slot` = NONE and nonzero otherwise (generations start at 1) | `SU_E_TYPE` |
+| `formation_ox`, `formation_oy` | yes, required when `formation_slot` != NONE (D1) | yes | 0..32767 (offset + BIAS) | `SU_E_TYPE` |
+| `cooldown`, `goal_*`, `anchor_*`, `target_*`, `truncated`, `proj_*`, `dmg_*`, `incoming` (system-owned) | idle value only: 0. `target_slot`, `dmg_target`, `proj_target` at spawn: NONE (a named value must be NONE; unnamed = NONE, D1) | **no** | not writable | `SU_E_TYPE` |
 
 Rules that depend on other fields:
 - **Writable set of `world.set_fields`** (exactly these 14 names): `pos_x, pos_y, speed, range_sq, reload, damage, flight, order_mode, order_x, order_y, formation_slot, formation_gen, formation_ox, formation_oy`. Each of these is written by control in the table of section 2. A name in the table but not in this list (`kind`, `team`, `hp`, every system-owned field) is `SU_E_TYPE`. A name that is not a field of the schema is `SU_E_SCHEMA_MISMATCH` (existing behaviour, `worker.c` "values names an unknown field").
 - `range_sq` on a kind-2 row must remain 0; `set_fields` reads `kind` from the committed row to check it. A kind-2 row with `hp != 0` is refused at spawn.
 - Duplicate entity in one `set_fields` call: `SU_E_INVALID_ARGUMENT` (10.3). Stale handle or dead entity: `SU_E_STALE_HANDLE`.
+
+**Spawn defaults (D1, r4).** Applied by the handler (`h_world_spawn` and the `spawn_batch` row handler in `worker.c`) to each row before `su_world_spawn`:
+- `reload`, `damage`, `flight` are required. An omitted one is `SU_E_TYPE` (path = field name), because their domains exclude 0 on every row.
+- `formation_slot` omitted = `NONE`. `formation_gen` is required when `formation_slot != NONE`; when the slot is `NONE` it is omitted = 0.
+- `formation_ox`, `formation_oy` are required when `formation_slot != NONE` (an omitted value would mean offset -16384).
+- `target_slot`, `dmg_target`, `proj_target` omitted = `NONE`. A named value must be `NONE` (`SU_E_TYPE`); 0 is a real slot and is not an idle value.
+- All other unnamed fields take the schema default 0, which is in their domain (or is a guarded idle value, 2.2).
+
+**Resulting-row rules (D2, r4).** `set_fields` applies the payload to the committed row (in a scratch copy), then checks the rules on that resulting row: `formation_gen = 0` when `formation_slot = NONE`, and `formation_gen != 0` when `formation_slot != NONE`; `range_sq = 0` when the committed `kind = 2`; `hp` is not changed. Spawn applies the same formation rule to the spawned row. The formation generation rule is new in r4 (it closes the "gen 0 never validates" case the review noted); it is a consistency rule under OD-9 and is recorded in 13. A call whose payload alone looks valid but whose resulting row breaks a rule is `SU_E_TYPE` for the whole call.
+
+**Batch atomicity (D3, r4).** `world.spawn_batch` (and `set_fields`) validates every row (domains, spawn rules above, duplicates) before any mutation. For `spawn_batch` the handler then prechecks, before the first `su_world_spawn`: `rows <= capacity - alive` (free slots, from `su_ents`) and the high-water precheck of 12 (`hw + rows`). Any failure returns with no state change, no record appended and no revision bump. With the prechecks passing, `su_world_spawn` cannot fail for capacity. Test T-RTS-LOAD-1(g).
 - The table is a set of profile constants. The bounds of `damage`, `flight`, `reload`, `speed`, `hp` and `order_mode` are `rts_u32_v1` profile constants (OD-9). Changing them is a profile change with a new digest.
 
 ## 3. Scheduler and phases
@@ -233,12 +278,35 @@ typedef struct SuHostOpDesc {
 **Effect path (`src/runtime/jobs/su_effects.{c,h}`):** `SuEffectInput` gains `uint32_t host_declared;` (appended at the end). In `su_effects_build` step 1, when `host_declared != 0`, the read and write sets of the entry are taken from `mod->fields[k].access` (bits READ and WRITE) and `su_effects_check_declared` is skipped; `su_effects_derive` is not called for that entry. For IR entries the code path is unchanged, so `su_effects_check_declared` still rejects a declared/derived mismatch. Steps 2 to 5 (edges, closure, conflicts, canonical order) are unchanged and apply to host entries.
 
 **Worker load (`src/runtime/worker.c`):**
-- The world's `capsules` manifest item for a host system is `{"capsule_path": "...", "host_operator": "rts.spatial"}` and has no `source_path`. The loader branch for items with `host_operator` calls `su_host_load(capsule_path, host_operator, &desc, &decl, msg)` (in `src/runtime/rts/host_decl.c`), then `su_sched_add_host`. The IR branch (`su_reload_load`) is unchanged.
-- `su_host_load` parses the capsule's `schedule` block and `host` object, checks that `system_id` equals the descriptor's, that `host.operator_version` and `host.constants_hash` equal the descriptor's (else refuse), and that `host.fields` equals the descriptor's field table (ids, names, types, access) exactly (else `SU_E_SCHEMA_MISMATCH`). Then it builds the declaration.
+- The world's `capsules` manifest item for a host system is `{"capsule_path": "...", "host_operator": "rts.spatial", "capsule_sha256": "..."}` and has no `source_path` and no `source_sha256`. The loader branch for items with `host_operator` looks up the descriptor by `system_id` in the host registry (`su_host_find`, `src/runtime/rts/host_registry.c`), calls `su_host_load(capsule_path, expected_capsule_sha256, &desc, &decl, msg)` (in `src/runtime/rts/host_decl.c`), then `su_sched_add_host`. The IR branch (`su_reload_load`) is unchanged.
+- `su_host_load` parses the capsule's `schedule` block and `host` object, checks that `system_id` equals the descriptor's, that `host.operator_version` and `host.constants_hash` equal the descriptor's (else refuse), and that `host.fields` equals the descriptor's field table (ids, names, types, access) exactly (else `SU_E_SCHEMA_MISMATCH`). It checks the file's SHA-256 against `expected_capsule_sha256` when given (as `su_reload_load` does). Then it builds the declaration. A capsule with no `schedule` block is refused, and a host capsule for an unregistered `system_id` is refused with `SU_E_SCHEMA_MISMATCH`.
+
+**Host identity (A3, r4).** Both hashes are defined, so every manifest, checkpoint and registry use in `worker.c` works unchanged:
+- `semantic_hash` = lowercase hex SHA-256 of the canonical JSON (sorted keys, no whitespace) of `{"schema_id", "system_id", "operator_version", "constants_hash", "fields":[{"access","id","name","type"}...ascending id]}` from the descriptor. It is computed by `su_sched_add_host` from the descriptor, so the same descriptor always gives the same value.
+- `capsule_hash` = lowercase hex SHA-256 of the host capsule file bytes, as returned by `su_host_load`.
+- `source_hash` = SHA-256 of the empty byte string (`e3b0c442...b855`). Host entries have no source; the constant keeps `su_reg_begin` (`worker.c:957`) and the checkpoint records non-empty and deterministic.
+- `su_sched_add_host` copies `semantic_hash` and `capsule_hash` into `SuSysEntry` (the existing `char[65]` fields), so `sched_manifest` (`worker.c:2020-2024`), the checkpoint record (`:2073-2075`), restore comparisons (`:2189`, `:2279`), the registry (`:957`, `:970`) and `system.list` output (`:478-483`) need no change for host entries.
+
+**Restore (A1, r4).** `CkptSys` gains `uint32_t kind` (`SU_SYS_KIND_IR` or `SU_SYS_KIND_HOST`), written by `ckpt_record` (`worker.c:2046`, fill at `:2073`). A checkpoint written before this change has no `kind` and is read as IR. `rebuild_schedule` (`worker.c:2171`) branches on `kind`:
+- IR: unchanged (`su_reload_load(paths.capsule, paths.source, ...)`, `:2193`).
+- HOST: `su_host_find(system_id)`, then `su_host_load(paths.capsule, c->capsule_hash, ...)` and `su_sched_add_host`. `paths.source` is not read. The restored `semantic_hash` is then compared with the manifest (`:2189`) as for IR entries.
+A host entry whose descriptor is no longer registered fails the restore with `SU_E_SCHEMA_MISMATCH`; no fallback.
+
+**Other reload sites (A2, r4).** Every path that reads a schedule entry's module or reloads from `paths` is listed with its treatment for host entries:
+- `load_schedule` (`worker.c:688`, the capsule loader at `:712`): host branch above (`host_operator` item).
+- `rebuild_schedule` (restore, `:2193`): host branch above.
+- `h_candidate_evaluate` (`:1834`, reload at `:1868`): if the request names a host `system_id` (registry lookup or a capsule with a `host` object), refuse with `SU_E_CAPABILITY_DENIED` before `su_reload_load`.
+- `h_internal_specialize_admit` (`:3445`, reload at `:3510`): same refusal, before `su_reload_load`, and before `spec_prepare` (`:3537`).
+- `h_internal_specialize_install` (`:3705`, `spec_prepare` at `:3770`): if `ww->sched.sys[j].kind == SU_SYS_KIND_HOST`, refuse with `SU_E_CAPABILITY_DENIED` before `spec_prepare`. `spec_prepare` (`:3295`) and `su_nv_prepare` (`native_versions.c:194`) are unchanged: they take only a module, and every native lowering path goes through them from these two handlers only.
+- `h_internal_world_migrate_prepare` (`:4223`, rebuild at `:4359`): a world with any host entry refuses `world.migrate` with `SU_E_CAPABILITY_DENIED`. M3 has no migration (section 2 preamble), so no host migration path is specified.
+- `h_internal_specialize_identity` (`:3347`) reads only the entry's hashes and needs no change.
+- `su_sched_check_candidate` (`schedule.c:200`) and `reload.c:162`: refusal in 3.1 "Refusals".
 - **How the worker reads phase and ordering:** `check_system_effects` calls `read_schedule_facts(paths[i].capsule, ...)` for every system, including host systems. Phase, `after` and `before` come from the capsule file's `schedule` block, not from the descriptor. Therefore every host capsule record must carry a `schedule` block (5.5). `check_system_effects` sets `in[i].host_declared = (sched->sys[i].kind == SU_SYS_KIND_HOST)`. The `after` target must be an earlier index (`worker.c:644-660`), so the capsule order is the schedule order (3.2).
 
 **Dispatch (`src/runtime/schedule.c`, `run_one_system`):** the first branch is `if (s->sys[i].kind == SU_SYS_KIND_HOST) return run_host(w, &s->sys[i]);`, before the native branch and before any chunked branch. `run_host`:
-1. `su_world_build_invocation(w, &inv)` and `su_world_build_outputs(w, &out)` (working reads, staging writes);
+1. Build the views (A4, r4):
+   - `su_world_build_invocation(w, &inv)` and `su_world_build_outputs(w, &out)`, then keep only the bindings whose field id is in the descriptor's declared set: READ bindings for `inv`, WRITE bindings for `out`. The host sees exactly its declared reads and writes (the filter lives in `run_host`; `su_world.h` is unchanged).
+   - For each declared write field, copy working to staging for **every row** (`memcpy(staging, working, rows * 4)`). `su_world_commit_staging` copies every row of each listed column (`su_world.c:556-600`, `memcpy(working, staging)`), so a non-target row must carry its working value into staging. Rows the operator writes overwrite that copy. Without this copy, `rts.scatter` (which writes only target rows) would overwrite `incoming` of every other row with stale staging data. This copy costs O(rows) per declared write field per host entry and no memory (staging exists, 9.3).
 2. `st = d->run(&inv, &out, d->host_ctx)`;
 3. on `SU_OK`, `su_world_commit_staging(w, write_ids, write_count)` with the descriptor's write ids in ascending order;
 4. return `st`. The caller already runs `su_world_zero_dead` after every system (`schedule.c:308`, `entity_tick.c:549`); that is the host zeroing step, so no zeroing code is added.
@@ -246,8 +314,10 @@ A host entry ignores `opt->workers` (serial, 3.2 and OD-14). `entity_tick.c:546`
 
 **Refusals:**
 - `su_sched_check_candidate` (`schedule.c:200`) looks up the entry named by `m->system_id`; if it is a host entry, it returns `SU_E_CAPABILITY_DENIED` with a message. `reload.c:162` calls this before any swap, so the old entry stays.
-- Native lowering: the entry point that lowers an entry to native (`native_versions.c`, the path that today calls `su_vm_context_create(a->mod, ...)` at line 477 and its caller) refuses a host entry with `SU_E_CAPABILITY_DENIED` before reading `mod`. Compiled under `SU_HAVE_NATIVE`.
-- Rejected alternatives (unchanged from r2): `mod == NULL` (37 dereference sites, 5 files); an IR no-op module with stores (fakes IR); running host operators outside the schedule (the tick loop would fork and the effect and manifest machinery would not apply).
+- Native lowering (r4, A2): `native_versions.c` is NOT changed (its signature takes only a module, and it cannot tell a host entry). Host entries are refused before any lowering, by the handler refusals in "Other reload sites" above (`h_internal_specialize_install`, `h_internal_specialize_admit`). This removes `native_versions.c` from M3-04a. T-HOST-07 tests the handler refusal.
+- Rejected alternatives (unchanged from r2): `mod == NULL` (37 dereference sites, 5 files); an IR no-op module with stores (fakes IR); running host operators outside the schedule (the tick loop would fork and the effect and manifest machinery would not apply); adding a `kind` parameter to `su_nv_prepare` (shared signature, not needed given the handler refusal).
+
+**Host registry (r4).** `src/runtime/rts/host_registry.{c,h}` is created by M3-04a. It holds a fixed table of `const SuHostOpDesc *` and exposes `su_host_find(const char *system_id)`. M3-04a registers only test-only descriptors through a test hook. M3-04 adds exactly its two production descriptors (`rts.spatial`, `rts.scatter`) to the table in `host_registry.c`. `worker.c` reads the registry and nothing else.
 
 **Production descriptors** for `rts.spatial` and `rts.scatter` are written in M3-04 (`profiles/rts/native/`), not in M3-04a. M3-04a ships the mechanism with test-only descriptors (T-HOST tests). M3-04a also writes the two host capsule records (`capsules/rts/host/`), whose declared sets are the 4.1 and 4.3 sets. M3-04 must produce descriptors equal to those records, which T-HOST-05 and the M3-04 load test check. No stub operator is registered in the product build.
 
@@ -275,7 +345,9 @@ Capsule `schedule.after` lists (capsule order 0 spatial, 1 goal, 2 combat, 3 mov
 - `rts.scatter`: `[rts.combat]`
 - `rts.damage`: `[rts.spatial, rts.scatter]`
 
-These are the complete edges for the r3 field sets. The B candidates of section 11 add edges (B1 needs `rts.damage` after `rts.goal` and `rts.move`, because B1 makes them read `hp`; B2 reads `cooldown`, already ordered after combat; B3 reads `anchor_valid`, already ordered after spatial). A candidate that adds an unordered conflict is refused by `su_effects_build` with `SU_E_SCHEMA_MISMATCH`, so the effect check is the gate.
+These are the complete edges for the r3 field sets. `rts.combat` before `rts.move` (in the `move` list) is documentary in the r3 field sets (r4, N-6): no conflict in those sets requires it, and it records that combat decides with tick-start position. It is kept so that candidate B2 (move reads `cooldown`, which combat writes) adds no edge; B2 is still checked by `su_effects_build` like any candidate.
+
+The B candidates of section 11 add edges. B1 makes `goal`, `combat` and `move` read `hp`, which `damage` writes. The required orders are `rts.damage` after `rts.goal` and after `rts.move` (explicit edges: there is no path from either to `damage` in the list above, r4 N-7), and `rts.damage` after `rts.combat` (already implied through `rts.scatter`: combat before scatter before damage). B2 reads `cooldown` (already ordered after combat). B3 reads `anchor_valid` (already ordered after spatial). A candidate that adds an unordered conflict is refused by `su_effects_build` with `SU_E_SCHEMA_MISMATCH`, so the effect check is the gate.
 
 ## 4. Host-side phase operators (`rts_ops_v1`)
 
@@ -404,15 +476,23 @@ Each capsule in `capsules/rts/` (IR variant) declares, using `schemas/capsule.sc
 - identity: `system_id`, `system_rev`, `ir_version` (0.1 or 0.2);
 - schema dependencies: `schema_id`, `schema_version`, `layout_generation`, field table digest;
 - field reads and writes exactly as in section 2 (per-system lists in 5.1 to 5.4);
-- schedule block: `phase` (`rts`) and `after` exactly as 3.2;
-- numeric profile `rts_u32_v1`;
+- schedule block: `phase` (`rts`), `after` exactly as 3.2, `before` (`[]`) and `parallel` (`"serial"`, the value the existing schema requires; `worker.c:638` still declares every system parallel, so the effect check of 3.2 is the gate, not this key);
+- numeric profile `rts_u32_v1` (the schema must accept it, see OD-16 below);
 - capabilities: none, except `rts.damage` (`despawn_self`, IR 0.2);
-- resource bounds: `max_instructions` 4096, `max_registers` 4096, and for `rts.damage` `max_struct_per_row = 1`, `max_events_per_row = 0`;
+- resource bounds: `max_instructions` 4096, `max_registers` 4096, `max_rows` 0 (no per-capsule bound: `su_jobs.c:373` then uses `SU_LIMIT_ROWS`; a nonzero value is capped at 1,000,000 by the schema), `allocation` `"forbidden"`, and for `rts.damage` `max_struct_per_row = 1`, `max_events_per_row = 0`;
 - test obligations: the T-RTS ids of section 10 that exercise the system.
 
-Each host capsule in `capsules/rts/host/` declares, under the host variant of the schema: identity (`system_id`, `system_rev`); the `schedule` block as above; `numeric_profile` `rts_u32_v1`; a `host` object with `operator` (`rts_ops_v1`), `operator_version`, `constants_hash` (sha256 hex), and `fields` (id, name, type, access) equal to the 4.1 or 4.3 declared sets; and test obligations. A host capsule has no `source`, `ir_version` or `fields` key.
+Each host capsule in `capsules/rts/host/` declares, under the host variant of the schema: identity (`system_id`, `system_rev`); `capsule_format` `"0.1"`; `schema` (`id` `"rts"`, `version` = the M3 schema version, `layout_generation` >= 1, as the world declares); the `schedule` block as above; `numeric_profile` `rts_u32_v1`; `limits` with `max_instructions` 1 (the schema minimum; no VM runs for a host entry), `max_rows` 0, `allocation` `"forbidden"`, `max_struct_per_row` 0, `max_events_per_row` 0; a `host` object with `operator` (`rts_ops_v1`), `operator_version`, `constants_hash` (sha256 hex), and `fields` (id, name, type, access) equal to the 4.1 or 4.3 declared sets; `tests` (at least one entry). A host capsule has no `source`, `ir_version` or top-level `fields` key.
 
-**OD-16 is invoked.** `schemas/capsule.schema.json` lacks `system_rev`, `capabilities` and the host variant. The single schema edit is task M3-03a (section 14), before any M3-03 or M3-04a record is validated. The edit adds those keys and makes `source`, `ir_version` and `fields` required only for the IR variant. Other keys are unchanged.
+**OD-16 is invoked.** The current `schemas/capsule.schema.json` (checked at r4) has these facts, each of which the M3-03a edit must address:
+- `capsule_format` const `"0.1"`, `additionalProperties: false` at top level, so `system_rev`, `capabilities` and `host` are refused today.
+- `numeric_profile` const `"u32_mod_v1"`: the RTS profile name `rts_u32_v1` is refused today. The edit makes it an enum of `u32_mod_v1` and `rts_u32_v1`.
+- `schedule.parallel` const `"serial"` and `schedule.before` required: the RTS records carry both (above).
+- `limits.max_rows` maximum 1,000,000: consistent with `SU_LIMIT_ROWS` (`include/sutekh/ir.h:20`); RTS records use 0 (above).
+- `fields` items use `read` and `write` booleans, while the 4.1 and 4.3 field tables use `access`. The IR variant keeps `read`/`write`; the host `host.fields` uses `access`, as defined here. No IR record changes.
+- `source`, `ir_version`, `fields` (top level) and `schema` are required by the IR variant only.
+
+The single schema edit is task M3-03a (section 14), before any M3-03 or M3-04a record is validated. Existing IR capsules must still validate unchanged (M3-03a acceptance). Other keys are unchanged.
 
 ## 6. IR expressiveness: why no new opcode is needed (D1)
 
@@ -510,38 +590,65 @@ Accounted categories, computed from capacity and configured limits, reported in 
 
 | category | formula | estimate (per row unless stated) |
 |---|---|---|
-| columns | `capacity * 39 * 4 * 2` (committed and working roots) plus staging `capacity * 4 * 10` (combat writes 10 fields) | 312 + 40 = 352 bytes per row |
-| entity table | `capacity * 12` (generation, alive, external id); exact layout from M2-00 | 12 bytes per row |
+| columns | `capacity * 39 * 4 * 2` (committed and working roots) plus staging `capacity * 4 * 25` (the 25 fields with WRITE access in the world's union: 3, 4, 5, 9, 19, 20, 21-30, 31-39; `su_world.c:447-461` allocates staging for each WRITE field) | 312 + 100 = 412 bytes per row (r3 said 352: staging counted 10 fields) |
+| entity table | `capacity * 12` (generation, alive, external id); exact layout from M2-00 | 12 bytes per row (not verified; M3-08a) |
 | spatial grid | `262144 * 4` counts + `262145 * 4` starts + `N_idx * 4` items | 2 MiB fixed + 4 bytes per indexed row |
-| structural and event buffers | `min(chunk_size * per_row, per_tick)` per (system, chunk), admitted at create (su_cmdq.h) | 32 bytes per row, unmeasured estimate, for `rts.damage` only |
+| structural buffers | per (system, chunk): `min(chunk_size * cap_s, per_tick_s)`, admitted at create by `su_cmdq_create`. `cap_s` is the system's own per-row cap with OD-20; without OD-20 it is the global maximum over all systems (`su_ent_run_ticks`, `entity_tick.c:469-494`) | with OD-20: 32 bytes per row (only `rts.damage` has a structural cap). Without OD-20: 6 systems x 32 = **192 bytes per row** |
+| cmdq scratch | `m_cmd`, `t_cmd`, `rec` (32, 32, 40 bytes) and `m_evt`, `t_evt`, `fin` (40 bytes each), each sized to its per-tick cap (= capacity), not to the used rows (`su_cmdq.c:188-193`) | 224 bytes per row, with or without OD-20 |
 | event log | `event_log_max * 40` | 40 bytes per retained event (not per row) |
-| checkpoint spool | `(checkpoint_retain + 1) * (446 * hw + 90 * retained_events + 16384)` reserved at admission | 446 per row and 90 per event: contract worst case, unmeasured (M3-08) |
+| checkpoint spool | `(checkpoint_retain + 1) * (446 * hw + 90 * event_log_max) + 16384` reserved at admission (12) | 446 per row and 90 per event: contract worst case, unmeasured (M3-08) |
 
-**Per-row total, excluding the event log and the spool:** 352 + 12 + 4 + 32 = **400 bytes per row**, plus 2 MiB fixed. (r2 said "about 440"; that figure was the agent-internal spool bound and is not part of this total.)
+**Per-row total, excluding the event log and the spool (r4, corrected):**
 
-**Spool note (audit N-b, F5):** `checkpoint_retain` = 1 for the RTS profile (the agent default is 4, `su_agent.c:57`). The create path holds the new checkpoint while the old one is retained, so the reservation is `(retain + 1)` times the bound. The RTS precheck (12) uses 446 per row and 90 per event, not the agent's internal 440 (`su_agent.c:978-984`), because 440 is below the contract worst case. With the 512 MiB binary spool, the precheck binds at about 588,000 rows (worst case, unmeasured): `2 * (446 N + 90 * 65,536) <= 536,870,912` gives `N <= 588,650`. The row guard (838,860) binds later. The 65,536-row recovery claim (12) fits the spool comfortably.
+| case | columns | staging (in columns row) | entity table | grid | structural | scratch | total |
+|---|---|---|---|---|---|---|---|
+| current code (no OD-20) | 312 | 100 | 12 | 4 | 192 | 224 | **844 bytes per row** |
+| with OD-20 (fix) | 312 | 100 | 12 | 4 | 32 | 224 | **684 bytes per row** |
+
+plus 2 MiB fixed. r3 stated 400 bytes per row; that figure undercounted staging, the structural buffers and the scratch arrays. (r2 said "about 440"; that figure was the agent-internal spool bound and is not part of this total.) The entity table and grid figures are not verified. Figures are estimates until M3-08a.
+
+**Spool note (audit N-b, F5, N-1 r4):** `checkpoint_retain` = 1 for the RTS profile (the agent default is 4, `su_agent.c:57`). The create path holds the new checkpoint while the old one is retained, so the reservation is `(retain + 1)` times the bound. The RTS precheck (12) uses 446 per row and 90 per event, not the agent's internal 440 (`su_agent.c:978-984`), because 440 is below the contract worst case. The per-event term uses `event_log_max` (the bound on retained events), not the retained count at the time of admission, so the precheck is conservative. With the 512 MiB binary spool (`sutekh_main.c:83`), the precheck binds at **588,630 rows** (worst case, unmeasured): the largest N with `2 * (446 N + 90 * 65,536) + 16,384 <= 536,870,912` is 588,630 (588,631 gives 536,871,716). The row guard (838,860) binds later. The 65,536-row recovery claim (12) fits the spool comfortably.
+
+**Agent-internal snapshot bound (N-2, r4).** `su_agent.c:978-984` computes `snapshot_bound` as `(fields + 1) * 11` per row plus fixed overhead `16384 + fields * 512 + MAX_SYSTEMS * 512`. The "440 bytes per row" (`(39 + 1) * 11`) is the per-row part only. The RTS precheck uses 446 per row (the contract worst case), not this bound, so the fixed overhead is outside the 9.3 figures.
 
 Cross-check: process `VmHWM` (from `/proc/self/status`) sampled at the end of each run and the allocator-level count where available. Any category that cannot be measured is `null` with a reason (C10). Exact per-root accounting is OD-10 (M3-08a). Until it lands, the harness reports the analytic figures and marks them as estimates.
 
 ### 9.4 Stall rule for RTS worlds (B, r3; replaces the r2 "no stall by construction" claim)
 
-Definitions. The tick merge (`su_cmdq_commit`, `su_cmdq.c:641-644`) refuses when `n_events + n_cmds > max_events_per_tick`, where `n_cmds` is the number of structural requests of the tick and `n_events` the number of system-emitted events of the tick. Control-plane records are not in this count: `world.spawn` and `world.spawn_batch` append their `SU_EVENT_SPAWNED` records to the event log at the boundary (`worker.c:1072-1079`), and `world.despawn` appends its record there too. They never pass through the cmdq buffers.
+Definitions. The tick merge (`su_cmdq_commit`, `su_cmdq.c:641-644`) refuses when `n_events + n_cmds > max_events_per_tick`, where `n_cmds` is the number of structural requests of the tick and `n_events` the number of system-emitted events of the tick. Control-plane records are not in this count: `world.spawn` and `world.spawn_batch` append their `SU_EVENT_SPAWNED` records to the event log when the command is applied (`worker.c:1072-1079`), and `world.despawn` appends its record there too. A control command is applied in the idle phase, between ticks (r4 correction of "at the boundary": `su_world_spawn` requires `SU_WORLD_PHASE_IDLE`, `su_world.c:737`, so no spawn runs inside a tick). Control records never pass through the cmdq buffers.
 
 Rule (OD-3c, r3). Control-plane records are excluded from `max_events_per_tick`. This is the existing code path, and the replay header records it (`caps.control_events_counted = false`).
 
 Claim. For an RTS world with `max_struct_per_tick = max_events_per_tick = capacity` and the schedule of section 3 (the only structural producer is `rts.damage` with `max_struct_per_row = 1`; no system emits events, `max_events_per_row = 0`):
 - `n_events = 0` for every tick;
-- `n_cmds` is at most the number of alive rows at tick start, because each alive row produces at most one `despawn_self` per tick and dead rows produce none (dead rows are zeroed, 9.4 proof step 2);
+- `n_cmds` is at most the number of alive rows at tick start, because each alive row produces at most one `despawn_self` per tick and dead rows produce none (proof step 2 below);
 - alive rows at tick start are at most `capacity`, so `n_cmds <= capacity = max_events_per_tick`.
-Therefore the merge check never refuses in an RTS world, whatever the control-plane history. A spawn at the boundary adds rows that are alive at tick start, and it is counted in the alive bound, not in a second counter.
+Therefore the merge check never refuses in an RTS world, whatever the control-plane history. A spawn applied between ticks adds rows that are alive at tick start, and it is counted in the alive bound, not in a second counter.
 
-Proof step 2 (dead rows produce no requests): `rts.damage` runs only on alive rows (VM alive mask, section 1). A row that dies in the tick emits its one request in that tick; it cannot emit again in a later tick because it is dead then.
+Proof step 2 (dead rows produce no requests): the VM skips dead rows (`su_vm.c:541`, alive view from `su_world_alive_view`, `entity_tick.c:233`; section 1). A row that dies in the tick emits its one request in that tick; it cannot emit again in a later tick because it is dead then.
+
+The OD-20 structural buffer fix (9.5) changes buffer sizes only, not the requests or the merge count, so the proof is unchanged by it.
 
 Consequence for the r2 F6 example (capacity 16, spawn 16, all die next tick): the 16 spawn records are control records and are not counted; the next tick has `n_cmds = 16 <= 16` and completes. Test T-RTS-CAPS-2.
 
 Alternative not chosen (for the owner's record): count control records in the window and bound admission with `alive_after + pending_control_records_after <= capacity`. That keeps the same invariant but halves the spawnable count per window (16 spawns into an empty 16-slot world become impossible, since 16 + 16 > 16). Rejected because it cuts scene load capacity for no safety gain under the proof above.
 
 Config check: M3-05 refuses `world.create` for an RTS profile whose `max_struct_per_tick` or `max_events_per_tick` is below capacity (M3-M28). Any configuration that breaks the claim (other producers, `max_struct_per_row > 1`, events from a system) is outside this claim and uses the general per-tick refusal with `SU_E_RESOURCE_LIMIT` (M2 rule).
+
+### 9.5 Structural buffer sizing and the capacity ceiling (E, r4; OD-20)
+
+**Current code.** `su_ent_run_ticks` (`src/runtime/entity_tick.c:469-494`) computes the per-row caps as the maximum over systems with `uses_entity_ops`, but calls `su_cmdq_create(s->count, rows, SU_CHUNK_SLOTS, per_s, per_e, ...)` with `s->count` = every scheduled system and one global per-row cap. `su_cmdq_create` (`su_cmdq.c:~150-180`) gives every (system, chunk) buffer `min(chunk_size * per_s, per_tick_s)` entries. For the RTS schedule (six systems, `per_s` = 1 from `rts.damage`) the structural buffers total `6 * capacity` entries of 32 bytes. Above `SU_CMDQ_MAX_ENTRIES` (4,194,304, `su_cmdq.h:54`) the create refuses with `SU_E_RESOURCE_LIMIT` (`su_cmdq.c:178`), and it does so on every `su_ent_run_ticks` call, before any row runs.
+
+**Honest ceiling without the fix:** capacity <= **699,050** for the six-system RTS schedule (6 x 699,050 = 4,194,300; 699,051 fails). The stop rule records a failure above that as `tick_cap` (12), not as a memory limit. Earlier text in this contract (capacity up to 1,048,576 at D11, 9.4, risk 1, the 12 sweep) assumed the fix.
+
+**Fix (OD-20, provisional (orchestrator, pending owner); recommendation adopted).** Only systems with `uses_entity_ops` get structural buffers.
+- New `su_cmdq_create_ex(nsystems, nslots, chunk_slots, const uint32_t *row_struct_cap, const uint32_t *row_event_cap, per_tick_s, per_tick_e, &q)`: per-system per-row caps (arrays of length `nsystems`). `su_cmdq_create` keeps its signature and calls `su_cmdq_create_ex` with the global value in every slot, so existing callers and tests are unchanged.
+- `su_ent_run_ticks` fills the arrays: `m->max_struct_per_row` and `m->max_events_per_row` for `uses_entity_ops` systems, 0 for all others. A zero-cap buffer has zero entries; commit, append and sort paths must accept it (M3-05 checks this).
+- Result: structural buffers = (number of entity-op systems) x capacity x 32 bytes. For RTS that is 1 x capacity: capacity up to 1,048,576 fits `SU_CMDQ_MAX_ENTRIES`.
+- The per-tick scratch arrays are unchanged: they are sized to the per-tick caps (= capacity), so they are 224 bytes per row whatever the used rows (9.3).
+- Files: `src/world/entities/su_cmdq.{c,h}` (shared, M2-00b; owner approval, OD-20) and `src/runtime/entity_tick.c`. Both are in the M3-05 lease (14).
+
+**Acceptance (T-RTS-CAPS-3, M3-05).** (1) Before the patch, the current code is run at capacity 699,051 with six systems (one entity-op): `su_ent_run_ticks` returns `SU_E_RESOURCE_LIMIT` (confirms E on the current tree). (2) After the patch, the same schedule at capacity 699,051 and at 1,048,576 completes one tick with `SU_OK`. (3) A zero-cap buffer appends and commits with no entries. (4) A cap mismatch (per-system array shorter than `nsystems`) is `SU_E_INVALID_ARGUMENT`. Mutant M3-M33 (global cap restored) must fail (1) at 699,051 after the patch. These tests run at the cmdq and entity-tick level. World capacity is still bounded by `SU_LIMIT_ROWS` (OD-21), so 1,000,001..1,048,576 is a cmdq capability until OD-21 is decided.
 
 ## 10. Tests and acceptance
 
@@ -561,19 +668,24 @@ A minimal set: two units at distance exactly `range_sq`; one unit at x=0 and one
 - `T-RTS-SCENE-1`: generator run twice gives identical bytes and digests; digest changes when any single PRNG constant or one field value changes (mutation).
 - `T-RTS-SCENE-2`: for each committed scene up to the cap of 12 (838,860 high-water and the spool precheck), the engine-loaded state, read back through a snapshot and hashed with the 7.2 encoding, equals the lock digest.
 - `T-RTS-LOAD-1` (C, F4; r3 definitions):
-  - **"Maximum row bytes"** (the byte bound used for every size claim): every row names the 39 fields and `external_id`, every value is a u32 written with 10 decimal digits (4294967295), compact JSON with no whitespace. Measured by the generator as 925 bytes per row (`{"values":{...39 pairs...},"external_id":4294967295}` plus one separator). For 1,024 rows the array is 948,225 bytes.
+  - **"Maximum row bytes"** (the byte bound used for every size claim): every row names the 39 fields and `external_id`, every value is a u32 written with 10 decimal digits (4294967295), compact JSON with no whitespace. **Computed** (not measured: no generator exists until M3-01) as 925 bytes per row without the separator (`{"values":{...39 pairs...},"external_id":4294967295}`). For the array of 1,024 rows, including the 1,023 separators and the two brackets, the size is **948,225 bytes** (925 x 1,024 + 1,023 + 2).
   - (a) **Accepted near-maximum request:** 1,024 domain-valid rows, each with the longest domain-valid value per field (positions 32767, speed 1024, range_sq 262144, reload 1024, damage 65535, flight 64, `formation_gen` 4294967295, `external_id` 4294967295, idle system fields 0 or NONE), request line at most 1,048,576 bytes. Expected: `SU_OK`, 1,024 rows, one revision bump, one recovery entry, 1,024 `SU_EVENT_SPAWNED` records (dropped beyond `event_log_max`).
   - (b) **Byte refusal:** the same request padded with spaces to 1,048,577 bytes is refused with `SU_E_RESOURCE_LIMIT` by the request-size check (`su_proto.c`, before row parsing), no state change.
   - (c) **Boundary:** a request line of exactly 1,048,576 bytes passes the size check (its refusal, if any, is a domain code, never `SU_E_RESOURCE_LIMIT` from size).
   - (d) **Bound check:** 1,024 rows in the maximum-row-bytes form are at most 948,225 bytes (plus envelope, under 100 KB), so no valid 1,024-row call can hit (b) without padding.
   - (e) **Scale:** a 1,000,000-row load is 977 calls; each call is 1,024 rows except the last; the event count matches the M2 spawn rule (one `SU_EVENT_SPAWNED` per row, with `dropped` for rows beyond `event_log_max`).
   - (f) **High-water precheck (N-c):** a spawn batch that would push `hw` above 838,860 is refused with `SU_E_RESOURCE_LIMIT` with no state change; capture at 838,860 rows succeeds (M3-M31).
+  - (g) **Batch atomicity (D3, r4):** a `spawn_batch` whose last row would exceed free capacity (`rows > capacity - alive`) is refused with `SU_E_RESOURCE_LIMIT` before any row is committed: no slot is taken, no record is appended, the revision is unchanged (the first 1,023 rows of that batch are not left behind). A second batch with a domain-invalid value in its last row is refused with `SU_E_TYPE` in the same way.
 - `T-RTS-CTRL-1` (D, N11): `set_fields` with 1,024 entities, each with the 14 writable fields at maximum domain values and a 20-digit handle (at most 354 bytes per entity, 362,496 bytes per call), is accepted and gives one revision bump; a stale handle among the entities refuses the whole call with `SU_E_STALE_HANDLE`; a duplicate entity refuses with `SU_E_INVALID_ARGUMENT`; writes to `kind`, `team`, `hp` or any system-owned field refuse with `SU_E_TYPE`; an unknown field name refuses with `SU_E_SCHEMA_MISMATCH`; each domain of 2.2 has a refused value at its boundary + 1 (and 0 where 0 is outside): `flight = 0` and `flight = 65` refuse with `SU_E_TYPE` in `spawn`, `spawn_batch` and `set_fields`; `reload = 0`; `damage = 0`; `order_mode = 3`; `formation_gen != 0` with `formation_slot = NONE`; `kind = 1` with `hp = 0` refuses with `SU_E_TYPE` at spawn; `kind = 2` with `hp != 0` or `range_sq != 0` refuses; a stale `expected_world_revision` refuses with `SU_E_STALE_REVISION` (M3-M19).
+  - **Spawn defaults (D1, r4):** a spawn omitting `reload`, `damage` or `flight` refuses with `SU_E_TYPE`; a spawn omitting `formation_slot` takes NONE and is accepted; a spawn with `formation_slot` = 3 and omitted `formation_ox` refuses with `SU_E_TYPE`; a spawn omitting `target_slot` reads back NONE; a spawn naming `target_slot = 0` refuses with `SU_E_TYPE` (0 is a slot, not idle).
+  - **Resulting-row rules (D2, r4):** `set_fields {formation_gen: 5}` on a row whose committed `formation_slot` is NONE and which does not name `formation_slot` refuses with `SU_E_TYPE`; `set_fields {range_sq: 100}` on a row whose committed `kind` is 2 refuses with `SU_E_TYPE`, even though the payload alone names no `kind`.
+  - **Formation generation (D2, r4):** `set_fields {formation_slot: 3}` on a row whose committed slot is NONE, with no `formation_gen` in the payload, refuses with `SU_E_TYPE` (the resulting row would carry generation 0 with a real slot, a permanently invalid anchor). The same call with `formation_gen: 1` is accepted.
 - `T-RTS-REPLAY-1`: record then replay gives identical digest records; replay with tick workers 1 and 2 identical.
 - `T-RTS-REPLAY-2`: a single flipped command byte, or a dropped `world.set_fields`, reports the first divergent tick; a changed `operator_manifest_hash` fails closed; `caps.control_events_counted = true` on an RTS world fails closed.
 - `T-RTS-REPLAY-3` (N9): kill the worker mid-run, recover from checkpoint plus log in a replacement worker, continue, and compare digests with an uninterrupted run; recovery replays at most `checkpoint_every` = 32 ticks. Fault seams inside `rts.spatial` and `rts.scatter` return `SU_E_INTERNAL`, and each is recovered the same way (AGENTS.md: in-process native faults require checkpoint recovery, not pointer rollback).
 - `T-RTS-CHURN-1`: spawn and despawn churn of at least 100,000 operations on a 16k scene with reference model comparison (inherits M2 churn test on RTS fields).
-- `T-RTS-CAPS-1` (B, F6): with an explicitly smaller configured `max_struct_per_tick`, deaths in one tick above it abort the tick with `SU_E_RESOURCE_LIMIT`, state unchanged (M2 rule), and the replay records the configured cap. With the RTS setting (`= capacity`), a tick where every alive unit dies completes.
+- `T-RTS-CAPS-1` (B, F6): with an explicitly smaller configured `max_struct_per_tick`, deaths in one tick above it abort the tick with `SU_E_RESOURCE_LIMIT`, state unchanged (M2 rule), and the replay records the configured cap. With the RTS setting (`= capacity`), a tick where every alive unit dies completes. **N-3 (r4):** in addition, `world.create` with an RTS profile whose `max_struct_per_tick` or `max_events_per_tick` is below its capacity is refused at creation (the M3-M28 config check of 9.4), with no run needed to exceed the cap.
+- `T-RTS-CAPS-3` (E, r4): structural buffer sizing and the capacity ceiling of 9.5 (cmdq and entity-tick level; not a world-level test).
 - `T-RTS-CAPS-2` (B, r3): spawn to capacity, then kill every row in the next tick, must complete. Setup: an empty RTS world of capacity 16 with `max_struct = max_events = 16`; `spawn_batch` of 16 rows (accepted; 16 control records appended to the event log, not counted); one tick in which all 16 units die (`n_cmds = 16`, `n_events = 0`). Expected: the tick commits, 16 `SU_EVENT_DESPAWNED` records, `dropped` correct if `event_log_max` is small. Repeat with `event_log_max` = 1 and with `SUTEKH_TICK_WORKERS` = 2. Also: spawn 16, kill 8, spawn 8, kill 16 across two ticks completes.
 
 ### 10.4 Verifier and IR negatives (M3-03)
@@ -594,10 +706,14 @@ Run in a targeted build of the runtime; the existing scheduler, worker and entit
 - **T-HOST-04** Declared effects are used: an entry with `host_declared = 1` that declares a write to field F, and an IR entry in the same phase that writes F with no ordering edge, makes `su_effects_build` return `SU_E_SCHEMA_MISMATCH`; with the edge, `SU_OK`. An IR entry with `host_declared = 0` and a declared/derived mismatch is still refused (`su_effects_check_declared` unchanged). Mutant M3-M29 (host effects derived as empty) must fail this test.
 - **T-HOST-05** Load checks: a host capsule whose `host.fields` differs from the descriptor (extra write, missing read, wrong access), whose `constants_hash` or `operator_version` differs, or whose `system_id` differs, is refused at world load with `SU_E_SCHEMA_MISMATCH` (or `SU_E_INVALID_ARGUMENT` for the id); the world is not created. A capsule without a `schedule` block is refused. The M3-04 production descriptors must equal the M3-04a capsule records (checked in M3-04).
 - **T-HOST-06** Candidate refusal: a candidate module whose `system_id` names a host entry is refused by `su_sched_check_candidate` and by the reload path with `SU_E_CAPABILITY_DENIED`; the old entry is unchanged and still runs.
-- **T-HOST-07** Native refusal: a native lowering request for a host entry returns `SU_E_CAPABILITY_DENIED` before `mod` is read (built under `SU_HAVE_NATIVE`; the existing `tests/native/qualification/test_native_chunked.c` build is the targeted compile).
+- **T-HOST-07** Native refusal (r4, A2): `internal.specialize.install` and `internal.specialize.admit` naming a host entry return `SU_E_CAPABILITY_DENIED` before `spec_prepare` and before any reload (built under `SU_HAVE_NATIVE`; the existing `tests/native/qualification/test_native_chunked.c` build is the targeted compile). `native_versions.c` is unchanged, so the test covers the handler refusal, not a lowering guard.
 - **T-HOST-08** No VM context: a host entry has `ctx == NULL` and `mod->insn_count == 0`; `su_sched_entry_destroy` frees the declaration with no double free (ASan build).
 - **T-HOST-09** Entity-op schedule: a schedule containing an IR 0.2 entry (`uses_entity_ops`) and a host entry runs both through `su_ent_run_ticks`; the host entry runs through `su_sched_run_system` and gets no per-chunk entity context.
 - **T-HOST-10** Workers: the T-HOST-02 schedule gives identical digests with `workers` 1 and 2 (the host entry is serial).
+- **T-HOST-11** Restore (A1, r4): a world with a host entry is checkpointed, the worker is killed, and a replacement restores it. `rebuild_schedule` rebuilds the host entry from the registry and `paths.capsule` with `paths.source` unused; the restored `semantic_hash` and `capsule_hash` equal the manifest (`:2189`, `:2279`); the run continues with digests equal to an uninterrupted run. A checkpoint whose host system is unregistered fails with `SU_E_SCHEMA_MISMATCH`. (T-RTS-REPLAY-3 is the world-level version.)
+- **T-HOST-12** Other reload sites (A2, r4): with a host entry installed, each of `internal.specialize.install` (for the host `system_id`), `internal.specialize.admit` and `candidate.evaluate` naming the host `system_id`, and `world.migrate` (any host entry present) returns `SU_E_CAPABILITY_DENIED` before any reload or `spec_prepare`, with no state change and the old entry still running.
+- **T-HOST-13** Views and staging (A4, r4): (a) a host `run` writing only target rows of a declared field leaves every other row's committed value unchanged across one commit (a non-target row whose working value is nonzero keeps it); (b) a host `run` that reads a field outside its declared read set receives no binding for it (filtering in `run_host`); (c) a host `run` that writes a field outside its declared write set receives no output binding for it. Mutant M3-M32 (no working-to-staging copy before `run`) must fail (a).
+- **T-HOST-05 additions (r4):** a host capsule without `parallel`, or with a `schema` whose `layout_generation` differs from the world's, or with `source` present, is refused at load; a host capsule with `limits.max_rows` nonzero is refused by the schema (M3-03a).
 
 ---
 
@@ -621,11 +737,12 @@ Evidence record per task (JSON, stored in `bench/rts/agent_experiments/records/`
 - Harness: `bench/rts/stress/`. Sweep scene sizes over a geometric series of powers of two starting at 1,024 (sweep points are a methodology choice, not a unit-count claim). For each size, run `T` ticks (default 120) of `mixed.battle.v1` and of `congested.blob.v1`.
 - **Admission prechecks (M3-05, r3):** before admitting a `world.spawn` or `world.spawn_batch`, the handler computes `hw_after` conservatively as `hw + rows` (`su_ents_high_water`, `su_ents.c:249`) and refuses with `SU_E_RESOURCE_LIMIT`, no state change, if either:
   - `hw_after > 838,860` (the snapshot row guard, so periodic capture is never refused by it; audit N-c), or
-  - `(checkpoint_retain + 1) * (446 * hw_after + 90 * event_log_max) + 16384 > spool_bytes_max` (spool, 9.3).
+  - `(checkpoint_retain + 1) * (446 * hw_after + 90 * event_log_max) + 16384 > spool_bytes_max` (spool, 9.3; at default settings this binds at 588,630 rows, before the row guard).
+  The precheck of a batch with `rows` rows is evaluated before the first `su_world_spawn` (D3, 2.2), and `hw_after` uses `hw + rows` because `alive` and `hw` cannot decrease during an admission.
   A capture refused by the row guard after this precheck is an invariant break and is reported as `SU_E_INTERNAL` (a finding, not a limit).
 - Stop rule per curve: stop at the first failing limit, which is recorded by name:
-  - `capacity` (`SU_LIMIT_ROWS`, default 1,000,000; RTS capacity must also be <= 1,048,576, F6);
-  - `tick_cap` (`SU_E_RESOURCE_LIMIT` from `max_struct_per_tick` or `max_events_per_tick`; by 9.4 this should never fire for RTS worlds, so any occurrence is a finding and a bug report, not a memory limit);
+  - `capacity` (`SU_LIMIT_ROWS`, default 1,000,000, OD-21; RTS capacity must also be <= 1,048,576, the cmdq limit, F6);
+  - `tick_cap` (`SU_E_RESOURCE_LIMIT` from `max_struct_per_tick` or `max_events_per_tick`, or from the cmdq admission at create when the structural buffers exceed `SU_CMDQ_MAX_ENTRIES`, which without OD-20 happens above capacity 699,050, 9.5; by 9.4 the first should never fire for RTS worlds, so any occurrence is a finding and a bug report, not a memory limit);
   - `operator_buffer` (`SU_E_RESOURCE_LIMIT` from an operator's admitted buffers);
   - `snapshot_cap` (`SU_E_RESOURCE_LIMIT` from the admission precheck of 12, or from capture at 64 MiB output);
   - `spool_budget` (`SU_E_RESOURCE_LIMIT` from the spool precheck, `spool_bytes_max`);
@@ -644,27 +761,29 @@ Evidence record per task (JSON, stored in `bench/rts/agent_experiments/records/`
 | id | item | change class | owner |
 |---|---|---|---|
 | OD-1 | Host-side operators (`rts_ops_v1`) instead of IR gather/scatter (D2) | design | orchestrator plus M3 owner |
-| OD-1b | Additive host-entry kind in `schedule.h` (3.1): `SU_SYS_KIND_*`, `SuHostField`, `SuHostOpDesc`, `su_sched_add_host`, `SuSysEntry.kind/host`; declaration module in `src/runtime/rts/host_decl.c` (no `su_lir.h` change); `SuEffectInput.host_declared` (`su_effects.*`); dispatch branch; candidate and native refusal | shared contract (runtime header) and runtime sources | scheduler/runtime owner |
+| OD-1b | Additive host-entry kind in `schedule.h` (3.1): `SU_SYS_KIND_*`, `SuHostField`, `SuHostOpDesc`, `su_sched_add_host`, `SuSysEntry.kind/host`; declaration module in `src/runtime/rts/host_decl.c` (no `su_lir.h` change); `SuEffectInput.host_declared` (`su_effects.*`); dispatch branch; candidate and native refusal | shared contract (runtime header) and runtime sources | scheduler/runtime owner; provisional (orchestrator, pending owner): r4 mechanism of 3.1 (A1-A4) |
 | OD-2 | No IR opcode additions in M3 (D1); IR 0.3 proposal only if 6.4 triggers | design | IR owner |
-| OD-3 | `world.set_fields {world_id, expected_world_revision, entities:[{entity, values}]}`: at most 1,024 entities per call; `values` restricted to the 14 writable fields of 2.2; `kind`, `team`, `hp` and system-owned fields rejected with `SU_E_TYPE`; duplicate or stale entity refuses the whole call; one revision check and one recovery-log entry per call; emits no event | shared contract (new control method) | ABI/control owner |
-| OD-3b | `world.spawn_batch {world_id, expected_world_revision, rows:[{values, external_id?}]}`: at most 1,024 rows per call; `external_id` is a u32 (as `world.spawn`); request line at most 1,048,576 bytes (`su_proto.h:5`), checked before row parsing; one recovery-log entry per call; slots in given order; one `SU_EVENT_SPAWNED` per row, appended to the event log outside the tick merge (M2 rule, `worker.c:1077`) | shared contract (new control method) | ABI/control owner |
-| OD-3c | Whether control-plane records count toward `max_events_per_tick`. **r3 proposal: excluded** (9.4). The r2 "required" rule (counted) is withdrawn because it breaks the stall-freedom claim with no safety gain under the 9.4 proof. Recorded in the replay header (`caps.control_events_counted = false`). Alternative (pending-record admission bound) recorded in 9.4 and not chosen | shared contract (runtime) | runtime/control owner (approval required) |
+| OD-3 | `world.set_fields {world_id, expected_world_revision, entities:[{entity, values}]}`: at most 1,024 entities per call; `values` restricted to the 14 writable fields of 2.2; `kind`, `team`, `hp` and system-owned fields rejected with `SU_E_TYPE`; duplicate or stale entity refuses the whole call; one revision check and one recovery-log entry per call; emits no event; r4: resulting-row rules and spawn defaults (2.2, D1-D2) | shared contract (new control method) | ABI/control owner; provisional (orchestrator, pending owner) |
+| OD-3b | `world.spawn_batch {world_id, expected_world_revision, rows:[{values, external_id?}]}`: at most 1,024 rows per call; `external_id` is a u32 (as `world.spawn`); request line at most 1,048,576 bytes (`su_proto.h:5`), checked before row parsing; one recovery-log entry per call; slots in given order; one `SU_EVENT_SPAWNED` per row, appended to the event log outside the tick merge (M2 rule, `worker.c:1077`); r4: batch atomicity and prechecks (D3) | shared contract (new control method) | ABI/control owner; provisional (orchestrator, pending owner) |
+| OD-3c | Whether control-plane records count toward `max_events_per_tick`. **r3 proposal: excluded** (9.4). The r2 "required" rule (counted) is withdrawn because it breaks the stall-freedom claim with no safety gain under the 9.4 proof. Recorded in the replay header (`caps.control_events_counted = false`). Alternative (pending-record admission bound) recorded in 9.4 and not chosen | shared contract (runtime) | runtime/control owner (approval required); provisional (orchestrator, pending owner): excluded, as recorded in 9.4 |
 | OD-4 | `SU_SCHED_MAX_SYSTEMS` stays 8; M3 uses 6 | none | - |
 | OD-5 | Declared-and-tested (not verified) effects for host operators (4.4) | design risk accepted | owner |
 | OD-6 | Query grid 64-unit cells (512 x 512), K = 128, rc <= 8, ring order, `truncated = [box_total > K]`; gates of 4.2 with the thin-margin rule | profile constant | RTS profile owner |
 | OD-7 | No separation, avoidance, pathfinding or obstacle map in M3 | scope | owner |
 | OD-8 | One projectile per shooter with fixed flight time | scope | owner |
-| OD-9 | `rts_u32_v1` numeric profile and 15-bit domain; control domains of 2.2, including the proposed `hp` bound 1..65535 for kind 1 and `flight` 1..64 for every row | profile | owner |
+| OD-9 | `rts_u32_v1` numeric profile and 15-bit domain; control domains of 2.2, including the proposed `hp` bound 1..65535 for kind 1 (kind 2: 0 only, r4 D4), `flight` 1..64 for every row, and the r4 formation-generation rule (2.2) | profile | owner; the r4 text (D4, formation rule) is provisional (orchestrator, pending owner); the `hp` bound stays a proposal |
 | OD-10 | Exact per-root memory accounting API in `src/world` (for 9.3), M3-08a | native_core | ABI/world owner |
 | OD-11 | Native lane for goal/combat/move (M3-10), gated on M1 owner acceptance | native_core, later | owner |
 | OD-12 | Bulk scene read-back above the snapshot cap; spawn_batch is the only load path in M3 | scope, later | owner |
 | OD-13 | Whether a Python model written by a different agent under the same orchestrator counts as independent | process | owner |
-| OD-14 | Scatter and spatial remain serial in M3 | scope | owner |
+| OD-14 | Scatter and spatial remain serial in M3 (added to section 17 in r4, audit N-j) | scope | owner; provisional (orchestrator, pending owner) |
 | OD-15 | Snapshot limit: accept the N <= 65,536 recovery claim (F5), or raise `SU_SNAPSHOT_MAX_BYTES` or the row guard, or adopt a binary snapshot encoding (new format, not in this contract). Note: with `retain = 1` and 512 MiB the spool precheck binds first (about 588,000 rows, 9.3) | shared contract (`src/world/snapshot.h`) | snapshot owner |
-| OD-16 | Capsule schema change, invoked in r3: `system_rev`, `capabilities`, and the host variant (5.5); single writer M3-03a | shared schema | schema owner |
-| OD-17 | Replay header 0.1 additions (`checkpoint_every`, `operator_manifest_hash`, `dropped` count, `caps.control_events_counted`, `spool`) | file format | replay owner |
+| OD-16 | Capsule schema change, invoked in r3: `system_rev`, `capabilities`, and the host variant (5.5); r4 adds the `numeric_profile` enum (`rts_u32_v1`), `schedule.before`/`parallel` as used, `limits` values for host records, and the `fields` shape split (5.5); single writer M3-03a | shared schema | schema owner; provisional (orchestrator, pending owner) |
+| OD-17 | Replay header 0.1 additions (`checkpoint_every`, `operator_manifest_hash`, `dropped` count, `caps.control_events_counted`, `spool`); r4: recorder and replayer are Python clients of the agent protocol in `bench/rts/replay/` (M3-05) | file format | replay owner; provisional (orchestrator, pending owner) |
 | OD-18 | `checkpoint_every` = 32 ticks as an RTS profile constant (N9) | profile constant | RTS profile owner |
-| OD-19 | Redefinition of M3-07 behaviours B2 and B3, removal of r1 B2 and B3 (F9); candidate order B3, B2, B1 (11) | scope | owner |
+| OD-19 | Redefinition of M3-07 behaviours B2 and B3, removal of r1 B2 and B3 (F9); candidate order B3, B2, B1 (11); r4 edges for B1 (3.2) | scope | owner; provisional (orchestrator, pending owner) |
+| OD-20 | (new, r4, E) Per-system structural buffer caps: `su_cmdq_create_ex` with per-system arrays; only entity-op systems get structural buffers (9.5). Without it the six-system RTS schedule caps capacity at 699,050 | shared contract (`src/world/entities/su_cmdq.h`, M2-00b) and runtime (`entity_tick.c`); lease M3-05 | ABI/world owner; provisional (orchestrator, pending owner): fix adopted; the honest ceiling 699,050 applies until it lands |
+| OD-21 | (new, r4) `SU_LIMIT_ROWS` is compile-time (`include/sutekh/ir.h:20`, the bound of `max_entities`). RTS capacity stays <= 1,000,000 by default. Raising it to 1,048,576 needs a header change | shared header (`include/sutekh/ir.h`), not in any M3 lease | ABI owner; provisional (orchestrator, pending owner): keep 1,000,000; no header change in M3 |
 
 Profile errors reuse existing codes: `SU_E_INVALID_ARGUMENT` (malformed scene or command, duplicate entity in a call), `SU_E_TYPE` (out-of-domain value, `kind = 0` on live row, `kind = 1` with `hp = 0`, `kind = 2` with `hp` or `range_sq` nonzero, immutable or system-owned field write, `range_sq > 262144`, idle-value violation), `SU_E_RESOURCE_LIMIT` (capacity, per-tick caps, operator buffers, request size, high-water precheck, spool precheck), `SU_E_SCHEMA_MISMATCH` (generator schema digest differs from loaded schema, unknown field name, host capsule field table differs from the descriptor), `SU_E_STALE_HANDLE` and `SU_E_STALE_REVISION` (control commands), `SU_E_CAPABILITY_DENIED` (host entry replaced by a candidate or lowered to native), `SU_E_INTERNAL` (invariant violated inside an operator, including `rc > 8`, and a capture refused after the precheck). No new status codes are proposed; a new code would require a `status.h` change and owner approval.
 
@@ -677,14 +796,14 @@ Note for the orchestrator (not an edit to `planning/tasks.json`, which this cont
 | M3-00 | Contract r3 freeze (this file) | M2-01 (design only) | `planning/contracts/M3_RTS_CONTRACT.md` | design | no | owner accepts or rejects OD-1 to OD-19 |
 | M3-01 | Schema, Python scene generator (single normative), scene lock | M3-00 | `profiles/rts/schema/`, `bench/rts/gen/`, `bench/rts/scenes.lock.json` | profile | no | generator reproducible; digests stable; PRNG and field-order mutants change digests; remainder rule (7.3); anchor idle values (7.3) |
 | M3-02 | Independent Python reference model, IR evaluator, targeting oracle | M3-00 | `bench/rts/ref/`, `tests/rts/ref/` | profile | no | 10.1 known answers (including the exact ring fixture of 10.1); IR-vs-model differential; oracle budget (8); targeting metrics (4.2) at 1,024 queriers; model author does not read M3-04 sources |
-| M3-03a | Capsule schema edit (OD-16): `system_rev`, `capabilities`, host variant (5.5) | M3-00 and OD-16 approval | `schemas/capsule.schema.json` only | shared_schema | no | existing IR capsules still validate unchanged; IR and host variants validate; an unknown top-level key is refused; no other key changes |
+| M3-03a | Capsule schema edit (OD-16): `system_rev`, `capabilities`, host variant, `numeric_profile` enum with `rts_u32_v1`, `parallel`/`before` as used (5.5) | M3-00 and OD-16 approval | `schemas/capsule.schema.json` only | shared_schema | no | existing IR capsules still validate unchanged; IR and host variants validate (host `limits.max_instructions` 1, `max_rows` 0); `rts_u32_v1` accepted; `max_rows` above 1,000,000 refused; an unknown top-level key is refused; no other key changes |
 | M3-03 | IR systems goal/combat/move/damage, authoring generator, IR capsule records | M3-01, M3-02, M3-03a, M2-01 (IR 0.2 verifier) | `capsules/rts/` (IR records only), `bench/rts/gen_ir.py` | gameplay | no (0.1 systems are native-eligible but native is not run here) | 10.4 negatives; regenerate-equality; measured instruction counts recorded; 5.5 record fields and 3.2 `after` lists |
-| M3-04a | Scheduler host-entry kind (OD-1b) and host capsule records | M3-00, OD-1b approval, M3-03a | `src/runtime/schedule.h`, `src/runtime/schedule.c`, `src/runtime/jobs/su_effects.h`, `src/runtime/jobs/su_effects.c`, `src/runtime/worker.c` (host loader branch in the world schedule loader and the `host_declared` line in `check_system_effects` only), `src/runtime/native_versions.c` (refusal guard only), `src/runtime/rts/host_decl.c` and `src/runtime/rts/host_decl.h` (new), `capsules/rts/host/` (2 new records, `spatial` and `scatter`), `tests/scheduler/test_host_entry.c` (new), `tests/rts/host/` (new) | shared_contract, native_core | yes (targeted compile of the runtime with and without `SU_HAVE_NATIVE`; existing scheduler, tick-worker, entity-tick and reload tests; T-HOST-01..10) | IR entries unchanged; host dispatch, declared-set use in effects, load checks, candidate and native refusal, no VM context for host entries |
-| M3-04 | Host operators: spatial index, gather, scatter (C17); production descriptors | M3-01, M3-02, M3-04a | `profiles/rts/native/`, `tests/rts/native/` | native_core | yes | 10.1 SPATIAL, GATHER, SCATTER; ASan, UBSan; instrumented store-set check (4.4); fault seams (N9); descriptors equal the M3-04a host records (T-HOST-05). Depends on M3-02 known answers, not on M3-03 |
-| M3-05 | `world.set_fields`, `world.spawn_batch`, admission prechecks (12), replay record and replay, checkpoint recovery | M3-03, M3-04, M3-04a, OD-3, OD-3b, OD-3c approved | `src/agent/su_agent.c` (method handlers only), `schemas/` (no capsule schema), `docs/AGENT_RPC.md` (with approval), `tests/rts/replay/`, `bench/rts/load/` | schema/runtime | yes | T-RTS-LOAD-1 (a)-(f), T-RTS-CTRL-1, T-RTS-REPLAY-1..3, T-RTS-CAPS-1, T-RTS-CAPS-2; the high-water and spool precheck; config check (9.4); recovery-log entries for the two new methods; OD-3c rule (exclusion) implemented and recorded |
+| M3-04a | Scheduler host-entry kind (OD-1b) and host capsule records | M3-00, OD-1b approval, M3-03a | `src/runtime/schedule.h`, `src/runtime/schedule.c`, `src/runtime/jobs/su_effects.h`, `src/runtime/jobs/su_effects.c`, `src/runtime/worker.c` (functions only: `load_schedule` host branch (`:688-733`), `check_system_effects` (`host_declared` line), `rebuild_schedule` (`:2171`), `ckpt_record` (`CkptSys.kind`, `:2046`), `h_candidate_evaluate` (`:1834`), `h_internal_specialize_admit` (`:3445`), `h_internal_specialize_install` (`:3705`), `h_internal_world_migrate_prepare` (`:4223`) refusals), `src/runtime/rts/host_decl.c` and `src/runtime/rts/host_decl.h` (new), `src/runtime/rts/host_registry.c` and `src/runtime/rts/host_registry.h` (new; test-only registration hook, `su_host_find`), `src/runtime/rts/host_registry.c` is the file M3-04 extends (r4). `src/runtime/native_versions.c` is NOT in the lease (A2: no change), `capsules/rts/host/` (2 new records, `spatial` and `scatter`), `tests/scheduler/test_host_entry.c` (new), `tests/rts/host/` (new) | shared_contract, native_core | yes (targeted compile of the runtime with and without `SU_HAVE_NATIVE`; existing scheduler, tick-worker, entity-tick and reload tests; T-HOST-01..10) | IR entries unchanged; host dispatch, declared-set use in effects, load checks, restore of host entries (A1), handler refusals in place of native-lowering refusal (A2), staging and view rules (A4), no VM context for host entries |
+| M3-04 | Host operators: spatial index, gather, scatter (C17); production descriptors | M3-01, M3-02, M3-04a | `profiles/rts/native/`, `tests/rts/native/`, `src/runtime/rts/host_registry.c` (adds exactly the two production descriptors, `rts.spatial` and `rts.scatter`; nothing else in that file) | native_core | yes | 10.1 SPATIAL, GATHER, SCATTER; ASan, UBSan; instrumented store-set check (4.4); fault seams (N9); descriptors equal the M3-04a host records (T-HOST-05). Depends on M3-02 known answers, not on M3-03 |
+| M3-05 | `world.set_fields`, `world.spawn_batch`, admission prechecks (12), structural buffer caps (9.5), replay record and replay, checkpoint recovery | M3-03, M3-04, M3-04a, OD-3, OD-3b, OD-3c, OD-20 approved | `src/runtime/worker.c` (handler functions only: `h_world_spawn` defaults and checks (D1), new `set_fields` and `spawn_batch` handlers, admission prechecks, `:1015` onward), `src/agent/su_agent.c` (forwarding and recovery-log entries only), `src/world/entities/su_cmdq.{c,h}` (OD-20), `src/runtime/entity_tick.c` (per-system caps in `su_ent_run_ticks` only), `schemas/` (no capsule schema), `docs/AGENT_RPC.md` (with approval), `tests/rts/replay/`, `tests/entities/` (one new cmdq/entity-tick test file for T-RTS-CAPS-3), `bench/rts/replay/` (recorder and replayer, Python), `bench/rts/load/` | schema/runtime | yes | T-RTS-LOAD-1 (a)-(g), T-RTS-CTRL-1, T-RTS-REPLAY-1..3, T-RTS-CAPS-1, T-RTS-CAPS-2, T-RTS-CAPS-3 (9.5, confirmed on the current tree before the patch); the high-water and spool precheck; config check (9.4); recovery-log entries for the two new methods; OD-3c rule (exclusion) implemented and recorded |
 | M3-06 | End-to-end suite, golden scenes, edge fixtures, mutation campaign, targeting gates | M3-02, M3-05 | `tests/rts/e2e/`, `tests/rts/fixtures/` | tests | yes (with engine runs) | C == Python digests for committed scenes within oracle limits; 10.6 gates with the thin-margin rule; all listed mutants detected or recorded as equivalent; M3-M27 detected by the per-tick model comparison (15) |
 | M3-07 | Agent-authored behaviours experiment (B1-B3, redefined) | M3-06 | `bench/rts/agent_experiments/`; candidates only through the candidate pipeline (no direct edits to `capsules/rts/` on the canonical branch) | evidence | no | records per section 11; hidden fixtures authored by a different party; candidate order B3, B2, B1; each fixture fails on the baseline and on the last accepted candidate |
-| M3-08 | Stress curves and memory methodology | M3-06; M3-08a for exact accounting | `bench/rts/stress/` | evidence | no | raw logs with hashes, hardware blocks, named limits, null reasons; no predeclared unit-count claims; recovery claim per 12 |
+| M3-08 | Stress curves and memory methodology | M3-06; M3-08a for exact accounting | `bench/rts/stress/`, `src/platform/sutekh_main.c` (comment at lines 81-83 only, N-c) | evidence | no | raw logs with hashes, hardware blocks, named limits, null reasons; no predeclared unit-count claims; recovery claim per 12; the `sutekh_main.c` comment is corrected to the 9.3 spool figures (588,630 rows at default settings) |
 | M3-08a | Exact per-root memory accounting (OD-10) | owner approval | `src/world/` (accounting API only) | native_core | yes | per-category bytes match the 9.3 table within stated tolerance; optional: without it, 9.3 figures stay estimates |
 | M3-09 | Independent review of any performance optimization | M3-08 and the optimization | reviewer write-free | review | per change | C10 evidence present; reviewer differs from author; digests unchanged |
 | M3-10 | Native lane for goal/combat/move (optional) | M1 owner acceptance, M3-03, M3-06 | `backends/native/` (lease) | native_core | yes | differential vs reference VM across row tails and dead rows; capability fallback |
@@ -692,7 +811,12 @@ Note for the orchestrator (not an edit to `planning/tasks.json`, which this cont
 Notes on the split (r3):
 - The only writer of `schemas/capsule.schema.json` for the M3 capsule keys is M3-03a. M3-03 and M3-04a depend on it. M3-04 does not depend on M3-03.
 - M3-04a writes the two host capsule records; M3-03 writes only IR records. The `capsules/rts/` lease is split by subdirectory (`capsules/rts/host/` for M3-04a).
-- M3-05 has no lease on `src/runtime/`; the OD-3c exclusion is already the existing code path, so M3-05 adds no tick-merge counter.
+- M3-05 has a lease on `src/runtime/worker.c` and `src/runtime/entity_tick.c` (r4, E and D1-D3). The OD-3c exclusion is already the existing code path, so M3-05 adds no tick-merge counter. `su_agent.c` changes are forwarding and recovery-log entries only; the validators are in `worker.c` (`h_world_spawn` at `:1015`).
+- M3-04a and M3-05 both edit `worker.c`. M3-05 depends on M3-04a, so they run in sequence on the canonical branch, with M3-04a merged first (integrator order).
+- Replay recorder and replayer (OD-17): `bench/rts/replay/` (M3-05), a Python client of the agent protocol. They are harness code, not engine code.
+- `bench/rts/gen_ir.py` (M3-03) is an IR authoring tool. It is not a scene generator; D10 (one normative scene generator, `bench/rts/gen/`) is unchanged.
+- M3-08 lease adds `src/platform/sutekh_main.c` for the comment only (N-c), so the stale spool comment is corrected where the spool figures are measured.
+- `planning/tasks.json` is not edited by this contract. The split is written as paste-ready JSON in Appendix A.
 
 Mapping to MILESTONES M3 closure evidence: deterministic replay (M3-05, M3-06); agent-authored behaviours (M3-07); end-to-end tick costs (M3-08); stress curves and memory accounting (M3-08, M3-08a); independently reviewed optimizations (M3-09). M3-10 is optional and does not block closure.
 
@@ -732,12 +856,16 @@ Mapping to MILESTONES M3 closure evidence: deterministic replay (M3-05, M3-06); 
 | M3-M29 | host entry effects derived as empty (declared set ignored by `su_effects_build`) | T-HOST-04 (a host write conflicts with an unordered IR entry and must be refused) |
 | M3-M30 | control domain check missing for `flight` (0 accepted) or a system-owned field accepted by `set_fields` | T-RTS-CTRL-1 domain and writable-set cases |
 | M3-M31 | spawn admission without the high-water precheck (`hw_after > 838,860` accepted) | T-RTS-LOAD-1 (f) |
+| M3-M32 | host `run_host` skips the working-to-staging copy for non-target rows (A4) | T-HOST-13 (a) (`incoming` of non-target rows overwritten by stale staging) |
+| M3-M33 | cmdq structural caps use the global maximum again (OD-20 reverted) | T-RTS-CAPS-3 (2) at capacity 699,051 |
+| M3-M34 | `rebuild_schedule` reads `paths.source` for a host entry, or host restore skips the registry (A1) | T-HOST-11 |
+| M3-M35 | spawn accepts an omitted `reload` (default 0) or `formation_slot` gen rule not enforced in `set_fields` (D1, D2) | T-RTS-CTRL-1 spawn-default and resulting-row cases |
 
 Each mutant is applied to a copy of the tree, and the named test must fail. An unrun mutant is listed as unrun, not as passing. Equivalent mutants are listed as equivalent, not as detected.
 
 ## 16. Risks
 
-1. **Per-tick caps at scale.** Mass deaths cannot exceed alive rows per tick, and alive rows cannot exceed capacity; control records are outside the tick merge (9.4). The cap is still a configured value that the stress run records; it must not be raised silently, and capacity above 1,048,576 is out of scope.
+1. **Per-tick caps at scale.** Mass deaths cannot exceed alive rows per tick, and alive rows cannot exceed capacity; control records are outside the tick merge (9.4). The cap is still a configured value that the stress run records; it must not be raised silently. Capacity is bounded by `SU_LIMIT_ROWS` (1,000,000, OD-21), the cmdq structural buffers (9.5, OD-20) and the high-water and spool prechecks (12); capacity above 1,048,576 is out of scope.
 2. **Host operators carry gameplay logic.** The spatial query, gather and scatter are profile code. Their effects are declared and tested, not verified (OD-5). A later verifier extension is the fix; it is not claimed here.
 3. **Approximate target under congestion.** Truncation makes targeting depend on budget and ring order. This is an accepted profile semantic (OD-6). Measured with the metrics of 4.2 and gated; not described as exact nearest-neighbour behaviour. The probe numbers in section R.2 are from a non-generator scene and are not a claim about the committed scenes.
 4. **Overlap without separation.** Congested scenes will stack units. That is a synthetic choice (OD-7), not a physical model.
@@ -750,7 +878,7 @@ Each mutant is applied to a copy of the tree, and the named test must fail. An u
 11. **Native lane timing.** Native execution of goal, combat and move changes performance only; the reference VM stays the oracle (M3-10).
 12. **Authoring tool trust.** The generators are Python; they are development helpers and not part of the native build. Their outputs are committed and digested so the no-build guarantee (C01) is not affected by them.
 13. **Spatial grid memory and per-tick cost.** The 512 x 512 grid costs 2 MiB and a 262,144-bucket counting sort per tick (F2 change). Measured in M3-08 against the 128 x 128 grid of r1; if the cost is not acceptable, the owner revisits cell size and K together (OD-6).
-14. **Snapshot and spool limits.** Recovery claims stop at N = 65,536 (F5). The high-water precheck (838,860) and the spool precheck (about 588,000 rows at default settings, worst-case estimate) bind before 1M. Changing either is OD-15.
+14. **Snapshot and spool limits.** Recovery claims stop at N = 65,536 (F5). The high-water precheck (838,860) and the spool precheck (588,630 rows at default settings, worst-case estimate, 9.3) bind before 1M. Changing either is OD-15.
 15. **Host event accounting.** Resolved in the r3 proposal by OD-3c "excluded" (9.4), which needs owner approval. If the owner rejects it, the pending-record admission bound in 9.4 is the fallback and must be implemented in M3-05 with its test before M3-05 closes.
 16. **Host capsule schema.** The host variant depends on OD-16 (M3-03a). Until that task lands, M3-04a cannot validate its records; this is a sequencing risk, not a design risk.
 
@@ -772,3 +900,228 @@ Each mutant is applied to a copy of the tree, and the named test must fail. An u
 14. Approve the redefined M3-07 behaviours B1, B2 and B3, the removal of the r1 B2 and B3 (OD-19, F9), and the candidate order B3, B2, B1 (11).
 15. Approve the capsule schema change (OD-16, M3-03a): `system_rev`, `capabilities`, and the host variant (5.5).
 16. Approve the replay header additions (OD-17): `checkpoint_every`, `operator_manifest_hash`, `dropped`, `caps.control_events_counted`, `spool`.
+17. Confirm OD-14 (scatter and spatial serial in M3; r4 adds it here, audit N-j).
+18. Approve OD-20: the per-system structural cap change in `src/world/entities/su_cmdq.{c,h}` and `src/runtime/entity_tick.c`. Without it the six-system RTS schedule caps capacity at 699,050 (9.5).
+19. Confirm OD-21: RTS capacity stays at most `SU_LIMIT_ROWS` = 1,000,000 in M3, with no change to `include/sutekh/ir.h`.
+
+---
+
+## Appendix A. Proposed `planning/tasks.json` M3 split (paste-ready; not applied)
+
+This block replaces the single `M3-00` entry of `planning/tasks.json` (lines 567-580) when the owner accepts r4. This contract does not edit `planning/tasks.json`. Each entry has `status` `planned` until the owner accepts this revision. Fields mirror the existing entries (`id`, `milestone`, `goal`, `depends_on`, `base_revision`, `write_scope`, `read_scope`, `change_class`, `requires_native_validation`, `acceptance`, `status`). The block is a JSON array.
+
+```json
+[
+  {
+    "id": "M3-00",
+    "milestone": "M3",
+    "goal": "Freeze the M3 RTS microcosm contract (r4); owner accepts or rejects OD-1 to OD-21.",
+    "depends_on": ["M2-01"],
+    "base_revision": null,
+    "write_scope": ["planning/contracts/M3_RTS_CONTRACT.md"],
+    "read_scope": ["AGENTS.md", "ENGINE_CONSTITUTION.md", "planning/audit/M3-00-contract-r3-review.md"],
+    "change_class": "design",
+    "requires_native_validation": false,
+    "acceptance": ["Owner accepts or rejects each open OD in section 13 and the items in section 17."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-01",
+    "milestone": "M3",
+    "goal": "RTS schema, single normative Python scene generator, scene lock.",
+    "depends_on": ["M3-00"],
+    "base_revision": null,
+    "write_scope": ["profiles/rts/schema/", "bench/rts/gen/", "bench/rts/scenes.lock.json"],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md"],
+    "change_class": "profile",
+    "requires_native_validation": false,
+    "acceptance": ["Generator reproducible; digests stable; PRNG and field-order mutants change digests; remainder rule 7.3; anchor idle values 7.3."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-02",
+    "milestone": "M3",
+    "goal": "Independent Python reference model, IR evaluator and targeting oracle.",
+    "depends_on": ["M3-00"],
+    "base_revision": null,
+    "write_scope": ["bench/rts/ref/", "tests/rts/ref/"],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md"],
+    "change_class": "profile",
+    "requires_native_validation": false,
+    "acceptance": ["10.1 known answers including the exact ring fixture; IR-vs-model differential; oracle budget (8); targeting metrics (4.2) at 1,024 queriers; model author does not read M3-04 sources."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-03a",
+    "milestone": "M3",
+    "goal": "Capsule schema edit (OD-16): system_rev, capabilities, host variant, rts_u32_v1 profile name, host limits values.",
+    "depends_on": ["M3-00"],
+    "base_revision": null,
+    "write_scope": ["schemas/capsule.schema.json"],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md", "schemas/capsule.schema.json"],
+    "change_class": "shared_schema",
+    "requires_native_validation": false,
+    "acceptance": ["Existing IR capsules validate unchanged; IR and host variants validate; rts_u32_v1 accepted; max_rows above 1,000,000 refused; unknown top-level key refused; no other key changes."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-03",
+    "milestone": "M3",
+    "goal": "IR systems goal, combat, move and damage; IR authoring tool; IR capsule records.",
+    "depends_on": ["M3-01", "M3-02", "M3-03a", "M2-01"],
+    "base_revision": null,
+    "write_scope": ["capsules/rts/ (IR records only)", "bench/rts/gen_ir.py"],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md", "LIVE_IR_SPEC.md"],
+    "change_class": "gameplay",
+    "requires_native_validation": false,
+    "acceptance": ["10.4 negatives; regenerate-equality; measured instruction counts recorded; 5.5 record fields and 3.2 after lists."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-04a",
+    "milestone": "M3",
+    "goal": "Scheduler host-entry kind (OD-1b): dispatch, declared effects, restore, handler refusals, host capsule records, host registry.",
+    "depends_on": ["M3-00", "M3-03a"],
+    "base_revision": null,
+    "write_scope": [
+      "src/runtime/schedule.h",
+      "src/runtime/schedule.c",
+      "src/runtime/jobs/su_effects.h",
+      "src/runtime/jobs/su_effects.c",
+      "src/runtime/worker.c (functions listed in 14, M3-04a)",
+      "src/runtime/rts/host_decl.c",
+      "src/runtime/rts/host_decl.h",
+      "src/runtime/rts/host_registry.c",
+      "src/runtime/rts/host_registry.h",
+      "capsules/rts/host/",
+      "tests/scheduler/test_host_entry.c",
+      "tests/rts/host/"
+    ],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md", "src/runtime/reload.c"],
+    "change_class": "shared_contract",
+    "requires_native_validation": true,
+    "acceptance": ["IR entries unchanged (T-HOST-01); T-HOST-02..13; targeted compile with and without SU_HAVE_NATIVE; existing scheduler, tick-worker, entity-tick and reload tests pass unchanged."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-04",
+    "milestone": "M3",
+    "goal": "Host operators rts.spatial and rts.scatter (spatial index, gather, scatter) and their production descriptors.",
+    "depends_on": ["M3-01", "M3-02", "M3-04a"],
+    "base_revision": null,
+    "write_scope": [
+      "profiles/rts/native/",
+      "tests/rts/native/",
+      "src/runtime/rts/host_registry.c (two production entries only)"
+    ],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md", "capsules/rts/host/"],
+    "change_class": "native_core",
+    "requires_native_validation": true,
+    "acceptance": ["10.1 SPATIAL, GATHER, SCATTER; ASan and UBSan; instrumented store-set check (4.4); fault seams (N9); descriptors equal the M3-04a host records (T-HOST-05)."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-05",
+    "milestone": "M3",
+    "goal": "world.set_fields and world.spawn_batch; spawn defaults and batch atomicity; admission prechecks; structural buffer caps (OD-20); replay record and replay; checkpoint recovery.",
+    "depends_on": ["M3-03", "M3-04", "M3-04a"],
+    "base_revision": null,
+    "write_scope": [
+      "src/runtime/worker.c (handler functions only)",
+      "src/agent/su_agent.c (forwarding and recovery-log entries only)",
+      "src/world/entities/su_cmdq.c",
+      "src/world/entities/su_cmdq.h",
+      "src/runtime/entity_tick.c (su_ent_run_ticks caps only)",
+      "tests/rts/replay/",
+      "tests/entities/ (one new cmdq test file)",
+      "bench/rts/replay/",
+      "bench/rts/load/",
+      "docs/AGENT_RPC.md (with approval)"
+    ],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md", "docs/AGENT_RPC.md"],
+    "change_class": "schema_runtime",
+    "requires_native_validation": true,
+    "acceptance": ["T-RTS-LOAD-1 (a)-(g); T-RTS-CTRL-1; T-RTS-REPLAY-1..3; T-RTS-CAPS-1..3 (CAPS-3 confirmed at 699,051 before the patch); high-water and spool prechecks; config check (9.4); recovery-log entries; OD-3c exclusion recorded. Needs OD-3, OD-3b, OD-3c and OD-20 approval."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-06",
+    "milestone": "M3",
+    "goal": "End-to-end suite, golden scenes, edge fixtures, mutation campaign, targeting gates.",
+    "depends_on": ["M3-02", "M3-05"],
+    "base_revision": null,
+    "write_scope": ["tests/rts/e2e/", "tests/rts/fixtures/"],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md"],
+    "change_class": "tests",
+    "requires_native_validation": true,
+    "acceptance": ["C equals Python digests for committed scenes within oracle limits; 10.6 gates with the thin-margin rule; listed mutants detected or recorded as equivalent or unrun; M3-M27 detected by the per-tick model comparison (15)."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-07",
+    "milestone": "M3",
+    "goal": "Agent-authored behaviours experiment: B3, B2, B1 through the candidate pipeline.",
+    "depends_on": ["M3-06"],
+    "base_revision": null,
+    "write_scope": ["bench/rts/agent_experiments/"],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md", "AGENT_PROTOCOL.md"],
+    "change_class": "evidence",
+    "requires_native_validation": false,
+    "acceptance": ["Records per section 11; hidden fixtures written by a different party; each fixture fails on the baseline and on the last accepted candidate; no direct edits to capsules/rts/ on the canonical branch."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-08a",
+    "milestone": "M3",
+    "goal": "Exact per-root memory accounting API (OD-10); optional for M3-08.",
+    "depends_on": ["M3-00"],
+    "base_revision": null,
+    "write_scope": ["src/world/ (accounting API only)"],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md"],
+    "change_class": "native_core",
+    "requires_native_validation": true,
+    "acceptance": ["Per-category bytes match the 9.3 table within stated tolerance; without it 9.3 figures stay estimates. Needs owner approval (OD-10)."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-08",
+    "milestone": "M3",
+    "goal": "Stress curves and memory methodology; spool comment correction.",
+    "depends_on": ["M3-06"],
+    "base_revision": null,
+    "write_scope": ["bench/rts/stress/", "src/platform/sutekh_main.c (comment at lines 81-83 only)"],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md"],
+    "change_class": "evidence",
+    "requires_native_validation": false,
+    "acceptance": ["Raw logs with hashes, hardware blocks, named limits and null reasons; no predeclared unit-count claims; recovery claim per 12; comment matches 9.3 (588,630 rows at default settings)."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-09",
+    "milestone": "M3",
+    "goal": "Independent review of any M3 performance optimization.",
+    "depends_on": ["M3-08"],
+    "base_revision": null,
+    "write_scope": [],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md"],
+    "change_class": "review",
+    "requires_native_validation": true,
+    "acceptance": ["C10 evidence present; reviewer differs from author; digests unchanged."],
+    "status": "planned"
+  },
+  {
+    "id": "M3-10",
+    "milestone": "M3",
+    "goal": "Optional native lane for goal, combat and move.",
+    "depends_on": ["M3-03", "M3-06"],
+    "base_revision": null,
+    "write_scope": ["backends/native/"],
+    "read_scope": ["planning/contracts/M3_RTS_CONTRACT.md"],
+    "change_class": "native_core",
+    "requires_native_validation": true,
+    "acceptance": ["Differential against reference VM across row tails and dead rows; capability fallback. Requires M1 owner acceptance (OD-11)."],
+    "status": "planned"
+  }
+]
+```
+
