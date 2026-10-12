@@ -70,3 +70,19 @@ Native lane (`-DSUTEKH_NATIVE=ON`) was not rebuilt for this change, because the 
 - Full M0 harness after the TX9 fix: see the final run recorded in the PR description.
 - Native lane: not run in this change.
 - Sanitizers, dev profile, clang, Windows: not run (as in the earlier audit).
+
+## Queue status update (2026-10-12, after PRs #10, #13, #14 merged)
+
+- Item 3 (`error.detail` for worker-side errors): partly landed on main in `1d0455f` ("Add error.detail for
+  worker-side verification failures") for `world.create`, `candidate.install` and capsule loads. Migration and
+  `candidate.evaluate` verification remain message-only, so that remainder is still queued.
+- The `set_fields` control-plane slice landed on main in `655efef`. The coordinator's condition for taking the
+  `worker.c` and `su_agent.c` items is therefore met for the files that slice touched; re-check before editing.
+- Item 22 (`runtime_mode`): decided mapping. ARCHITECTURE section 7 defines four modes. The binary serves the agent
+  API, so `release` does not apply. The default VM build reports `dev_checked`; a `SUTEKH_NATIVE=ON` build reports
+  `dev_native`. `perf_trusted` needs explicit instrumentation settings, which this binary does not take. Blocker: the
+  native build has no compile definition that the code can test. A `SUTEKH_NATIVE_BUILD` definition would be added in
+  `CMakeLists.txt`, which is a shared build file. Not done in this pass.
+- A4 (request-id idempotence, explicit `idempotency_key` only): not started in this pass. Needs `src/agent/su_agent.c`
+  and a new test in `tests/reload/test_reload.c`.
+- Items 1, 5 to 9, 12, 13, 15 to 17, 19 to 21, 23 to 27 in the audit: unchanged, owner decisions or later work.
