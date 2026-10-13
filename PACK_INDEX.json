@@ -92,8 +92,8 @@
     },
     {
       "path": "CMakeLists.txt",
-      "bytes": 33779,
-      "sha256": "27b4333397207ab58ac963f4553f6ba30db3b684a401337158806c02bd27a837"
+      "bytes": 34021,
+      "sha256": "3e3ba11a10f8add4a3279ca0cb133e9451298aa0d1f82510752369092934267c"
     },
     {
       "path": "COMMERCIAL_LICENSE.md",
@@ -157,8 +157,8 @@
     },
     {
       "path": "SUTEKH_FULL_SPEC.md",
-      "bytes": 185029,
-      "sha256": "e09908779ba45f21f32e3f0df2f1425ba7bf29a02a09ce1f5f9028b7ec82955a"
+      "bytes": 185469,
+      "sha256": "02e9873c2409b96bccc1352dd4daae0c2b26ecf808e0e880e02cc195bd0bc45a"
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -392,8 +392,8 @@
     },
     {
       "path": "docs/AGENT_RPC.md",
-      "bytes": 61761,
-      "sha256": "a0908f9cfa1df537e1c6e3f75761f9fea6f115cd015486926879e498c5680791"
+      "bytes": 62201,
+      "sha256": "6448e4b0c0cb9ae4fc2875d68a374c8dfa043bb02f259166f66e8a46cc1a7e2d"
     },
     {
       "path": "docs/BACKENDS_AND_DEPENDENCIES.md",
@@ -1211,6 +1211,11 @@
       "sha256": "6febf3f9d60fbe86c6c39dcd1173827f4d81389e84794553cdecef5beb839812"
     },
     {
+      "path": "planning/handoffs/2026-10-13-m3-05-load-spool.md",
+      "bytes": 2395,
+      "sha256": "f6fc8c83bcf1c8775ec9132589e2f4bec013a825f95f50c023eac808b9de8901"
+    },
+    {
       "path": "planning/handoffs/2026-10-13-m3-05-spawn-batch-worker.md",
       "bytes": 3627,
       "sha256": "7975b52675a1cff861dceccc1feff1955a41163eaf988c512cf4f8f20061bed1"
@@ -1352,8 +1357,8 @@
     },
     {
       "path": "src/agent/su_agent.c",
-      "bytes": 245655,
-      "sha256": "b7195501940c985c9448f0d8d3b3dc53ee7ab9c0ee8394afac51a2aef6e316ec"
+      "bytes": 246238,
+      "sha256": "3755a7bb9dd788512a73ffd74af8abc37176eb4423f0a97453ed3c4a21db411e"
     },
     {
       "path": "src/agent/su_agent.h",
@@ -1577,8 +1582,8 @@
     },
     {
       "path": "src/runtime/worker.c",
-      "bytes": 229977,
-      "sha256": "13849de0184b40df65a8c7435cd6061b50b35dcdc4842d4ab4af978d7ce53fa0"
+      "bytes": 232321,
+      "sha256": "eab24400f5a970ea8953fc5585e3fd033245c9d0c204cdfa06eae5e3d0ebd333"
     },
     {
       "path": "src/runtime/worker.h",
@@ -3527,8 +3532,18 @@
     },
     {
       "path": "tests/rts/load/PLAN.md",
-      "bytes": 1999,
-      "sha256": "032e439c13c6f8ce88dd2bfc75571ebea686651f508efa10cb512f9ac233ba82"
+      "bytes": 2301,
+      "sha256": "85b5db377598f731a00497682b4e69f9416dcaa967a6e3606d125d244fcf3458"
+    },
+    {
+      "path": "tests/rts/load/rts_session.py",
+      "bytes": 6398,
+      "sha256": "b1b22fd7e4855ff24835eb362e333cb66eb22e7999c16c887f3fce44cfefa1d4"
+    },
+    {
+      "path": "tests/rts/load/test_load_engine.py",
+      "bytes": 9746,
+      "sha256": "6cdb5e4f3cc31af607a9d3de3339595a28a60858a0e3821828e5212f3b668957"
     },
     {
       "path": "tests/rts/load/test_load_plan.py",

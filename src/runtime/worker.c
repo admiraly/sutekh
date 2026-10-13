@@ -1176,7 +1176,10 @@ static uint32_t spawn_row_parse(WorkerWorld *ww, const SuJsonValue *vals, SuWorl
     }
     if (world_is_rts(ww)) {
         char msg[WORKER_MSG_CAP];
-        uint32_t cap = (uint32_t)ww->inst.rows;
+        /* formation_slot is bounded by the entity capacity (max(fixture rows, max_entities)), not by the rows
+         * the fixture loaded. */
+        const SuEnts *e = su_world_entities_committed(ww->inst.w);
+        uint32_t cap = e != NULL ? su_ents_capacity(e) : 0u;
         if (su_rts_ctl_spawn_row(named, n, cap, sched_has_field, ww, add, &n_add, &bad) != SU_OK) {
             snprintf(msg, sizeof msg, "spawn value breaks a control rule of the rts profile: %s",
                      bad != NULL ? bad : "row");
@@ -1193,11 +1196,38 @@ static uint32_t spawn_row_parse(WorkerWorld *ww, const SuJsonValue *vals, SuWorl
     return SU_OK;
 }
 
-/* Admission prechecks of rows new rows (contract 2.2 D3 and 12): free slots, then the high-water bound
- * hw + rows. A refusal changes nothing. The spool precheck of 12 needs the supervisor's spool settings and
- * is not applied here. */
-static uint32_t spawn_precheck(WorkerWorld *ww, uint32_t rows, WorkerFail *f) {
+/* Spool settings the supervisor sends with an admitted spawn (contract 12). Absent (replay, direct worker
+ * calls) means no spool precheck: a logged spawn was admitted once and must replay. */
+typedef struct SpoolAdmit {
+    int has;
+    uint64_t retain;
+    uint64_t bytes_max;
+} SpoolAdmit;
+
+/* Reads spool_retain and spool_bytes_max (both or neither) from the request params. */
+static uint32_t spool_admit_param(const SuJsonValue *params, SpoolAdmit *sa, WorkerFail *f) {
+    const SuJsonValue *r = su_json_member(params, "spool_retain");
+    const SuJsonValue *m = su_json_member(params, "spool_bytes_max");
+    memset(sa, 0, sizeof *sa);
+    if (r == NULL && m == NULL) {
+        return SU_OK;
+    }
+    if (r == NULL || m == NULL || !su_json_get_uint(r, &sa->retain) || !su_json_get_uint(m, &sa->bytes_max) ||
+        sa->retain > UINT32_MAX) {
+        fail(f, SU_E_TYPE, "spool_retain and spool_bytes_max must be given together as integers");
+        return SU_E_TYPE;
+    }
+    sa->has = 1;
+    return SU_OK;
+}
+
+/* Admission prechecks of rows new rows (contract 2.2 D3 and 12): free slots, the high-water bound hw + rows,
+ * and, when the supervisor sent its spool settings, the spool bound
+ * (retain + 1) * (446 * hw_after + 90 * event_log_max) + 16384 <= spool_bytes_max (9.3). A refusal changes
+ * nothing. */
+static uint32_t spawn_precheck(WorkerWorld *ww, uint32_t rows, const SpoolAdmit *sa, WorkerFail *f) {
     const SuEnts *e = su_world_entities_committed(ww->inst.w);
+    uint64_t hw_after;
     if (e == NULL) {
         fail(f, SU_E_INTERNAL, "world has no entity table");
         return SU_E_INTERNAL;
@@ -1206,9 +1236,26 @@ static uint32_t spawn_precheck(WorkerWorld *ww, uint32_t rows, WorkerFail *f) {
         fail(f, SU_E_RESOURCE_LIMIT, "not enough free slots; world unchanged");
         return SU_E_RESOURCE_LIMIT;
     }
-    if ((uint64_t)su_ents_high_water(e) + rows > SPAWN_HIGH_WATER_MAX) {
+    hw_after = (uint64_t)su_ents_high_water(e) + rows;
+    if (hw_after > SPAWN_HIGH_WATER_MAX) {
         fail(f, SU_E_RESOURCE_LIMIT, "high water would pass the snapshot row bound; world unchanged");
         return SU_E_RESOURCE_LIMIT;
+    }
+    if (sa != NULL && sa->has) {
+        uint64_t ms = 0;
+        uint64_t me = 0;
+        uint64_t log_max = 0;
+        uint64_t need;
+        if (ww->sched.ent == NULL || su_ent_rt_caps(ww->sched.ent, &ms, &me, &log_max) != SU_OK) {
+            fail(f, SU_E_INTERNAL, "world has no entity runtime");
+            return SU_E_INTERNAL;
+        }
+        /* hw_after <= 838,860 and log_max <= 2^20, so every product fits in u64. */
+        need = (sa->retain + 1u) * (UINT64_C(446) * hw_after + UINT64_C(90) * log_max) + UINT64_C(16384);
+        if (need > sa->bytes_max) {
+            fail(f, SU_E_RESOURCE_LIMIT, "checkpoints of the grown world would not fit the spool; world unchanged");
+            return SU_E_RESOURCE_LIMIT;
+        }
     }
     return SU_OK;
 }
@@ -1220,6 +1267,7 @@ static uint32_t h_world_spawn(WorkerState *s, const SuJsonValue *params, SuBuf *
     const SuJsonValue *vals = su_json_member(params, "values");
     const SuJsonValue *xid = su_json_member(params, "external_id");
     SuWorldSpawnValue sv[SPAWN_ROW_CAP];
+    SpoolAdmit sa;
     uint64_t ext = 0;
     SuEntity h = SU_ENTITY_INVALID;
     uint32_t n = 0;
@@ -1246,7 +1294,11 @@ static uint32_t h_world_spawn(WorkerState *s, const SuJsonValue *params, SuBuf *
     if (st != SU_OK) {
         return st;
     }
-    st = spawn_precheck(ww, 1u, f);
+    st = spool_admit_param(params, &sa, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = spawn_precheck(ww, 1u, &sa, f);
     if (st != SU_OK) {
         return st;
     }
@@ -1339,6 +1391,7 @@ static uint32_t h_world_spawn_batch(WorkerState *s, const SuJsonValue *params, S
     uint32_t ext[SPAWN_BATCH_MAX_ROWS];
     SuEntity hs[SPAWN_BATCH_MAX_ROWS];
     uint32_t n;
+    SpoolAdmit sa;
     uint32_t i;
     uint32_t st = SU_OK;
     char rev[64];
@@ -1394,7 +1447,10 @@ static uint32_t h_world_spawn_batch(WorkerState *s, const SuJsonValue *params, S
             return st;
         }
     }
-    st = spawn_precheck(ww, n, f);
+    st = spool_admit_param(params, &sa, f);
+    if (st == SU_OK) {
+        st = spawn_precheck(ww, n, &sa, f);
+    }
     if (st != SU_OK) {
         free(sv);
         return st;

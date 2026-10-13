@@ -666,8 +666,13 @@ used worlds are counted); the native lane covers the commit, rollback and bindin
   recovery replays it verbatim and checks the digest as for every logged operation. Item keys other than those
   listed are `SU_E_TYPE`.
 
-Not yet: the spool precheck of contract 12 (`(checkpoint_retain + 1) * (446 * hw_after + 90 * event_log_max) + 16384
-<= spool_bytes_max`); an `error.detail` path for spawn-rule violations (the field is named in the message only).
+- **Spool precheck (contract 12).** With every admitted `world.spawn` and `world.spawn_batch` the supervisor sends its
+  `spool_retain` and `spool_bytes_max` to the worker, which refuses with `SU_E_RESOURCE_LIMIT` and no change when
+  `(checkpoint_retain + 1) * (446 * hw_after + 90 * event_log_max) + 16384 > spool_bytes_max`, `hw_after` being high
+  water plus the new rows. Recovery replays do not send them, so a logged spawn is never refused on replay. Both keys
+  are worker-internal (a client sending them to the supervisor gets `SU_E_TYPE` for an unknown key).
+
+Not yet: an `error.detail` path for spawn-rule violations (the field is named in the message only).
 
 ## 18. RTS control batches and host systems (M3-05; contract `planning/contracts/M3_RTS_CONTRACT.md` r4, 2.2, OD-3, OD-3b)
 

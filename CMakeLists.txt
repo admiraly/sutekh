@@ -182,6 +182,9 @@ add_test(NAME rts_native_diff COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/te
 add_test(NAME rts_ref_m3_mutants COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/ref/m3_control_mutants.py")
 # M3-05 replay recorder and replayer on the semantic model (T-RTS-REPLAY-1, -2 model side; -3 needs the engine).
 add_test(NAME rts_replay COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/replay/test_replay.py")
+# M3-05 T-RTS-LOAD-1 (a)-(c), (g) through a real supervisor with the full six-system RTS world.
+add_test(NAME rts_load_engine COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/load/test_load_engine.py"
+         $<TARGET_FILE:sutekh>)
 
 add_executable(test_reload tests/reload/test_reload.c)
 target_link_libraries(test_reload PRIVATE su_agent)

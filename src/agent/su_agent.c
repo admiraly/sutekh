@@ -4777,6 +4777,8 @@ static void respec_service(SuAgent *a) {
 }
 #endif /* SU_HAVE_NATIVE */
 
+static void append_spool_admit(SuBuf *req, const SuAgent *a);
+
 /* world.spawn {world_id, expected_world_revision, values:{<field>: u32}, external_id?: u32} (M2-00c3b).
  * The values object is kept as canonical text (ordered as received, u32 values) so recovery replays the
  * same spawn; the entity slot is the worker's lowest free slot, so the replay yields the same handle. */
@@ -4861,6 +4863,7 @@ static uint32_t h_world_spawn(SuAgent *a, const SuJsonValue *params, SuBuf *res,
         su_buf_str(&req, ",\"external_id\":");
         su_buf_u64(&req, ext);
     }
+    append_spool_admit(&req, a);
     req_end(&req);
     if (req.failed) {
         su_buf_free(&req);
@@ -4895,6 +4898,15 @@ static uint32_t h_world_spawn(SuAgent *a, const SuJsonValue *params, SuBuf *res,
     relay(res, &resp, c);
     su_buf_free(&resp);
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* Spool settings for the worker's spawn admission precheck (contract M3 12). Sent with admitted spawns only;
+ * recovery replays omit them, so a logged spawn is never refused by them. */
+static void append_spool_admit(SuBuf *req, const SuAgent *a) {
+    su_buf_str(req, ",\"spool_retain\":");
+    su_buf_u64(req, a->retain);
+    su_buf_str(req, ",\"spool_bytes_max\":");
+    su_buf_u64(req, a->spool_max);
 }
 
 /* Canonical text of one {<field>: u32} object, members in the order received. */
@@ -5045,6 +5057,9 @@ static uint32_t h_world_control(SuAgent *a, const SuJsonValue *params, SuBuf *re
     su_buf_str(&req, key);
     su_buf_str(&req, "\":");
     su_buf_put(&req, body.data, body.len);
+    if (ctl == CTL_SPAWN_BATCH) {
+        append_spool_admit(&req, a);
+    }
     req_end(&req);
     su_buf_free(&body);
     if (req.failed) {
