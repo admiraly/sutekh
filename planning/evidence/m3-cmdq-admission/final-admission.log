@@ -1,0 +1,23 @@
+UpdateCTestConfiguration  from :/root/sutekh/build/DartConfiguration.tcl
+Test project /root/sutekh/build
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 31
+    Start 31: cmdq_admission
+
+31: Test command: /root/sutekh/build/test_cmdq_admission
+31: Working Directory: /root/sutekh/build
+31: Test timeout computed to be: 10000000
+31: test_cmdq_admission: 30 checks, 0 failures
+1/1 Test #31: cmdq_admission ...................   Passed    0.01 sec
+
+The following tests passed:
+	cmdq_admission
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.01 sec

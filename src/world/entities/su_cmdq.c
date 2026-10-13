@@ -120,6 +120,19 @@ void su_cmdq_destroy(SuCmdQ *q) {
     free(q);
 }
 
+/* Bound queue geometry before proportional allocations or cap-array reads. */
+static uint32_t buffer_dimensions(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots,
+                                  uint64_t *nchunks) {
+    if (nsystems == 0u || nslots == 0u || nslots > UINT64_C(0xFFFFFFFF) || chunk_slots == 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *nchunks = nslots / chunk_slots + (nslots % chunk_slots != 0u ? 1u : 0u);
+    if (*nchunks > SU_CMDQ_MAX_BUFFERS || nsystems > SU_CMDQ_MAX_BUFFERS / *nchunks) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    return SU_OK;
+}
+
 uint32_t su_cmdq_create(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots,
                         uint32_t per_row_struct_cap, uint32_t per_row_event_cap,
                         uint64_t per_tick_struct_cap, uint64_t per_tick_event_cap, SuCmdQ **out) {
@@ -127,13 +140,20 @@ uint32_t su_cmdq_create(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots
     uint32_t *ps;
     uint32_t *pe;
     uint32_t st;
+    uint64_t nchunks;
 
     if (out == NULL) {
         return SU_E_INVALID_ARGUMENT;
     }
     *out = NULL;
-    if (nsystems == 0u) {
+    if (per_row_struct_cap > 64u || per_row_event_cap > 64u || per_tick_struct_cap == 0u ||
+        per_tick_event_cap == 0u || per_tick_struct_cap > SU_CMDQ_MAX_TICK_CAP ||
+        per_tick_event_cap > SU_CMDQ_MAX_TICK_CAP) {
         return SU_E_INVALID_ARGUMENT;
+    }
+    st = buffer_dimensions(nsystems, nslots, chunk_slots, &nchunks);
+    if (st != SU_OK) {
+        return st;
     }
     /* Uniform caps: every system gets the same per-row cap. */
     ps = malloc(sizeof *ps * (size_t)nsystems);
@@ -162,6 +182,8 @@ uint32_t su_cmdq_create_ex(uint32_t nsystems, uint64_t nslots, uint64_t chunk_sl
     uint64_t tot_s = 0;
     uint64_t tot_e = 0;
     uint32_t i;
+    uint32_t st;
+    uint64_t nchunks;
 
     if (out == NULL) {
         return SU_E_INVALID_ARGUMENT;
@@ -172,6 +194,10 @@ uint32_t su_cmdq_create_ex(uint32_t nsystems, uint64_t nslots, uint64_t chunk_sl
         per_tick_struct_cap > SU_CMDQ_MAX_TICK_CAP || per_tick_event_cap > SU_CMDQ_MAX_TICK_CAP ||
         per_row_struct_cap == NULL || per_row_event_cap == NULL) {
         return SU_E_INVALID_ARGUMENT;
+    }
+    st = buffer_dimensions(nsystems, nslots, chunk_slots, &nchunks);
+    if (st != SU_OK) {
+        return st;
     }
     for (i = 0; i < nsystems; i++) {
         if (per_row_struct_cap[i] > 64u || per_row_event_cap[i] > 64u) {
@@ -186,11 +212,7 @@ uint32_t su_cmdq_create_ex(uint32_t nsystems, uint64_t nslots, uint64_t chunk_sl
     q->nsys = nsystems;
     q->nslots = nslots;
     q->chunk_slots = chunk_slots;
-    q->nchunks = nslots / chunk_slots + (nslots % chunk_slots != 0u ? 1u : 0u);
-    if (q->nchunks > SU_CMDQ_MAX_BUFFERS || nsystems > SU_CMDQ_MAX_BUFFERS / q->nchunks) {
-        free(q);
-        return SU_E_RESOURCE_LIMIT;
-    }
+    q->nchunks = nchunks;
     q->nbuf = (uint64_t)nsystems * q->nchunks;
     q->prs = calloc(nsystems, sizeof *q->prs);
     q->pre = calloc(nsystems, sizeof *q->pre);

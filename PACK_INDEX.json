@@ -92,8 +92,8 @@
     },
     {
       "path": "CMakeLists.txt",
-      "bytes": 34746,
-      "sha256": "8ef2aae14177d0bdc1d3d36632c424769ee3b12bc3d6b3b3728b8a34bdcbecdd"
+      "bytes": 35550,
+      "sha256": "bd1f598044c01fd1b366a2ebc1a2165ab8e082ea88c327068d68a03b024b9168"
     },
     {
       "path": "COMMERCIAL_LICENSE.md",
@@ -138,7 +138,7 @@
     {
       "path": "PACK_VALIDATION.json",
       "bytes": 557,
-      "sha256": "1c1fe9367aeddfa23d04c6a2da773d8b6f3ce432cd8cc22e577bfe8784d4fd95"
+      "sha256": "abbb9c90f0ee95695da5b5e4b7d5afaa82ee72280ea845bb170ed82383afed44"
     },
     {
       "path": "README.md",
@@ -891,6 +891,46 @@
       "sha256": "2dbd6d99402e2f984767a1d2ff410881e4f709cc0572caf5a1dfb3a5dfd686c2"
     },
     {
+      "path": "planning/evidence/m3-cmdq-admission/dev-ctest.log",
+      "bytes": 4515,
+      "sha256": "349096cd5a645a6ff93de1cad17337bd95b18818523597d62be32871193e5529"
+    },
+    {
+      "path": "planning/evidence/m3-cmdq-admission/final-admission.log",
+      "bytes": 734,
+      "sha256": "f23dac15a27f9d06bde8c876f6dd37b808693d436d79ba34e0a60f14045b77f6"
+    },
+    {
+      "path": "planning/evidence/m3-cmdq-admission/mutant-admission.log",
+      "bytes": 950,
+      "sha256": "cee712a30040293011e74bd5fcfd33af7fda815751969c021414e94710b0b070"
+    },
+    {
+      "path": "planning/evidence/m3-cmdq-admission/mutation.json",
+      "bytes": 271,
+      "sha256": "3b85e8ffe99f6fec2d01c2517dce31121f9ce65b00f8b8a3736d7053a1b89867"
+    },
+    {
+      "path": "planning/evidence/m3-cmdq-admission/native-ctest.log",
+      "bytes": 5691,
+      "sha256": "67808491491239d1bcbf06f59c26ea00564bde856e715f7d3282d1c055926798"
+    },
+    {
+      "path": "planning/evidence/m3-cmdq-admission/restored-admission.log",
+      "bytes": 243,
+      "sha256": "470a2b67ff32a58987d463161f3e13f5ea1b4041f3635a16c5bab5b7e49a6d5d"
+    },
+    {
+      "path": "planning/evidence/m3-cmdq-admission/result.json",
+      "bytes": 3372,
+      "sha256": "4bcf5437b79489103fe4fd8fed758f7da2a23f0a2c7629f47627ce61c6463b92"
+    },
+    {
+      "path": "planning/evidence/m3-cmdq-admission/sanitizer-admission.log",
+      "bytes": 918,
+      "sha256": "3b774b84dfbc6eb641b54ac85ce5c420eaf057821b51d369c71774de60f1e333"
+    },
+    {
       "path": "planning/evidence/m3-host-fault/dev-ctest.log",
       "bytes": 4411,
       "sha256": "2019dbded64f5301bdddb7de67c24fdc9ae2f1cf8a455f2b780a82381fedb570"
@@ -1266,6 +1306,11 @@
       "sha256": "6febf3f9d60fbe86c6c39dcd1173827f4d81389e84794553cdecef5beb839812"
     },
     {
+      "path": "planning/handoffs/2026-10-13-m3-05-cmdq-admission.md",
+      "bytes": 3318,
+      "sha256": "10c3a722219f13362054b60a5da5859fd4571ece9f662be5456f60a02faabfa2"
+    },
+    {
       "path": "planning/handoffs/2026-10-13-m3-05-ctrl-caps-q2.md",
       "bytes": 3913,
       "sha256": "e9c676822e13bc9d31c83de0d24df13cb8ad0fe4b399de7252b22862c09b2128"
@@ -1292,8 +1337,8 @@
     },
     {
       "path": "planning/status.json",
-      "bytes": 8792,
-      "sha256": "63ed3f0909e07f744b921f1aff4903156c8832931b18d4b0aad4ebf20476a76f"
+      "bytes": 9001,
+      "sha256": "b5b7168b3ce25c9c4a7fec3145a3c9e0eab253f3b0667f0a926577a7cc7dda9f"
     },
     {
       "path": "planning/tasks.json",
@@ -1672,8 +1717,8 @@
     },
     {
       "path": "src/world/entities/su_cmdq.c",
-      "bytes": 34290,
-      "sha256": "c62f5b247e695e385106766da813979900d6a5acfd1689751d477922442342f1"
+      "bytes": 35176,
+      "sha256": "8c949707efc33c801877bb755dd458ebaed34097335538122b12c8e31a3313d0"
     },
     {
       "path": "src/world/entities/su_cmdq.h",
@@ -1766,6 +1811,11 @@
       "sha256": "de6ed98aedfd92a24a6ea302cefb310de4150db19f9f22f59a23410067d9c18e"
     },
     {
+      "path": "tests/entities/cmdq_admission_seam.h",
+      "bytes": 512,
+      "sha256": "80f67698e57555821e20b814a24d6d69474ee657baaef04b54cedf138d342ba7"
+    },
+    {
       "path": "tests/entities/test_churn.c",
       "bytes": 10320,
       "sha256": "510e498d761760da792feb7169332b9688133d0962dffb10c63bf54058bca1bd"
@@ -1774,6 +1824,11 @@
       "path": "tests/entities/test_cmdq.c",
       "bytes": 42198,
       "sha256": "f1634d1c3a4688190a874819b1d2ce1456657e46e1692a82ff38d5b6077bb80f"
+    },
+    {
+      "path": "tests/entities/test_cmdq_admission.c",
+      "bytes": 2317,
+      "sha256": "cbac4d44bbedda972d4c9bac416c854f275f48840731463ffc4439a95e303f0e"
     },
     {
       "path": "tests/entities/test_cmdq_percap.c",

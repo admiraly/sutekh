@@ -1,0 +1,9 @@
+{
+  "mutant": "bypass uniform-cap geometry refusal",
+  "file": "src/world/entities/su_cmdq.c",
+  "edit": "first if (st != SU_OK) -> if (0 && st != SU_OK) in su_cmdq_create",
+  "result": "detected",
+  "test_exit": 8,
+  "restored_positive_exit": 0,
+  "sanitizer_exit": 0
+}

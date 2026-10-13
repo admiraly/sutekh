@@ -1,0 +1,18 @@
+Test project /root/sutekh-validation-host-fault-20261013/build
+    Start 31: cmdq_admission
+1/1 Test #31: cmdq_admission ...................***Failed    0.00 sec
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_cmdq_admission.c:37: CHECK failed: g_calls == 0u
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_cmdq_admission.c:37: CHECK failed: g_calls == 0u
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_cmdq_admission.c:37: CHECK failed: g_calls == 0u
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_cmdq_admission.c:37: CHECK failed: g_calls == 0u
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_cmdq_admission.c:58: CHECK failed: g_calls == 0u && q == NULL
+test_cmdq_admission: 30 checks, 5 failures
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.01 sec
+
+The following tests FAILED:
+	 31 - cmdq_admission (Failed)
+Errors while running CTest

@@ -445,6 +445,19 @@ target_compile_definitions(test_cmdq PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_cmdq)
 add_test(NAME cmdq COMMAND test_cmdq WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Oversized dimensions must be refused without allocating or scanning cap arrays.
+add_library(su_cmdq_admission_objs OBJECT src/world/entities/su_cmdq.c)
+target_include_directories(su_cmdq_admission_objs PRIVATE src "${SUTEKH_CONTRACT_INCLUDE}")
+target_compile_options(su_cmdq_admission_objs PRIVATE
+    -include "${CMAKE_CURRENT_SOURCE_DIR}/tests/entities/cmdq_admission_seam.h")
+sutekh_apply_warnings(su_cmdq_admission_objs)
+add_executable(test_cmdq_admission tests/entities/test_cmdq_admission.c
+    $<TARGET_OBJECTS:su_cmdq_admission_objs>)
+target_include_directories(test_cmdq_admission PRIVATE src "${SUTEKH_CONTRACT_INCLUDE}")
+target_link_libraries(test_cmdq_admission PRIVATE Threads::Threads)
+sutekh_apply_warnings(test_cmdq_admission)
+add_test(NAME cmdq_admission COMMAND test_cmdq_admission)
+
 # M3-05: control-plane domains (contract 2.2). Pure checks, no world state.
 add_library(su_rts_control STATIC src/runtime/rts/control_domains.c)
 target_include_directories(su_rts_control PUBLIC src include)

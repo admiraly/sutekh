@@ -1,0 +1,70 @@
+{
+  "task": "M3-05 admission hardening / oversized queue geometry",
+  "base_revision": "0e27c805051dd268ef75174c9ba4466eaf89ac9f",
+  "recorded_at": "2026-10-13T11:33:07.835908+00:00",
+  "modified_source_sha256": {
+    "src/world/entities/su_cmdq.c": "8c949707efc33c801877bb755dd458ebaed34097335538122b12c8e31a3313d0",
+    "tests/entities/test_cmdq_admission.c": "cbac4d44bbedda972d4c9bac416c854f275f48840731463ffc4439a95e303f0e",
+    "tests/entities/cmdq_admission_seam.h": "80f67698e57555821e20b814a24d6d69474ee657baaef04b54cedf138d342ba7",
+    "CMakeLists.txt": "bd1f598044c01fd1b366a2ebc1a2165ab8e082ea88c327068d68a03b024b9168"
+  },
+  "artifact_sha256": {
+    "build/sutekh": "a7234ac9f3056186dcccb97cf62b82d7eafb518aa8abf49f8f516d8b4b38e156",
+    "build/test_cmdq": "7da7146004e9deeb4cee9ba9e2e9d5c275fb25524328b6330b24ebaa243d8b51",
+    "build/test_cmdq_admission": "0c2e5f1f9862de7faaa6873cf183740345c310bb6fd15d97aca91665e348cd36",
+    "build-native/sutekh": "bf06ca2d270561b2cf0b517bad5bc8fbc878a052aa4ffac47df0c753de7fdde7",
+    "build-native/test_cmdq_admission": "7ee4ac5696e216dacf477eae7ea7939694348139e054f7cf22f44020c9e4e35a"
+  },
+  "commands": [
+    {
+      "command": "cmake --build build -j 4",
+      "exit": 0
+    },
+    {
+      "command": "ctest --test-dir build -j 4 --output-on-failure",
+      "exit": 0,
+      "passed": 43,
+      "failed": 0
+    },
+    {
+      "command": "cmake --build build-native -j 4",
+      "exit": 0
+    },
+    {
+      "command": "ctest --test-dir build-native -j 4 --output-on-failure -E ^native_avx2$",
+      "exit": 0,
+      "passed": 54,
+      "failed": 0,
+      "excluded": "native_avx2; unchanged XSAVE feasibility failure recorded in host-fault native test run; not re-run for queue-only changes"
+    },
+    {
+      "command": "ctest --test-dir build -R ^cmdq_admission$ -V",
+      "exit": 0,
+      "checks": 30,
+      "failures": 0
+    },
+    {
+      "command": "cmake -S . -B build-admission-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS=\"-fsanitize=address,undefined -fno-omit-frame-pointer\" -DCMAKE_EXE_LINKER_FLAGS=\"-fsanitize=address,undefined\"; cmake --build build-admission-asan -j 2 --target test_cmdq_admission; ctest --test-dir build-admission-asan -R ^cmdq_admission$ -V",
+      "exit": 0,
+      "note": "isolated validation worktree; 30 checks, 0 failures"
+    }
+  ],
+  "mutation": {
+    "mutant": "bypass uniform-cap geometry refusal",
+    "file": "src/world/entities/su_cmdq.c",
+    "edit": "first if (st != SU_OK) -> if (0 && st != SU_OK) in su_cmdq_create",
+    "result": "detected",
+    "test_exit": 8,
+    "restored_positive_exit": 0,
+    "sanitizer_exit": 0
+  },
+  "worktree": "/root/sutekh-validation-host-fault-20261013; mutant restored; positive and sanitizer checks passed",
+  "not_run": [
+    "Native Windows",
+    "Independent reviewer",
+    "Full sanitizer matrix",
+    "Native AVX2 upper-YMM probe not rerun"
+  ],
+  "baseline_observation": "Initial host-fault full dev suite passed cmdq only after 194.77s and ~8 GiB allocation/paging for an impossible system count. An intermediate pre-guard queue run was killed to stop paging; the new admission assertions failed against that unpatched queue. Final recorded tests use the patched code.",
+  "measurements": "Correctness/resource evidence only; elapsed test times are shared-WSL observations, not performance qualification."
+}

@@ -6,7 +6,7 @@
   "current_milestone": "M3",
   "accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "runtime_tests": "2026-10-13 host-fault slice: dev ctest 42/42; final recovery checks 3748/0 in dev and native; native ctest excluding already-run cmdq 52/53 (pre-existing WSL native_avx2 XSAVE feasibility failure). See planning/evidence/m3-host-fault/result.json.",
+  "runtime_tests": "2026-10-13 queue admission: dev ctest 43/43; native ctest 54/54 with only unchanged native_avx2 XSAVE probe excluded (known failure recorded in m3-host-fault/result.json). Allocation guard 30/0 and focused ASan+UBSan pass; admission-bypass mutant detected. See planning/evidence/m3-cmdq-admission/result.json.",
   "engine_benchmarks": "run_provisional_shared_vm_not_qualification",
   "original_bfme_compatibility": "not_run",
   "remote_repository": "https://github.com/admiraly/sutekh",
@@ -140,7 +140,8 @@
         "T-RTS-CAPS-1 config check and T-RTS-CAPS-2 engine",
         "Q2 formation liveness refusal",
         "T-RTS-REPLAY-1..3 against the engine",
-        "T-RTS-REPLAY-3 internal spatial/scatter partial-work faults; replacement worker checkpoint+log recovery"
+        "T-RTS-REPLAY-3 internal spatial/scatter partial-work faults; replacement worker checkpoint+log recovery",
+        "Command-queue dimensions refused before proportional allocation or cap-array reads; allocation-counter regression and sanitizer checks"
       ],
       "open": [
         "T-RTS-LOAD-1 (e)(f) engine (near-million-row world)",
@@ -152,7 +153,7 @@
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "m0_accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "head_at_last_status_update": "50268e9f07d53b16d8efc27896fb2489dc08af61",
+  "head_at_last_status_update": "0e27c805051dd268ef75174c9ba4466eaf89ac9f",
   "owner_ratifications": [
     {
       "date": "2026-10-12",
