@@ -1,0 +1,70 @@
+UpdateCTestConfiguration  from :/root/sutekh/build/DartConfiguration.tcl
+Test project /root/sutekh/build
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 30
+    Start 30: cmdq
+
+30: Test command: /root/sutekh/build/test_cmdq
+30: Working Directory: /root/sutekh
+30: Test timeout computed to be: 10000000
+30: test_cmdq: checks=62285 failures=0 canonical_dump_fnv=9de50690b420c7db
+1/6 Test #30: cmdq .............................   Passed    2.41 sec
+test 31
+    Start 31: cmdq_admission
+
+31: Test command: /root/sutekh/build/test_cmdq_admission
+31: Working Directory: /root/sutekh/build
+31: Test timeout computed to be: 10000000
+31: test_cmdq_admission: 32 checks, 0 failures
+2/6 Test #31: cmdq_admission ...................   Passed    0.00 sec
+test 35
+    Start 35: cmdq_percap
+
+35: Test command: /root/sutekh/build/test_cmdq_percap
+35: Working Directory: /root/sutekh
+35: Test timeout computed to be: 10000000
+35: test_cmdq_percap: 15 checks, 0 failures
+3/6 Test #35: cmdq_percap ......................   Passed    0.00 sec
+test 36
+    Start 36: rts_capacity
+
+36: Test command: /root/sutekh/build/test_rts_capacity
+36: Working Directory: /root/sutekh
+36: Test timeout computed to be: 120
+36: six-system tick at capacity 699051: SU_OK
+36: six-system tick at capacity 1000000: SU_OK
+36: test_rts_capacity: 52 checks, 0 failures
+4/6 Test #36: rts_capacity .....................   Passed    4.05 sec
+test 37
+    Start 37: rts_churn
+
+37: Test command: /root/sutekh/build/test_rts_churn
+37: Working Directory: /root/sutekh/build
+37: Test timeout computed to be: 120
+37: test_rts_churn: 100000 accepted churn operations, 233161 checks, 0 failures
+5/6 Test #37: rts_churn ........................   Passed    1.16 sec
+test 40
+    Start 40: entity_tick
+
+40: Test command: /root/sutekh/build/test_entity_tick
+40: Working Directory: /root/sutekh
+40: Test timeout computed to be: 10000000
+40: test_entity_tick: 185 checks, 0 failures
+6/6 Test #40: entity_tick ......................   Passed    0.16 sec
+
+The following tests passed:
+	cmdq
+	cmdq_admission
+	cmdq_percap
+	rts_capacity
+	rts_churn
+	entity_tick
+
+100% tests passed, 0 tests failed out of 6
+
+Total Test time (real) =   7.80 sec

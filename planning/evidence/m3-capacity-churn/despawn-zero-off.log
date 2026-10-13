@@ -1,0 +1,16 @@
+Test project /root/sutekh-validation-host-fault-20261013/build
+    Start 37: rts_churn
+1/1 Test #37: rts_churn ........................***Failed    0.12 sec
+RTS churn model mismatch after operation 257
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_churn.c:109: CHECK failed: equal
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_churn.c:144: CHECK failed: operations == OPERATIONS && m->count == CAPACITY
+test_rts_churn: 514 accepted churn operations, 33801 checks, 2 failures
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.12 sec
+
+The following tests FAILED:
+	 37 - rts_churn (Failed)
+Errors while running CTest

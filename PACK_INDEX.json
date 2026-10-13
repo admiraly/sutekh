@@ -92,8 +92,8 @@
     },
     {
       "path": "CMakeLists.txt",
-      "bytes": 35550,
-      "sha256": "bd1f598044c01fd1b366a2ebc1a2165ab8e082ea88c327068d68a03b024b9168"
+      "bytes": 36528,
+      "sha256": "b2fc24179fa4a101cc006caf681a8a32ca0a9d42de3c853192cce9e0bfc77851"
     },
     {
       "path": "COMMERCIAL_LICENSE.md",
@@ -138,7 +138,7 @@
     {
       "path": "PACK_VALIDATION.json",
       "bytes": 557,
-      "sha256": "abbb9c90f0ee95695da5b5e4b7d5afaa82ee72280ea845bb170ed82383afed44"
+      "sha256": "6cf9a77f818630b09c4439eb311e15e911f62d33f3d9186baed6842a422c7639"
     },
     {
       "path": "README.md",
@@ -891,6 +891,56 @@
       "sha256": "2dbd6d99402e2f984767a1d2ff410881e4f709cc0572caf5a1dfb3a5dfd686c2"
     },
     {
+      "path": "planning/evidence/m3-capacity-churn/M3-M33.log",
+      "bytes": 1327,
+      "sha256": "bcc77d487656342844f4d9dfad779c819a3de2fc6d518917338e2f6acf1e11e6"
+    },
+    {
+      "path": "planning/evidence/m3-capacity-churn/despawn-zero-off.log",
+      "bytes": 681,
+      "sha256": "ee89c78a165844f8cae07d1014e4c83ce247a79a0efddf5ca71e7de220dede8b"
+    },
+    {
+      "path": "planning/evidence/m3-capacity-churn/dev-ctest.log",
+      "bytes": 4716,
+      "sha256": "f1dccc04448de981129199c556a4685ec46a2df8ca294da75e9502e4375cb45c"
+    },
+    {
+      "path": "planning/evidence/m3-capacity-churn/final-focused.log",
+      "bytes": 2338,
+      "sha256": "94591eb683a4868fa5768f2d787eb2c957f7687660c3f4608c372d88aba21e98"
+    },
+    {
+      "path": "planning/evidence/m3-capacity-churn/final-restored.log",
+      "bytes": 335,
+      "sha256": "14367d485950d146ae8ab3b0794a8aabf68eab4ef075e8d0b6823aa7f7b9322a"
+    },
+    {
+      "path": "planning/evidence/m3-capacity-churn/mutations-final.json",
+      "bytes": 978,
+      "sha256": "d82fa0cac9e8c97e3a59aa1d2bf85370649b812e348fe9fbf7c457186366f82c"
+    },
+    {
+      "path": "planning/evidence/m3-capacity-churn/native-ctest.log",
+      "bytes": 5892,
+      "sha256": "22c4c3f06e37dc804ce005ba943b3a882aa8b22725511e18c457a478a0d2989c"
+    },
+    {
+      "path": "planning/evidence/m3-capacity-churn/result.json",
+      "bytes": 6003,
+      "sha256": "52e9ca2a285d4f9c6752cbc8cf444db05f13bc0c262bd639c8f5274598c90ba9"
+    },
+    {
+      "path": "planning/evidence/m3-capacity-churn/sanitizer-tests.log",
+      "bytes": 1798,
+      "sha256": "ceeaf93f423c73615a48906b837f87c6ee5c661db6c29de404e03279d45aebec"
+    },
+    {
+      "path": "planning/evidence/m3-capacity-churn/short-cap-check-off.log",
+      "bytes": 1045,
+      "sha256": "9c298b0f58efc93fe06d6905d0509ec8acb6f8b01d940b12630fdcbc8509552f"
+    },
+    {
       "path": "planning/evidence/m3-cmdq-admission/dev-ctest.log",
       "bytes": 4515,
       "sha256": "349096cd5a645a6ff93de1cad17337bd95b18818523597d62be32871193e5529"
@@ -1306,6 +1356,11 @@
       "sha256": "6febf3f9d60fbe86c6c39dcd1173827f4d81389e84794553cdecef5beb839812"
     },
     {
+      "path": "planning/handoffs/2026-10-13-m3-05-capacity-churn.md",
+      "bytes": 4504,
+      "sha256": "32953fc11948e045b7cc915777744f2af4b7851433b7d342e13ee82a7c38f0dc"
+    },
+    {
       "path": "planning/handoffs/2026-10-13-m3-05-cmdq-admission.md",
       "bytes": 3318,
       "sha256": "10c3a722219f13362054b60a5da5859fd4571ece9f662be5456f60a02faabfa2"
@@ -1337,8 +1392,8 @@
     },
     {
       "path": "planning/status.json",
-      "bytes": 9001,
-      "sha256": "b5b7168b3ce25c9c4a7fec3145a3c9e0eab253f3b0667f0a926577a7cc7dda9f"
+      "bytes": 9198,
+      "sha256": "8c4631a2ce8d881f27364f8810fee8491a3a158d2088bba0000346c77cfe4965"
     },
     {
       "path": "planning/tasks.json",
@@ -1597,8 +1652,8 @@
     },
     {
       "path": "src/runtime/entity_tick.c",
-      "bytes": 19269,
-      "sha256": "e3c710ce7009e4453e773d5e3b1042464ec0369036b1bd51a14584243222f659"
+      "bytes": 19362,
+      "sha256": "e5014df505483931a76a1f4f1d819a6418e94de95bbdfaedc82a3db07ad45927"
     },
     {
       "path": "src/runtime/entity_tick.h",
@@ -1717,13 +1772,13 @@
     },
     {
       "path": "src/world/entities/su_cmdq.c",
-      "bytes": 35176,
-      "sha256": "8c949707efc33c801877bb755dd458ebaed34097335538122b12c8e31a3313d0"
+      "bytes": 35924,
+      "sha256": "69b8a18e92ec8c58cdabaf8231c3f403630ad0def9407f80a943dd0fd88f4ee4"
     },
     {
       "path": "src/world/entities/su_cmdq.h",
-      "bytes": 11558,
-      "sha256": "171f04d9c6f0c1ea3fa8d8b83ee6bdae8ef797f2fa9275d19dfc917355300e11"
+      "bytes": 12223,
+      "sha256": "6cfa57632ba054bb98c07ff42c3e34197860cdcc1f7a00d319cf618a01a218e5"
     },
     {
       "path": "src/world/entities/su_ents.c",
@@ -1827,8 +1882,8 @@
     },
     {
       "path": "tests/entities/test_cmdq_admission.c",
-      "bytes": 2317,
-      "sha256": "cbac4d44bbedda972d4c9bac416c854f275f48840731463ffc4439a95e303f0e"
+      "bytes": 2546,
+      "sha256": "7a46a62a70b8b12b72c7e29c2b62b5d36184f00d71b1f0a490d12277fbf97895"
     },
     {
       "path": "tests/entities/test_cmdq_percap.c",
@@ -1844,6 +1899,16 @@
       "path": "tests/entities/test_entity_tick.c",
       "bytes": 27112,
       "sha256": "14fdf30ae77fb05740408a1ed4f127d6b27a583cf5919c43a58beab76d970060"
+    },
+    {
+      "path": "tests/entities/test_rts_capacity.c",
+      "bytes": 6825,
+      "sha256": "0544e5ed31d49cf95fcc64cc1dc60882fab89dbad78a2e143fb808248577cac3"
+    },
+    {
+      "path": "tests/entities/test_rts_churn.c",
+      "bytes": 5588,
+      "sha256": "1cf85fc11921c2d66ace6b67a9bd01012586fc14f3aba026af60d148bd35f94c"
     },
     {
       "path": "tests/entities/test_world_ents.c",

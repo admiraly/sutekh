@@ -1,0 +1,31 @@
+{
+  "mutants": [
+    {
+      "mutant": "M3-M33",
+      "source": "src/runtime/entity_tick.c",
+      "edit": "ps[i] = m->uses_entity_ops ? m->max_struct_per_row : 0u; -> ps[i] = 1u;",
+      "test": "rts_capacity",
+      "test_exit": 8,
+      "result": "detected"
+    },
+    {
+      "mutant": "short-cap-check-off",
+      "source": "src/world/entities/su_cmdq.c",
+      "edit": "if (struct_count < nsystems || event_count < nsystems) { -> if (0 && (struct_count < nsystems || event_count < nsystems)) {",
+      "test": "rts_capacity",
+      "test_exit": 8,
+      "result": "detected"
+    },
+    {
+      "mutant": "despawn-zero-off",
+      "source": "src/world/su_world.c",
+      "edit": "su_zero_slot(w, w->committed, slot); -> if (0) su_zero_slot(w, w->committed, slot);",
+      "test": "rts_churn",
+      "test_exit": 8,
+      "result": "detected"
+    }
+  ],
+  "restored_tests_exit": 0,
+  "sanitizer_tests_exit": 0,
+  "worktree": "/root/sutekh-validation-host-fault-20261013"
+}

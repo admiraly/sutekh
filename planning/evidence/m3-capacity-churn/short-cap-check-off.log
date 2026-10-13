@@ -1,0 +1,19 @@
+Test project /root/sutekh-validation-host-fault-20261013/build
+    Start 36: rts_capacity
+1/1 Test #36: rts_capacity .....................***Failed    3.55 sec
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_capacity.c:150: CHECK failed: su_cmdq_create_ex_checked(2u, 4u, 1u, ps, 1u, pe, 2u, 4u, 4u, &q) == SU_E_INVALID_ARGUMENT
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_capacity.c:152: CHECK failed: q == NULL
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_capacity.c:153: CHECK failed: su_cmdq_create_ex_checked(2u, 4u, 1u, ps, 2u, pe, 1u, 4u, 4u, &q) == SU_E_INVALID_ARGUMENT
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_capacity.c:155: CHECK failed: q == NULL
+six-system tick at capacity 699051: SU_OK
+six-system tick at capacity 1000000: SU_OK
+test_rts_capacity: 52 checks, 4 failures
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   3.55 sec
+
+The following tests FAILED:
+	 36 - rts_capacity (Failed)
+Errors while running CTest

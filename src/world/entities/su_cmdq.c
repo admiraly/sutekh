@@ -283,6 +283,21 @@ uint64_t su_cmdq_chunk_count(const SuCmdQ *q) {
     return q == NULL ? 0u : q->nchunks;
 }
 
+uint32_t su_cmdq_create_ex_checked(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots,
+                                  const uint32_t *per_row_struct_cap, size_t struct_count,
+                                  const uint32_t *per_row_event_cap, size_t event_count,
+                                  uint64_t per_tick_struct_cap, uint64_t per_tick_event_cap, SuCmdQ **out) {
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    if (struct_count < nsystems || event_count < nsystems) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return su_cmdq_create_ex(nsystems, nslots, chunk_slots, per_row_struct_cap, per_row_event_cap,
+                            per_tick_struct_cap, per_tick_event_cap, out);
+}
+
 void su_cmdq_reset(SuCmdQ *q) {
     if (q == NULL) {
         return;

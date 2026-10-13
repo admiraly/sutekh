@@ -1,0 +1,43 @@
+UpdateCTestConfiguration  from :/root/sutekh-validation-host-fault-20261013/build-admission-asan/DartConfiguration.tcl
+Test project /root/sutekh-validation-host-fault-20261013/build-admission-asan
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 31
+    Start 31: cmdq_admission
+
+31: Test command: /root/sutekh-validation-host-fault-20261013/build-admission-asan/test_cmdq_admission
+31: Working Directory: /root/sutekh-validation-host-fault-20261013/build-admission-asan
+31: Test timeout computed to be: 10000000
+31: test_cmdq_admission: 32 checks, 0 failures
+1/3 Test #31: cmdq_admission ...................   Passed    0.02 sec
+test 36
+    Start 36: rts_capacity
+
+36: Test command: /root/sutekh-validation-host-fault-20261013/build-admission-asan/test_rts_capacity
+36: Working Directory: /root/sutekh-validation-host-fault-20261013
+36: Test timeout computed to be: 120
+36: six-system tick at capacity 699051: SU_OK
+36: six-system tick at capacity 1000000: SU_OK
+36: test_rts_capacity: 52 checks, 0 failures
+2/3 Test #36: rts_capacity .....................   Passed   20.25 sec
+test 37
+    Start 37: rts_churn
+
+37: Test command: /root/sutekh-validation-host-fault-20261013/build-admission-asan/test_rts_churn
+37: Working Directory: /root/sutekh-validation-host-fault-20261013/build-admission-asan
+37: Test timeout computed to be: 120
+37: test_rts_churn: 100000 accepted churn operations, 233161 checks, 0 failures
+3/3 Test #37: rts_churn ........................   Passed    3.71 sec
+
+The following tests passed:
+	cmdq_admission
+	rts_capacity
+	rts_churn
+
+100% tests passed, 0 tests failed out of 3
+
+Total Test time (real) =  24.00 sec

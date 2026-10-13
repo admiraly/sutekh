@@ -1,0 +1,21 @@
+Test project /root/sutekh-validation-host-fault-20261013/build
+    Start 36: rts_capacity
+1/1 Test #36: rts_capacity .....................***Failed    0.04 sec
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_capacity.c:133: CHECK failed: su_ent_budget(&s, capacity, capacity, capacity) == SU_OK
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_capacity.c:135: CHECK failed: st == SU_OK
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_capacity.c:136: CHECK failed: done == 1u && failed == UINT32_MAX && su_world_tick(w) == 1u
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_capacity.c:133: CHECK failed: su_ent_budget(&s, capacity, capacity, capacity) == SU_OK
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_capacity.c:135: CHECK failed: st == SU_OK
+/root/sutekh-validation-host-fault-20261013/tests/entities/test_rts_capacity.c:136: CHECK failed: done == 1u && failed == UINT32_MAX && su_world_tick(w) == 1u
+six-system tick at capacity 699051: SU_E_RESOURCE_LIMIT
+six-system tick at capacity 1000000: SU_E_RESOURCE_LIMIT
+test_rts_capacity: 52 checks, 6 failures
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.05 sec
+
+The following tests FAILED:
+	 36 - rts_capacity (Failed)
+Errors while running CTest

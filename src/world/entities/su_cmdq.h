@@ -101,6 +101,13 @@ uint32_t su_cmdq_create(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots
 uint32_t su_cmdq_create_ex(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots,
                            const uint32_t *per_row_struct_cap, const uint32_t *per_row_event_cap,
                            uint64_t per_tick_struct_cap, uint64_t per_tick_event_cap, SuCmdQ **out);
+/* Length-aware caps: either span shorter than nsystems returns SU_E_INVALID_ARGUMENT before
+ * array reads or allocation. Counts describe caller-provided readable elements, not byte sizes.
+ * The legacy _ex API retains its precondition of nsystems readable entries in each array. */
+uint32_t su_cmdq_create_ex_checked(uint32_t nsystems, uint64_t nslots, uint64_t chunk_slots,
+                                  const uint32_t *per_row_struct_cap, size_t struct_count,
+                                  const uint32_t *per_row_event_cap, size_t event_count,
+                                  uint64_t per_tick_struct_cap, uint64_t per_tick_event_cap, SuCmdQ **out);
 void su_cmdq_destroy(SuCmdQ *q);
 uint64_t su_cmdq_chunk_count(const SuCmdQ *q);
 /* Clears counts and the overflow flag. Allocates nothing. */

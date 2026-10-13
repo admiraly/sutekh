@@ -1,0 +1,9 @@
+Test project /root/sutekh-validation-host-fault-20261013/build
+    Start 36: rts_capacity
+1/2 Test #36: rts_capacity .....................   Passed    3.59 sec
+    Start 37: rts_churn
+2/2 Test #37: rts_churn ........................   Passed    0.96 sec
+
+100% tests passed, 0 tests failed out of 2
+
+Total Test time (real) =   4.55 sec

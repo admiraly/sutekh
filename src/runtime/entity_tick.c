@@ -483,8 +483,9 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
         return SU_OK;
     }
     sys_row_caps(s, ps, pe);
-    st = su_cmdq_create_ex(s->count, rows, SU_CHUNK_SLOTS, ps, pe, rt->max_struct_tick,
-                           rt->max_events_tick, &q);
+    st = su_cmdq_create_ex_checked(s->count, rows, SU_CHUNK_SLOTS,
+                                  ps, SU_SCHED_MAX_SYSTEMS, pe, SU_SCHED_MAX_SYSTEMS,
+                                  rt->max_struct_tick, rt->max_events_tick, &q);
     if (st != SU_OK) {
         return st;
     }

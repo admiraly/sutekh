@@ -485,6 +485,23 @@ target_compile_definitions(test_cmdq_percap PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_cmdq_percap)
 add_test(NAME cmdq_percap COMMAND test_cmdq_percap WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# T-RTS-CAPS-3: real six-system schedule at the old ceiling and the retained world limit.
+add_executable(test_rts_capacity tests/entities/test_rts_capacity.c)
+target_include_directories(test_rts_capacity PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/native")
+target_link_libraries(test_rts_capacity PRIVATE su_agent)
+sutekh_apply_warnings(test_rts_capacity)
+add_test(NAME rts_capacity COMMAND test_rts_capacity WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+set_tests_properties(rts_capacity PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+
+add_executable(test_rts_churn tests/entities/test_rts_churn.c)
+target_include_directories(test_rts_churn PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/native")
+target_link_libraries(test_rts_churn PRIVATE su_agent)
+sutekh_apply_warnings(test_rts_churn)
+add_test(NAME rts_churn COMMAND test_rts_churn)
+set_tests_properties(rts_churn PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+
 # ---- BEGIN M2-00c1 world integration (entity table in su_world; snapshot 0.2) ----
 target_link_libraries(su_world PUBLIC su_ents su_ir)
 add_executable(test_world_ents tests/entities/test_world_ents.c)

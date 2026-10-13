@@ -53,6 +53,13 @@ int main(void) {
     refused((uint32_t)SU_CMDQ_MAX_BUFFERS + 1u, 1u, 1u);
     refused(1u, SU_CMDQ_MAX_BUFFERS + 1u, 1u);
     refused(2u, SU_CMDQ_MAX_BUFFERS, 1u);
+    {
+        uint32_t cap = 0u;
+        g_calls = 0u;
+        CHECK(su_cmdq_create_ex_checked(2u, 4u, 1u, &cap, 1u, &cap, 1u, 4u, 4u, &q)
+              == SU_E_INVALID_ARGUMENT);
+        CHECK(q == NULL && g_calls == 0u);
+    }
     g_calls = 0u;
     CHECK(su_cmdq_create(1u, 0u, 1u, 1u, 1u, 1u, 1u, &q) == SU_E_INVALID_ARGUMENT);
     CHECK(g_calls == 0u && q == NULL);

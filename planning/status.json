@@ -6,7 +6,7 @@
   "current_milestone": "M3",
   "accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "runtime_tests": "2026-10-13 queue admission: dev ctest 43/43; native ctest 54/54 with only unchanged native_avx2 XSAVE probe excluded (known failure recorded in m3-host-fault/result.json). Allocation guard 30/0 and focused ASan+UBSan pass; admission-bypass mutant detected. See planning/evidence/m3-cmdq-admission/result.json.",
+  "runtime_tests": "2026-10-13 capacity/churn checkpoint: default ctest 45/45; native ctest 56/56 excluding known WSL native_avx2 XSAVE feasibility probe. Capacity 52/0, RTS churn 100000 accepted operations / 233161 checks / 0 failures; focused ASan+UBSan 3/3; three mutants detected. See planning/evidence/m3-capacity-churn/result.json.",
   "engine_benchmarks": "run_provisional_shared_vm_not_qualification",
   "original_bfme_compatibility": "not_run",
   "remote_repository": "https://github.com/admiraly/sutekh",
@@ -141,19 +141,19 @@
         "Q2 formation liveness refusal",
         "T-RTS-REPLAY-1..3 against the engine",
         "T-RTS-REPLAY-3 internal spatial/scatter partial-work faults; replacement worker checkpoint+log recovery",
-        "Command-queue dimensions refused before proportional allocation or cap-array reads; allocation-counter regression and sanitizer checks"
+        "Command-queue dimensions refused before proportional allocation or cap-array reads; allocation-counter regression and sanitizer checks",
+        "T-RTS-CAPS-3: six-system ticks at capacity 699051/1000000, queue at 1048576, zero-cap empty commit, checked cap-span refusal; M3-M33 detected",
+        "T-RTS-CHURN-1: 100000 accepted world-library spawn/despawn operations on 16384 RTS rows, independent 39-field/handle model"
       ],
       "open": [
         "T-RTS-LOAD-1 (e)(f) engine (near-million-row world)",
-        "T-RTS-CAPS-3 acceptance (1)/(2) at 699,051 and 1,048,576 rows",
-        "T-RTS-CHURN-1",
         "Q8 engine-vs-model digest equality"
       ]
     }
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "m0_accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "head_at_last_status_update": "0e27c805051dd268ef75174c9ba4466eaf89ac9f",
+  "head_at_last_status_update": "95367853d069a415c69ac1c39d7a307bb4371434",
   "owner_ratifications": [
     {
       "date": "2026-10-12",

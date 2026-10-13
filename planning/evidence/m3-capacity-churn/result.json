@@ -1,0 +1,131 @@
+{
+  "task": "M3-05: T-RTS-CAPS-3 and T-RTS-CHURN-1",
+  "base_revision": "95367853d069a415c69ac1c39d7a307bb4371434",
+  "recorded_at": "2026-10-13T12:08:54.783697+00:00",
+  "modified_source_sha256": {
+    "CMakeLists.txt": "b2fc24179fa4a101cc006caf681a8a32ca0a9d42de3c853192cce9e0bfc77851",
+    "src/runtime/entity_tick.c": "e5014df505483931a76a1f4f1d819a6418e94de95bbdfaedc82a3db07ad45927",
+    "src/world/entities/su_cmdq.c": "69b8a18e92ec8c58cdabaf8231c3f403630ad0def9407f80a943dd0fd88f4ee4",
+    "src/world/entities/su_cmdq.h": "6cfa57632ba054bb98c07ff42c3e34197860cdcc1f7a00d319cf618a01a218e5",
+    "tests/entities/test_cmdq_admission.c": "7a46a62a70b8b12b72c7e29c2b62b5d36184f00d71b1f0a490d12277fbf97895",
+    "tests/entities/test_rts_capacity.c": "0544e5ed31d49cf95fcc64cc1dc60882fab89dbad78a2e143fb808248577cac3",
+    "tests/entities/test_rts_churn.c": "1cf85fc11921c2d66ace6b67a9bd01012586fc14f3aba026af60d148bd35f94c"
+  },
+  "input_sha256": {
+    "capsules/rts/combat.capsule.json": "01a7fe4b60d469e399a2ae4a2811f4e8a8506d6c65e564ed28d73c3ec24b8ee6",
+    "capsules/rts/combat.lir.json": "2ffa3d0e15921ec64aa2bb1dbaaa3a2d7610a0978a952bffbc041e95bea858cb",
+    "capsules/rts/damage.capsule.json": "261581d97ccaf2a6a1e39809537a81a60b53f109d2a8c448b342eed278b02377",
+    "capsules/rts/damage.lir.json": "8a5a54dad0521048e152fae040d8cae2aaf2737665dc9d2993e7e0b443bdacbc",
+    "capsules/rts/goal.capsule.json": "6b0d61205266a6abeba5476d4b0a0ff8613e7014d6b5544315ed9a8bccf70a23",
+    "capsules/rts/goal.lir.json": "6c5328ae7d4daa0e24cfda6511234f6dc16fa04c7cdacac05cb48a0b43184fc1",
+    "capsules/rts/host/scatter.capsule.json": "06bfc4af5b21ede92736b422072f3e2410252f22a27378662546bfc0089d2e6d",
+    "capsules/rts/host/spatial.capsule.json": "00b5338e14063002e9a632d8dd922989bd46befe87a8f9546dcd2dacd988a4c3",
+    "capsules/rts/move.capsule.json": "1a93a49c06b1c2505e74720e337d3a474849eeb6a83e3b9b3c1948f5305b5ad3",
+    "capsules/rts/move.lir.json": "b833926ef960233185721412ab14e72d6645dba6ee964b3365c9d4587a2b58dd"
+  },
+  "fixture_header_sha256": "9c9214d5a5d5bacaa42bc59752f55337d2529f65b59599d447dc27fa258c4e91",
+  "artifact_sha256": {
+    "build/sutekh": "c2ba406829ca57b0ec3f11b9673e53d6077182c4a5fa8506b419b4f1522b69dc",
+    "build/test_rts_capacity": "19f1b079cf965fb968a40f48b89512addaa7e7285a2173f9ba9d5c71f5ade2aa",
+    "build/test_rts_churn": "a37eefbe106038022a05f62d64a250873ee193ef3ba6e94a083270b953be723a",
+    "build-native/sutekh": "8aeb40ea5cc5b69818a0a9e4f8dab59b998f88299c1730ccf0e7d14d1ae07128",
+    "build-native/test_rts_capacity": "6402d67f731e45e98e3ec88cb665125edd8fa83a7c83bfc84446bc3db02dacfd",
+    "build-native/test_rts_churn": "fc485f76d622211df955c266232d1d4a60a4d7a983a5ecef5f8128373f8f6753"
+  },
+  "checks": {
+    "default_ctest": {
+      "passed": 45,
+      "failed": 0,
+      "exit": 0
+    },
+    "native_ctest": {
+      "passed": 56,
+      "failed": 0,
+      "exit": 0,
+      "excluded": "native_avx2; unchanged WSL XSAVE feasibility failure recorded in planning/evidence/m3-host-fault/native-ctest.log"
+    },
+    "capacity": {
+      "checks": 52,
+      "failures": 0,
+      "queue_capacities": [
+        699051,
+        1048576
+      ],
+      "world_capacities": [
+        699051,
+        1000000
+      ],
+      "world_1048576": "refused as required by retained SU_LIMIT_ROWS",
+      "world_population": 1,
+      "schedule": "six committed RTS capsules, no installed native variants"
+    },
+    "churn": {
+      "accepted_operations": 100000,
+      "initial_population": 16384,
+      "capacity": 16384,
+      "checks": 233161,
+      "failures": 0,
+      "oracle": "Independent C liveness/generation/lowest-free/39-field model; world library mutations, not supervisor RPC or battle simulation"
+    },
+    "checked_caps": {
+      "admission_checks": 32,
+      "failures": 0,
+      "new_api": "su_cmdq_create_ex_checked; explicit element counts; legacy signature retained"
+    },
+    "sanitizers": {
+      "tests": 3,
+      "passed": 3,
+      "failed": 0,
+      "flags": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+      "scope": "cmdq_admission, rts_capacity, rts_churn; isolated validation worktree"
+    }
+  },
+  "commands": [
+    "cmake --build build -j 4",
+    "ctest --test-dir build -j 4 --output-on-failure",
+    "cmake --build build-native -j 4",
+    "ctest --test-dir build-native -j 4 --output-on-failure -E ^native_avx2$",
+    "ctest --test-dir build -R cmdq|rts_capacity|rts_churn|entity_tick -V",
+    "cmake --build build-admission-asan -j 4 --target test_rts_capacity test_rts_churn test_cmdq_admission",
+    "ctest --test-dir build-admission-asan -R ^rts_capacity$|^rts_churn$|^cmdq_admission$ -V"
+  ],
+  "mutations": {
+    "mutants": [
+      {
+        "mutant": "M3-M33",
+        "source": "src/runtime/entity_tick.c",
+        "edit": "ps[i] = m->uses_entity_ops ? m->max_struct_per_row : 0u; -> ps[i] = 1u;",
+        "test": "rts_capacity",
+        "test_exit": 8,
+        "result": "detected"
+      },
+      {
+        "mutant": "short-cap-check-off",
+        "source": "src/world/entities/su_cmdq.c",
+        "edit": "if (struct_count < nsystems || event_count < nsystems) { -> if (0 && (struct_count < nsystems || event_count < nsystems)) {",
+        "test": "rts_capacity",
+        "test_exit": 8,
+        "result": "detected"
+      },
+      {
+        "mutant": "despawn-zero-off",
+        "source": "src/world/su_world.c",
+        "edit": "su_zero_slot(w, w->committed, slot); -> if (0) su_zero_slot(w, w->committed, slot);",
+        "test": "rts_churn",
+        "test_exit": 8,
+        "result": "detected"
+      }
+    ],
+    "restored_tests_exit": 0,
+    "sanitizer_tests_exit": 0,
+    "worktree": "/root/sutekh-validation-host-fault-20261013"
+  },
+  "not_run": [
+    "Native Windows",
+    "Independent reviewer",
+    "Million-row scene load",
+    "Full sanitizer matrix",
+    "Engine-versus-Python-model digest equality"
+  ],
+  "performance": "Shared-WSL correctness observations, not throughput or performance qualification."
+}
