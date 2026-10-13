@@ -84,10 +84,18 @@ def _spec(m, **over):
     return spec
 
 
+def _world_with_anchor(m):
+    """A capacity-4 world whose slot 0 holds a live anchor, so a spec naming formation_slot 0 passes the Q2
+    liveness rule and is judged by the rule under test."""
+    w = m.World(4)
+    w.spawn(_spec(m, kind=m.KIND_ANCHOR, hp=0))
+    return w
+
+
 def _must_refuse(m, spec: dict, label: str) -> None:
     """The control plane must refuse this spawn with a type error. Any other outcome fails the check."""
     try:
-        m.World(4).spawn(spec)
+        _world_with_anchor(m).spawn(spec)
     except m.ModelError:
         return
     raise AssertionError(f"accepted but must be refused: {label}")
@@ -95,7 +103,7 @@ def _must_refuse(m, spec: dict, label: str) -> None:
 
 def _must_accept(m, spec: dict, label: str) -> None:
     try:
-        m.World(4).spawn(spec)
+        _world_with_anchor(m).spawn(spec)
     except m.ModelError as err:
         raise AssertionError(f"refused but must be accepted: {label} ({err.code})")
 

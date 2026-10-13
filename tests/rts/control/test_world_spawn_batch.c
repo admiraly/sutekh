@@ -280,6 +280,9 @@ int main(int argc, char **argv) {
     REFUSED("[" UNIT(",\"formation_slot\":1") "]", SU_E_TYPE, "formation_slot without formation_gen");
     REFUSED("[" UNIT(",\"formation_slot\":1,\"formation_gen\":0") "]", SU_E_TYPE, "formation_gen 0 with a slot");
     REFUSED("[" UNIT(",\"formation_slot\":8,\"formation_gen\":1") "]", SU_E_TYPE, "formation_slot beyond capacity");
+    /* Q2: a formation_slot must name a live row; slot 5 was despawned above. */
+    REFUSED("[" UNIT(",\"formation_slot\":5,\"formation_gen\":2") "]", SU_E_TYPE,
+            "formation_slot naming a dead row");
 
     /* Expected revision must match. */
     before = mark();
@@ -291,7 +294,7 @@ int main(int argc, char **argv) {
     before = mark();
     st = spawn_batch("[{\"values\":{\"kind\":1,\"hp\":5,\"pos_x\":11},\"external_id\":901},"
                      "{\"values\":{\"kind\":2,\"team\":1,\"pos_x\":12}},"
-                     "{\"values\":{\"kind\":1,\"hp\":65535,\"pos_x\":13,\"formation_slot\":5,\"formation_gen\":3}},"
+                     "{\"values\":{\"kind\":1,\"hp\":65535,\"pos_x\":13,\"formation_slot\":1,\"formation_gen\":3}},"
                      "{\"values\":{\"kind\":1,\"hp\":1,\"pos_x\":14,\"target_slot\":4294967295}}]",
                      NULL, &f, out, sizeof out);
     CHECK(st == SU_OK, "valid batch accepted: %s (%s)", su_status_name(st), f.msg);
@@ -305,7 +308,7 @@ int main(int argc, char **argv) {
     }
     CHECK(committed("formation_slot", 4) == NONE_U32 && committed("formation_gen", 4) == 0u,
           "omitted formation_slot is NONE (D1)");
-    CHECK(committed("formation_slot", 6) == 5u && committed("formation_gen", 6) == 3u, "named formation kept");
+    CHECK(committed("formation_slot", 6) == 1u && committed("formation_gen", 6) == 3u, "named formation kept");
     CHECK(committed("kind", 5) == 2u && committed("team", 5) == 1u && committed("hp", 5) == 0u, "anchor row");
     CHECK(strstr(out, "\"spawned\":4") != NULL, "reply counts the rows: %s", out);
     CHECK(strstr(out, "\"entities\":[8589934596,8589934597,8589934598,8589934599]") != NULL,

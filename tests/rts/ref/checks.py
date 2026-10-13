@@ -328,19 +328,27 @@ def check_gather_known_answers(m, ir) -> None:
     m.spatial_phase(w)
     assert w.cols["anchor_valid"][1] == 0, "despawned anchor with the assigned generation"
 
-    # dead anchor at its current (post-despawn) generation, reached through control-plane spawn only.
-    # Slots 0 and 1 are freed (lowest-free allocation gives slot 0 to the next spawn). The new member
-    # takes slot 0 and names dead slot 1 with gen 2, the value the slot now carries. 2.2 checks no
-    # liveness of formation_slot, so only the alive check (4.1(a)) refuses it. Mutant M3-M24 is caught here.
+    # Dead anchor at its current (post-despawn) generation. Q2 (owner decision, M3-05): the control plane
+    # refuses a formation_slot that names a dead row, so this state is not reachable through spawn or
+    # set_fields any more; it is built white-box, and the alive check of 4.1(a) must still refuse it at
+    # operator level. Mutant M3-M24 is caught here.
     w = m.World(3)
     h0 = w.spawn(_unit(m, 100, 100, 0))
     h1 = w.spawn(_unit(m, 1000, 1000, 0, kind=2))
     w.spawn(_unit(m, 2000, 2000, 0))
     w.despawn(h0)
     w.despawn(h1)
-    member = w.spawn(_unit(m, 1200, 1000, 0, formation_slot=1, formation_gen=w.gen[1],
-                           formation_ox=16384, formation_oy=16384))
+    try:
+        w.spawn(_unit(m, 1200, 1000, 0, formation_slot=1, formation_gen=w.gen[1],
+                      formation_ox=16384, formation_oy=16384))
+        raise AssertionError("Q2: spawn naming a dead formation_slot must be refused")
+    except m.ModelError as e:
+        assert (e.code, e.path) == ("SU_E_TYPE", "formation_slot"), "Q2 refusal code"
+    member = w.spawn(_unit(m, 1200, 1000, 0))
     assert member & 0xFFFFFFFF == 0, "member takes the lowest free slot"
+    w.cols["formation_slot"][0] = 1  # white-box: dead slot 1 at the generation it now carries
+    w.cols["formation_gen"][0] = w.gen[1]
+    w.cols["formation_ox"][0] = w.cols["formation_oy"][0] = 16384
     m.spatial_phase(w)
     assert w.cols["anchor_valid"][0] == 0 and w.cols["anchor_x"][0] == 0, \
         "dead slot at its current generation must not gather"

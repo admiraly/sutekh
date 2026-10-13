@@ -51,19 +51,27 @@ def error_status(resp: dict) -> str:
     return resp.get("error", {}).get("code", "") if "error" in resp else ""
 
 
-def max_rows(n: int) -> list:
-    return [rs.max_row(CAPACITY - 1) for _ in range(n)]
+def max_rows(n: int, formation_slot: int | None = None) -> list:
+    return [rs.max_row(formation_slot) for _ in range(n)]
 
 
 def case_a_and_recovery(binary: str) -> None:
-    """(a) accepted near-maximum 1,024-row request; one revision bump; 1,024 SPAWNED records; recovery."""
+    """(a) accepted near-maximum 1,024-row request; one revision bump; 1,024 SPAWNED records; recovery.
+
+    Slots 0..1023 are filled first (rows with formation_slot NONE), so the near-maximum rows can name live slot
+    1023 with formation_gen 4294967295 (Q2: a formation_slot must name a live row)."""
     ctl = rs.Session(binary)
     rec = rs.Session(binary)
     try:
         wid, rev = ctl.create_rts(CAPACITY, event_log_max=4096)
         wid_r, rev_r = rec.create_rts(CAPACITY, event_log_max=4096)
         check((wid, rev) == (wid_r, rev_r), "both sessions create the same world identity")
-        rows = max_rows(1024)
+        for s, w_rev in ((ctl, rev), (rec, rev_r)):
+            r = s.call("world.spawn_batch", {"world_id": wid, "expected_world_revision": w_rev,
+                                             "rows": max_rows(1024)})
+            check(r["world_revision"] == f"{wid}.r2", "fill batch: slots 0..1023")
+        rev = rev_r = f"{wid}.r2"
+        rows = max_rows(1024, 1023)
         line = batch_line(ctl, wid, rev, rows)
         check(len(line) <= rs.REQUEST_BYTES_MAX, f"near-maximum request fits 1 MiB ({len(line)} bytes)")
         params_rows = len(line) - len(batch_line(ctl, wid, rev, []))
@@ -75,11 +83,11 @@ def case_a_and_recovery(binary: str) -> None:
                 return
             r = resp["result"]
             check(r["spawned"] == 1024 and len(r["entities"]) == 1024, "1,024 rows spawned")
-            check(r["world_revision"] == f"{wid}.r2", f"one revision bump ({r['world_revision']})")
+            check(r["world_revision"] == f"{wid}.r3", f"one revision bump ({r['world_revision']})")
         ev, dropped = ctl.all_events(wid)
         spawned = [e for e in ev if e["kind"] == SPAWNED]
-        check(len(spawned) == 1024 and dropped == 0, f"1,024 SU_EVENT_SPAWNED records ({len(spawned)}, {dropped})")
-        check([e["slot"] for e in spawned] == list(range(1024)), "rows take slots 0..1023 in order")
+        check(len(spawned) == 2048 and dropped == 0, f"1,024 SU_EVENT_SPAWNED records per batch ({len(spawned)}, {dropped})")
+        check([e["slot"] for e in spawned] == list(range(2048)), "rows take slots 0..2047 in order")
 
         # Recovery: the batch is one logged entry. No snapshot is taken before the kill (it would checkpoint).
         old = rec.kill_worker()
@@ -88,7 +96,7 @@ def case_a_and_recovery(binary: str) -> None:
         recovery = resp.get("error", {}).get("recovery") or resp.get("recovery") or {}
         check(recovery.get("recovered") is True and recovery.get("replaced_pid_old") == old,
               f"world recovered in a replacement worker: {recovery}")
-        rev2 = f"{wid}.r2"
+        rev2 = f"{wid}.r3"
         check(ctl.snapshot_sha(wid, rev2) == rec.snapshot_sha(wid, rev2), "recovered digest equals the control")
         check(ctl.all_events(wid) == rec.all_events(wid), "recovered event log equals the control")
         step = {"world_id": wid, "expected_world_revision": rev2, "ticks": 2}

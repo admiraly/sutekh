@@ -672,6 +672,17 @@ used worlds are counted); the native lane covers the commit, rollback and bindin
   water plus the new rows. Recovery replays do not send them, so a logged spawn is never refused on replay. Both keys
   are worker-internal (a client sending them to the supervisor gets `SU_E_TYPE` for an unknown key).
 
+- **Formation liveness (Q2, owner decision).** A `formation_slot` other than NONE named by `world.spawn`,
+  `world.spawn_batch` or `world.set_fields` must be a live row of the committed state, else `SU_E_TYPE`. A batch is
+  checked against the state before the call, so a row cannot name a row of the same batch. `set_fields` checks the
+  slot only when the payload names `formation_slot`; a member whose anchor dies later keeps its value (the gather
+  of `rts.spatial` refuses it by generation).
+- **Per-tick caps at creation (contract 9.4, M3-M28).** `world.create` of a world whose `schema_id` is `rts` with
+  `max_struct_per_tick` or `max_events_per_tick` below its capacity is `SU_E_RESOURCE_LIMIT`: below that the kill-all
+  tick of 9.4 could stall.
+- **Equal-slot handles in `set_fields`.** Staleness is checked before duplication: two handles of one slot with
+  different generations give `SU_E_STALE_HANDLE`; the same handle twice gives `SU_E_INVALID_ARGUMENT`.
+
 Not yet: an `error.detail` path for spawn-rule violations (the field is named in the message only).
 
 ## 18. RTS control batches and host systems (M3-05; contract `planning/contracts/M3_RTS_CONTRACT.md` r4, 2.2, OD-3, OD-3b)

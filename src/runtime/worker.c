@@ -1033,6 +1033,15 @@ static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf 
         fail(f, SU_E_RESOURCE_LIMIT, "entity tick buffers exceed the resource budget; lower the rows or the systems");
         return SU_E_RESOURCE_LIMIT;
     }
+    /* Stall rule of the rts profile (contract M3 9.4, M3-M28): the merge never refuses a tick only while both
+     * per-tick caps are at least the capacity, so a world configured below it is refused here. */
+    if (strcmp(sched.schema_id, "rts") == 0 &&
+        (max_struct < su_world_row_count(inst.w) || max_events < su_world_row_count(inst.w))) {
+        inst_free(&inst);
+        su_sched_free(&sched);
+        fail(f, SU_E_RESOURCE_LIMIT, "an rts world needs max_struct_per_tick and max_events_per_tick >= its capacity");
+        return SU_E_RESOURCE_LIMIT;
+    }
     if (want != NULL) {
         /* Supervisor recovery: the world keeps the id it had before the worker died. */
         snprintf(id, sizeof id, "%s", want);
@@ -1185,6 +1194,19 @@ static uint32_t spawn_row_parse(WorkerWorld *ww, const SuJsonValue *vals, SuWorl
                      bad != NULL ? bad : "row");
             fail(f, SU_E_TYPE, msg);
             return SU_E_TYPE;
+        }
+        /* Q2 (owner decision, M3-05): a named formation_slot must be a live row of the committed state, so a
+         * member never names a dead slot at its current generation. In a batch this is the state before the
+         * batch: a row cannot name a row of the same call. */
+        for (i = 0; i < n; i++) {
+            if (strcmp(named[i].name, "formation_slot") == 0 && named[i].value != SU_RTS_NONE) {
+                uint8_t live = 0;
+                if (su_world_alive_view(ww->inst.w, named[i].value, 1u, &live) != SU_OK || live == 0u) {
+                    fail(f, SU_E_TYPE, "spawn value breaks a control rule of the rts profile: formation_slot "
+                                       "names a row that is not alive");
+                    return SU_E_TYPE;
+                }
+            }
         }
         for (i = 0; i < n_add; i++) {
             sv[n].field_id = field_id_by_name(ww, add[i].name, strlen(add[i].name));
@@ -1575,16 +1597,17 @@ static uint32_t h_world_set_fields(WorkerState *s, const SuJsonValue *params, Su
             return set_fields_fail(f, SU_E_TYPE, "each entities item needs entity (integer handle) and values (object)");
         }
         slot[i] = SU_ENTITY_SLOT(hv[i]);
-        for (k = 0; k < i; k++) {
-            if (slot[k] == slot[i]) {
-                return set_fields_fail(f, SU_E_INVALID_ARGUMENT, "duplicate entity in one world.set_fields call");
-            }
-        }
-        /* Liveness and generation of the handle (the committed row). */
+        /* Liveness and generation of the handle (the committed row), before the duplicate check: a stale
+         * handle naming a live entity's slot is a stale handle, not the same entity (reference model order). */
         if (su_world_alive_view(ww->inst.w, slot[i], 1u, &a) != SU_OK ||
             su_world_generation_view(ww->inst.w, slot[i], 1u, &g) != SU_OK || a == 0u ||
             g != SU_ENTITY_GEN(hv[i])) {
             return set_fields_fail(f, SU_E_STALE_HANDLE, "entity handle is stale or dead");
+        }
+        for (k = 0; k < i; k++) {
+            if (slot[k] == slot[i]) {
+                return set_fields_fail(f, SU_E_INVALID_ARGUMENT, "duplicate entity in one world.set_fields call");
+            }
         }
         for (k = 0; k < vals->u.object.count; k++) {
             const SuJsonMember *m = &vals->u.object.members[k];
@@ -1642,6 +1665,7 @@ static uint32_t h_world_set_fields(WorkerState *s, const SuJsonValue *params, Su
         uint32_t fs = col_fslot[slot[i]];
         uint32_t fg = col_fgen[slot[i]];
         uint32_t kind = col_kind[slot[i]];
+        int names_fslot = 0;
         for (j = 0; j < nf; j++) {
             if (!has[i][j]) {
                 continue;
@@ -1650,6 +1674,7 @@ static uint32_t h_world_set_fields(WorkerState *s, const SuJsonValue *params, Su
                 range = fval[i][j];
             } else if (fid[j] == id_fslot) {
                 fs = fval[i][j];
+                names_fslot = 1;
             } else if (fid[j] == id_fgen) {
                 fg = fval[i][j];
             }
@@ -1657,6 +1682,14 @@ static uint32_t h_world_set_fields(WorkerState *s, const SuJsonValue *params, Su
         /* formation_slot is NONE or a slot of this world (contract 2.2). */
         if (su_rts_ctl_check_formation_slot(fs, (uint32_t)rows_n) != SU_OK) {
             return set_fields_fail(f, SU_E_TYPE, "formation_slot is outside the world's capacity");
+        }
+        /* Q2: a newly written formation_slot must name a live row (a committed value whose anchor died later
+         * is left alone; only the write is checked). */
+        if (names_fslot && fs != SU_RTS_NONE) {
+            uint8_t live = 0;
+            if (su_world_alive_view(ww->inst.w, fs, 1u, &live) != SU_OK || live == 0u) {
+                return set_fields_fail(f, SU_E_TYPE, "formation_slot names a row that is not alive");
+            }
         }
         if (su_rts_ctl_check_row(kind, range, fs, fg) != SU_OK) {
             return set_fields_fail(f, SU_E_TYPE, "resulting row breaks a control rule; call refused");

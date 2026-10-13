@@ -936,7 +936,7 @@ static void scenario_control_batches(uint32_t interval, const char *tag) {
     pair_batch(&p, "world.spawn_batch", "rows",
                "[{\"values\":{\"kind\":1,\"hp\":7,\"pos_x\":40,\"range_sq\":900},\"external_id\":77},"
                "{\"values\":{\"kind\":2,\"team\":1,\"pos_x\":50}},"
-               "{\"values\":{\"kind\":1,\"hp\":9,\"pos_x\":60,\"formation_slot\":5,\"formation_gen\":2}},"
+               "{\"values\":{\"kind\":1,\"hp\":9,\"pos_x\":60,\"formation_slot\":2,\"formation_gen\":2}},"
                "{\"values\":{\"kind\":1,\"hp\":3,\"team\":1,\"pos_x\":70}}]",
                0u);
     pair_batch(&p, "world.set_fields", "entities", "[{\"entity\":4294967296,\"values\":{\"kind\":2}}]", SU_E_TYPE);

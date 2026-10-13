@@ -185,6 +185,12 @@ add_test(NAME rts_replay COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/r
 # M3-05 T-RTS-LOAD-1 (a)-(c), (g) through a real supervisor with the full six-system RTS world.
 add_test(NAME rts_load_engine COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/load/test_load_engine.py"
          $<TARGET_FILE:sutekh>)
+# M3-05 T-RTS-CAPS-1 (config check at create) and T-RTS-CAPS-2 (kill-all tick) through a real supervisor.
+add_test(NAME rts_caps_engine COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/load/test_caps_engine.py"
+         $<TARGET_FILE:sutekh>)
+# M3-05 T-RTS-CTRL-1 on the 39-field RTS world through a real supervisor.
+add_test(NAME rts_ctrl_engine COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/load/test_ctrl_engine.py"
+         $<TARGET_FILE:sutekh>)
 
 add_executable(test_reload tests/reload/test_reload.c)
 target_link_libraries(test_reload PRIVATE su_agent)

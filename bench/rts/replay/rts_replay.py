@@ -212,6 +212,8 @@ class ModelBackend(Backend):
                 if type(ext) is not int or not (0 <= ext <= U32_MAX):
                     raise ModelError("SU_E_TYPE", "external_id", "u32 integer")
                 specs.append(validate_spawn(r["values"], w.cap))
+                # Q2: liveness against the state before the batch (rows of this batch are not yet alive).
+                w.check_formation_live(specs[-1]["formation_slot"])
             try:
                 limits.check_prechecks(len(rows), w.cap, sum(w.alive), w.hw)
             except limits.BatchRefused as exc:
@@ -283,6 +285,12 @@ def _set_fields(w: World, args: dict) -> None:
             raise ModelError("SU_E_TYPE", "formation_gen", "formation_gen = 0 iff slot NONE")
         if row["kind"] == 2 and row["range_sq"] != 0:
             raise ModelError("SU_E_TYPE", "range_sq", "must be 0 on kind 2")
+        if "formation_slot" in values:
+            # Q2: a newly named formation slot must be a live row (a row whose anchor dies later keeps its
+            # value; only the write is checked).
+            if row["formation_slot"] != NONE and row["formation_slot"] >= w.cap:
+                raise ModelError("SU_E_TYPE", "formation_slot", "outside the world's capacity")
+            w.check_formation_live(row["formation_slot"])
         plans.append((slot, values))
     for slot, values in plans:
         for name, v in values.items():

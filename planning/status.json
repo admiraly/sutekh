@@ -126,7 +126,27 @@
       "M3-03",
       "M3-04"
     ],
-    "note": "M3-05 next (OD-3, OD-3b, OD-3c, OD-20 accepted 2026-10-12). Owner delegated remaining approvals on 2026-10-12: OD-11 accepted as stated (native lane for M3-10 allowed now that M1 is owner-accepted); OD-15 not changed (recovery claim stays N<=65,536; raising the limit needs a snapshot-owner change not yet scoped); docs/AGENT_RPC.md edit for M3-05 approved, limited to recording the new control methods. Q2 liveness refusal still to do in M3-05."
+    "note": "M3-05 next (OD-3, OD-3b, OD-3c, OD-20 accepted 2026-10-12). Owner delegated remaining approvals on 2026-10-12: OD-11 accepted as stated (native lane for M3-10 allowed now that M1 is owner-accepted); OD-15 not changed (recovery claim stays N<=65,536; raising the limit needs a snapshot-owner change not yet scoped); docs/AGENT_RPC.md edit for M3-05 approved, limited to recording the new control methods. Q2 liveness refusal implemented in M3-05 (2026-10-13; see planning/handoffs/2026-10-13-m3-05-ctrl-caps-q2.md).",
+    "m3_05_progress": {
+      "date": "2026-10-13",
+      "done": [
+        "world.set_fields and world.spawn_batch (worker, supervisor, recovery log)",
+        "host systems in world.create",
+        "spawn defaults D1, batch atomicity D3, resulting-row rules D2",
+        "high-water and spool admission prechecks",
+        "OD-20 per-system structural caps",
+        "T-RTS-LOAD-1 (a)(b)(c)(g) engine",
+        "T-RTS-CTRL-1 engine",
+        "T-RTS-CAPS-1 config check and T-RTS-CAPS-2 engine",
+        "Q2 formation liveness refusal"
+      ],
+      "open": [
+        "T-RTS-LOAD-1 (e)(f) engine (near-million-row world)",
+        "T-RTS-REPLAY-1..3 against the engine (recorder/replayer engine backend)",
+        "T-RTS-CAPS-3 acceptance (1)/(2) at 699,051 and 1,048,576 rows",
+        "T-RTS-CHURN-1"
+      ]
+    }
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "m0_accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",

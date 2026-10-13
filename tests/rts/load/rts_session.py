@@ -133,14 +133,18 @@ class Session:
             cursor = r["next_cursor"]
 
 
-def max_row(formation_slot: int) -> dict:
-    """A domain-valid kind-1 row with the longest value of every field (contract 10.3 (a))."""
+def max_row(formation_slot: int | None) -> dict:
+    """A domain-valid kind-1 row with the longest value of every field (contract 10.3 (a)). formation_slot must
+    name a live row (Q2); None gives NONE with generation 0."""
     vals = {name: 0 for name in model.SPAWN_IDLE_ZERO}
     for name in model.SPAWN_IDLE_NONE:
         vals[name] = NONE
     vals.update({"kind": 1, "team": 1, "hp": 65535, "pos_x": 32767, "pos_y": 32767, "speed": 1024,
                  "range_sq": 262144, "reload": 1024, "damage": 65535, "flight": 64, "order_mode": 2,
-                 "order_x": 32767, "order_y": 32767, "formation_slot": formation_slot, "formation_gen": NONE,
-                 "formation_ox": 32767, "formation_oy": 32767})
+                 "order_x": 32767, "order_y": 32767, "formation_ox": 32767, "formation_oy": 32767})
+    if formation_slot is None:
+        vals.update({"formation_slot": NONE, "formation_gen": 0})
+    else:
+        vals.update({"formation_slot": formation_slot, "formation_gen": NONE})
     assert set(vals) == set(model.FIELD_NAMES)
     return {"values": vals, "external_id": NONE}

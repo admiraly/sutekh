@@ -163,9 +163,16 @@ class World:
         """SuEntity handle for the live row at slot: generation << 32 | slot."""
         return (self.gen[slot] << 32) | slot
 
+    def check_formation_live(self, formation_slot: int) -> None:
+        """Q2 (owner decision, M3-05): a formation_slot other than NONE must name a live row of the committed
+        state, so a member never names a dead slot at its current generation (M3-M24)."""
+        if formation_slot != NONE and not self.alive[formation_slot]:
+            raise ModelError("SU_E_TYPE", "formation_slot", "must name a live row")
+
     def spawn(self, spec: dict) -> int:
         """Spawn one row from named fields; returns the handle. Omitted fields take the 2.2 defaults."""
         vals = validate_spawn(spec, self.cap)
+        self.check_formation_live(vals["formation_slot"])
         slot = next((s for s in range(self.cap) if not self.alive[s]), None)
         if slot is None:
             raise ModelError("SU_E_RESOURCE_LIMIT", "world", "no free slot")
