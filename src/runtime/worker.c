@@ -1881,6 +1881,25 @@ static uint32_t h_world_inspect(WorkerState *s, const SuJsonValue *params, SuBuf
     su_buf_u64(res, su_ents_retired_count(su_world_entities_committed(ww->inst.w)));
     su_buf_str(res, ",\"high_water\":");
     su_buf_u64(res, su_ents_high_water(su_world_entities_committed(ww->inst.w)));
+    {
+        /* RTS digest counts (contract M3 9.1): alive rows whose truncated flag is set by the last rts.spatial run.
+         * Reported when the schema has the field. */
+        uint32_t tid = field_id_by_name(ww, "truncated", 9u);
+        const uint32_t *tcol = NULL;
+        uint64_t trows = 0;
+        if (tid != 0u && su_world_read_committed(ww->inst.w, tid, &tcol, &trows) == SU_OK) {
+            uint64_t r;
+            uint64_t n = 0;
+            for (r = 0; r < trows; r++) {
+                uint8_t live = 0;
+                if (tcol[r] != 0u && su_world_alive_view(ww->inst.w, (uint32_t)r, 1u, &live) == SU_OK && live) {
+                    n++;
+                }
+            }
+            su_buf_str(res, ",\"truncated_rows\":");
+            su_buf_u64(res, n);
+        }
+    }
     su_buf_str(res, "}");
     /* M2-01b (contract section 7): layout generation, migration lineage (hex), the world's schema with use and
      * access, and the systems that still need resubmission (none after a successful commit). */

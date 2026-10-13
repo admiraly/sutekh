@@ -683,6 +683,12 @@ used worlds are counted); the native lane covers the commit, rollback and bindin
 - **Equal-slot handles in `set_fields`.** Staleness is checked before duplication: two handles of one slot with
   different generations give `SU_E_STALE_HANDLE`; the same handle twice gives `SU_E_INVALID_ARGUMENT`.
 
+- **`world.inspect`** `entities` also reports `truncated_rows` when the schema has a `truncated` field: the alive rows
+  whose flag the last `rts.spatial` run set (an rts-replay digest count, contract 9.1).
+- **Checkpoint interval.** `sutekh serve` reads `SUTEKH_CHECKPOINT_INTERVAL_TICKS` (1..1,048,576, default 64); the RTS
+  replay header records `checkpoint_every` 32 (contract 9.1, T-RTS-REPLAY-3). `world.snapshot` is also a checkpoint,
+  so a recovery after a snapshot replays nothing.
+
 Not yet: an `error.detail` path for spawn-rule violations (the field is named in the message only).
 
 ## 18. RTS control batches and host systems (M3-05; contract `planning/contracts/M3_RTS_CONTRACT.md` r4, 2.2, OD-3, OD-3b)

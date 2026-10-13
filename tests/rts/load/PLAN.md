@@ -2,7 +2,7 @@
 
 Source: `planning/contracts/M3_RTS_CONTRACT.md`, section 10.3. Byte bound: 925 bytes per maximum row, 948,225 bytes for 1,024 rows. Request cap: 1,048,576 bytes, checked on the raw request line before row parsing.
 
-Engine test: `tests/rts/load/test_load_engine.py` (ctest `rts_load_engine`), a real `sutekh serve` with the full six-system RTS world built by `world.create` (`tests/rts/load/rts_session.py`).
+Engine test: `tests/rts/load/test_load_engine.py` (ctest `rts_load_engine`), a real `sutekh serve` with the full six-system RTS world built by `world.create` (`bench/rts/replay/rts_session.py`).
 
 | case | claim | where it runs now | status |
 |---|---|---|---|

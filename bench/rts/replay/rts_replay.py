@@ -390,8 +390,9 @@ class Recorder:
             "format": FORMAT, "version": VERSION, "numeric_profile": NUMERIC_PROFILE,
             "scene": scene_header(self.scene["generator"], self.scene.get("params", {}),
                                   self.scene["seed"], self.scene["capacity"], self.scene_digest),
-            "schema_digest": "sha256:" + "0" * 64,  # model has no engine schema descriptor
-            "system_manifest_hash": "sha256:" + "0" * 64,
+            # The model has no engine schema descriptor or system manifest; an engine backend provides both.
+            "schema_digest": getattr(self.backend, "schema_digest", "sha256:" + "0" * 64),
+            "system_manifest_hash": getattr(self.backend, "system_manifest_hash", "sha256:" + "0" * 64),
             "operator_manifest_hash": self.backend.operator_manifest_hash,
             "engine": self.engine, "caps": self.caps,
             "spool": {"checkpoint_retain": 0, "spool_bytes_max": 0},

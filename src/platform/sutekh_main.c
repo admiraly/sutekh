@@ -91,6 +91,18 @@ static int run_serve(int argc, char **argv) {
             }
         }
     }
+    /* Checkpoint interval in accepted ticks (default 64). SUTEKH_CHECKPOINT_INTERVAL_TICKS=N (1..1,048,576)
+     * overrides it; the M3 replay header records checkpoint_every = 32 (contract M3 9.1, T-RTS-REPLAY-3). */
+    {
+        const char *ci_env = getenv("SUTEKH_CHECKPOINT_INTERVAL_TICKS");
+        if (ci_env != NULL && ci_env[0] >= '1' && ci_env[0] <= '9') {
+            char *end = NULL;
+            unsigned long long v = strtoull(ci_env, &end, 10);
+            if (end != NULL && *end == '\0' && v >= 1u && v <= 1048576u) {
+                cfg.checkpoint_interval_ticks = (uint32_t)v;
+            }
+        }
+    }
     {
         const char *as_env = getenv("SUTEKH_WORKER_AS_BYTES");
         if (as_env != NULL && as_env[0] >= '0' && as_env[0] <= '9') {

@@ -138,13 +138,15 @@
         "T-RTS-LOAD-1 (a)(b)(c)(g) engine",
         "T-RTS-CTRL-1 engine",
         "T-RTS-CAPS-1 config check and T-RTS-CAPS-2 engine",
-        "Q2 formation liveness refusal"
+        "Q2 formation liveness refusal",
+        "T-RTS-REPLAY-1..3 against the engine (fault seams inside host operators not yet)"
       ],
       "open": [
         "T-RTS-LOAD-1 (e)(f) engine (near-million-row world)",
-        "T-RTS-REPLAY-1..3 against the engine (recorder/replayer engine backend)",
         "T-RTS-CAPS-3 acceptance (1)/(2) at 699,051 and 1,048,576 rows",
-        "T-RTS-CHURN-1"
+        "T-RTS-CHURN-1",
+        "REPLAY-3 fault seams in rts.spatial/rts.scatter",
+        "Q8 engine-vs-model digest equality"
       ]
     }
   },

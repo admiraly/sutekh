@@ -92,8 +92,8 @@
     },
     {
       "path": "CMakeLists.txt",
-      "bytes": 34493,
-      "sha256": "2ff7a1f889338fd8d56d083dc2c8e6888044b9f78ac503034fc870ec291e42aa"
+      "bytes": 34746,
+      "sha256": "8ef2aae14177d0bdc1d3d36632c424769ee3b12bc3d6b3b3728b8a34bdcbecdd"
     },
     {
       "path": "COMMERCIAL_LICENSE.md",
@@ -157,8 +157,8 @@
     },
     {
       "path": "SUTEKH_FULL_SPEC.md",
-      "bytes": 186441,
-      "sha256": "fb2ded78ae23284bfad3900d0c1603d5e2f781dc4903a379a08d45d38c9b494e"
+      "bytes": 186935,
+      "sha256": "8d17bd7b6da1284a58e18aa002f0fc8ac7079d0ba6a69a7ef4ffe793cb5c9bce"
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -321,9 +321,19 @@
       "sha256": "84328d0c00722eb62683669e45baf1636df32eea7441cd2bd46b9807d4e2ae0d"
     },
     {
+      "path": "bench/rts/replay/engine_backend.py",
+      "bytes": 4325,
+      "sha256": "c986af423346e90b89aa6bb8abe6fb87c9f5f9ca05d70ae498786813f6530e5e"
+    },
+    {
       "path": "bench/rts/replay/rts_replay.py",
-      "bytes": 21207,
-      "sha256": "3332a286ce1233342834f68c8cb45bfb9a7eb228968818129ee07434b412a43c"
+      "bytes": 21362,
+      "sha256": "aa97338ecb983394b52a0892a3785ee7574d960e7ccbf921b011cf0b0b9e6b59"
+    },
+    {
+      "path": "bench/rts/replay/rts_session.py",
+      "bytes": 6711,
+      "sha256": "f52d645f3950d6791358732ec9cd8f43e2cf8f8c4999bbfaf2b9d736f41c5977"
     },
     {
       "path": "bench/rts/replay/spawn_batch_limits.py",
@@ -392,8 +402,8 @@
     },
     {
       "path": "docs/AGENT_RPC.md",
-      "bytes": 63173,
-      "sha256": "838a25b783286139726eda8280c438dd5f5f97f51a3881b005c746585affc37c"
+      "bytes": 63667,
+      "sha256": "b712ea34bfefb407a656f46d3aa279e8caed6fb00f175f55028aa79666354596"
     },
     {
       "path": "docs/BACKENDS_AND_DEPENDENCIES.md",
@@ -1221,14 +1231,19 @@
       "sha256": "f6fc8c83bcf1c8775ec9132589e2f4bec013a825f95f50c023eac808b9de8901"
     },
     {
+      "path": "planning/handoffs/2026-10-13-m3-05-replay-engine.md",
+      "bytes": 2511,
+      "sha256": "d3e3d20d8d9fbf557cfc4966797a59e632d1bfea06fd784b6f3ed347b44a6218"
+    },
+    {
       "path": "planning/handoffs/2026-10-13-m3-05-spawn-batch-worker.md",
       "bytes": 3627,
       "sha256": "7975b52675a1cff861dceccc1feff1955a41163eaf988c512cf4f8f20061bed1"
     },
     {
       "path": "planning/status.json",
-      "bytes": 8657,
-      "sha256": "29bd0b0557f05b2613fc04c27e3eed0c4b9fa9281fd2cec1f34fd6a0dd5076a1"
+      "bytes": 8771,
+      "sha256": "270733f43c5df0316f928bcfa52be00662abee7d6badf320cc3b03bd71fff78d"
     },
     {
       "path": "planning/tasks.json",
@@ -1472,8 +1487,8 @@
     },
     {
       "path": "src/platform/sutekh_main.c",
-      "bytes": 5600,
-      "sha256": "c8923136b8c269da53b5ace7c5686642f2022ec5b4f5459814f1be977e5da264"
+      "bytes": 6227,
+      "sha256": "e2a20e14946dfa05a8ffac1de012a3e1271eaf30a490ee6900651eb3b1662d5f"
     },
     {
       "path": "src/runtime/checkpoint.c",
@@ -1587,8 +1602,8 @@
     },
     {
       "path": "src/runtime/worker.c",
-      "bytes": 234377,
-      "sha256": "948e81e1e18acbac807ff4f620ec7aafdb477aadd59f221609e85989b12b64f6"
+      "bytes": 235172,
+      "sha256": "c747df573473afcf4f186aa5edf872f0c240ddbcdc28ba8ab34689386c5ea779"
     },
     {
       "path": "src/runtime/worker.h",
@@ -3537,28 +3552,23 @@
     },
     {
       "path": "tests/rts/load/PLAN.md",
-      "bytes": 2301,
-      "sha256": "85b5db377598f731a00497682b4e69f9416dcaa967a6e3606d125d244fcf3458"
-    },
-    {
-      "path": "tests/rts/load/rts_session.py",
-      "bytes": 6598,
-      "sha256": "a5730576c07ffd81cc995cd6e1c3fa3aedf87f0b4b93a7e8521cf1a6d86a0d9a"
+      "bytes": 2303,
+      "sha256": "e6b373b1ed469a85d0724200644ba0cd5602fb022e4759bb6c9ad0ba61da84d5"
     },
     {
       "path": "tests/rts/load/test_caps_engine.py",
-      "bytes": 7224,
-      "sha256": "59248ee241c9004987e8b99d4568b50b32693f3f7035c5637576422325626fce"
+      "bytes": 7282,
+      "sha256": "2d83c3b48a1d7755da6f85d41639ccaa6b9d13f88b33a8b9b6ea9809aa90ae2e"
     },
     {
       "path": "tests/rts/load/test_ctrl_engine.py",
-      "bytes": 11726,
-      "sha256": "28610be6d7425418a300987a64fabc0dc338a7760b983006f33d14e18ef93b35"
+      "bytes": 11772,
+      "sha256": "be9c58e3159a4b8ffbc2f4a440a3f34523d99138f1d2efaa16b13ab2ac393b50"
     },
     {
       "path": "tests/rts/load/test_load_engine.py",
-      "bytes": 10331,
-      "sha256": "dbefd2144cbcf1c779c97c8b5e9a87928f6a43c1c19e9e94acb1a26e0541017d"
+      "bytes": 10389,
+      "sha256": "7d8bac733c8a26edcd72ba2df95870a6062b70492843b4851f1eef8d9d98cea3"
     },
     {
       "path": "tests/rts/load/test_load_plan.py",
@@ -3634,6 +3644,11 @@
       "path": "tests/rts/replay/test_replay.py",
       "bytes": 14119,
       "sha256": "d2b22c38f0b9f374adafbfaea17c4f2a3a587f09ffc7d15cf847be7e405876b3"
+    },
+    {
+      "path": "tests/rts/replay/test_replay_engine.py",
+      "bytes": 10248,
+      "sha256": "e2fea82071397c1424ed7d73e6eb676f79b3e58ae38c782651c26be13843a7a2"
     },
     {
       "path": "tests/scheduler/fixtures/pipe/advance.capsule.json",

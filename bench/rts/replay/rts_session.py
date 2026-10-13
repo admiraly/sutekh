@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(REPO, "bench", "rts", "ref"))
 import model  # noqa: E402  (bench/rts/ref/model.py: the field table of contract section 2)
 
 NONE = 0xFFFFFFFF
+EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"  # source hash of a host entry
 REQUEST_BYTES_MAX = 1048576
 
 IR_SYSTEMS = ("goal", "combat", "move", "damage")
