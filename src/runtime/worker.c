@@ -1103,37 +1103,48 @@ static uint32_t h_world_create(WorkerState *s, const SuJsonValue *params, SuBuf 
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
-/* world.spawn {world_id, expected_world_revision, values:{<field>: u32}, external_id?: u32}. */
-static uint32_t h_world_spawn(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
-    WorkerWorld *ww;
-    const char *expect = str_of(params, "expected_world_revision");
-    const SuJsonValue *vals = su_json_member(params, "values");
-    const SuJsonValue *xid = su_json_member(params, "external_id");
-    SuWorldSpawnValue sv[SU_LIMIT_FIELDS];
-    uint64_t ext = 0;
-    uint64_t v = 0;
-    SuEntity h = SU_ENTITY_INVALID;
-    uint32_t n = 0;
-    uint32_t i;
-    uint32_t st = SU_OK;
-    char rev[64];
+/* Field id of a schedule field by name, or 0 when the schedule has no such field. */
+static uint32_t field_id_by_name(const WorkerWorld *ww, const char *name, size_t len) {
+    uint32_t k;
+    for (k = 0; k < ww->sched.field_count; k++) {
+        const char *nm = ww->sched.fields[k].name;
+        if (strlen(nm) == len && memcmp(nm, name, len) == 0) {
+            return ww->sched.fields[k].id;
+        }
+    }
+    return 0u;
+}
 
-    ww = world_param(s, params, f, &st);
-    if (st != SU_OK) {
-        return st;
-    }
-    st = check_expected(ww, expect, f);
-    if (st != SU_OK) {
-        return st;
-    }
-    if (vals == NULL || vals->type != SU_JSON_OBJECT || ent_log(ww) == NULL) {
-        fail(f, SU_E_TYPE, "world.spawn needs values as an object of field names to u32");
-        return SU_E_TYPE;
-    }
-    if (xid != NULL && (!su_json_get_uint(xid, &ext) || ext > UINT32_MAX)) {
-        fail(f, SU_E_TYPE, "external_id must be a u32 integer");
-        return SU_E_TYPE;
-    }
+/* Snapshot row guard (contract 12, audit N-c): admission keeps high water at or below this bound so a
+ * periodic capture is never refused by the guard. */
+#define SPAWN_HIGH_WATER_MAX 838860u
+/* Rows of one world.spawn_batch call (OD-3b). */
+#define SPAWN_BATCH_MAX_ROWS 1024u
+/* Spawn values of one row: every schema field at most once, plus the defaults of the RTS spawn rules. */
+#define SPAWN_ROW_CAP (SU_LIMIT_FIELDS + SU_RTS_SPAWN_ADD_MAX)
+
+/* World of the RTS profile (profiles/rts/schema/rts_u32_v1.json): spawns follow the rules of contract 2.2. */
+static int world_is_rts(const WorkerWorld *ww) {
+    return strcmp(ww->sched.schema_id, "rts") == 0;
+}
+
+static int sched_has_field(const char *name, void *ctx) {
+    return field_id_by_name((const WorkerWorld *)ctx, name, strlen(name)) != 0u;
+}
+
+/* Parses one spawn values object into sv[0..*n_out) (sv holds SPAWN_ROW_CAP entries). Unknown names are
+ * SU_E_SCHEMA_MISMATCH and non-u32 values SU_E_TYPE. On an RTS world the spawn rules of contract 2.2 and
+ * D1 then apply, and their NONE defaults are appended. Nothing is written. */
+static uint32_t spawn_row_parse(WorkerWorld *ww, const SuJsonValue *vals, SuWorldSpawnValue *sv, uint32_t *n_out,
+                                WorkerFail *f) {
+    SuRtsNamed named[SU_LIMIT_FIELDS];
+    SuRtsNamed add[SU_RTS_SPAWN_ADD_MAX];
+    const char *bad = NULL;
+    uint32_t n = 0;
+    uint32_t n_add = 0;
+    uint32_t i;
+    uint64_t v = 0;
+
     if (vals->u.object.count > SU_LIMIT_FIELDS) {
         fail(f, SU_E_SCHEMA_MISMATCH, "values names an unknown field");
         return SU_E_SCHEMA_MISMATCH;
@@ -1159,7 +1170,85 @@ static uint32_t h_world_spawn(WorkerState *s, const SuJsonValue *params, SuBuf *
         }
         sv[n].field_id = ww->sched.fields[found].id;
         sv[n].value = (uint32_t)v;
+        named[n].name = ww->sched.fields[found].name;
+        named[n].value = (uint32_t)v;
         n++;
+    }
+    if (world_is_rts(ww)) {
+        char msg[WORKER_MSG_CAP];
+        uint32_t cap = (uint32_t)ww->inst.rows;
+        if (su_rts_ctl_spawn_row(named, n, cap, sched_has_field, ww, add, &n_add, &bad) != SU_OK) {
+            snprintf(msg, sizeof msg, "spawn value breaks a control rule of the rts profile: %s",
+                     bad != NULL ? bad : "row");
+            fail(f, SU_E_TYPE, msg);
+            return SU_E_TYPE;
+        }
+        for (i = 0; i < n_add; i++) {
+            sv[n].field_id = field_id_by_name(ww, add[i].name, strlen(add[i].name));
+            sv[n].value = add[i].value;
+            n++;
+        }
+    }
+    *n_out = n;
+    return SU_OK;
+}
+
+/* Admission prechecks of rows new rows (contract 2.2 D3 and 12): free slots, then the high-water bound
+ * hw + rows. A refusal changes nothing. The spool precheck of 12 needs the supervisor's spool settings and
+ * is not applied here. */
+static uint32_t spawn_precheck(WorkerWorld *ww, uint32_t rows, WorkerFail *f) {
+    const SuEnts *e = su_world_entities_committed(ww->inst.w);
+    if (e == NULL) {
+        fail(f, SU_E_INTERNAL, "world has no entity table");
+        return SU_E_INTERNAL;
+    }
+    if (rows > su_ents_capacity(e) - su_ents_alive_count(e)) {
+        fail(f, SU_E_RESOURCE_LIMIT, "not enough free slots; world unchanged");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    if ((uint64_t)su_ents_high_water(e) + rows > SPAWN_HIGH_WATER_MAX) {
+        fail(f, SU_E_RESOURCE_LIMIT, "high water would pass the snapshot row bound; world unchanged");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    return SU_OK;
+}
+
+/* world.spawn {world_id, expected_world_revision, values:{<field>: u32}, external_id?: u32}. */
+static uint32_t h_world_spawn(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const SuJsonValue *vals = su_json_member(params, "values");
+    const SuJsonValue *xid = su_json_member(params, "external_id");
+    SuWorldSpawnValue sv[SPAWN_ROW_CAP];
+    uint64_t ext = 0;
+    SuEntity h = SU_ENTITY_INVALID;
+    uint32_t n = 0;
+    uint32_t st = SU_OK;
+    char rev[64];
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = check_expected(ww, expect, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (vals == NULL || vals->type != SU_JSON_OBJECT || ent_log(ww) == NULL) {
+        fail(f, SU_E_TYPE, "world.spawn needs values as an object of field names to u32");
+        return SU_E_TYPE;
+    }
+    if (xid != NULL && (!su_json_get_uint(xid, &ext) || ext > UINT32_MAX)) {
+        fail(f, SU_E_TYPE, "external_id must be a u32 integer");
+        return SU_E_TYPE;
+    }
+    st = spawn_row_parse(ww, vals, sv, &n, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = spawn_precheck(ww, 1u, f);
+    if (st != SU_OK) {
+        return st;
     }
     st = su_world_spawn(ww->inst.w, sv, n, (uint32_t)ext, &h);
     if (st != SU_OK) {
@@ -1236,16 +1325,115 @@ static uint32_t h_world_despawn(WorkerState *s, const SuJsonValue *params, SuBuf
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
-/* Field id of a schedule field by name, or 0 when the schedule has no such field. */
-static uint32_t field_id_by_name(const WorkerWorld *ww, const char *name, size_t len) {
-    uint32_t k;
-    for (k = 0; k < ww->sched.field_count; k++) {
-        const char *nm = ww->sched.fields[k].name;
-        if (strlen(nm) == len && memcmp(nm, name, len) == 0) {
-            return ww->sched.fields[k].id;
+/* world.spawn_batch {world_id, expected_world_revision, rows:[{values, external_id?}]} (M3-05, OD-3b,
+ * contract 2.2 D3). Every row is parsed and checked (spawn_row_parse) and the admission prechecks run for
+ * the whole batch before the first su_world_spawn, so a refused call takes no slot, appends no record and
+ * keeps the revision. An accepted call spawns the rows in the given order, appends one SU_EVENT_SPAWNED per
+ * row and bumps the revision once. The 1 MiB request cap is the protocol's (su_proto), before parsing. */
+static uint32_t h_world_spawn_batch(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
+    WorkerWorld *ww;
+    const char *expect = str_of(params, "expected_world_revision");
+    const SuJsonValue *rows = su_json_member(params, "rows");
+    SuWorldSpawnValue *sv = NULL;
+    uint32_t cnt[SPAWN_BATCH_MAX_ROWS];
+    uint32_t ext[SPAWN_BATCH_MAX_ROWS];
+    SuEntity hs[SPAWN_BATCH_MAX_ROWS];
+    uint32_t n;
+    uint32_t i;
+    uint32_t st = SU_OK;
+    char rev[64];
+
+    ww = world_param(s, params, f, &st);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = check_expected(ww, expect, f);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (rows == NULL || rows->type != SU_JSON_ARRAY || ent_log(ww) == NULL) {
+        fail(f, SU_E_TYPE, "world.spawn_batch needs rows as an array of {values, external_id?} objects");
+        return SU_E_TYPE;
+    }
+    if (rows->u.array.count == 0u || rows->u.array.count > SPAWN_BATCH_MAX_ROWS) {
+        fail(f, SU_E_RESOURCE_LIMIT, "world.spawn_batch takes 1 to 1024 rows");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    n = (uint32_t)rows->u.array.count;
+    sv = malloc((size_t)n * SPAWN_ROW_CAP * sizeof *sv);
+    if (sv == NULL) {
+        fail(f, SU_E_RESOURCE_LIMIT, "allocation failed");
+        return SU_E_RESOURCE_LIMIT;
+    }
+
+    /* Validate every row. Nothing is written. */
+    for (i = 0; i < n; i++) {
+        const SuJsonValue *item = rows->u.array.items[i];
+        const SuJsonValue *vals = NULL;
+        const SuJsonValue *xid = NULL;
+        uint64_t x = 0;
+
+        if (item != NULL && item->type == SU_JSON_OBJECT) {
+            vals = su_json_member(item, "values");
+            xid = su_json_member(item, "external_id");
+        }
+        if (vals == NULL || vals->type != SU_JSON_OBJECT) {
+            free(sv);
+            fail(f, SU_E_TYPE, "each rows item needs values as an object of field names to u32");
+            return SU_E_TYPE;
+        }
+        if (xid != NULL && (!su_json_get_uint(xid, &x) || x > UINT32_MAX)) {
+            free(sv);
+            fail(f, SU_E_TYPE, "external_id must be a u32 integer");
+            return SU_E_TYPE;
+        }
+        ext[i] = (uint32_t)x;
+        st = spawn_row_parse(ww, vals, sv + (size_t)i * SPAWN_ROW_CAP, &cnt[i], f);
+        if (st != SU_OK) {
+            free(sv);
+            return st;
         }
     }
-    return 0u;
+    st = spawn_precheck(ww, n, f);
+    if (st != SU_OK) {
+        free(sv);
+        return st;
+    }
+
+    /* Apply. With the prechecks passed, a failure here is an invariant break, not a limit. */
+    for (i = 0; i < n; i++) {
+        st = su_world_spawn(ww->inst.w, sv + (size_t)i * SPAWN_ROW_CAP, cnt[i], ext[i], &hs[i]);
+        if (st == SU_OK) {
+            st = ent_log_one(ww, SU_EVENT_SPAWNED, SU_ENTITY_SLOT(hs[i]), SU_ENTITY_SLOT(hs[i]),
+                             SU_ENTITY_GEN(hs[i]));
+        }
+        if (st != SU_OK) {
+            free(sv);
+            if (i > 0u) {
+                ww->revision++;
+            }
+            fail(f, SU_E_INTERNAL, "spawn_batch failed after its prechecks; world is partly spawned");
+            return SU_E_INTERNAL;
+        }
+    }
+    free(sv);
+    ww->revision++;
+    rev_string(ww, rev, sizeof rev);
+    su_buf_str(res, "{\"world_id\":");
+    su_buf_quoted(res, ww->id, strlen(ww->id));
+    su_buf_str(res, ",\"world_revision\":");
+    su_buf_quoted(res, rev, strlen(rev));
+    su_buf_str(res, ",\"spawned\":");
+    su_buf_u64(res, n);
+    su_buf_str(res, ",\"entities\":[");
+    for (i = 0; i < n; i++) {
+        if (i > 0u) {
+            su_buf_str(res, ",");
+        }
+        su_buf_u64(res, hs[i]);
+    }
+    su_buf_str(res, "]}");
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
 /* Fails with code and message; returns the code. */
@@ -5644,6 +5832,8 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
         st = h_world_despawn(s, req.params, &res, &f);
     } else if (strcmp(req.method, "world.set_fields") == 0) {
         st = h_world_set_fields(s, req.params, &res, &f);
+    } else if (strcmp(req.method, "world.spawn_batch") == 0) {
+        st = h_world_spawn_batch(s, req.params, &res, &f);
     } else if (strcmp(req.method, "events.read") == 0) {
         st = h_events_read(s, req.params, &res, &f);
     } else if (strcmp(req.method, "internal.candidate.evaluate") == 0) {

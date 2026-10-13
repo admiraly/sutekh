@@ -443,6 +443,13 @@ target_include_directories(test_world_set_fields PRIVATE "${CMAKE_CURRENT_SOURCE
 target_compile_definitions(test_world_set_fields PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_world_set_fields)
 add_test(NAME rts_world_set_fields COMMAND test_world_set_fields "${CMAKE_BINARY_DIR}/rts_world_set_fields_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# M3-05 world.spawn_batch and the RTS spawn rules (contract 2.2 D1, D3, OD-3b) against an RTS world.
+add_executable(test_world_spawn_batch tests/rts/control/test_world_spawn_batch.c)
+target_link_libraries(test_world_spawn_batch PRIVATE su_agent)
+target_include_directories(test_world_spawn_batch PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/host")
+target_compile_definitions(test_world_spawn_batch PRIVATE _POSIX_C_SOURCE=200809L)
+sutekh_apply_warnings(test_world_spawn_batch)
+add_test(NAME rts_world_spawn_batch COMMAND test_world_spawn_batch "${CMAKE_BINARY_DIR}/rts_world_spawn_batch_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 add_executable(test_control_domains tests/rts/control/test_control_domains.c)
 target_link_libraries(test_control_domains PRIVATE su_rts_control)
 add_test(NAME rts_control_domains COMMAND test_control_domains WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

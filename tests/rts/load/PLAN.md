@@ -10,7 +10,7 @@ Source: `planning/contracts/M3_RTS_CONTRACT.md`, section 10.3. Byte bound: 925 b
 | (d) | 1,024 maximum-form rows are at most 948,225 bytes | Python (`tests/rts/replay/test_replay.py`, `test_worst_case_request_fits_the_cap`) | run, passes |
 | (e) | 1,000,000-row load is 977 calls, last call short | Python loader (not written) | not run: the loader is outside this slice |
 | (f) | high-water precheck at 838,860 | Python (`spawn_batch_limits.check_prechecks`) | run, passes; engine path not run |
-| (g) | last row over free capacity refuses with no state change, no record, no revision bump; a domain-invalid last row refuses with `SU_E_TYPE` | Python model (`test_spawn_batch_is_atomic`, `test_spawn_batch_refuses_when_free_slots_are_short`) | run, passes; engine path not run |
+| (g) | last row over free capacity refuses with no state change, no record, no revision bump; a domain-invalid last row refuses with `SU_E_TYPE` | Python model (`test_spawn_batch_is_atomic`, `test_spawn_batch_refuses_when_free_slots_are_short`) | run, passes; engine worker handler run (`tests/rts/control/test_world_spawn_batch.c`, passes); agent path not run |
 
 Rules for the engine versions:
 - Each engine case goes through the agent protocol (`su_agent.c`), not a direct worker call.
