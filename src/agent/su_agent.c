@@ -3681,6 +3681,14 @@ static uint32_t h_world_step(SuAgent *a, const SuJsonValue *params, SuBuf *res, 
         return worker_died(a, c, &op);
     }
     reply_parse(&r, resp.data, resp.len);
+    if (!r.ok && r.code == SU_E_INTERNAL) {
+        /* An invariant break inside a system (for example a host operator, contract M3 10.3 T-RTS-REPLAY-3) is an
+         * in-process fault: the worker's memory is not trusted after it. The worker is discarded and the world is
+         * rebuilt from its checkpoint and log in a replacement (AGENTS.md: no pointer rollback). */
+        reply_free(&r);
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
     memset(&none, 0, sizeof none);
     rc = sync_after(a, w, LOG_STEP, &none, 0, r.ok);
     reply_free(&r);

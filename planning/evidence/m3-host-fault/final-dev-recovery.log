@@ -1,0 +1,23 @@
+UpdateCTestConfiguration  from :/root/sutekh/build/DartConfiguration.tcl
+Test project /root/sutekh/build
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 27
+    Start 27: recovery
+
+27: Test command: /root/sutekh/build/test_recovery "/root/sutekh/build/recovery_worker" "/root/sutekh" "/root/sutekh/build/recovery_scratch" "/root/sutekh/build/sutekh"
+27: Working Directory: /root/sutekh
+27: Test timeout computed to be: 10000000
+27: test_recovery: 3748 checks, 0 failures
+1/1 Test #27: recovery .........................   Passed    0.96 sec
+
+The following tests passed:
+	recovery
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.96 sec

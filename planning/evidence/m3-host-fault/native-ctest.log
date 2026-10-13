@@ -1,0 +1,131 @@
+Test project /root/sutekh/build-native
+      Start 27: native_scalar_corpus_gen
+      Start 49: migration_model
+      Start  8: scheduler
+      Start  9: tick_workers
+ 1/53 Test #49: migration_model ...................   Passed    0.07 sec
+      Start  6: control
+ 2/53 Test #27: native_scalar_corpus_gen ..........   Passed    2.48 sec
+      Start 28: native_scalar
+ 3/53 Test  #6: control ...........................   Passed   13.69 sec
+      Start 37: specialize_churn
+ 4/53 Test  #9: tick_workers ......................   Passed   18.40 sec
+      Start 14: rts_native_diff
+ 5/53 Test #37: specialize_churn ..................   Passed   11.25 sec
+      Start 32: specialize_admission
+ 6/53 Test  #8: scheduler .........................   Passed   25.66 sec
+      Start 35: native_chunked
+ 7/53 Test #14: rts_native_diff ...................   Passed    8.71 sec
+      Start 29: native_avx2_corpus_gen
+ 8/53 Test #28: native_scalar .....................   Passed   25.63 sec
+      Start  2: entities
+ 9/53 Test #35: native_chunked ....................   Passed    4.46 sec
+      Start 50: migration
+10/53 Test #29: native_avx2_corpus_gen ............   Passed    3.12 sec
+      Start 30: native_avx2
+11/53 Test  #2: entities ..........................   Passed    2.81 sec
+      Start 17: rts_load_engine
+12/53 Test #17: rts_load_engine ...................   Passed    1.32 sec
+      Start 39: recovery
+13/53 Test #50: migration .........................   Passed    2.28 sec
+      Start 31: native_versions
+14/53 Test #39: recovery ..........................   Passed    1.65 sec
+      Start 19: rts_replay_engine
+15/53 Test #31: native_versions ...................   Passed    1.48 sec
+      Start 21: reload
+16/53 Test #21: reload ............................   Passed    1.06 sec
+      Start 20: rts_ctrl_engine
+17/53 Test #19: rts_replay_engine .................   Passed    1.51 sec
+      Start 51: migration_runtime
+18/53 Test #32: specialize_admission ..............   Passed   10.44 sec
+      Start 33: native_fault
+19/53 Test #20: rts_ctrl_engine ...................   Passed    0.72 sec
+      Start 16: rts_replay
+20/53 Test #33: native_fault ......................   Passed    0.40 sec
+      Start 18: rts_caps_engine
+21/53 Test #16: rts_replay ........................   Passed    0.37 sec
+      Start 15: rts_ref_m3_mutants
+22/53 Test #18: rts_caps_engine ...................   Passed    0.25 sec
+      Start 36: specialize_inflight
+23/53 Test #51: migration_runtime .................   Passed    0.71 sec
+      Start 48: entity_tick
+24/53 Test #15: rts_ref_m3_mutants ................   Passed    0.26 sec
+      Start  1: world
+25/53 Test #36: specialize_inflight ...............   Passed    0.23 sec
+      Start 40: containment
+26/53 Test #48: entity_tick .......................   Passed    0.23 sec
+      Start  4: ir
+27/53 Test #40: containment .......................   Passed    0.07 sec
+      Start 22: snapshot_cp
+28/53 Test  #4: ir ................................   Passed    0.08 sec
+      Start 52: migration_alloc_points
+29/53 Test #52: migration_alloc_points ............   Passed    0.04 sec
+      Start 53: migration_alloc_points_selftest
+30/53 Test  #1: world .............................   Passed    0.16 sec
+      Start 12: rts_native_ops
+31/53 Test #22: snapshot_cp .......................   Passed    0.06 sec
+      Start 38: release_seams
+32/53 Test #53: migration_alloc_points_selftest ...   Passed    0.04 sec
+      Start  5: vm
+33/53 Test #38: release_seams .....................   Passed    0.03 sec
+      Start 47: churn
+34/53 Test  #5: vm ................................   Passed    0.02 sec
+      Start 10: host_entry
+35/53 Test #12: rts_native_ops ....................   Passed    0.05 sec
+      Start 46: world_entities
+36/53 Test #10: host_entry ........................   Passed    0.01 sec
+      Start 42: rts_world_set_fields
+37/53 Test #47: churn .............................   Passed    0.02 sec
+      Start 34: safe_retire
+38/53 Test #42: rts_world_set_fields ..............   Passed    0.01 sec
+      Start 11: host_restore
+39/53 Test #34: safe_retire .......................   Passed    0.01 sec
+      Start 43: rts_world_spawn_batch
+40/53 Test #46: world_entities ....................   Passed    0.02 sec
+41/53 Test #11: host_restore ......................   Passed    0.01 sec
+      Start  7: snapshot
+      Start 23: world_ext_retired
+42/53 Test #43: rts_world_spawn_batch .............   Passed    0.01 sec
+      Start  3: world_acct
+43/53 Test  #7: snapshot ..........................   Passed    0.01 sec
+44/53 Test #23: world_ext_retired .................   Passed    0.00 sec
+      Start 44: rts_control_domains
+      Start 41: hardening
+45/53 Test  #3: world_acct ........................   Passed    0.01 sec
+46/53 Test #44: rts_control_domains ...............   Passed    0.00 sec
+      Start 24: world_restore_null
+      Start 45: cmdq_percap
+47/53 Test #41: hardening .........................   Passed    0.01 sec
+48/53 Test #24: world_restore_null ................   Passed    0.00 sec
+      Start 25: lir_oom
+      Start 13: rts_native_records
+49/53 Test #45: cmdq_percap .......................   Passed    0.01 sec
+50/53 Test #25: lir_oom ...........................   Passed    0.01 sec
+      Start 26: path_fifo
+51/53 Test #13: rts_native_records ................   Passed    0.00 sec
+52/53 Test #26: path_fifo .........................   Passed    0.00 sec
+53/53 Test #30: native_avx2 .......................***Failed   40.43 sec
+/root/sutekh/tests/native/avx2/test_native_avx2.c:1078: CHECK failed: feasible
+host caps: 0x3 (AVX2 usable; /proc/cpuinfo says avx2)
+known answers (7 programs, 43 rows each, scalar and avx2): ok
+frame bound (R=2048 -> RESOURCE_LIMIT, R=2047 AVX2 copy): ok
+fixtures (10 verified pairs, 49 row counts each, 3 engines): ok
+corpus: 5000 programs, 5000 verified, 0 failed 3-engine differential
+unaligned columns (element offsets 1..7, exact end guard, rows 4097..4103): ok
+wrapper rejections on AVX2 (alias, row limit, generation): ok
+upper YMM state: XSTATE_BV bit2 before call=0 after call=0 (probe NOT valid: dirty state not observed)
+ABI clobber trampoline (SysV, rbx rbp r12-r15 poisoned and checked, scalar and avx2): ok
+disassembly (unsigned-min): 1925 bytes of text, 360 bytes of code, ret/vzeroupper rule checked
+W^X (AVX2 code mapping r-xp, no rwx mapping, store into code faults): ok
+failure injection (AVX2 mmap and mprotect -> RESOURCE_LIMIT, mapping count unchanged): ok
+avx2 differential runs with the AVX2 engine: 245497; host AVX2 usable; checks 142, failures 1
+result: FAILED
+
+
+98% tests passed, 1 tests failed out of 53
+
+Total Test time (real) =  70.67 sec
+
+The following tests FAILED:
+	 30 - native_avx2 (Failed)
+Errors while running CTest

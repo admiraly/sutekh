@@ -6,7 +6,7 @@
   "current_milestone": "M3",
   "accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "runtime_tests": "head 2026-10-12 (after spec-conformance decisions change): release ctest 32/32; harness default: TX9 fixed to per-system budget sizing, see planning/handoffs/2026-10-12-spec-conformance-decisions.md; native lane not rerun for this change",
+  "runtime_tests": "2026-10-13 host-fault slice: dev ctest 42/42; final recovery checks 3748/0 in dev and native; native ctest excluding already-run cmdq 52/53 (pre-existing WSL native_avx2 XSAVE feasibility failure). See planning/evidence/m3-host-fault/result.json.",
   "engine_benchmarks": "run_provisional_shared_vm_not_qualification",
   "original_bfme_compatibility": "not_run",
   "remote_repository": "https://github.com/admiraly/sutekh",
@@ -139,20 +139,20 @@
         "T-RTS-CTRL-1 engine",
         "T-RTS-CAPS-1 config check and T-RTS-CAPS-2 engine",
         "Q2 formation liveness refusal",
-        "T-RTS-REPLAY-1..3 against the engine (fault seams inside host operators not yet)"
+        "T-RTS-REPLAY-1..3 against the engine",
+        "T-RTS-REPLAY-3 internal spatial/scatter partial-work faults; replacement worker checkpoint+log recovery"
       ],
       "open": [
         "T-RTS-LOAD-1 (e)(f) engine (near-million-row world)",
         "T-RTS-CAPS-3 acceptance (1)/(2) at 699,051 and 1,048,576 rows",
         "T-RTS-CHURN-1",
-        "REPLAY-3 fault seams in rts.spatial/rts.scatter",
         "Q8 engine-vs-model digest equality"
       ]
     }
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "m0_accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "head_at_last_status_update": "eb4e07db59f936c611e04597ad2029a037a023f0",
+  "head_at_last_status_update": "50268e9f07d53b16d8efc27896fb2489dc08af61",
   "owner_ratifications": [
     {
       "date": "2026-10-12",

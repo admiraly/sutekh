@@ -1,0 +1,39 @@
+Test project /root/sutekh-validation-host-fault-20261013/build
+    Start 27: recovery
+1/1 Test #27: recovery .........................***Failed    1.74 sec
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:1075: CHECK failed: step(&p.rec, p.wid, p.rrev, sizeof p.rrev, 4, &r) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:530: CHECK failed: !resp_ok(r)
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:531: CHECK failed: resp_error_status(r) == SU_E_WORKER_FAILED
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:492: CHECK failed: rec != NULL
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:1079: CHECK failed: uint_of(rec, "from_checkpoint_tick") == 4u
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:461: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:473: CHECK failed: ta == tb
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:474: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:461: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:473: CHECK failed: ta == tb
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:474: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:1075: CHECK failed: step(&p.rec, p.wid, p.rrev, sizeof p.rrev, 4, &r) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:530: CHECK failed: !resp_ok(r)
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:531: CHECK failed: resp_error_status(r) == SU_E_WORKER_FAILED
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:492: CHECK failed: rec != NULL
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:1079: CHECK failed: uint_of(rec, "from_checkpoint_tick") == 4u
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:461: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:473: CHECK failed: ta == tb
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:474: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:461: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:473: CHECK failed: ta == tb
+/root/sutekh-validation-host-fault-20261013/tests/recovery/test_recovery.c:474: CHECK failed: strcmp(p->crev, p->rrev) == 0
+test_recovery: 3732 checks, 26 failures
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   1.74 sec
+
+The following tests FAILED:
+	 27 - recovery (Failed)
+Errors while running CTest

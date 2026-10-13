@@ -1,0 +1,80 @@
+{
+  "task": "M3-05 / T-RTS-REPLAY-3 host faults",
+  "base_revision": "50268e9f07d53b16d8efc27896fb2489dc08af61",
+  "recorded_at": "2026-10-13T11:24:03.747949+00:00",
+  "modified_source_sha256": {
+    "src/agent/su_agent.c": "1b0ea520fdfdbcaa5a1e6c38141966d486682ab56c7cf5eef65d6ab2c7fb3919",
+    "src/runtime/worker.c": "20d8e13276ebf0882282ff81e440baf71dd4a1004db3aac8bc82c4f4a9440569",
+    "tests/recovery/test_recovery.c": "deb6830172a9d986f42620755ae64a8c396a9acb8fa97d1d46665215068e75ed"
+  },
+  "artifact_sha256": {
+    "build/sutekh": "2c5545d803e49c835836524345dab9bf2c352f383b7f03937eeffa065c143924",
+    "build/recovery_worker": "80848bfb3275b2768d8c6368141106a9b62ee4ed091ffcc9a6bd1070d945de5e",
+    "build/test_recovery": "a097232a9ad1c0bb5c8f364873cf76126aa3515ba04ed81e6c71115679bedfa6",
+    "build-native/sutekh": "62c5ea32b0a2185899a103591f6bb3fc1dc57970adbc32d48d3e1432ccfccd4c",
+    "build-native/recovery_worker": "5f3d3deb578687ddbc8a6739b667b4639c3cad1debd6145f05299261354f109a",
+    "build-native/test_recovery": "1e8fd0016e9cb55d1d8616bc4b50c7c2abfa282479b820583ee3dea4c8f07618"
+  },
+  "commands": [
+    {
+      "command": "cmake --build build -j 4",
+      "exit": 0
+    },
+    {
+      "command": "cmake --build build-native -j 4",
+      "exit": 0
+    },
+    {
+      "command": "ctest --test-dir build -j 4 --output-on-failure",
+      "exit": 0,
+      "passed": 42,
+      "failed": 0,
+      "note": "Run before test-config parser overflow hardening; final focused checks rerun afterward."
+    },
+    {
+      "command": "ctest --test-dir build-native -j 4 --output-on-failure -E ^cmdq$",
+      "exit": 8,
+      "passed": 52,
+      "failed": 1,
+      "excluded": "cmdq: identical queue code was already tested in dev; prior run paged heavily",
+      "failure": "Pre-existing native_avx2 upper-YMM XSAVE feasibility probe under WSL, unchanged by this patch."
+    },
+    {
+      "command": "ctest --test-dir build -R ^recovery$ -V",
+      "exit": 0,
+      "checks": 3748,
+      "failures": 0
+    },
+    {
+      "command": "ctest --test-dir build-native -R ^recovery$ -V",
+      "exit": 0,
+      "checks": 3748,
+      "failures": 0
+    }
+  ],
+  "mutations": [
+    {
+      "mutant": "internal-recovery-off",
+      "file": "src/agent/su_agent.c",
+      "from": "if (!r.ok && r.code == SU_E_INTERNAL) {",
+      "to": "if (0 && !r.ok && r.code == SU_E_INTERNAL) {",
+      "test_exit": 8,
+      "result": "detected"
+    },
+    {
+      "mutant": "host-hook-not-armed",
+      "file": "src/runtime/worker.c",
+      "from": "op->fault_at = 1u;",
+      "to": "op->fault_at = RTS_OPS_NO_FAULT;",
+      "test_exit": 8,
+      "result": "detected"
+    }
+  ],
+  "mutation_scope": "Isolated detached worktree /root/sutekh-validation-host-fault-20261013; source restored and positive check passed. Mutation run preceded the final test-config parser overflow hardening. Recovery and hook branches unchanged by that hardening.",
+  "not_run": [
+    "Native Windows",
+    "Sanitizers for this slice",
+    "Independent reviewer"
+  ],
+  "source_guards": "Test environment names are absent from production binaries (asserted by test_recovery)."
+}

@@ -1,0 +1,18 @@
+[
+  {
+    "mutant": "internal-recovery-off",
+    "file": "src/agent/su_agent.c",
+    "from": "if (!r.ok && r.code == SU_E_INTERNAL) {",
+    "to": "if (0 && !r.ok && r.code == SU_E_INTERNAL) {",
+    "test_exit": 8,
+    "result": "detected"
+  },
+  {
+    "mutant": "host-hook-not-armed",
+    "file": "src/runtime/worker.c",
+    "from": "op->fault_at = 1u;",
+    "to": "op->fault_at = RTS_OPS_NO_FAULT;",
+    "test_exit": 8,
+    "result": "detected"
+  }
+]

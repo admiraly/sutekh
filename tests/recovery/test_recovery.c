@@ -967,6 +967,134 @@ static void scenario_control_batches(uint32_t interval, const char *tag) {
     pair_close(&p);
 }
 
+/* ---------- host-operator fault seams on the full RTS world (M3 T-RTS-REPLAY-3) ---------- */
+
+/* The 39 fields of contract M3 section 2. */
+static const char *const k_rts_full[] = {
+    "kind", "team", "hp", "pos_x", "pos_y", "speed", "range_sq", "reload", "cooldown", "damage", "flight",
+    "order_mode", "order_x", "order_y", "formation_slot", "formation_gen", "formation_ox", "formation_oy", "goal_x",
+    "goal_y", "anchor_x", "anchor_y", "anchor_valid", "target_slot", "target_gen", "target_dist_sq", "target_valid",
+    "target_x", "target_y", "truncated", "proj_active", "proj_left", "proj_target", "proj_target_gen", "proj_damage",
+    "dmg_out", "dmg_target", "dmg_target_gen", "incoming",
+};
+
+/* rts_full_empty.json (39 fields, no rows) and the six RTS capsules, in the project copy. */
+static void write_rts_full_project(void) {
+    static const char *const ir[] = {"goal", "combat", "move", "damage"};
+    char path[4400];
+    char name[64];
+    FILE *fh;
+    size_t k;
+    for (k = 0; k < sizeof ir / sizeof ir[0]; k++) {
+        snprintf(name, sizeof name, "%s.capsule.json", ir[k]);
+        copy_from("capsules/rts", name);
+        snprintf(name, sizeof name, "%s.lir.json", ir[k]);
+        copy_from("capsules/rts", name);
+    }
+    copy_from("capsules/rts/host", "scatter.capsule.json");
+    snprintf(path, sizeof path, "%s/rts_full_empty.json", g_proj);
+    fh = fopen(path, "wb");
+    if (fh == NULL) {
+        perror(path);
+        exit(2);
+    }
+    fprintf(fh, "{\"fixture_format\":\"0.1\",\"schema_id\":\"rts\",\"schema_version\":1,\"tick\":0,\"entity_ids\":[],"
+                "\"columns\":{");
+    for (k = 0; k < sizeof k_rts_full / sizeof k_rts_full[0]; k++) {
+        fprintf(fh, "%s\"%s\":[]", k ? "," : "", k_rts_full[k]);
+    }
+    fprintf(fh, "}}");
+    fclose(fh);
+}
+
+/* The full six-system RTS world of contract 3.2 with capacity 64 and per-tick caps 64 (9.4). */
+static int create_rts_full(Session *s, char *wid, size_t wcap, char *rev, size_t rcap) {
+    Resp r;
+    int ok;
+    call(s,
+         "{\"protocol\":\"0.1\",\"id\":\"cw\",\"method\":\"world.create\",\"params\":{\"fixture_path\":"
+         "\"rts_full_empty.json\",\"capsule_paths\":[{\"capsule_path\":\"spatial.capsule.json\",\"host_operator\":"
+         "\"rts.spatial\"},\"goal.capsule.json\",\"combat.capsule.json\",\"move.capsule.json\",{\"capsule_path\":"
+         "\"scatter.capsule.json\",\"host_operator\":\"rts.scatter\"},\"damage.capsule.json\"],\"max_entities\":64,"
+         "\"max_struct_per_tick\":64,\"max_events_per_tick\":64}}",
+         &r);
+    ok = resp_ok(&r) && str_of(resp_result(&r), "world_id", wid, wcap) &&
+         str_of(resp_result(&r), "world_revision", rev, rcap);
+    if (!ok && r.text != NULL) {
+        fprintf(stderr, "create_rts_full: %s\n", (const char *)r.text);
+    }
+    resp_free(&r);
+    return ok;
+}
+
+/* Two duelling pairs (contract M3 7.4 weapons are synthetic): opposite teams on one spot, in range, so combat fires
+ * and scatter delivers damage every few ticks. */
+static const char *const k_duels =
+    "[{\"values\":{\"kind\":1,\"team\":0,\"hp\":40,\"pos_x\":100,\"pos_y\":100,\"range_sq\":400,\"reload\":2,"
+    "\"damage\":3,\"flight\":2}},{\"values\":{\"kind\":1,\"team\":1,\"hp\":40,\"pos_x\":100,\"pos_y\":100,"
+    "\"range_sq\":400,\"reload\":3,\"damage\":2,\"flight\":1}},{\"values\":{\"kind\":1,\"team\":0,\"hp\":30,"
+    "\"pos_x\":5000,\"pos_y\":100,\"range_sq\":400,\"reload\":1,\"damage\":1,\"flight\":3}},{\"values\":{\"kind\":1,"
+    "\"team\":1,\"hp\":30,\"pos_x\":5000,\"pos_y\":100,\"range_sq\":400,\"reload\":2,\"damage\":2,\"flight\":2}}]";
+
+/* A host operator fails with SU_E_INTERNAL inside the tick that would compute tick 8 (one shot). The supervisor
+ * treats it as an in-process fault: the worker is discarded and the world is rebuilt in a replacement from the
+ * checkpoint at tick 4 plus the log; the retried step and the rest of the run equal a control session. */
+static void scenario_host_fault(const char *system_id, const char *tag) {
+    Opts o = default_opts();
+    Pair p;
+    Resp r;
+    char token[4200];
+    char wid_r[24];
+    char ev_c[16384];
+    char ev_r[16384];
+    FILE *tf;
+    uint64_t old_pid;
+    const SuJsonValue *rec;
+
+    o.interval = 4;
+    snprintf(token, sizeof token, "%s/host-%s.token", g_scratch, tag);
+    tf = fopen(token, "w");
+    CHECK(tf != NULL);
+    if (tf != NULL) {
+        fputs("once\n", tf);
+        fclose(tf);
+    }
+    setenv("SUTEKH_TEST_HOST_FAULT_SYSTEM", system_id, 1);
+    setenv("SUTEKH_TEST_HOST_FAULT_TICK", "8", 1);
+    setenv("SUTEKH_TEST_HOST_FAULT_TOKEN", token, 1);
+    pair_open(&p, &o, tag);
+    CHECK(create_rts_full(&p.ctl, p.wid, sizeof p.wid, p.crev, sizeof p.crev));
+    CHECK(create_rts_full(&p.rec, wid_r, sizeof wid_r, p.rrev, sizeof p.rrev));
+    CHECK(strcmp(p.wid, wid_r) == 0 && strcmp(p.crev, p.rrev) == 0);
+    pair_batch(&p, "world.spawn_batch", "rows", k_duels, 0u);
+    pair_step(&p, 4); /* checkpoint at tick 4 (interval) */
+    pair_step(&p, 2); /* ticks 5-6: one logged step */
+
+    /* The recovered session reaches tick 8 first, so it takes the one-shot seam. */
+    old_pid = worker_pid_of(&p.rec);
+    CHECK(step(&p.rec, p.wid, p.rrev, sizeof p.rrev, 4, &r) == 0);
+    expect_worker_failed(&r);
+    expect_recovery(&r, old_pid, 1);
+    rec = resp_member(&r, "recovery");
+    CHECK(uint_of(rec, "from_checkpoint_tick") == 4u);
+    CHECK(uint_of(rec, "ops_replayed") >= 1u);
+    resp_free(&r);
+    CHECK(access(token, F_OK) != 0); /* the seam fired */
+    unsetenv("SUTEKH_TEST_HOST_FAULT_SYSTEM");
+    unsetenv("SUTEKH_TEST_HOST_FAULT_TICK");
+    unsetenv("SUTEKH_TEST_HOST_FAULT_TOKEN");
+
+    /* Retry: the revision is the acknowledged one (tick 6). */
+    pair_step(&p, 4);
+    pair_check(&p);
+    ent_events_text(&p.ctl, p.wid, ev_c, sizeof ev_c);
+    ent_events_text(&p.rec, p.wid, ev_r, sizeof ev_r);
+    CHECK(strlen(ev_c) > 0 && strcmp(ev_c, ev_r) == 0);
+    pair_step(&p, 6);
+    pair_check(&p);
+    pair_close(&p);
+}
+
 /* Repeated crashes at the same tick: the first recovery retries; the second, from the same failing
  * operation, quarantines the installed revision, reverts the world to the newest checkpoint that
  * predates it, and reports the quarantine on the candidate. The crash seam only fires while the
@@ -1441,10 +1569,13 @@ int main(int argc, char **argv) {
     copy_from("tests/fixtures/entities", "despawn_move.lir.json");
     copy_from("capsules/rts/host", "spatial.capsule.json");
     write_rts_fixture();
+    write_rts_full_project();
 
     scenario_despawn_replay();
     scenario_control_batches(0u, "ctl-log");
     scenario_control_batches(1u, "ctl-ck");
+    scenario_host_fault("rts.spatial", "hf-spatial");
+    scenario_host_fault("rts.scatter", "hf-scatter");
     scenario_after_step();
     scenario_after_install();
     scenario_replay_install(0);
@@ -1460,7 +1591,9 @@ int main(int argc, char **argv) {
         /* The production binary (built without SU_TEST_FAULT_HOOKS) carries no crash seam: none of
          * its strings may be present. The seam's environment names are the probe. */
         const char *probes[] = {"SUTEKH_TEST_KILL_AT_TICK", "SUTEKH_TEST_KILL_SOURCE_SHA",
-                                "SUTEKH_TEST_KILL_TOKEN", "SUTEKH_TEST_KILL_MODE"};
+                                "SUTEKH_TEST_KILL_TOKEN", "SUTEKH_TEST_KILL_MODE",
+                                "SUTEKH_TEST_HOST_FAULT_SYSTEM", "SUTEKH_TEST_HOST_FAULT_TICK",
+                                "SUTEKH_TEST_HOST_FAULT_TOKEN"};
         size_t k;
         for (k = 0; k < sizeof probes / sizeof probes[0]; k++) {
             int hit = file_contains(argv[4], probes[k]);

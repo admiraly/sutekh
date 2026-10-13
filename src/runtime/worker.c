@@ -27,6 +27,9 @@
 #include "runtime/schedule.h"
 #include "runtime/rts/host_decl.h"
 #include "runtime/rts/host_registry.h"
+#ifdef SU_TEST_FAULT_HOOKS
+#include "../../profiles/rts/native/rts_ops.h"
+#endif
 #ifdef SU_HAVE_NATIVE
 #include "backends/native/su_native.h"
 #include "runtime/native_versions.h"
@@ -143,6 +146,11 @@ typedef struct WorkerState {
     int test_kill_abort;
     char test_kill_src[65];   /* when set, only a world with a system of this source hash dies */
     char test_kill_token[SU_PATH_BUF]; /* when set, the seam fires once: the file is unlinked first */
+    /* M3 host-operator fault seam (T-RTS-REPLAY-3). See test_host_fault_configure. */
+    int test_host_set;
+    uint64_t test_host_tick;
+    char test_host_sys[SU_DIAG_SYSTEM_BYTES];
+    char test_host_token[SU_PATH_BUF];
 #endif
 } WorkerState;
 
@@ -2124,6 +2132,57 @@ static void test_native_crash_configure(void) {
 
 #endif /* SU_HAVE_NATIVE */
 
+/* M3 host-operator fault seam (contract M3 10.3 T-RTS-REPLAY-3). In the tick that would compute tick N, the
+ * host system named by SUTEKH_TEST_HOST_FAULT_SYSTEM arms its existing internal fault point 1,
+ * returning SU_E_INTERNAL after partial operator work, when:
+ *   SUTEKH_TEST_HOST_FAULT_SYSTEM=<system_id>   (required; a host entry, e.g. rts.spatial or rts.scatter)
+ *   SUTEKH_TEST_HOST_FAULT_TICK=N               (required, decimal)
+ *   SUTEKH_TEST_HOST_FAULT_TOKEN=<path>         (required) one shot: the file must exist and is unlinked first */
+static void test_host_fault_configure(WorkerState *s) {
+    const char *sys = getenv("SUTEKH_TEST_HOST_FAULT_SYSTEM");
+    const char *v = getenv("SUTEKH_TEST_HOST_FAULT_TICK");
+    const char *tok = getenv("SUTEKH_TEST_HOST_FAULT_TOKEN");
+    char *end = NULL;
+    unsigned long long n;
+
+    if (sys == NULL || v == NULL || tok == NULL || v[0] < '1' || v[0] > '9' || tok[0] == '\0' ||
+        sys[0] == '\0' || strlen(sys) >= sizeof s->test_host_sys || strlen(tok) >= sizeof s->test_host_token) {
+        return;
+    }
+    errno = 0;
+    n = strtoull(v, &end, 10);
+    if (errno == ERANGE || end == NULL || *end != '\0' || n == 0) {
+        return;
+    }
+    s->test_host_set = 1;
+    s->test_host_tick = (uint64_t)n;
+    snprintf(s->test_host_sys, sizeof s->test_host_sys, "%s", sys);
+    snprintf(s->test_host_token, sizeof s->test_host_token, "%s", tok);
+}
+
+/* Arm the existing operator seam, not a scheduler error. Fault point 1 follows anchor stores in
+ * spatial and the first damage store in scatter. Reset on every host invocation so a tick with no
+ * eligible scatter arrivals cannot leave an armed fault for a later tick or another world. */
+static void test_host_fault_arm(WorkerState *s, unsigned idx) {
+    WorkerWorld *ww = s->cur_ww;
+    RtsOpsCtx *op;
+    if (ww == NULL || idx >= ww->sched.count || ww->sched.sys[idx].kind != SU_SYS_KIND_HOST) {
+        return;
+    }
+    if (strcmp(ww->sched.sys[idx].system_id, "rts.spatial") == 0) {
+        op = rts_spatial_ctx();
+    } else if (strcmp(ww->sched.sys[idx].system_id, "rts.scatter") == 0) {
+        op = rts_scatter_ctx();
+    } else {
+        return;
+    }
+    op->fault_at = RTS_OPS_NO_FAULT;
+    if (s->test_host_set && strcmp(ww->sched.sys[idx].system_id, s->test_host_sys) == 0 &&
+        su_world_tick(ww->inst.w) + 1u == s->test_host_tick && unlink(s->test_host_token) == 0) {
+        op->fault_at = 1u;
+    }
+}
+
 static void test_kill_check(WorkerState *s, unsigned idx) {
     WorkerWorld *ww = s->cur_ww;
     uint32_t i;
@@ -2157,6 +2216,7 @@ static int fault_thunk(unsigned idx, void *ctx) {
     WorkerState *s = ctx;
 #ifdef SU_TEST_FAULT_HOOKS
     test_kill_check(s, idx);
+    test_host_fault_arm(s, idx);
 #endif
     return s->hooks.fail_system != NULL && s->hooks.fail_system(idx) != 0;
 }
@@ -2164,7 +2224,7 @@ static int fault_thunk(unsigned idx, void *ctx) {
 /* The fault seam runs before every system of every tick when a hook or a test crash is set. */
 static int fault_seam_wanted(const WorkerState *s) {
 #ifdef SU_TEST_FAULT_HOOKS
-    if (s->test_kill_set) {
+    if (s->test_kill_set || s->test_host_set) {
         return 1;
     }
 #endif
@@ -6072,6 +6132,7 @@ int su_worker_main_with_hooks(int in_fd, int out_fd, const SuWorkerHooks *hooks)
     }
 #ifdef SU_TEST_FAULT_HOOKS
     test_kill_configure(s);
+    test_host_fault_configure(s);
 #ifdef SU_HAVE_NATIVE
     test_native_crash_configure();
 #endif

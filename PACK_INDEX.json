@@ -138,7 +138,7 @@
     {
       "path": "PACK_VALIDATION.json",
       "bytes": 557,
-      "sha256": "0c5de3236ddc9897e0abb2a20310f06516b39c6e4e76dbd1a46343afc0fbf1c5"
+      "sha256": "1c1fe9367aeddfa23d04c6a2da773d8b6f3ce432cd8cc22e577bfe8784d4fd95"
     },
     {
       "path": "README.md",
@@ -891,6 +891,51 @@
       "sha256": "2dbd6d99402e2f984767a1d2ff410881e4f709cc0572caf5a1dfb3a5dfd686c2"
     },
     {
+      "path": "planning/evidence/m3-host-fault/dev-ctest.log",
+      "bytes": 4411,
+      "sha256": "2019dbded64f5301bdddb7de67c24fdc9ae2f1cf8a455f2b780a82381fedb570"
+    },
+    {
+      "path": "planning/evidence/m3-host-fault/final-dev-recovery.log",
+      "bytes": 824,
+      "sha256": "4fbf5f3efe9c7a6ec3e2f9c1db812813be984c0894a6b99b3776f90ea2d2daf7"
+    },
+    {
+      "path": "planning/evidence/m3-host-fault/final-native-recovery.log",
+      "bytes": 866,
+      "sha256": "a39474ac56417d8fdd515b2c906d3666c323c091c1f1ce610d7e42bd5b924db5"
+    },
+    {
+      "path": "planning/evidence/m3-host-fault/host-hook-not-armed.log",
+      "bytes": 3483,
+      "sha256": "a78a15eecdfe79184f6efa1cac0d85658763712522b1d248c5c677c67f17ace1"
+    },
+    {
+      "path": "planning/evidence/m3-host-fault/internal-recovery-off.log",
+      "bytes": 4119,
+      "sha256": "7c4b62a2cabf5879d9e77dccd53bf6f058658dc47ae4179ab4cdc4d5dc10deb7"
+    },
+    {
+      "path": "planning/evidence/m3-host-fault/mutants.json",
+      "bytes": 452,
+      "sha256": "ab5c4501989de73a600e52dff7d137da1022030beac9dd3d024e802cf7b72d2a"
+    },
+    {
+      "path": "planning/evidence/m3-host-fault/native-ctest.log",
+      "bytes": 6767,
+      "sha256": "5f08d38b21c6feb17be61e22558c1d167fb6c8d161d02e190d1c0f6d593a05d1"
+    },
+    {
+      "path": "planning/evidence/m3-host-fault/restored-recovery.log",
+      "bytes": 237,
+      "sha256": "8f20448fb0a4e894535d85be04f5dac5776b073d4d89a63fb20d21148efd53a1"
+    },
+    {
+      "path": "planning/evidence/m3-host-fault/result.json",
+      "bytes": 3140,
+      "sha256": "c4be313b1a9b70c0cae057a46c74f61c48381b903fbb04fc0ac0bf17775f4277"
+    },
+    {
       "path": "planning/handoffs/2026-10-07-dependencies.md",
       "bytes": 2654,
       "sha256": "5c02dfea834bf7f613a694cd5013733417db13ea14d13df4249544ab2a2caf93"
@@ -1226,6 +1271,11 @@
       "sha256": "e9c676822e13bc9d31c83de0d24df13cb8ad0fe4b399de7252b22862c09b2128"
     },
     {
+      "path": "planning/handoffs/2026-10-13-m3-05-host-fault-recovery.md",
+      "bytes": 3696,
+      "sha256": "5bf71f0e28250be6b43346bc2fcc6e77e926a5b7f7d4932ac34c6bf462a1683f"
+    },
+    {
       "path": "planning/handoffs/2026-10-13-m3-05-load-spool.md",
       "bytes": 2395,
       "sha256": "f6fc8c83bcf1c8775ec9132589e2f4bec013a825f95f50c023eac808b9de8901"
@@ -1242,13 +1292,13 @@
     },
     {
       "path": "planning/status.json",
-      "bytes": 8771,
-      "sha256": "270733f43c5df0316f928bcfa52be00662abee7d6badf320cc3b03bd71fff78d"
+      "bytes": 8792,
+      "sha256": "63ed3f0909e07f744b921f1aff4903156c8832931b18d4b0aad4ebf20476a76f"
     },
     {
       "path": "planning/tasks.json",
-      "bytes": 29481,
-      "sha256": "0600aaa7ec184c79262bc3b703bdf219418614a6939e0fbc85bc6aa64e97d645"
+      "bytes": 29524,
+      "sha256": "e4227f99a3936e4bcdfe42ad5cdf35ec496a9c97ba7388133c9d5c79874036a3"
     },
     {
       "path": "planning/toolchain-windows.json",
@@ -1377,8 +1427,8 @@
     },
     {
       "path": "src/agent/su_agent.c",
-      "bytes": 246238,
-      "sha256": "3755a7bb9dd788512a73ffd74af8abc37176eb4423f0a97453ed3c4a21db411e"
+      "bytes": 246710,
+      "sha256": "1b0ea520fdfdbcaa5a1e6c38141966d486682ab56c7cf5eef65d6ab2c7fb3919"
     },
     {
       "path": "src/agent/su_agent.h",
@@ -1602,8 +1652,8 @@
     },
     {
       "path": "src/runtime/worker.c",
-      "bytes": 235172,
-      "sha256": "c747df573473afcf4f186aa5edf872f0c240ddbcdc28ba8ab34689386c5ea779"
+      "bytes": 238012,
+      "sha256": "20d8e13276ebf0882282ff81e440baf71dd4a1004db3aac8bc82c4f4a9440569"
     },
     {
       "path": "src/runtime/worker.h",
@@ -3122,8 +3172,8 @@
     },
     {
       "path": "tests/recovery/test_recovery.c",
-      "bytes": 54354,
-      "sha256": "e6ea77b5b9a6cf13d739af4f94f35bf856d270d325918c9d5794acc1021f1660"
+      "bytes": 60645,
+      "sha256": "deb6830172a9d986f42620755ae64a8c396a9acb8fa97d1d46665215068e75ed"
     },
     {
       "path": "tests/reload/make_fixtures.py",
