@@ -798,6 +798,175 @@ static void scenario_mid_step(void) {
     pair_close(&p);
 }
 
+/* ---------- control batches on an RTS world (M3-05, OD-3, OD-3b) ---------- */
+
+static int ent_despawn(Session *s, const char *wid, char *rev, size_t rcap, uint64_t handle);
+static void ent_events_text(Session *s, const char *wid, char *out, size_t cap);
+
+#define RTS_ROWS 8u
+#define RTS_GEN1 4294967296ull
+
+/* The 18 host fields of capsules/rts/host/spatial.capsule.json. */
+static const char *const k_rts_fields[] = {
+    "kind", "team", "hp", "pos_x", "pos_y", "range_sq", "formation_slot", "formation_gen", "anchor_x", "anchor_y",
+    "anchor_valid", "target_slot", "target_gen", "target_dist_sq", "target_valid", "target_x", "target_y", "truncated",
+};
+
+/* rts_world.json: eight units with hp 10, no formation and no target, in the project copy. */
+static void write_rts_fixture(void) {
+    char path[4400];
+    FILE *fh;
+    uint32_t r;
+    size_t k;
+    snprintf(path, sizeof path, "%s/rts_world.json", g_proj);
+    fh = fopen(path, "wb");
+    if (fh == NULL) {
+        perror(path);
+        exit(2);
+    }
+    fprintf(fh, "{\"fixture_format\":\"0.1\",\"schema_id\":\"rts\",\"schema_version\":1,\"tick\":0,\"entity_ids\":[");
+    for (r = 0; r < RTS_ROWS; r++) {
+        fprintf(fh, "%s%u", r ? "," : "", r + 1u);
+    }
+    fprintf(fh, "],\"columns\":{");
+    for (k = 0; k < sizeof k_rts_fields / sizeof k_rts_fields[0]; k++) {
+        fprintf(fh, "%s\"%s\":[", k ? "," : "", k_rts_fields[k]);
+        for (r = 0; r < RTS_ROWS; r++) {
+            uint32_t v = 0;
+            if (strcmp(k_rts_fields[k], "kind") == 0) v = 1u;
+            if (strcmp(k_rts_fields[k], "hp") == 0) v = 10u;
+            if (strcmp(k_rts_fields[k], "pos_x") == 0) v = 100u * r;
+            if (strcmp(k_rts_fields[k], "range_sq") == 0) v = 400u;
+            if (strcmp(k_rts_fields[k], "formation_slot") == 0 || strcmp(k_rts_fields[k], "target_slot") == 0) {
+                v = 4294967295u;
+            }
+            fprintf(fh, "%s%u", r ? "," : "", v);
+        }
+        fprintf(fh, "]");
+    }
+    fprintf(fh, "}}");
+    fclose(fh);
+}
+
+static int create_rts_world(Session *s, char *wid, size_t wcap, char *rev, size_t rcap) {
+    Resp r;
+    int ok;
+    call(s,
+         "{\"protocol\":\"0.1\",\"id\":\"cw\",\"method\":\"world.create\",\"params\":{\"fixture_path\":"
+         "\"rts_world.json\",\"capsule_paths\":[{\"capsule_path\":\"spatial.capsule.json\",\"host_operator\":"
+         "\"rts.spatial\"}]}}",
+         &r);
+    ok = resp_ok(&r) && str_of(resp_result(&r), "world_id", wid, wcap) &&
+         str_of(resp_result(&r), "world_revision", rev, rcap);
+    resp_free(&r);
+    return ok;
+}
+
+/* world.set_fields or world.spawn_batch with key (entities or rows) = arr. Returns the error status (0 when
+ * accepted, then rev is updated). */
+static uint64_t ctl_batch(Session *s, const char *method, const char *key, const char *wid, char *rev,
+                          size_t rcap, const char *arr) {
+    Resp r;
+    char line[4096];
+    uint64_t st = 0;
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"cb\",\"method\":\"%s\",\"params\":{\"world_id\":\"%s\","
+             "\"expected_world_revision\":\"%s\",\"%s\":%s}}",
+             method, wid, rev, key, arr);
+    call(s, line, &r);
+    if (resp_ok(&r)) {
+        CHECK(str_of(resp_result(&r), "world_revision", rev, rcap));
+    } else {
+        st = resp_error_status(&r);
+    }
+    resp_free(&r);
+    return st;
+}
+
+/* Applies the same batch to both sessions; both must answer want and agree on the revision. */
+static void pair_batch(Pair *p, const char *method, const char *key, const char *arr, uint64_t want) {
+    uint64_t a = ctl_batch(&p->ctl, method, key, p->wid, p->crev, sizeof p->crev, arr);
+    uint64_t b = ctl_batch(&p->rec, method, key, p->wid, p->rrev, sizeof p->rrev, arr);
+    CHECK(a == want);
+    CHECK(b == want);
+    if (a != want || b != want) {
+        fprintf(stderr, "%s %s: want %llu, got %llu / %llu\n", method, arr, (unsigned long long)want,
+                (unsigned long long)a, (unsigned long long)b);
+    }
+    CHECK(strcmp(p->crev, p->rrev) == 0);
+}
+
+/* An RTS world (spatial host system) created through the supervisor; slots 4..7 despawned, refilled by one
+ * world.spawn_batch, two rows changed by one world.set_fields, refusals in between. The worker is killed and
+ * the replacement must reach the same digest and event log. interval 0 keeps every operation in the replay
+ * log (the creation capture is the base); interval 1 checkpoints after one step, so the host entry is also
+ * restored from a checkpoint record. */
+static void scenario_control_batches(uint32_t interval, const char *tag) {
+    Opts o = default_opts();
+    Pair p;
+    Resp r;
+    char ev_c[16384];
+    char ev_r[16384];
+    char wid_r[24];
+    char line[512];
+    uint64_t old_pid;
+    uint32_t k;
+
+    o.interval = interval == 0u ? 1000000u : interval;
+    pair_open(&p, &o, tag);
+    CHECK(create_rts_world(&p.ctl, p.wid, sizeof p.wid, p.crev, sizeof p.crev));
+    CHECK(create_rts_world(&p.rec, wid_r, sizeof wid_r, p.rrev, sizeof p.rrev));
+    CHECK(strcmp(p.wid, wid_r) == 0 && strcmp(p.crev, p.rrev) == 0);
+    if (interval != 0u) {
+        pair_step(&p, 1);
+    }
+    for (k = 4; k < RTS_ROWS; k++) {
+        uint64_t h = RTS_GEN1 + k;
+        CHECK(ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, h));
+        CHECK(ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, h));
+    }
+    /* Refused: five rows into four free slots; a domain-invalid row; an unknown item key. */
+    pair_batch(&p, "world.spawn_batch", "rows",
+               "[{\"values\":{\"kind\":1,\"hp\":1}},{\"values\":{\"kind\":1,\"hp\":1}},{\"values\":{\"kind\":1,\"hp\":1}},"
+               "{\"values\":{\"kind\":1,\"hp\":1}},{\"values\":{\"kind\":1,\"hp\":1}}]",
+               SU_E_RESOURCE_LIMIT);
+    pair_batch(&p, "world.spawn_batch", "rows", "[{\"values\":{\"kind\":1,\"hp\":0}}]", SU_E_TYPE);
+    pair_batch(&p, "world.spawn_batch", "rows", "[{\"values\":{\"kind\":1,\"hp\":1},\"extra\":1}]", SU_E_TYPE);
+    /* Accepted. */
+    pair_batch(&p, "world.spawn_batch", "rows",
+               "[{\"values\":{\"kind\":1,\"hp\":7,\"pos_x\":40,\"range_sq\":900},\"external_id\":77},"
+               "{\"values\":{\"kind\":2,\"team\":1,\"pos_x\":50}},"
+               "{\"values\":{\"kind\":1,\"hp\":9,\"pos_x\":60,\"formation_slot\":5,\"formation_gen\":2}},"
+               "{\"values\":{\"kind\":1,\"hp\":3,\"team\":1,\"pos_x\":70}}]",
+               0u);
+    pair_batch(&p, "world.set_fields", "entities", "[{\"entity\":4294967296,\"values\":{\"kind\":2}}]", SU_E_TYPE);
+    pair_batch(&p, "world.set_fields", "entities",
+               "[{\"entity\":4294967296,\"values\":{\"pos_x\":5,\"pos_y\":6}},"
+               "{\"entity\":4294967297,\"values\":{\"formation_slot\":5,\"formation_gen\":2,\"range_sq\":1}}]",
+               0u);
+    /* No digest here: world.snapshot would take a checkpoint, and the batches must come from the replay log. */
+
+    old_pid = pair_kill(&p);
+    snprintf(line, sizeof line,
+             "{\"protocol\":\"0.1\",\"id\":\"in\",\"method\":\"world.inspect\",\"params\":{\"world_id\":\"%s\","
+             "\"limit\":1}}",
+             p.wid);
+    call(&p.rec, line, &r);
+    expect_worker_failed(&r);
+    expect_recovery(&r, old_pid, 1);
+    resp_free(&r);
+    pair_check(&p);
+    ent_events_text(&p.ctl, p.wid, ev_c, sizeof ev_c);
+    ent_events_text(&p.rec, p.wid, ev_r, sizeof ev_r);
+    CHECK(strlen(ev_c) > 0 && strcmp(ev_c, ev_r) == 0);
+
+    /* Both sessions continue identically. */
+    pair_batch(&p, "world.set_fields", "entities", "[{\"entity\":4294967298,\"values\":{\"pos_y\":3}}]", 0u);
+    pair_step(&p, 2);
+    pair_check(&p);
+    pair_close(&p);
+}
+
 /* Repeated crashes at the same tick: the first recovery retries; the second, from the same failing
  * operation, quarantines the installed revision, reverts the world to the newest checkpoint that
  * predates it, and reports the quarantine on the candidate. The crash seam only fires while the
@@ -1270,8 +1439,12 @@ int main(int argc, char **argv) {
     copy_from("tests/fixtures/entities", "actors_3.json");
     copy_from("tests/fixtures/entities", "despawn_move.capsule.json");
     copy_from("tests/fixtures/entities", "despawn_move.lir.json");
+    copy_from("capsules/rts/host", "spatial.capsule.json");
+    write_rts_fixture();
 
     scenario_despawn_replay();
+    scenario_control_batches(0u, "ctl-log");
+    scenario_control_batches(1u, "ctl-ck");
     scenario_after_step();
     scenario_after_install();
     scenario_replay_install(0);

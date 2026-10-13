@@ -119,7 +119,11 @@ typedef struct Ckpt {
 } Ckpt;
 
 enum { LOG_NONE = 0, LOG_STEP = 1, LOG_INSTALL = 2, LOG_SPAWN = 3, LOG_DESPAWN = 4, LOG_MIGRATE = 5,
-       LOG_ROLLBACK = 6 };
+       LOG_ROLLBACK = 6, LOG_CONTROL = 7 };
+
+/* M3-05: control batches (LOG_CONTROL). The canonical batch array is spooled under ext "control". */
+enum { CTL_SET_FIELDS = 1, CTL_SPAWN_BATCH = 2 };
+#define AGENT_CTL_MAX_ITEMS 1024u
 
 /* M2-01b: a schema migration (LOG_MIGRATE) or a rollback (LOG_ROLLBACK). Documents and replacement
  * capsules are spooled by content hash; a rollback names the pinned pre-migration checkpoint it restored. */
@@ -157,6 +161,8 @@ typedef struct LogOp {
     uint32_t has_ext;
     uint32_t ext_id;
     uint64_t handle;
+    int ctl;               /* control batch: CTL_SET_FIELDS or CTL_SPAWN_BATCH */
+    char ctl_sha[65];      /* control batch: spooled canonical array (ext "control") */
     MigOp mig;             /* migration and rollback */
 } LogOp;
 
@@ -344,7 +350,7 @@ typedef struct AgentCall {
 
 /* What the worker was doing when it died, for crash bookkeeping and quarantine. */
 enum { OPK_READ = 0, OPK_STEP, OPK_INSTALL, OPK_CREATE, OPK_RESTORE, OPK_CLOSE, OPK_SPAWN, OPK_DESPAWN,
-       OPK_MIGRATE, OPK_ROLLBACK };
+       OPK_MIGRATE, OPK_ROLLBACK, OPK_CONTROL };
 typedef struct InFlight {
     int kind;
     AgentWorld *w;     /* NULL for reads and creation */
@@ -357,7 +363,8 @@ typedef struct InFlight {
 static const char *const k_capabilities[] = {
     "engine.info",   "capsule.submit", "candidate.status", "candidate.evaluate",
     "candidate.install", "tests.run", "job.status", "world.create", "world.inspect", "world.step",
-    "world.snapshot", "world.restore", "world.close", "world.spawn", "world.despawn", "events.read",
+    "world.snapshot", "world.restore", "world.close", "world.spawn", "world.despawn", "world.set_fields",
+    "world.spawn_batch", "events.read",
     "world.migrate_plan", "world.migrate_commit", "world.migrate_rollback",
 #ifdef SU_HAVE_NATIVE
     "world.specialize",
@@ -749,6 +756,9 @@ static int spool_referenced(const SuAgent *a, const char *sha, const char *ext) 
             if (migop_refs(&w->log[k].mig, sha, ext)) {
                 return 1;
             }
+            if (w->log[k].kind == LOG_CONTROL && strcmp(ext, "control") == 0 && strcmp(w->log[k].ctl_sha, sha) == 0) {
+                return 1;
+            }
         }
         for (k = 0; k < w->ck_count; k++) {
             if (is_snap) {
@@ -864,6 +874,34 @@ static uint32_t spool_file(const SuAgent *a, const char *sha, const char *ext, c
     return su_spool_path(a->spool, sha, ext, out, cap) == SU_OK ? SU_OK : SU_E_INTERNAL;
 }
 
+/* M3-04a host entries: a host system has no source, so its source hash is the SHA-256 of the empty byte
+ * string (host_decl.c), which no IR module has; its system_id names the registered host operator. */
+#define AGENT_EMPTY_SHA256 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+static int sysref_is_host(const SysRef *s) {
+    return strcmp(s->source_sha, AGENT_EMPTY_SHA256) == 0;
+}
+
+/* One capsules entry for the worker. A host entry is {system_id, capsule_path, host_operator,
+ * capsule_sha256, semantic_hash} (no source); an IR entry also names its source path and hash. */
+static void write_capsule_entry(SuBuf *req, const SysRef *s, const char *cap, const char *src) {
+    su_buf_str(req, "{\"system_id\":");
+    su_buf_quoted(req, s->system_id, strlen(s->system_id));
+    su_buf_str(req, ",\"capsule_path\":");
+    su_buf_quoted(req, cap, strlen(cap));
+    if (sysref_is_host(s)) {
+        su_buf_str(req, ",\"host_operator\":");
+        su_buf_quoted(req, s->system_id, strlen(s->system_id));
+    } else {
+        su_buf_str(req, ",\"source_path\":");
+        su_buf_quoted(req, src, strlen(src));
+        buf_hash_field(req, "source_sha256", s->source_sha);
+    }
+    buf_hash_field(req, "capsule_sha256", s->capsule_sha);
+    buf_hash_field(req, "semantic_hash", s->semantic_hash);
+    su_buf_str(req, "}");
+}
+
 /* Writes a JSON array of {system_id, capsule_path, source_path, capsule_sha256, source_sha256,
  * semantic_hash} objects whose paths are spool files. */
 static uint32_t write_capsules(const SuAgent *a, SuBuf *req, const char *key, const SysRef *sys, uint32_t n) {
@@ -874,23 +912,15 @@ static uint32_t write_capsules(const SuAgent *a, SuBuf *req, const char *key, co
     su_buf_str(req, key);
     su_buf_str(req, "\":[");
     for (i = 0; i < n; i++) {
+        src[0] = '\0';
         if (spool_file(a, sys[i].capsule_sha, "capsule", cap, sizeof cap) != SU_OK ||
-            spool_file(a, sys[i].source_sha, "source", src, sizeof src) != SU_OK) {
+            (!sysref_is_host(&sys[i]) && spool_file(a, sys[i].source_sha, "source", src, sizeof src) != SU_OK)) {
             return SU_E_INTERNAL;
         }
         if (i > 0) {
             su_buf_str(req, ",");
         }
-        su_buf_str(req, "{\"system_id\":");
-        su_buf_quoted(req, sys[i].system_id, strlen(sys[i].system_id));
-        su_buf_str(req, ",\"capsule_path\":");
-        su_buf_quoted(req, cap, strlen(cap));
-        su_buf_str(req, ",\"source_path\":");
-        su_buf_quoted(req, src, strlen(src));
-        buf_hash_field(req, "capsule_sha256", sys[i].capsule_sha);
-        buf_hash_field(req, "source_sha256", sys[i].source_sha);
-        buf_hash_field(req, "semantic_hash", sys[i].semantic_hash);
-        su_buf_str(req, "}");
+        write_capsule_entry(req, &sys[i], cap, src);
     }
     su_buf_str(req, "]");
     return req->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
@@ -926,8 +956,10 @@ static uint32_t write_capsules_disk(SuAgent *a, const AgentWorld *w, SuBuf *req,
             src = cd->source_real;
         }
         if (cap == NULL) {
+            src_sp[0] = '\0';
             if (spool_file(a, sys[i].capsule_sha, "capsule", cap_sp, sizeof cap_sp) != SU_OK ||
-                spool_file(a, sys[i].source_sha, "source", src_sp, sizeof src_sp) != SU_OK) {
+                (!sysref_is_host(&sys[i]) &&
+                 spool_file(a, sys[i].source_sha, "source", src_sp, sizeof src_sp) != SU_OK)) {
                 return SU_E_INTERNAL;
             }
             cap = cap_sp;
@@ -936,16 +968,7 @@ static uint32_t write_capsules_disk(SuAgent *a, const AgentWorld *w, SuBuf *req,
         if (i > 0) {
             su_buf_str(req, ",");
         }
-        su_buf_str(req, "{\"system_id\":");
-        su_buf_quoted(req, sys[i].system_id, strlen(sys[i].system_id));
-        su_buf_str(req, ",\"capsule_path\":");
-        su_buf_quoted(req, cap, strlen(cap));
-        su_buf_str(req, ",\"source_path\":");
-        su_buf_quoted(req, src, strlen(src));
-        buf_hash_field(req, "capsule_sha256", sys[i].capsule_sha);
-        buf_hash_field(req, "source_sha256", sys[i].source_sha);
-        buf_hash_field(req, "semantic_hash", sys[i].semantic_hash);
-        su_buf_str(req, "}");
+        write_capsule_entry(req, &sys[i], cap, src);
     }
     su_buf_str(req, "]");
     return req->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
@@ -1222,7 +1245,7 @@ static int sync_after(SuAgent *a, AgentWorld *w, int log_kind, const LogOp *tmpl
     }
     if (log_kind != LOG_NONE) {
         if (log_kind == LOG_SPAWN || log_kind == LOG_DESPAWN || log_kind == LOG_MIGRATE ||
-            log_kind == LOG_ROLLBACK) {
+            log_kind == LOG_ROLLBACK || log_kind == LOG_CONTROL) {
             /* A control-plane mutation: one new revision, the tick unchanged. A rollback is a restore: one new
              * revision, and the tick becomes the pinned checkpoint's (it may be earlier). */
             if ((log_kind != LOG_ROLLBACK && tick_new != w->tick) || rev_new != w->rev + 1u) {
@@ -1522,6 +1545,24 @@ static int replay_log(SuAgent *a, AgentWorld *w, RecStats *s, const Ckpt *base) 
                 su_buf_str(&req, ",\"external_id\":");
                 su_buf_u64(&req, op->ext_id);
             }
+            req_end(&req);
+        } else if (op->kind == LOG_CONTROL) {
+            char pc[SU_PATH_BUF];
+            uint8_t *body = NULL;
+            size_t blen = 0;
+            if (spool_file(a, op->ctl_sha, "control", pc, sizeof pc) != SU_OK ||
+                su_path_read_file(pc, SU_LIMIT_PROTOCOL_MESSAGE, &body, &blen) != SU_OK) {
+                mark_unrecoverable(w, "a logged control batch is missing from the spool");
+                return 2;
+            }
+            req_begin(&req, AGENT_INTERNAL_ID, op->ctl == CTL_SET_FIELDS ? "world.set_fields" : "world.spawn_batch");
+            su_buf_str(&req, "\"world_id\":");
+            su_buf_quoted(&req, w->id, strlen(w->id));
+            su_buf_str(&req, ",\"expected_world_revision\":");
+            su_buf_quoted(&req, cur, strlen(cur));
+            su_buf_str(&req, op->ctl == CTL_SET_FIELDS ? ",\"entities\":" : ",\"rows\":");
+            su_buf_put(&req, body, blen);
+            free(body);
             req_end(&req);
         } else if (op->kind == LOG_DESPAWN) {
             req_begin(&req, AGENT_INTERNAL_ID, "world.despawn");
@@ -3222,6 +3263,44 @@ static uint32_t h_world_create(SuAgent *a, const SuJsonValue *params, SuBuf *res
         size_t cap_len = 0;
         uint8_t *src = NULL;
         size_t src_len = 0;
+        if (many != NULL && many->u.array.items[i] != NULL && many->u.array.items[i]->type == SU_JSON_OBJECT) {
+            /* Host entry (M3-04a): {capsule_path, host_operator}. The operator is built into the engine; the
+             * capsule is its declaration record. There is no source, so the recorded source hash is the hash of
+             * the empty byte string, which is what the worker reports for a host entry. */
+            static const char *const hkeys[] = {"capsule_path", "host_operator"};
+            const SuJsonValue *item = many->u.array.items[i];
+            const char *hrel = NULL;
+            const char *hop = NULL;
+            if (check_keys(item, hkeys, 2, c) != SU_OK || param_str(item, "capsule_path", 1, &hrel, c) != SU_OK ||
+                param_str(item, "host_operator", 1, &hop, c) != SU_OK) {
+                st = SU_E_TYPE;
+                goto fail_early;
+            }
+            if (strlen(hop) >= sizeof refs[i].system_id) {
+                st = call_fail(c, SU_E_TYPE, "host_operator is too long");
+                goto fail_early;
+            }
+            st = su_path_resolve(a->root, hrel, sys[i].capsule, sizeof sys[i].capsule);
+            if (st != SU_OK) {
+                call_fail(c, st, "capsule path rejected by the project path policy");
+                goto fail_early;
+            }
+            st = su_path_read_file(sys[i].capsule, AGENT_CAPSULE_MAX, &cap, &cap_len);
+            if (st != SU_OK) {
+                call_fail(c, st, "capsule could not be read");
+                goto fail_early;
+            }
+            sys[i].source[0] = '\0';
+            snprintf(refs[i].system_id, sizeof refs[i].system_id, "%s", hop);
+            st = spool_put_admit(a, "capsule", cap, cap_len, refs[i].capsule_sha);
+            free(cap);
+            if (st != SU_OK) {
+                call_fail(c, st, "spool budget exhausted; world not created");
+                goto fail_early;
+            }
+            snprintf(refs[i].source_sha, sizeof refs[i].source_sha, "%s", AGENT_EMPTY_SHA256);
+            continue;
+        }
         if (many != NULL) {
             const SuJsonValue *item = many->u.array.items[i];
             if (!su_json_is_string(item) || item->u.string.len == 0 || item->u.string.len > AGENT_MAX_PARAM_STRING) {
@@ -4059,8 +4138,9 @@ static uint32_t system_paths(SuAgent *a, const AgentWorld *w, const SysRef *sys,
         sp = cd->source_real;
     }
     if (cp == NULL) {
+        src_sp[0] = '\0';
         if (spool_file(a, sys->capsule_sha, "capsule", cap_sp, sizeof cap_sp) != SU_OK ||
-            spool_file(a, sys->source_sha, "source", src_sp, sizeof src_sp) != SU_OK) {
+            (!sysref_is_host(sys) && spool_file(a, sys->source_sha, "source", src_sp, sizeof src_sp) != SU_OK)) {
             return SU_E_INTERNAL;
         }
         cp = cap_sp;
@@ -4804,6 +4884,186 @@ static uint32_t h_world_spawn(SuAgent *a, const SuJsonValue *params, SuBuf *res,
     rc = sync_after(a, w, LOG_SPAWN, &lop, 0, r.ok);
     reply_free(&r);
     su_buf_free(&vb);
+    if (rc == CK_DIED) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    if (rc == CK_BAD) {
+        su_buf_free(&resp);
+        return call_fail(c, SU_E_INTERNAL, "world state diverged from the worker; world is unrecoverable");
+    }
+    relay(res, &resp, c);
+    su_buf_free(&resp);
+    return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* Canonical text of one {<field>: u32} object, members in the order received. */
+static uint32_t ctl_values(const SuJsonValue *vals, SuBuf *out, AgentCall *c) {
+    size_t i;
+    if (vals == NULL || vals->type != SU_JSON_OBJECT) {
+        return call_fail(c, SU_E_TYPE, "values must be an object of field names to u32");
+    }
+    su_buf_str(out, "{");
+    for (i = 0; i < vals->u.object.count; i++) {
+        const SuJsonMember *m = &vals->u.object.members[i];
+        uint64_t v = 0;
+        if (!su_json_get_uint(m->value, &v) || v > UINT32_MAX) {
+            return call_fail(c, SU_E_TYPE, "values must be u32 integers");
+        }
+        if (i > 0) {
+            su_buf_str(out, ",");
+        }
+        su_buf_quoted(out, m->key, m->key_len);
+        su_buf_str(out, ":");
+        su_buf_u64(out, v);
+    }
+    su_buf_str(out, "}");
+    return SU_OK;
+}
+
+/* Canonical text of the batch array of world.set_fields (items {entity, values}) or world.spawn_batch (items
+ * {values, external_id?}). The worker checks every rule; this checks the shape that the log must replay. */
+static uint32_t ctl_canon(const SuJsonValue *arr, int ctl, SuBuf *out, AgentCall *c) {
+    static const char *const k_set[] = {"entity", "values"};
+    static const char *const k_spawn[] = {"values", "external_id"};
+    size_t i;
+    uint32_t st;
+
+    if (arr == NULL || arr->type != SU_JSON_ARRAY) {
+        return call_fail(c, SU_E_TYPE, ctl == CTL_SET_FIELDS ? "entities must be an array of {entity, values}"
+                                                             : "rows must be an array of {values, external_id?}");
+    }
+    if (arr->u.array.count == 0u || arr->u.array.count > AGENT_CTL_MAX_ITEMS) {
+        /* The worker's codes for the same counts (contract OD-3, OD-3b). */
+        return ctl == CTL_SET_FIELDS ? call_fail(c, SU_E_TYPE, "world.set_fields takes 1 to 1024 entities")
+                                     : call_fail(c, SU_E_RESOURCE_LIMIT, "world.spawn_batch takes 1 to 1024 rows");
+    }
+    su_buf_str(out, "[");
+    for (i = 0; i < arr->u.array.count; i++) {
+        const SuJsonValue *it = arr->u.array.items[i];
+        uint64_t v = 0;
+        if (it == NULL || it->type != SU_JSON_OBJECT) {
+            return call_fail(c, SU_E_TYPE, "each batch item must be an object");
+        }
+        st = check_keys(it, ctl == CTL_SET_FIELDS ? k_set : k_spawn, 2, c);
+        if (st != SU_OK) {
+            return st;
+        }
+        su_buf_str(out, i > 0 ? ",{" : "{");
+        if (ctl == CTL_SET_FIELDS) {
+            const SuJsonValue *eh = su_json_member(it, "entity");
+            if (eh == NULL || !su_json_get_uint(eh, &v)) {
+                return call_fail(c, SU_E_TYPE, "entity must be an integer handle");
+            }
+            su_buf_str(out, "\"entity\":");
+            su_buf_u64(out, v);
+            su_buf_str(out, ",\"values\":");
+            st = ctl_values(su_json_member(it, "values"), out, c);
+        } else {
+            const SuJsonValue *xid = su_json_member(it, "external_id");
+            su_buf_str(out, "\"values\":");
+            st = ctl_values(su_json_member(it, "values"), out, c);
+            if (st == SU_OK && xid != NULL) {
+                if (!su_json_get_uint(xid, &v) || v > UINT32_MAX) {
+                    return call_fail(c, SU_E_TYPE, "external_id must be a u32 integer");
+                }
+                su_buf_str(out, ",\"external_id\":");
+                su_buf_u64(out, v);
+            }
+        }
+        if (st != SU_OK) {
+            return st;
+        }
+        su_buf_str(out, "}");
+    }
+    su_buf_str(out, "]");
+    if (out->failed) {
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "batch is too large");
+    }
+    return SU_OK;
+}
+
+/* world.set_fields {world_id, expected_world_revision, entities} and world.spawn_batch {world_id,
+ * expected_world_revision, rows} (M3-05, OD-3, OD-3b). The canonical batch is spooled first (a full spool
+ * refuses the call before the worker sees it), then forwarded; an accepted call is one LOG_CONTROL entry that
+ * names the spooled batch, so recovery replays the same call. */
+static uint32_t h_world_control(SuAgent *a, const SuJsonValue *params, SuBuf *res, AgentCall *c, int ctl) {
+    static const char *const allowed_set[] = {"world_id", "expected_world_revision", "entities"};
+    static const char *const allowed_spawn[] = {"world_id", "expected_world_revision", "rows"};
+    const char *method = ctl == CTL_SET_FIELDS ? "world.set_fields" : "world.spawn_batch";
+    const char *key = ctl == CTL_SET_FIELDS ? "entities" : "rows";
+    const char *world_id = NULL;
+    const char *expect = NULL;
+    AgentWorld *w = NULL;
+    InFlight op;
+    LogOp lop;
+    SuBuf body;
+    SuBuf req;
+    SuBuf resp;
+    Reply r;
+    char sha[65];
+    uint32_t st;
+    int rc;
+
+    if (check_keys(params, ctl == CTL_SET_FIELDS ? allowed_set : allowed_spawn, 3, c) != SU_OK ||
+        param_str(params, "world_id", 1, &world_id, c) != SU_OK ||
+        param_str(params, "expected_world_revision", 1, &expect, c) != SU_OK) {
+        return SU_E_TYPE;
+    }
+    su_buf_init(&body);
+    st = ctl_canon(su_json_member(params, key), ctl, &body, c);
+    if (st != SU_OK) {
+        su_buf_free(&body);
+        return st;
+    }
+    st = world_for_call(a, world_id, &w, c);
+    if (st == SU_OK) {
+        st = preflight(a, c);
+    }
+    if (st == SU_OK) {
+        st = log_room(a, c, w);
+    }
+    if (st != SU_OK) {
+        su_buf_free(&body);
+        return st;
+    }
+    if (spool_put_admit(a, "control", body.data, body.len, sha) != SU_OK) {
+        su_buf_free(&body);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "the spool cannot hold the batch for recovery; world unchanged");
+    }
+    memset(&op, 0, sizeof op);
+    op.kind = OPK_CONTROL;
+    op.w = w;
+    op.tick = w->tick;
+    su_buf_init(&req);
+    req_begin(&req, c->id, method);
+    su_buf_str(&req, "\"world_id\":");
+    su_buf_quoted(&req, world_id, strlen(world_id));
+    su_buf_str(&req, ",\"expected_world_revision\":");
+    su_buf_quoted(&req, expect, strlen(expect));
+    su_buf_str(&req, ",\"");
+    su_buf_str(&req, key);
+    su_buf_str(&req, "\":");
+    su_buf_put(&req, body.data, body.len);
+    req_end(&req);
+    su_buf_free(&body);
+    if (req.failed) {
+        su_buf_free(&req);
+        return call_fail(c, SU_E_RESOURCE_LIMIT, "batch request too large");
+    }
+    su_buf_init(&resp);
+    st = roundtrip(a, c->id, &req, &resp);
+    su_buf_free(&req);
+    if (st != SU_OK) {
+        su_buf_free(&resp);
+        return worker_died(a, c, &op);
+    }
+    reply_parse(&r, resp.data, resp.len);
+    memset(&lop, 0, sizeof lop);
+    lop.ctl = ctl;
+    snprintf(lop.ctl_sha, sizeof lop.ctl_sha, "%s", sha);
+    rc = sync_after(a, w, LOG_CONTROL, &lop, 0, r.ok);
+    reply_free(&r);
     if (rc == CK_DIED) {
         su_buf_free(&resp);
         return worker_died(a, c, &op);
@@ -5862,6 +6122,12 @@ static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c
     }
     if (strcmp(req->method, "world.despawn") == 0) {
         return h_world_despawn(a, p, res, c);
+    }
+    if (strcmp(req->method, "world.set_fields") == 0) {
+        return h_world_control(a, p, res, c, CTL_SET_FIELDS);
+    }
+    if (strcmp(req->method, "world.spawn_batch") == 0) {
+        return h_world_control(a, p, res, c, CTL_SPAWN_BATCH);
     }
     if (strcmp(req->method, "world.migrate_plan") == 0) {
         return h_world_migrate_plan(a, p, res, c);

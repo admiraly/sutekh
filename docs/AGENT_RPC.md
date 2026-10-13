@@ -638,3 +638,63 @@ The owner states the intended reading. Until then this is a deviation. A rollbac
 Not in this section (deviations, see the M2-01b and M2-01 fixes2/fixes3 handoffs): inline migration documents (paths
 only); native kernels admitted but not yet installed are not tracked per world (only the installed artifacts of the
 used worlds are counted); the native lane covers the commit, rollback and bindings checks above, not the undo.
+
+## 18. RTS control batches and host systems (M3-05; contract `planning/contracts/M3_RTS_CONTRACT.md` r4, 2.2, OD-3, OD-3b)
+
+- **`world.create`** `capsule_paths` items may be `{capsule_path, host_operator}` objects as well as path strings. Such an
+  item is a host system (M3-04a): an operator built into the engine (`rts.spatial`, `rts.scatter`), whose capsule is
+  its declaration record and which has no source. The supervisor records the host operator as the `system_id` and the
+  source hash as the SHA-256 of the empty byte string (what the worker reports for a host entry), so checkpoints,
+  restore and recovery carry host entries like IR entries. An unknown operator is `SU_E_CAPABILITY_DENIED`.
+- **`world.spawn`** on a world whose `schema_id` is `rts` applies the spawn domains and defaults of contract 2.2 (D1):
+  `kind`, `reload`, `damage`, `flight` required (when the schema has them); `kind` 1 or 2; `hp` 1..65,535 for kind 1 and
+  0 for kind 2; system-owned fields only at their idle value; omitted `formation_slot`, `target_slot`, `dmg_target`,
+  `proj_target` are NONE. A violation is `SU_E_TYPE` and the message names the field. Every world: a spawn that would
+  take high water above 838,860 rows, or that has no free slot, is `SU_E_RESOURCE_LIMIT` with no change.
+- **`world.spawn_batch`** `{world_id, expected_world_revision, rows: [{values, external_id?}]}` -> `{world_id,
+  world_revision, spawned, entities: [handle, ...]}`. 1..1,024 rows (else `SU_E_RESOURCE_LIMIT`). Every row is checked
+  as by `world.spawn`, then free slots (`rows <= capacity - alive`) and high water (`hw + rows <= 838,860`), before
+  any row is spawned: a refused call takes no slot, appends no record and keeps the revision. An accepted call spawns
+  in row order into the lowest free slots, appends one `SU_EVENT_SPAWNED` per row and bumps the revision once.
+- **`world.set_fields`** `{world_id, expected_world_revision, entities: [{entity, values}]}` -> `{world_id,
+  world_revision, updated}`. 1..1,024 entities; only the 14 writable fields of 2.2; resulting-row rules on the committed
+  row with the payload applied; duplicate entity `SU_E_INVALID_ARGUMENT`; stale handle `SU_E_STALE_HANDLE`; a refused
+  call changes nothing; an accepted call bumps the revision once and emits no event.
+- **Recovery.** The supervisor stores the canonical batch array (members in the order received, u32 values) in the
+  spool under ext `control` before it forwards the call; a spool that cannot hold it refuses the call with
+  `SU_E_RESOURCE_LIMIT` and the world unchanged. An accepted call is one replay-log entry naming the spooled batch;
+  recovery replays it verbatim and checks the digest as for every logged operation. Item keys other than those
+  listed are `SU_E_TYPE`.
+
+Not yet: the spool precheck of contract 12 (`(checkpoint_retain + 1) * (446 * hw_after + 90 * event_log_max) + 16384
+<= spool_bytes_max`); an `error.detail` path for spawn-rule violations (the field is named in the message only).
+
+## 18. RTS control batches and host systems (M3-05; contract `planning/contracts/M3_RTS_CONTRACT.md` r4, 2.2, OD-3, OD-3b)
+
+- **`world.create`** `capsule_paths` items may be `{capsule_path, host_operator}` objects as well as path strings. Such an
+  item is a host system (M3-04a): an operator built into the engine (`rts.spatial`, `rts.scatter`), whose capsule is
+  its declaration record and which has no source. The supervisor records the host operator as the `system_id` and the
+  source hash as the SHA-256 of the empty byte string (what the worker reports for a host entry), so checkpoints,
+  restore and recovery carry host entries like IR entries. An unknown operator is `SU_E_CAPABILITY_DENIED`.
+- **`world.spawn`** on a world whose `schema_id` is `rts` applies the spawn domains and defaults of contract 2.2 (D1):
+  `kind`, `reload`, `damage`, `flight` required (when the schema has them); `kind` 1 or 2; `hp` 1..65,535 for kind 1 and
+  0 for kind 2; system-owned fields only at their idle value; omitted `formation_slot`, `target_slot`, `dmg_target`,
+  `proj_target` are NONE. A violation is `SU_E_TYPE` and the message names the field. Every world: a spawn that would
+  take high water above 838,860 rows, or that has no free slot, is `SU_E_RESOURCE_LIMIT` with no change.
+- **`world.spawn_batch`** `{world_id, expected_world_revision, rows: [{values, external_id?}]}` -> `{world_id,
+  world_revision, spawned, entities: [handle, ...]}`. 1..1,024 rows (else `SU_E_RESOURCE_LIMIT`). Every row is checked
+  as by `world.spawn`, then free slots (`rows <= capacity - alive`) and high water (`hw + rows <= 838,860`), before
+  any row is spawned: a refused call takes no slot, appends no record and keeps the revision. An accepted call spawns
+  in row order into the lowest free slots, appends one `SU_EVENT_SPAWNED` per row and bumps the revision once.
+- **`world.set_fields`** `{world_id, expected_world_revision, entities: [{entity, values}]}` -> `{world_id,
+  world_revision, updated}`. 1..1,024 entities; only the 14 writable fields of 2.2; resulting-row rules on the committed
+  row with the payload applied; duplicate entity `SU_E_INVALID_ARGUMENT`; stale handle `SU_E_STALE_HANDLE`; a refused
+  call changes nothing; an accepted call bumps the revision once and emits no event.
+- **Recovery.** The supervisor stores the canonical batch array (members in the order received, u32 values) in the
+  spool under ext `control` before it forwards the call; a spool that cannot hold it refuses the call with
+  `SU_E_RESOURCE_LIMIT` and the world unchanged. An accepted call is one replay-log entry naming the spooled batch;
+  recovery replays it verbatim and checks the digest as for every logged operation. Item keys other than those
+  listed are `SU_E_TYPE`.
+
+Not yet: the spool precheck of contract 12 (`(checkpoint_retain + 1) * (446 * hw_after + 90 * event_log_max) + 16384
+<= spool_bytes_max`); an `error.detail` path for spawn rule violations (the field is in the message only).

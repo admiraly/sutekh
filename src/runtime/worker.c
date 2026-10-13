@@ -3202,8 +3202,31 @@ static int restore_entry_fill(CkptSys *c, const SuJsonValue *item) {
                                         "source_sha256", "semantic_hash"};
     const size_t caps_max[6] = {SU_DIAG_SYSTEM_BYTES, SU_PATH_BUF, SU_PATH_BUF, 65, 65, 65};
     const char *vals[6];
+    const char *hop = str_of(item, "host_operator");
     size_t k;
 
+    if (hop != NULL) {
+        /* Host entry (M3-04a): no source; the operator is the system_id (rebuild_schedule looks it up so). */
+        static const char *const hkeys[4] = {"system_id", "capsule_path", "capsule_sha256", "semantic_hash"};
+        const size_t hmax[4] = {SU_DIAG_SYSTEM_BYTES, SU_PATH_BUF, 65, 65};
+        for (k = 0; k < 4; k++) {
+            vals[k] = str_of(item, hkeys[k]);
+            if (vals[k] == NULL || strlen(vals[k]) >= hmax[k]) {
+                return 0;
+            }
+        }
+        if (strcmp(hop, vals[0]) != 0 || str_of(item, "source_path") != NULL) {
+            return 0;
+        }
+        memset(c, 0, sizeof *c);
+        c->kind = SU_SYS_KIND_HOST;
+        snprintf(c->system_id, sizeof c->system_id, "%s", vals[0]);
+        snprintf(c->paths.capsule, sizeof c->paths.capsule, "%s", vals[1]);
+        snprintf(c->capsule_hash, sizeof c->capsule_hash, "%s", vals[2]);
+        snprintf(c->semantic_hash, sizeof c->semantic_hash, "%s", vals[3]);
+        return 1;
+    }
+    c->kind = SU_SYS_KIND_IR;
     for (k = 0; k < 6; k++) {
         vals[k] = str_of(item, keys[k]);
         if (vals[k] == NULL || strlen(vals[k]) >= caps_max[k]) {
