@@ -6,7 +6,7 @@
   "current_milestone": "M3",
   "accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "runtime_tests": "2026-10-14 Q8: reference 22/22, model replay 26/26; seven committed scenes at 16..65536 rows x4 ticks and three scenes x64 ticks engine/model canonical state/events/counts equal. Default integration ctest 46/46.",
+  "runtime_tests": "2026-10-14: default build/ctest49/49; focused native-enabled6/6; host mutants23 killed/2 equivalent, reference mutants32 detected/1 equivalent. Q8 and edge fixtures passed. OD6 targeting miss gate and OD15 scale/snapshot conflict remain unmet. See planning/evidence/m3-native-mutation-refresh/.",
   "engine_benchmarks": "run_provisional_shared_vm_not_qualification",
   "original_bfme_compatibility": "not_run",
   "remote_repository": "https://github.com/admiraly/sutekh",
@@ -157,7 +157,8 @@
       "done": [
         "Q8 engine/model comparison in M3-05",
         "Five full-RPC edge fixtures with worker counts1/2",
-        "M3-M27 scratch-IR semantic mutant detected and restored baseline passed"
+        "M3-M27 scratch-IR semantic mutant detected and restored baseline passed",
+        "Refreshed host campaign25 variants (23 killed/2 equivalent) and reference campaign33 variants (32 detected/1 equivalent); restored baselines passed"
       ],
       "open": [
         "OD6: retained K128 misses2/938 on committed16k scene >0.1%",
@@ -169,7 +170,7 @@
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "m0_accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "head_at_last_status_update": "7f9be851cf4761f42d1f86bd7dc60ab5bc35c31c",
+  "head_at_last_status_update": "7948f33ffa189fac1ec5d6dc27458bf7fc7d255b",
   "owner_ratifications": [
     {
       "date": "2026-10-12",

@@ -11,11 +11,19 @@ Specification v0.1 • 6 October 2026
 
 **Objective:** maximize verified game functionality delivered per agent-hour, while retaining a path to workload-specific, near-hardware-limit execution. Ordinary gameplay edits must not trigger native project builds, link steps, or executable restarts.
 
-**Status:** this is a specification and prompt package, not an implemented engine. Timing numbers are proposed acceptance targets, never benchmark results. The included Python checker checks this package and its small executable examples; it does not establish engine performance, security, or BFME compatibility. “Sutekh” is a working name, not a cleared product name.
+**Status:** Sutekh has an implemented headless C17 runtime, checked JSON gameplay IR, a local structured control plane, worker recovery, generational entities, and a six-system RTS prototype. M0–M2 are owner-accepted with documented caveats; M3 is in progress. There is no full editor, renderer, or Windows-native runtime. Timing observations are not performance qualification, and BFME compatibility has not been established. See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [durable task state](planning/status.json). “Sutekh” remains a working name, not a cleared product name.
 
 ### Start here
 
-Place this directory at the root of a **new, separate engine checkout**. Do not replace the existing Rust BFME remake, the accelerator fork, or either Open-BFME reconstruction repository. Give the coding orchestrator `prompts/00_MASTER_ORCHESTRATOR.md`. The first actual implementation assignment is `prompts/01_BOOTSTRAP_ZERO_WAIT.md`.
+On Linux or WSL, build and run the regression suite from the repository root:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j 2
+ctest --test-dir build --output-on-failure
+```
+
+The default lane uses the checked reference VM. Native specialization is optional and has separate qualification requirements. Keep this engine checkout separate from existing game projects. The root specifications below remain authoritative for continued development.
 
 The orchestrator should read `AGENTS.md`, the five root specifications below, and `planning/tasks.json`. It should implement the smallest live, headless loop before extending the architecture. Individual workers receive only their task packet, relevant contracts, and the corresponding role prompt—not this entire package on every task.
 
@@ -27,7 +35,7 @@ The orchestrator should read `AGENTS.md`, the five root specifications below, an
 | [AGENT_PROTOCOL.md](AGENT_PROTOCOL.md) | Parallel work, verification, integration, recovery |
 | [MILESTONES.md](MILESTONES.md) | Dependency-ordered delivery and acceptance gates |
 
-The `docs/` directory specifies state migration, determinism, storage/ABI, RPC, builds, performance methodology, rendering, security risks, game profiles, dependency policy, and tests. `schemas/` contains machine-readable structures. `examples/` contains a valid movement capsule, fixtures, negative examples, and an explicitly unmeasured report. `planning/` contains a bootstrap task graph and an honest initial status file.
+The `docs/` directory specifies state migration, determinism, storage/ABI, RPC, builds, performance methodology, rendering, security risks, game profiles, dependency policy, and tests. `schemas/` contains machine-readable structures. `examples/` contains a valid movement capsule, fixtures, negative examples, and an explicitly unmeasured report. `planning/` contains the task graph, current status, audits, and reproducible validation evidence.
 
 ### Single-file reading copies
 

@@ -1,0 +1,43 @@
+{
+  "job": {
+    "argv": [
+      "python3",
+      "-I",
+      "tests/rts/ref/mutants.py",
+      "--json",
+      "/root/sutekh/planning/evidence/m3-native-mutation-refresh/reference-mutants.json"
+    ],
+    "bind": {
+      "backend": "python_reference",
+      "layout_generation": 1,
+      "semantic_hash": "0190f15f5ad9ae229ab50989b9e6c82dae0ab4fdbcf7efb6b25ee75aecd88f36"
+    },
+    "child_pid": null,
+    "cwd": "/root/sutekh",
+    "env": {},
+    "exit_code": 0,
+    "finished_mono_ns": 7285301462576,
+    "finished_wall": 1791982306.0482628,
+    "inputs": {
+      "backend": "python_reference",
+      "layout_generation": 1,
+      "semantic_hash": "0190f15f5ad9ae229ab50989b9e6c82dae0ab4fdbcf7efb6b25ee75aecd88f36"
+    },
+    "job_id": 2,
+    "job_key": "7737b915742f707f9bde967bb0ddd2d56e132bf399ad9577ba35fd86aa1b11af",
+    "log_path": "/root/sutekh/build/broker-m3-validation/logs/job-2.log",
+    "log_sha256": "0c0f27ed9333843405355981cf9594e79493166b89777f1e6d44e188ab0facd1",
+    "memory_bytes": 2147483648,
+    "owner_pid": 41366,
+    "reason": "",
+    "started_mono_ns": 7272198313168,
+    "started_wall": 1791982292.9451153,
+    "state": "succeeded",
+    "submitted_mono_ns": 7272079337776,
+    "submitted_wall": 1791982292.8261328,
+    "superseded_by": null,
+    "system_id": "m3-reference-mutants",
+    "timeout_s": 300.0
+  },
+  "ok": true
+}

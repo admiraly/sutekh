@@ -1,0 +1,11 @@
+# M3 validation refresh and public runtime CI
+
+Existing host mutation campaign refreshed in isolated /root/sutekh-e2e:25 variants,23 killed,2 documented equivalents,0 unaccepted. Original spatial/scatter sources restored byte-for-byte against main and positive operator/quick differential checks passed. Reference campaign via broker job2:33 variants,32 detected,1 documented equivalent,baseline passed. Initial broker job1 failed from an omitted cwd; it is retained as failed, not counted as validation. Explicit-root job2 succeeded and its durable status/log identity is archived.
+
+Default integration `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF`; `cmake --build build -j2`; `ctest --test-dir build --output-on-failure -j2`:49/49 passed. Native-enabled focused RTS suite6/6 passed. Known WSL AVX2 XSAVE feasibility failure was not rerun or waived; no full native-suite claim. Evidence, artifacts/source hashes and commands in planning/evidence/m3-native-mutation-refresh.
+
+README now accurately presents the implemented Linux/WSL headless engine and current limitations, instead of claiming the tree is only a specification package. IMPLEMENTATION_STATUS retains historical M0 evidence and adds the current M3 checkpoint. GitHub workflow gains a Linux checked-runtime build/CTest job, using existing pinned action revisions and pinned Python test dependencies. Remote CI result is pending at this commit; local equivalent49/49 passed.
+
+The previously incorrect 1M-world/28MB checkpoint comment in src/platform/sutekh_main.c is corrected to the conservative588630-row admission calculation and retained65536-row recovery claim (M3-08's scoped comment correction). No production behavior, limit, architecture or spec changed. Target sutekh recompiled after the comment edit. Public-license references untouched. Modified implementation/presentation paths:README.md,docs/IMPLEMENTATION_STATUS.md,.github/workflows/repository-checks.yml,src/platform/sutekh_main.c; planning evidence/state/handoff/pack artifacts also updated.
+
+M3-05/M3-06 remain incomplete: OD6 miss-rate gate, distinct-querier count, and OD15 scale/snapshot contradiction remain explicit. Independent reviewer, native Windows and performance qualification unrun. Continue independent stress methodology preparation while owner limit direction is pending.

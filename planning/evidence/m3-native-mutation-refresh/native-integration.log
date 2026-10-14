@@ -1,0 +1,26 @@
+$ cmake -S . -B build-native -DSUTEKH_NATIVE=ON
+-- Configuring done (0.0s)
+-- Generating done (0.2s)
+-- Build files have been written to: /root/sutekh/build-native
+$ cmake --build build-native --target test_rts_snapshot_limit -j 2
+[0/2] Re-checking globbed directories...
+[1/3] Building C object CMakeFiles/test_rts_snapshot_limit.dir/tests/entities/test_rts_snapshot_limit.c.o
+[2/3] Linking CXX executable test_rts_snapshot_limit
+$ ctest --test-dir build-native -R ^(rts_model_digest|rts_e2e_edges|rts_projectile_mutant|rts_snapshot_limit|rts_native_diff|rts_native_ops)$ --output-on-failure -j 2
+Test project /root/sutekh/build-native
+    Start 14: rts_native_diff
+    Start 12: rts_native_ops
+1/6 Test #12: rts_native_ops ...................   Passed    0.03 sec
+    Start 20: rts_model_digest
+2/6 Test #20: rts_model_digest .................   Passed    0.89 sec
+    Start 60: rts_e2e_edges
+3/6 Test #60: rts_e2e_edges ....................   Passed    0.47 sec
+    Start 61: rts_projectile_mutant
+4/6 Test #61: rts_projectile_mutant ............   Passed    0.17 sec
+5/6 Test #14: rts_native_diff ..................   Passed    4.54 sec
+    Start 59: rts_snapshot_limit
+6/6 Test #59: rts_snapshot_limit ...............   Passed    0.63 sec
+
+100% tests passed, 0 tests failed out of 6
+
+Total Test time (real) =   5.17 sec

@@ -62,8 +62,8 @@
     },
     {
       "path": ".github/workflows/repository-checks.yml",
-      "bytes": 1662,
-      "sha256": "ad1fd63226d7cdf5a0aff8e7d136e107cf45b9f845a5d18b5f3e396e9082c18a"
+      "bytes": 2431,
+      "sha256": "6b90bf3491089545df26879490a755206798c8b2ebe4e7f7f43695e34462ec92"
     },
     {
       "path": ".gitignore",
@@ -138,12 +138,12 @@
     {
       "path": "PACK_VALIDATION.json",
       "bytes": 557,
-      "sha256": "a868769f109bf587bfbba28c374ef353a37f1c9ce1fbd2caca0c0d3590ac371c"
+      "sha256": "63c0b82b95d046b10b0c94b0e93b9a96c1d23641095e5dd80c9e8eddf1052981"
     },
     {
       "path": "README.md",
-      "bytes": 9004,
-      "sha256": "f82a7715a2aef0404cd399d28a933807aedc80958c333ea333d4f42ffecbcd2f"
+      "bytes": 9386,
+      "sha256": "f9c426a430dfc45f349f0af9305d537f7f1e79079f787dcee894ae36fe9e37db"
     },
     {
       "path": "SECURITY.md",
@@ -442,8 +442,8 @@
     },
     {
       "path": "docs/IMPLEMENTATION_STATUS.md",
-      "bytes": 43745,
-      "sha256": "83f20e32596e6aea2c80a87961286db8289c602f22a94f24affec8d90c96bd49"
+      "bytes": 45640,
+      "sha256": "15406403692ede230cb4a7010bcf23ff6348b5b879c78961c47d9ae9de7ab4d3"
     },
     {
       "path": "docs/PERFORMANCE.md",
@@ -1141,6 +1141,61 @@
       "sha256": "544cc250039d2608a8ae53d7d1f172e2e46e6120ad2f4e023cdf63edaff4d9ba"
     },
     {
+      "path": "planning/evidence/m3-native-mutation-refresh/broker-status.json",
+      "bytes": 1356,
+      "sha256": "21c05f5bc57b1144b897ab4f9328b9bee4c82f6af2224b7cb7c5ddd3a41c73b2"
+    },
+    {
+      "path": "planning/evidence/m3-native-mutation-refresh/broker-submission-retry.json",
+      "bytes": 179,
+      "sha256": "65ca0e17efca5a2b3b3b1bc8fededeea99900e0941fe0d3971777c6f2cf081f0"
+    },
+    {
+      "path": "planning/evidence/m3-native-mutation-refresh/broker-submission.json",
+      "bytes": 179,
+      "sha256": "215b81c67d86c38fad563346926d5549616ae157e725fdc79c8178199268f207"
+    },
+    {
+      "path": "planning/evidence/m3-native-mutation-refresh/broker-wrong-cwd.log",
+      "bytes": 134,
+      "sha256": "b2578bdf1e0cb6c3dbd0a160f22c005303942a15a335d5a89df9563e66c31c35"
+    },
+    {
+      "path": "planning/evidence/m3-native-mutation-refresh/default-integration.log",
+      "bytes": 5460,
+      "sha256": "bf47d9dce324ce5e38cde6c74389355e08cf3f44934e6c6757e17ebf47efeb2b"
+    },
+    {
+      "path": "planning/evidence/m3-native-mutation-refresh/host-mutants.log",
+      "bytes": 7430,
+      "sha256": "5d94d526c3043168ac942fcd2cb86f7bd379416d65fbbd35f39e2991c153e00e"
+    },
+    {
+      "path": "planning/evidence/m3-native-mutation-refresh/native-integration.log",
+      "bytes": 1325,
+      "sha256": "106a713b9960c4fb47caf5a42c117c54f71677b604dca6ef993da6fd6de75b5e"
+    },
+    {
+      "path": "planning/evidence/m3-native-mutation-refresh/reference-mutants.json",
+      "bytes": 13500,
+      "sha256": "e1736573cbf40b96e9d2e1351bf16f52b536d83b9ac97184dde67eeda6fadadf"
+    },
+    {
+      "path": "planning/evidence/m3-native-mutation-refresh/reference-mutants.log",
+      "bytes": 4254,
+      "sha256": "0c0f27ed9333843405355981cf9594e79493166b89777f1e6d44e188ab0facd1"
+    },
+    {
+      "path": "planning/evidence/m3-native-mutation-refresh/restored.log",
+      "bytes": 1177,
+      "sha256": "0b0e49c9bd1d0de3b5ed11e6d3e2658af2f12714419ea90f6ee15283a27788ce"
+    },
+    {
+      "path": "planning/evidence/m3-native-mutation-refresh/result.json",
+      "bytes": 3502,
+      "sha256": "ba249b5ff7a8c14db758cb0314665ce8d989f9a46251d163b47f2e76d9a0f762"
+    },
+    {
       "path": "planning/handoffs/2026-10-07-dependencies.md",
       "bytes": 2654,
       "sha256": "5c02dfea834bf7f613a694cd5013733417db13ea14d13df4249544ab2a2caf93"
@@ -1521,9 +1576,14 @@
       "sha256": "5e11c9df1603b7476f360f0b27e1b9aadb72617945c8682bff5e425de49773a3"
     },
     {
+      "path": "planning/handoffs/2026-10-14-m3-mutation-ci-status.md",
+      "bytes": 2343,
+      "sha256": "4d10fad5c4ea0a2eab5508ec072e26406cf89dc07c0ae4f171d49a4f73eb2a8b"
+    },
+    {
       "path": "planning/status.json",
-      "bytes": 10059,
-      "sha256": "1c4fb3b1c64abf9810f5b009fa14abc7004c63e9d0fdc618c81f06a0e7b9154a"
+      "bytes": 10301,
+      "sha256": "8f9e3098c0099da84585f5d424d322193bffc1e4131636afc564785b6b963eb9"
     },
     {
       "path": "planning/tasks.json",
@@ -1767,8 +1827,8 @@
     },
     {
       "path": "src/platform/sutekh_main.c",
-      "bytes": 6227,
-      "sha256": "e2a20e14946dfa05a8ffac1de012a3e1271eaf30a490ee6900651eb3b1662d5f"
+      "bytes": 6224,
+      "sha256": "c3cfe9257bf7112446142074c66b11a528db6c1ad224a16e4f48f400332ce954"
     },
     {
       "path": "src/runtime/checkpoint.c",

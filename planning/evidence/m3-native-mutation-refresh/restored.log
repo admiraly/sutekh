@@ -1,0 +1,10 @@
+$ build/test_rts_ops
+test_rts_ops: 148 checks, 0 failures
+$ python3 -I tests/rts/native/diff_driver.py --driver build/test_rts_diff --work build/restored-diff --quick
+PASS duel16-o1: alive 14/16, valid targets 4, truncated 0 (model truncated_rows 0), nonzero incoming 5, digest C 962eedd2776bee33 model 962eedd2776bee33
+PASS duel16-o2: alive 14/16, valid targets 4, truncated 0 (model truncated_rows 0), nonzero incoming 4, digest C 0414c078efa36e44 model 0414c078efa36e44
+PASS mixed-1024-o1: alive 908/1024, valid targets 0, truncated 0 (model truncated_rows 0), nonzero incoming 322, digest C 160f66e092fbad7d model 160f66e092fbad7d
+PASS mixed-1024-o2: alive 896/1024, valid targets 0, truncated 0 (model truncated_rows 0), nonzero incoming 305, digest C a318fde3cd75dcdb model a318fde3cd75dcdb
+PASS congested-1024-o1: alive 891/1024, valid targets 617, truncated 183 (model truncated_rows 183), nonzero incoming 304, digest C 8401dd53670610cb model 8401dd53670610cb
+PASS congested-1024-o2: alive 906/1024, valid targets 628, truncated 183 (model truncated_rows 183), nonzero incoming 310, digest C 053cf24724ca8708 model 053cf24724ca8708
+rts_native_diff: 6 runs, 0 failures

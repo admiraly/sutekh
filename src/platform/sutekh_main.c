@@ -78,8 +78,8 @@ static int run_serve(int argc, char **argv) {
     /* Workers and disposable admission children run under RLIMIT_AS (constitution C07). Default
      * 4 GiB; SUTEKH_WORKER_AS_BYTES overrides it (0 = unlimited, needed under AddressSanitizer). */
     cfg.worker_address_space_bytes = UINT64_C(4) * 1024u * 1024u * 1024u;
-    /* Recovery spool (checkpoints, captured capsules): default 512 MiB so a 1,000,000-row world
-     * (about 28 MB per checkpoint, retain+1 reserved) fits; SUTEKH_SPOOL_BYTES_MAX overrides. */
+    /* Recovery spool default 512 MiB: RTS conservative admission binds at 588,630 rows
+     * (retain=1, event_log_max=65,536). Recovery claim N<=65,536; SUTEKH_SPOOL_BYTES_MAX overrides. */
     cfg.spool_bytes_max = UINT64_C(512) * 1024u * 1024u;
     {
         const char *sp_env = getenv("SUTEKH_SPOOL_BYTES_MAX");

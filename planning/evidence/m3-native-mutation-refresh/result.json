@@ -1,0 +1,74 @@
+{
+  "format": "0.1",
+  "date": "2026-10-14",
+  "task": "M3-06 mutation refresh",
+  "base_revision": "cfe4f463a6964e38f135b3086b9e9ea0631d6c7f",
+  "native_source_changes": "none_after_restore",
+  "source_hashes": {
+    "profiles/rts/native/rts_spatial.c": "e98267b704015ccd8df2673d36e0981ab8cdcc88ab655313455de7d3231bd635",
+    "profiles/rts/native/rts_scatter.c": "3274b582a441d32712a6dbe61bb6ad97cf509215219f6c19df2294e9efeef478"
+  },
+  "artifact_hashes": {
+    "build/test_rts_ops": "c87f881b260cb0d91285c6a0cb8f54cbf59d58af7a01970474de8c59bf8e83e9",
+    "build/test_rts_diff": "98b93434cfe276ab7e476d518520e05e5c72cf9cfcce86d36b4b14f5b00053de"
+  },
+  "checks": [
+    {
+      "command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug; cmake --build build --target test_rts_ops test_rts_diff -j 2",
+      "exit_code": 0
+    },
+    {
+      "command": "python3 -I tests/rts/native/mutants.py --build build --work build/mutant-scratch",
+      "exit_code": 0,
+      "total": 25,
+      "killed": 23,
+      "equivalent": 2
+    },
+    {
+      "command": "build/test_rts_ops; python3 -I tests/rts/native/diff_driver.py --driver build/test_rts_diff --work build/restored-diff --quick",
+      "exit_code": 0
+    },
+    {
+      "command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF; cmake --build build -j 2; ctest --test-dir build --output-on-failure -j 2",
+      "exit_code": 0,
+      "tests": 49
+    },
+    {
+      "command": "cmake -S . -B build-native -DSUTEKH_NATIVE=ON; cmake --build build-native --target test_rts_snapshot_limit -j 2; ctest --test-dir build-native -R ^(rts_model_digest|rts_e2e_edges|rts_projectile_mutant|rts_snapshot_limit|rts_native_diff|rts_native_ops)$ --output-on-failure -j 2",
+      "exit_code": 0,
+      "tests": 6
+    },
+    {
+      "command": "broker job2: python3 -I tests/rts/ref/mutants.py --json planning/evidence/m3-native-mutation-refresh/reference-mutants.json",
+      "exit_code": 0,
+      "total": 33,
+      "detected": 32,
+      "equivalent": 1
+    },
+    {
+      "command": "cmake --build build --target sutekh -j 2",
+      "exit_code": 0,
+      "note": "Compile after comment-only spool correction; same source line count."
+    }
+  ],
+  "limitations": [
+    "This refresh covers the existing host-operator campaign, not all M3-06 mutants.",
+    "Equivalent M3-M06 dead-target stores are erased by zero-dead before publish; M3-M09b reverse order equivalent for unsigned saturating add.",
+    "Known native_avx2 WSL XSAVE feasibility probe not rerun or waived; native focused6/6 is not full native suite qualification.",
+    "Independent reviewer and Windows-native unrun."
+  ],
+  "modified_paths": [
+    "README.md",
+    "docs/IMPLEMENTATION_STATUS.md",
+    ".github/workflows/repository-checks.yml",
+    "src/platform/sutekh_main.c"
+  ],
+  "modified_source_hashes": {
+    "README.md": "f9c426a430dfc45f349f0af9305d537f7f1e79079f787dcee894ae36fe9e37db",
+    "docs/IMPLEMENTATION_STATUS.md": "15406403692ede230cb4a7010bcf23ff6348b5b879c78961c47d9ae9de7ab4d3",
+    ".github/workflows/repository-checks.yml": "6b90bf3491089545df26879490a755206798c8b2ebe4e7f7f43695e34462ec92",
+    "src/platform/sutekh_main.c": "c3cfe9257bf7112446142074c66b11a528db6c1ad224a16e4f48f400332ce954"
+  },
+  "engine_sha256": "c2ba406829ca57b0ec3f11b9673e53d6077182c4a5fa8506b419b4f1522b69dc",
+  "broker_note": "Initial job1 failed due to omitted cwd; job2 uses explicit repository cwd and succeeded. Both statuses/logs retained; runner return ok is not job success."
+}

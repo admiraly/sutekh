@@ -1,4 +1,17 @@
-# Implementation status (M0)
+# Implementation status
+
+## Current checkpoint — 14 October 2026
+
+M0–M2 are owner-accepted with the caveats retained in `planning/status.json`. M3 remains in progress. Current work includes the six-system RTS runtime, atomic batch control methods, per-system structural queues, and replacement-worker recovery after actual host faults.
+
+Independent model comparison now reproduces snapshot 0.2 and retained-event digests: all seven committed scenes through four ticks (up to 65,536 rows), and three small scenes through 64 ticks, match engine state/events/counts. Five RPC edge slices pass with worker counts 1/2. M3-M27 is detected as a semantic divergence at tick 3; host mutation refresh detects 23 of 25 variants, with two documented equivalents. See `planning/handoffs/2026-10-14-m3-05-model-digest.md` and `planning/handoffs/2026-10-14-m3-06-edges-targeting.md`.
+
+Unmet gates remain explicit: retained K128 misses 2/938 oracle-positive queries on the committed 16k congested scene, exceeding 0.1%; the 1,024-row scene has 964 distinct armed queriers; million-row load and capture-at 838,860 requirements conflict with retained admission/snapshot limits. No profile constants, scene seeds or snapshot limits were relaxed. OD6/OD15 resolution is pending. A native regression proves capture at 838,860 refuses under 64 MiB; it does not claim successful loading at that scale.
+
+Default integration now passes 49/49; focused native-enabled checks pass 6/6. The reference mutation refresh detects 32 of 33 variants, with one documented equivalent. Exact commands, hashes and logs are in `planning/evidence/m3-model-digest/`, `m3-load-limits/`, `m3-e2e-targeting/`, and `m3-native-mutation-refresh/`. These are correctness observations, not timing qualification. Native Windows and independent review are unrun; the existing WSL AVX2 XSAVE feasibility failure remains documented and unwaived.
+
+## Historical M0 evidence
+
 
 Status as of M0-14 (2026-10-11). This document describes the source tree at commit `d352b54` (the last M0-14 source commit; M0-14 source commits are `8a2f68c`, `5cad0d3`, `d352b54`). Every harness report in `planning/evidence/` records `repo_head` `d352b54`. The evidence commit that adds `planning/evidence/` and this document changes no source. Every figure below comes from a file under `planning/evidence/`; the file is named next to the figure. M0 was CLOSED by owner decision on 2026-10-11 at accepted revision 9af40ccee115231b5682e7f0248c9cbd1729ed6b (release binary sha256 d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf) with the caveats recorded in planning/status.json. Historical note from the earlier text: M0 was not closed: the M0-11 closure audit (`planning/audit/M0-audit.md`) and the M0-reaudit (`planning/audit/M0-reaudit.md`) are the references for the open items in section 4. `planning/tasks.json` and `planning/status.json` belong to the orchestrator and were not edited here.
 
