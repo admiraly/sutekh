@@ -1,0 +1,50 @@
+{
+  "format": "0.1",
+  "date": "2026-10-14",
+  "task": "M3-06 independent checks",
+  "status": "partial_gates_unmet",
+  "modified_paths": [
+    "CMakeLists.txt",
+    "tests/rts/e2e/edge_fixtures.py",
+    "tests/rts/e2e/projectile_mutant.py",
+    "tests/rts/e2e/targeting_gates.py"
+  ],
+  "source_hashes": {
+    "CMakeLists.txt": "e388a3cbf55ea089f8c8b09e014e46a873ffea9cd9f532d49175400b3e458478",
+    "tests/rts/e2e/edge_fixtures.py": "f6207958be72fd7b9477def9431ef0aa39e22a175b46e2e409bb2d10af8d86e2",
+    "tests/rts/e2e/projectile_mutant.py": "3528b303e942606cad97c01b603516c9a4d83aa8a0d9ca9dfefdf1d733376d8c",
+    "tests/rts/e2e/targeting_gates.py": "83079002b327f146b23e416049f9b3b1118a156f8a1aa39876d95f815366655a"
+  },
+  "checks": [
+    {
+      "command": "python3 -I tests/rts/e2e/edge_fixtures.py --binary /root/sutekh/build/sutekh",
+      "exit_code": 0,
+      "fixtures": 5,
+      "worker_counts": [
+        1,
+        2
+      ]
+    },
+    {
+      "command": "python3 -I tests/rts/e2e/projectile_mutant.py --binary /root/sutekh/build/sutekh",
+      "exit_code": 0,
+      "detected": "M3-M27 tick3 proj_target_gen slot0; restored baseline passed"
+    },
+    {
+      "command": "python3 -I tests/rts/e2e/targeting_gates.py --binary /root/sutekh/build/sutekh --out planning/evidence/m3-e2e-targeting/targeting.json",
+      "exit_code": 1,
+      "status": "failed_gates",
+      "reason": "16k misses 2/938 >0.1%; 1024-row scene only 964 distinct armed queriers"
+    },
+    {
+      "command": "cmake -S . -B build; ctest --test-dir build -R ^(rts_e2e_edges|rts_projectile_mutant|rts_model_digest)$ --output-on-failure",
+      "exit_code": 0,
+      "tests": 3
+    }
+  ],
+  "limitations": [
+    "M3-05 scale gate conflict unresolved; M3-06 not complete.",
+    "K128/profile constants and scenes/seeds unchanged.",
+    "No performance qualification, native implementation change, full mutation campaign, independent reviewer, or native Windows validation in this slice."
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "M3-M27",
+  "mutation": "combat s40 arrival on_true k1 -> v39: retain proj_target_gen on arrival",
+  "command": [
+    "python3",
+    "-I",
+    "tests/rts/replay/test_model_snapshot.py",
+    "--binary",
+    "/root/sutekh/build/sutekh",
+    "--max-rows",
+    "16",
+    "--ticks",
+    "8"
+  ],
+  "mutant_sha256": "8f87fe86bb11c5b01267baf96e3ddf354887776fde3b37426c1f13a4cf223787",
+  "restored_sha256": "2ffa3d0e15921ec64aa2bb1dbaaa3a2d7610a0978a952bffbc041e95bea858cb",
+  "mutant_exit_code": 1,
+  "restored_exit_code": 0,
+  "native_build": "not_required_gameplay_IR"
+}

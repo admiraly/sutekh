@@ -1,0 +1,2 @@
+{"workers": 1, "status": "passed", "fixtures": ["stale-projectile-slot-reuse", "despawned-and-reused-anchor", "two-shooters-one-boundary-kill", "equal-distance-lower-slot", "ring-zero-friendly-budget-exhaustion"]}
+{"workers": 2, "status": "passed", "fixtures": ["stale-projectile-slot-reuse", "despawned-and-reused-anchor", "two-shooters-one-boundary-kill", "equal-distance-lower-slot", "ring-zero-friendly-budget-exhaustion"]}

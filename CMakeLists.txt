@@ -574,3 +574,8 @@ target_link_libraries(test_rts_snapshot_limit PRIVATE su_agent)
 sutekh_apply_warnings(test_rts_snapshot_limit)
 add_test(NAME rts_snapshot_limit COMMAND test_rts_snapshot_limit)
 set_tests_properties(rts_snapshot_limit PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+
+# M3-06 real RPC edge slices and accepted-IR M3-M27 semantic mutant.
+add_test(NAME rts_e2e_edges COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/e2e/edge_fixtures.py" --binary $<TARGET_FILE:sutekh>)
+add_test(NAME rts_projectile_mutant COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/e2e/projectile_mutant.py" --binary $<TARGET_FILE:sutekh>)
+set_tests_properties(rts_e2e_edges rts_projectile_mutant PROPERTIES TIMEOUT 120)

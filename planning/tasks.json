@@ -876,7 +876,7 @@
       "acceptance": [
         "C equals Python digests for committed scenes within oracle limits; 10.6 gates with the thin-margin rule; listed mutants detected or recorded as equivalent or unrun; M3-M27 detected by the per-tick model comparison (15)."
       ],
-      "status": "planned"
+      "status": "implementing"
     },
     {
       "id": "M3-07",

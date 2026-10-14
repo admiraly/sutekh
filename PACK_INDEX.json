@@ -92,8 +92,8 @@
     },
     {
       "path": "CMakeLists.txt",
-      "bytes": 37425,
-      "sha256": "3f76d6f767b6b3c64ae94e71345060c74b754aea36e8068c1d37f6c8c80deb2b"
+      "bytes": 37868,
+      "sha256": "e388a3cbf55ea089f8c8b09e014e46a873ffea9cd9f532d49175400b3e458478"
     },
     {
       "path": "COMMERCIAL_LICENSE.md",
@@ -138,7 +138,7 @@
     {
       "path": "PACK_VALIDATION.json",
       "bytes": 557,
-      "sha256": "6033032df07c62a229716a80ebdf4fe4210084734de10fd5c25e3aaeeeddf5a2"
+      "sha256": "a868769f109bf587bfbba28c374ef353a37f1c9ce1fbd2caca0c0d3590ac371c"
     },
     {
       "path": "README.md",
@@ -986,6 +986,51 @@
       "sha256": "3b774b84dfbc6eb641b54ac85ce5c420eaf057821b51d369c71774de60f1e333"
     },
     {
+      "path": "planning/evidence/m3-e2e-targeting/M3-M27-restored.log",
+      "bytes": 419,
+      "sha256": "f6879449507f3b770bdd06e457b1990dba9ed4c9f13ce51be4479597cc376dba"
+    },
+    {
+      "path": "planning/evidence/m3-e2e-targeting/M3-M27.json",
+      "bytes": 576,
+      "sha256": "b7be19f49663bcd11fd78fa8865459833e1b7b53a58ecd7ba2e6edcefbc7a865"
+    },
+    {
+      "path": "planning/evidence/m3-e2e-targeting/M3-M27.log",
+      "bytes": 860,
+      "sha256": "5ed9ae1d803a39797ddaf26d05ea93ec76c310f3713c5198e10b2ed914f39cb7"
+    },
+    {
+      "path": "planning/evidence/m3-e2e-targeting/edge-fixtures.log",
+      "bytes": 428,
+      "sha256": "dfeb8d3607d9f188aea9c47b68c58a80bec353031119d43a076940e496772c09"
+    },
+    {
+      "path": "planning/evidence/m3-e2e-targeting/integration.log",
+      "bytes": 654,
+      "sha256": "889b2331d8756c6067459e26acbefbc332bb6277b1306f394b8ab2e3203e7d8c"
+    },
+    {
+      "path": "planning/evidence/m3-e2e-targeting/projectile-mutant.log",
+      "bytes": 640,
+      "sha256": "668092872d9be7b7abaea4a67cd7e370d54d965afd90fb9af5d921f5776f1ec9"
+    },
+    {
+      "path": "planning/evidence/m3-e2e-targeting/result.json",
+      "bytes": 1979,
+      "sha256": "3c588765cfa22893907b2895e6c6c37156df14d50de7c570e72f49b7e7a174e8"
+    },
+    {
+      "path": "planning/evidence/m3-e2e-targeting/targeting.json",
+      "bytes": 3366,
+      "sha256": "55982973ac51dce6bdfb03b65af28282930eaf87a135a615cfb5a6ba9d6c5318"
+    },
+    {
+      "path": "planning/evidence/m3-e2e-targeting/targeting.log",
+      "bytes": 3755,
+      "sha256": "a9d64264f8817764c8f80d5a715d4ef55a26e4f3463884b01a36349c31e8a6d1"
+    },
+    {
       "path": "planning/evidence/m3-host-fault/dev-ctest.log",
       "bytes": 4411,
       "sha256": "2019dbded64f5301bdddb7de67c24fdc9ae2f1cf8a455f2b780a82381fedb570"
@@ -1471,14 +1516,19 @@
       "sha256": "1f0ce70b830daf9a23d64e4313a5762000038b7e8df4fab83b80cb3a994aac82"
     },
     {
+      "path": "planning/handoffs/2026-10-14-m3-06-edges-targeting.md",
+      "bytes": 2353,
+      "sha256": "5e11c9df1603b7476f360f0b27e1b9aadb72617945c8682bff5e425de49773a3"
+    },
+    {
       "path": "planning/status.json",
-      "bytes": 9425,
-      "sha256": "572a74f06ce0381d0d19af5f994b70481a7f0eef20779e0fd80a3ef3ddab5978"
+      "bytes": 10059,
+      "sha256": "1c4fb3b1c64abf9810f5b009fa14abc7004c63e9d0fdc618c81f06a0e7b9154a"
     },
     {
       "path": "planning/tasks.json",
-      "bytes": 29524,
-      "sha256": "e4227f99a3936e4bcdfe42ad5cdf35ec496a9c97ba7388133c9d5c79874036a3"
+      "bytes": 29529,
+      "sha256": "2649e3e2c7fd22d3d54d5d9303afaa14a9d3d1272bb1540931ccbc8348c340e4"
     },
     {
       "path": "planning/toolchain-windows.json",
@@ -3594,6 +3644,21 @@
       "path": "tests/rts/control/test_world_spawn_batch.c",
       "bytes": 14731,
       "sha256": "fbf16826aacc394f847bd22a95b6ce6466df497d3aeef7d50d6c51ed3a953afb"
+    },
+    {
+      "path": "tests/rts/e2e/edge_fixtures.py",
+      "bytes": 4795,
+      "sha256": "f6207958be72fd7b9477def9431ef0aa39e22a175b46e2e409bb2d10af8d86e2"
+    },
+    {
+      "path": "tests/rts/e2e/projectile_mutant.py",
+      "bytes": 2065,
+      "sha256": "3528b303e942606cad97c01b603516c9a4d83aa8a0d9ca9dfefdf1d733376d8c"
+    },
+    {
+      "path": "tests/rts/e2e/targeting_gates.py",
+      "bytes": 3634,
+      "sha256": "83079002b327f146b23e416049f9b3b1118a156f8a1aa39876d95f815366655a"
     },
     {
       "path": "tests/rts/gen/mutants.py",

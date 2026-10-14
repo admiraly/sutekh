@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/root/sutekh-e2e/tests/rts/replay/test_model_snapshot.py", line 110, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/root/sutekh-e2e/tests/rts/replay/test_model_snapshot.py", line 105, in main
+    run(os.path.abspath(args.binary), spec, args.ticks)
+    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/sutekh-e2e/tests/rts/replay/test_model_snapshot.py", line 80, in run
+    engine.step(); reference.step(); final = compare(engine, reference, t)
+                                             ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/sutekh-e2e/tests/rts/replay/test_model_snapshot.py", line 34, in compare
+    raise AssertionError(f"tick {t}, field {name}, slot {slot}: model {expected_value}, engine {value}")
+AssertionError: tick 3, field proj_target_gen, slot 0: model 0, engine 1

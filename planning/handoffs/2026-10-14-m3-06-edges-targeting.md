@@ -1,0 +1,11 @@
+# M3-06 independent edge checks and targeting gate evidence
+
+New checks in `tests/rts/e2e/edge_fixtures.py` drive the real six-system supervisor and compare every acknowledged control/tick boundary against SnapshotModel. Five explicit known outcomes pass at configured worker counts 1 and 2: stale projectile ignores reused target slot; removed/reused anchor stays invalid at the stale generation; two shooters kill one target once at tick2, zeroing all39 dead columns; equal-distance ties pick lower slot; 201 friendly rows consume K128 before a ring1 enemy (target_valid0/truncated1). Ring fixture uses capacity2048, including empty tail chunks.
+
+`tests/rts/e2e/projectile_mutant.py` changes only session-owned scratch combat IR. M3-M27 is accepted as valid IR but detected at tick3, proj_target_gen slot0: model0/engine1. An unrelated creation/validation failure is not accepted as detection. Restored baseline passes through eight ticks; repository IR is untouched. CMake registers both bounded regressions.
+
+`tests/rts/e2e/targeting_gates.py` checks tick-one full engine/model equality on committed congested scenes, then exact independent targeting metrics with the existing seeded no-replacement sampler (seed20261012), hashes, environment/toolchain and explicit thin-margin/OD6 fields. It exits nonzero when numeric gates or the requested sample count fail. It is a measurement/gate runner, not added as a falsely green CTest.
+
+Actual retained-K128 results: at16384 rows, 1024 sampled queriers, oracle-positive938, missed2 (0.2132% >0.1%), not-nearest6 (0.6397% <2%), ratio p95 1.626 (<3). Thus the missed gate **fails**, no thin margin. At1024 rows there are only964 armed units; all are sampled, no misses/not-nearest, but the literal requested1024 distinct-querier count cannot be met. No scene/seed modification or repeated sampling hides this. OD6 owner decision requested; constants unchanged. Results/logs in planning/evidence/m3-e2e-targeting.
+
+Exact source/artifact hashes and commands in result.json/targeting.json. Production C/ASM/IR unchanged; no native build needed for Python harnesses. Full mutation campaign, independent reviewer and native Windows unrun. M3-06 remains incomplete and M3-05 scale-gate conflict persists. Continue remaining edge/mutation evidence and scope concrete OD6/OD15 remedies only after owner direction.
