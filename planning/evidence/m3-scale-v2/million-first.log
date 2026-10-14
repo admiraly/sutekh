@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/root/sutekh-scale-v2/tests/rts/load/test_scale_v2.py", line 105, in <module>
+    if __name__=="__main__":sys.exit(main())
+                                     ~~~~^^
+  File "/root/sutekh-scale-v2/tests/rts/load/test_scale_v2.py", line 38, in main
+    wid, rev = s.create_rts(args.rows)
+               ~~~~~~~~~~~~^^^^^^^^^^^
+  File "/root/sutekh-scale-v2/bench/rts/replay/rts_session.py", line 108, in create_rts
+    r = self.call("world.create", params)
+  File "/root/sutekh-scale-v2/bench/rts/replay/rts_session.py", line 98, in call
+    raise RpcError(e.get("status", 0), e.get("code", ""), e.get("message", ""))
+rts_session.RpcError: SU_E_SCHEMA_MISMATCH (9): host.operator is not rts_ops_v1

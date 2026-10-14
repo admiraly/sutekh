@@ -291,18 +291,18 @@ def check_spatial_known_answers(m, ir) -> None:
     m.spatial_phase(w)
     assert w.cols["target_valid"][0] == 0, "dead must be excluded"
     # box clipped at the grid edge: entries wrapping from cell x = -1 must not be counted (M3-M23)
-    specs = [_unit(m, 0, 64, 0, range_sq=100)] + [_unit(m, 32750, 10, 1) for _ in range(130)]
+    specs = [_unit(m, 0, 64, 0, range_sq=100)] + [_unit(m, 32750, 10, 1) for _ in range(m.K_BUDGET + 2)]
     w, _ = _world(m, specs)
     m.spatial_phase(w)
     assert w.cols["truncated"][0] == 0, "domain-edge clipping: far cell must not count toward the budget"
-    # truncation at exactly K = 128 examined and at K + 1 (contract 10.1)
-    base = [_unit(m, 10, 10, 0, range_sq=100)] + [_unit(m, 20, 20, 0) for _ in range(126)]
-    w, _ = _world(m, base + [_unit(m, 15, 10, 1)])  # box_total = 128
+    # truncation at exactly the versioned K examined and at K + 1 (contract 10.1)
+    base = [_unit(m, 10, 10, 0, range_sq=100)] + [_unit(m, 20, 20, 0) for _ in range(m.K_BUDGET - 2)]
+    w, _ = _world(m, base + [_unit(m, 15, 10, 1)])  # box_total = K
     m.spatial_phase(w)
-    assert (w.cols["truncated"][0], w.cols["target_valid"][0]) == (0, 1), "box_total 128"
-    w, _ = _world(m, base + [_unit(m, 15, 10, 1), _unit(m, 20, 20, 0)])  # box_total = 129
+    assert (w.cols["truncated"][0], w.cols["target_valid"][0]) == (0, 1), "box_total K"
+    w, _ = _world(m, base + [_unit(m, 15, 10, 1), _unit(m, 20, 20, 0)])  # box_total = K+1
     m.spatial_phase(w)
-    assert (w.cols["truncated"][0], w.cols["target_valid"][0]) == (1, 1), "box_total 129"
+    assert (w.cols["truncated"][0], w.cols["target_valid"][0]) == (1, 1), "box_total K+1"
     # the exact ring fixture (10.1): ring-0 holds 200 friendly entries; a single enemy sits in ring 1
     specs = [_unit(m, 32, 32, 0, range_sq=65536)] + [_unit(m, 20, 20, 0) for _ in range(200)]
     specs.append(_unit(m, 70, 32, 1))
@@ -674,9 +674,9 @@ def check_oracle_fixtures(m, ir) -> None:
     met = o.targeting_metrics(w, [0], "m3-02-fixture")
     assert (met["missed"], met["valid_but_not_nearest"], met["target_valid"]) == (1, 0, 0), met
     assert met["missed_rate"] == 1.0, met
-    # valid but not nearest: ring 0 has the first 128 entries, the nearer enemy sits in ring 1
+    # valid but not nearest: ring 0 has the first K entries, the nearer enemy sits in ring 1
     specs = [_unit(m, 60, 5, 0, range_sq=4096)]
-    specs += [_unit(m, 30, 30, 0) for _ in range(126)]
+    specs += [_unit(m, 30, 30, 0) for _ in range(m.K_BUDGET - 2)]
     specs.append(_unit(m, 0, 5, 1))   # ring 0, dist_sq 3600
     specs.append(_unit(m, 64, 5, 1))  # ring 1, dist_sq 16 (the true nearest)
     w, _ = _world(m, specs)

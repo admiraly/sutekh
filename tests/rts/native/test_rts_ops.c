@@ -284,34 +284,31 @@ static void test_sp_exclusions(void) {
     }
 }
 
-/* Budget (4.1(c)3, 10.1): K = 128 examined entries, self included. box_total 128 is not truncated; 129 is. */
+/* Budget (4.1(c)3, 10.1): versioned K examined entries, self included. box_total 128 is not truncated; 129 is. */
 static void test_sp_budget(void) {
-    RtsRow rows[130];
+    enum { K = RTS_OPS_BUDGET_K };
+    RtsRow rows[K + 2u];
     SuWorld *w = NULL;
     SuSchedule s;
     uint32_t st;
     uint32_t i;
-    /* box_total = 128: self, 126 friends, one enemy at the 128th entry (slot 127); found, not truncated */
     rows[0] = rts_unit(0u, 10u, 10u, 1u);
-    for (i = 1; i <= 126u; i++) {
-        rows[i] = rts_unit(0u, 10u, 10u, 0u);
-    }
-    rows[127] = rts_unit(1u, 10u, 11u, 0u);
-    st = scenario(&w, &s, 128u, rows, 128u);
-    CHECK(st == SU_OK, "budget 128 ticks (%u)", st);
+    for (i = 1u; i < K - 1u; i++) rows[i] = rts_unit(0u, 10u, 10u, 0u);
+    rows[K - 1u] = rts_unit(1u, 10u, 11u, 0u);
+    st = scenario(&w, &s, K, rows, K);
+    CHECK(st == SU_OK, "budget K ticks (%u)", st);
     if (st == SU_OK) {
-        CHECK(rts_read(w, F_TRUNCATED, 0) == 0u, "box_total 128 gives truncated 0");
-        CHECK(rts_read(w, F_TARGET_SLOT, 0) == 127u, "the 128th examined entry qualifies");
+        CHECK(rts_read(w, F_TRUNCATED, 0) == 0u, "box_total K gives truncated 0");
+        CHECK(rts_read(w, F_TARGET_SLOT, 0) == K - 1u, "the Kth examined entry qualifies");
     }
     finish(w, &s);
-    /* box_total = 129: the enemy is the 129th entry and is never examined; truncated 1 */
-    rows[127] = rts_unit(0u, 10u, 10u, 0u);
-    rows[128] = rts_unit(1u, 10u, 11u, 0u);
-    st = scenario(&w, &s, 129u, rows, 129u);
-    CHECK(st == SU_OK, "budget 129 ticks (%u)", st);
+    rows[K - 1u] = rts_unit(0u, 10u, 10u, 0u);
+    rows[K] = rts_unit(1u, 10u, 11u, 0u);
+    st = scenario(&w, &s, K + 1u, rows, K + 1u);
+    CHECK(st == SU_OK, "budget K+1 ticks (%u)", st);
     if (st == SU_OK) {
-        CHECK(rts_read(w, F_TRUNCATED, 0) == 1u, "box_total 129 gives truncated 1");
-        CHECK(rts_read(w, F_TARGET_VALID, 0) == 0u, "129th entry is not examined (budget spent)");
+        CHECK(rts_read(w, F_TRUNCATED, 0) == 1u, "box_total K+1 gives truncated 1");
+        CHECK(rts_read(w, F_TARGET_VALID, 0) == 0u, "K+1th entry is not examined (budget spent)");
     }
     finish(w, &s);
 }

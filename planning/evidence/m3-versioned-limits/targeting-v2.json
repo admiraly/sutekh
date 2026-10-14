@@ -1,0 +1,89 @@
+{
+  "format": "rts-targeting-gates/0.1",
+  "source_revision": "5de97822056ee37b1411706bd75be6b2a0ff12d7",
+  "artifact_sha256": "3f6b8c5e2e2f5ec81f70faf02f1fb86804cd2964ca2e0d7d8ea32d0812c19aaa",
+  "source_hashes": {
+    "tests/rts/e2e/targeting_gates.py": "5df55b560b82b985b3f2dd8d9abd2a8b8160370fb16c0f65bd9ac7f5ecc743f6",
+    "bench/rts/ref/model.py": "09f50deff4a246f715d0ff26098d3cacde71ed4a9ca4f983e7731d3d7110108e",
+    "bench/rts/ref/oracle.py": "dac0511c642fe05b178d0a7246e94f16c204381cfb3fda454593d2b463225b18",
+    "bench/rts/gen/rtsgen.py": "91b880bf2a7d40fef108b6e1ac8cfa9304544b4dbbc6807e29ba00d5d0934336",
+    "bench/rts/scenes.lock.json": "5bbdf8092ddc5e65aac499a42f6a09ffaa1af765e60011f3f0fce935a61d2e54"
+  },
+  "environment": {
+    "os": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+    "machine": "x86_64",
+    "python": "3.14.4",
+    "cpu": 18,
+    "toolchain": "cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0"
+  },
+  "elapsed_seconds": 10.292776994001542,
+  "performance_qualification": false,
+  "records": [
+    {
+      "scene_source": "committed:congested-1024",
+      "gates_applicable": true,
+      "queriers": 964,
+      "oracle_positive": 709,
+      "target_valid": 709,
+      "missed": 0,
+      "valid_but_not_nearest": 0,
+      "truncated_queriers": 194,
+      "missed_rate": 0.0,
+      "valid_but_not_nearest_rate": 0.0,
+      "valid_but_not_nearest_rate_over_valid": 0.0,
+      "missed_rate_over_all_queriers": 0.0,
+      "ratio_count": 0,
+      "ratio_p50": null,
+      "ratio_p95": null,
+      "ratio_inf_count": 0,
+      "thin_margin_point_estimate": false,
+      "requested_queriers": 1024,
+      "sample_count_met": true,
+      "gates": {
+        "missed": true,
+        "valid_but_not_nearest": true,
+        "ratio_p95": true,
+        "pass": true
+      },
+      "thin_margin": false,
+      "owner_decision": null,
+      "sampling_limitation": null,
+      "querier_seed": 20261012,
+      "querier_sha256": "d4b8940b3e789f500d96d2d8f4c772b32d59224ee92e8d614c310f253b14fb1f",
+      "scene_digest": "sha256:2da63ba5180e47d8babb31eeca5a417d8e5d91f4eacbc344e14b58633801661b"
+    },
+    {
+      "scene_source": "committed:congested-16384",
+      "gates_applicable": true,
+      "queriers": 1024,
+      "oracle_positive": 938,
+      "target_valid": 938,
+      "missed": 0,
+      "valid_but_not_nearest": 0,
+      "truncated_queriers": 662,
+      "missed_rate": 0.0,
+      "valid_but_not_nearest_rate": 0.0,
+      "valid_but_not_nearest_rate_over_valid": 0.0,
+      "missed_rate_over_all_queriers": 0.0,
+      "ratio_count": 0,
+      "ratio_p50": null,
+      "ratio_p95": null,
+      "ratio_inf_count": 0,
+      "thin_margin_point_estimate": false,
+      "requested_queriers": 1024,
+      "sample_count_met": true,
+      "gates": {
+        "missed": true,
+        "valid_but_not_nearest": true,
+        "ratio_p95": true,
+        "pass": true
+      },
+      "thin_margin": false,
+      "owner_decision": null,
+      "sampling_limitation": null,
+      "querier_seed": 20261012,
+      "querier_sha256": "bc534ff8ceac3df8c1cf3ab1118ee1b3125e2c82649769b291d86090d17051ac",
+      "scene_digest": "sha256:4aa1e365be847074c94fd3450cd5c1cfe01973afab17fa7fddd7822382d25709"
+    }
+  ]
+}

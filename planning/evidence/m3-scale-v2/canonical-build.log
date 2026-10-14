@@ -1,0 +1,56 @@
+[0/2] Re-checking globbed directories...
+[1/56] Building C object CMakeFiles/su_snapshot.dir/src/runtime/checkpoint.c.o
+[2/56] Building C object CMakeFiles/su_snapshot.dir/src/world/snapshot.c.o
+[3/56] Linking C static library libsu_snapshot.a
+[4/56] Building C object CMakeFiles/su_agent.dir/src/runtime/schedule.c.o
+[5/56] Building C object CMakeFiles/su_agent.dir/src/runtime/rts/host_decl.c.o
+[6/56] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_ops_common.c.o
+[7/56] Building C object CMakeFiles/su_agent.dir/src/runtime/worker.c.o
+[8/56] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_spatial.c.o
+[9/56] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_scatter.c.o
+[10/56] Linking C static library libsu_agent.a
+[11/56] Building C object CMakeFiles/recovery_worker.dir/src/runtime/worker.c.o
+[12/56] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/worker.c.o
+[13/56] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/schedule.c.o
+[14/56] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/rts/host_decl.c.o
+[15/56] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_ops_common.c.o
+[16/56] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_spatial.c.o
+[17/56] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_scatter.c.o
+[18/56] Building C object CMakeFiles/sutekh.dir/src/platform/sutekh_main.c.o
+[19/56] Building C object CMakeFiles/test_snapshot.dir/tests/snapshot/test_snapshot.c.o
+[20/56] Linking C executable recovery_worker
+[21/56] Building C object CMakeFiles/test_host_entry.dir/tests/scheduler/test_host_entry.c.o
+[22/56] Building C object CMakeFiles/test_rts_ops.dir/tests/rts/native/test_rts_ops.c.o
+[23/56] Building C object CMakeFiles/test_rts_records.dir/tests/rts/native/test_rts_records.c.o
+[24/56] Building C object CMakeFiles/test_rts_diff.dir/tests/rts/native/test_rts_diff.c.o
+[25/56] Building C object CMakeFiles/test_host_restore.dir/tests/rts/host/test_host_restore.c.o
+[26/56] Building C object CMakeFiles/test_world_set_fields.dir/tests/rts/control/test_world_set_fields.c.o
+[27/56] Building C object CMakeFiles/test_rts_capacity.dir/tests/entities/test_rts_capacity.c.o
+[28/56] Building C object CMakeFiles/test_rts_churn.dir/tests/entities/test_rts_churn.c.o
+[29/56] Building C object CMakeFiles/test_migrate.dir/tests/migration/test_migrate.c.o
+[30/56] Building C object CMakeFiles/test_world_spawn_batch.dir/tests/rts/control/test_world_spawn_batch.c.o
+[31/56] Linking C static library libsu_agent_hooks.a
+[32/56] Building C object CMakeFiles/test_rts_snapshot_limit.dir/tests/entities/test_rts_snapshot_limit.c.o
+[33/56] Linking C executable sutekh
+[34/56] Linking C executable worker_stub
+[35/56] Linking C executable test_control
+[36/56] Linking C executable test_snapshot
+[37/56] Linking C executable test_tick_workers
+[38/56] Linking C executable test_host_entry
+[39/56] Linking C executable test_host_restore
+[40/56] Linking C executable test_rts_ops
+[41/56] Linking C executable test_rts_records
+[42/56] Linking C executable test_rts_diff
+[43/56] Linking C executable test_reload
+[44/56] Linking C executable test_snapshot_cp
+[45/56] Linking C executable test_recovery
+[46/56] Linking C executable test_containment
+[47/56] Linking C executable test_hardening
+[48/56] Linking C executable test_world_set_fields
+[49/56] Linking C executable test_world_spawn_batch
+[50/56] Linking C executable test_rts_capacity
+[51/56] Linking C executable test_rts_churn
+[52/56] Linking C executable test_entity_tick
+[53/56] Linking C executable test_migrate
+[54/56] Linking C executable test_migrate_runtime
+[55/56] Linking C executable test_rts_snapshot_limit

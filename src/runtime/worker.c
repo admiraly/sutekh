@@ -1134,7 +1134,7 @@ static uint32_t field_id_by_name(const WorkerWorld *ww, const char *name, size_t
 
 /* Snapshot row guard (contract 12, audit N-c): admission keeps high water at or below this bound so a
  * periodic capture is never refused by the guard. */
-#define SPAWN_HIGH_WATER_MAX 838860u
+#define SPAWN_HIGH_WATER_MAX 1000000u
 /* Rows of one world.spawn_batch call (OD-3b). */
 #define SPAWN_BATCH_MAX_ROWS 1024u
 /* Spawn values of one row: every schema field at most once, plus the defaults of the RTS spawn rules. */
@@ -1262,11 +1262,14 @@ static uint32_t spawn_precheck(WorkerWorld *ww, uint32_t rows, const SpoolAdmit 
         fail(f, SU_E_INTERNAL, "world has no entity table");
         return SU_E_INTERNAL;
     }
-    if (rows > su_ents_capacity(e) - su_ents_alive_count(e)) {
+    if (rows > su_ents_free_count(e)) {
         fail(f, SU_E_RESOURCE_LIMIT, "not enough free slots; world unchanged");
         return SU_E_RESOURCE_LIMIT;
     }
-    hw_after = (uint64_t)su_ents_high_water(e) + rows;
+    /* Lowest-slot allocation fills reusable holes before growing high water. Retired slots
+     * are not reusable. Limits v2 admits reuse at the row ceiling without understating growth. */
+    uint64_t holes = (uint64_t)su_ents_high_water(e) - su_ents_alive_count(e) - su_ents_retired_count(e);
+    hw_after = (uint64_t)su_ents_high_water(e) + (rows > holes ? rows - holes : 0u);
     if (hw_after > SPAWN_HIGH_WATER_MAX) {
         fail(f, SU_E_RESOURCE_LIMIT, "high water would pass the snapshot row bound; world unchanged");
         return SU_E_RESOURCE_LIMIT;
@@ -1280,7 +1283,7 @@ static uint32_t spawn_precheck(WorkerWorld *ww, uint32_t rows, const SpoolAdmit 
             fail(f, SU_E_INTERNAL, "world has no entity runtime");
             return SU_E_INTERNAL;
         }
-        /* hw_after <= 838,860 and log_max <= 2^20, so every product fits in u64. */
+        /* hw_after <= 1,000,000 and log_max <= 2^20, so every product fits in u64. */
         need = (sa->retain + 1u) * (UINT64_C(446) * hw_after + UINT64_C(90) * log_max) + UINT64_C(16384);
         if (need > sa->bytes_max) {
             fail(f, SU_E_RESOURCE_LIMIT, "checkpoints of the grown world would not fit the spool; world unchanged");

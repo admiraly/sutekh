@@ -1,0 +1,46 @@
+{
+  "job": {
+    "argv": [
+      "python3",
+      "-I",
+      "tests/rts/replay/test_model_snapshot.py",
+      "--binary",
+      "/root/sutekh-limits/build/sutekh",
+      "--ticks",
+      "4"
+    ],
+    "bind": {
+      "backend": "rts_ops_v2",
+      "layout_generation": 1,
+      "semantic_hash": "23cf9ee47f5f4c1f0acc7b5b67261f123b81265143af2efa07312ad96ba754ca"
+    },
+    "child_pid": null,
+    "cwd": "/root/sutekh-limits",
+    "env": {},
+    "exit_code": 0,
+    "finished_mono_ns": 8552760553106,
+    "finished_wall": 1791983573.5073519,
+    "inputs": {
+      "artifact": "3f6b8c5e2e2f5ec81f70faf02f1fb86804cd2964ca2e0d7d8ea32d0812c19aaa",
+      "backend": "rts_ops_v2",
+      "layout_generation": 1,
+      "semantic_hash": "23cf9ee47f5f4c1f0acc7b5b67261f123b81265143af2efa07312ad96ba754ca"
+    },
+    "job_id": 1,
+    "job_key": "69564ab8087aab56513bc468cf17b8ffe10a35b1450a39808bc3cdeb8d82619b",
+    "log_path": "/root/sutekh-limits/build/broker/logs/job-1.log",
+    "log_sha256": "ea1fd1a9421b9d8f2b04498265a9374f736dc84f9de047a0e7699d6a72afd268",
+    "memory_bytes": 2147483648,
+    "owner_pid": 45356,
+    "reason": "",
+    "started_mono_ns": 8424961815173,
+    "started_wall": 1791983445.7086172,
+    "state": "succeeded",
+    "submitted_mono_ns": 8424838743881,
+    "submitted_wall": 1791983445.585089,
+    "superseded_by": null,
+    "system_id": "m3-rts-v2-goldens",
+    "timeout_s": 300.0
+  },
+  "ok": true
+}

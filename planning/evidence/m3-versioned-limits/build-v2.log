@@ -1,0 +1,218 @@
+$ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF
+-- The C compiler identification is GNU 15.2.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Configuring done (3.9s)
+-- Generating done (0.9s)
+-- Build files have been written to: /root/sutekh-limits/build
+$ cmake --build build -j 2
+[  1%] Building C object CMakeFiles/su_platform.dir/src/platform/su_platform.c.o
+[  2%] Building C object CMakeFiles/su_ir.dir/src/ir/su_sha256.c.o
+[  3%] Building C object CMakeFiles/su_ir.dir/src/ir/su_json.c.o
+[  4%] Linking C static library libsu_platform.a
+[  4%] Built target su_platform
+[  4%] Building C object CMakeFiles/su_ir.dir/src/ir/su_lir.c.o
+[  5%] Building C object CMakeFiles/su_ents.dir/src/world/entities/su_ents.c.o
+[  5%] Linking C static library libsu_ents.a
+[  6%] Linking C static library libsu_ir.a
+[  6%] Built target su_ents
+[  7%] Building C object CMakeFiles/su_cmdq.dir/src/world/entities/su_cmdq.c.o
+[  7%] Built target su_ir
+[  8%] Building C object CMakeFiles/test_entities.dir/tests/entities/test_entities.c.o
+[  8%] Linking C static library libsu_cmdq.a
+[  8%] Built target su_cmdq
+[  8%] Building C object CMakeFiles/su_world_acct_objs.dir/src/world/su_world.c.o
+[  9%] Linking C executable test_entities
+[ 10%] Building C object CMakeFiles/su_world_acct_objs.dir/src/world/entities/su_ents.c.o
+[ 11%] Building C object CMakeFiles/su_world_acct_objs.dir/src/world/entities/su_cmdq.c.o
+[ 11%] Built target su_world_acct_objs
+[ 11%] Building C object CMakeFiles/test_lir_oom.dir/tests/ir/test_lir_oom.c.o
+[ 11%] Built target test_entities
+[ 12%] Linking C executable test_lir_oom
+[ 12%] Building C object CMakeFiles/test_path_fifo.dir/tests/agent/test_path_fifo.c.o
+[ 13%] Building C object CMakeFiles/test_path_fifo.dir/src/agent/su_path.c.o
+[ 14%] Linking C executable test_path_fifo
+[ 14%] Built target test_lir_oom
+[ 15%] Building C object CMakeFiles/test_cmdq.dir/tests/entities/test_cmdq.c.o
+[ 15%] Built target test_path_fifo
+[ 16%] Building C object CMakeFiles/su_cmdq_admission_objs.dir/src/world/entities/su_cmdq.c.o
+[ 17%] Linking C executable test_cmdq
+[ 17%] Built target su_cmdq_admission_objs
+[ 17%] Building C object CMakeFiles/su_rts_control.dir/src/runtime/rts/control_domains.c.o
+[ 18%] Linking C static library libsu_rts_control.a
+[ 18%] Built target su_rts_control
+[ 19%] Building C object CMakeFiles/test_cmdq_percap.dir/tests/entities/test_cmdq_percap.c.o
+[ 19%] Linking C executable test_cmdq_percap
+[ 19%] Built target test_cmdq
+[ 20%] Building C object CMakeFiles/su_world.dir/src/world/su_world.c.o
+[ 21%] Linking C static library libsu_world.a
+[ 21%] Built target su_world
+[ 22%] Building C object CMakeFiles/test_world_acct.dir/tests/world/test_world_acct.c.o
+[ 23%] Linking C executable test_world_acct
+[ 23%] Built target test_cmdq_percap
+[ 24%] Building C object CMakeFiles/test_world_ext_retired.dir/tests/world/test_world_ext_retired.c.o
+[ 24%] Linking C executable test_world_ext_retired
+[ 24%] Built target test_world_acct
+[ 25%] Building C object CMakeFiles/test_world_restore_null.dir/tests/world/test_world_restore_null.c.o
+[ 25%] Built target test_world_ext_retired
+[ 26%] Linking C executable test_world_restore_null
+[ 26%] Building C object CMakeFiles/test_cmdq_admission.dir/tests/entities/test_cmdq_admission.c.o
+[ 27%] Linking C executable test_cmdq_admission
+[ 27%] Built target test_world_restore_null
+[ 28%] Building C object CMakeFiles/test_control_domains.dir/tests/rts/control/test_control_domains.c.o
+[ 28%] Built target test_cmdq_admission
+[ 28%] Building C object CMakeFiles/test_world_ents.dir/tests/entities/test_world_ents.c.o
+[ 28%] Linking C executable test_control_domains
+[ 29%] Linking C executable test_world_ents
+[ 29%] Built target test_control_domains
+[ 30%] Building C object CMakeFiles/test_churn.dir/tests/entities/test_churn.c.o
+[ 30%] Linking C executable test_churn
+[ 30%] Built target test_world_ents
+[ 31%] Building C object CMakeFiles/su_snapshot.dir/src/world/snapshot.c.o
+[ 31%] Building C object CMakeFiles/su_snapshot.dir/src/runtime/checkpoint.c.o
+[ 32%] Linking C static library libsu_snapshot.a
+[ 32%] Built target su_snapshot
+[ 32%] Built target test_churn
+[ 33%] Building C object CMakeFiles/su_vm.dir/src/vm/su_vm.c.o
+[ 34%] Building C object CMakeFiles/test_world.dir/tests/world/test_world.c.o
+[ 34%] Linking C static library libsu_vm.a
+[ 34%] Built target su_vm
+[ 34%] Building C object CMakeFiles/test_snapshot.dir/tests/snapshot/test_snapshot.c.o
+[ 34%] Linking C executable test_world
+[ 35%] Linking C executable test_snapshot
+[ 35%] Built target test_world
+[ 36%] Building C object CMakeFiles/su_migrate.dir/src/world/migration/su_migrate.c.o
+[ 36%] Linking C static library libsu_migrate.a
+[ 36%] Built target test_snapshot
+[ 37%] Building C object CMakeFiles/su_jobs.dir/src/runtime/jobs/su_jobs.c.o
+[ 37%] Built target su_migrate
+[ 38%] Building C object CMakeFiles/test_ir.dir/tests/ir/test_ir.c.o
+[ 38%] Building C object CMakeFiles/su_jobs.dir/src/runtime/jobs/su_effects.c.o
+[ 39%] Linking C executable test_ir
+[ 40%] Linking C static library libsu_jobs.a
+[ 40%] Built target su_jobs
+[ 40%] Building C object CMakeFiles/test_vm.dir/tests/vm/test_vm.c.o
+[ 41%] Linking C executable test_vm
+[ 41%] Built target test_ir
+[ 42%] Building C object CMakeFiles/test_scheduler.dir/tests/scheduler/test_scheduler.c.o
+[ 43%] Linking C executable test_scheduler
+[ 43%] Built target test_vm
+[ 44%] Building C object CMakeFiles/test_migrate.dir/tests/migration/test_migrate.c.o
+[ 44%] Linking C executable test_migrate
+[ 44%] Built target test_scheduler
+[ 45%] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_agent.c.o
+[ 45%] Built target test_migrate
+[ 45%] Building C object CMakeFiles/su_agent.dir/src/agent/su_agent.c.o
+[ 46%] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_module.c.o
+[ 46%] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_path.c.o
+[ 47%] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_proc.c.o
+[ 48%] Building C object CMakeFiles/su_agent.dir/src/agent/su_module.c.o
+[ 49%] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_proto.c.o
+[ 50%] Building C object CMakeFiles/su_agent.dir/src/agent/su_path.c.o
+[ 50%] Building C object CMakeFiles/su_agent.dir/src/agent/su_proc.c.o
+[ 50%] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_sandbox.c.o
+[ 51%] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_spool.c.o
+[ 52%] Building C object CMakeFiles/su_agent.dir/src/agent/su_proto.c.o
+[ 53%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/worker.c.o
+[ 54%] Building C object CMakeFiles/su_agent.dir/src/agent/su_sandbox.c.o
+[ 54%] Building C object CMakeFiles/su_agent.dir/src/agent/su_spool.c.o
+[ 55%] Building C object CMakeFiles/su_agent.dir/src/runtime/worker.c.o
+[ 55%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/registry.c.o
+[ 56%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/schedule.c.o
+[ 57%] Building C object CMakeFiles/su_agent.dir/src/runtime/registry.c.o
+[ 58%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/reload.c.o
+[ 58%] Building C object CMakeFiles/su_agent.dir/src/runtime/schedule.c.o
+[ 58%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/rts/control_domains.c.o
+[ 59%] Building C object CMakeFiles/su_agent.dir/src/runtime/reload.c.o
+[ 60%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/entity_tick.c.o
+[ 61%] Building C object CMakeFiles/su_agent.dir/src/runtime/rts/control_domains.c.o
+[ 62%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/rts/host_decl.c.o
+[ 62%] Building C object CMakeFiles/su_agent.dir/src/runtime/entity_tick.c.o
+[ 62%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/rts/host_registry.c.o
+[ 63%] Building C object CMakeFiles/su_agent.dir/src/runtime/rts/host_decl.c.o
+[ 64%] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_ops_common.c.o
+[ 65%] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_spatial.c.o
+[ 66%] Building C object CMakeFiles/su_agent.dir/src/runtime/rts/host_registry.c.o
+[ 66%] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_scatter.c.o
+[ 66%] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_ops_common.c.o
+[ 67%] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_spatial.c.o
+[ 68%] Linking C static library libsu_agent_hooks.a
+[ 69%] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_scatter.c.o
+[ 69%] Built target su_agent_hooks
+[ 69%] Linking C static library libsu_agent.a
+[ 69%] Built target su_agent
+[ 69%] Building C object CMakeFiles/sutekh.dir/src/platform/sutekh_main.c.o
+[ 70%] Building C object CMakeFiles/worker_stub.dir/tests/control/worker_stub.c.o
+[ 71%] Linking C executable worker_stub
+[ 72%] Linking C executable sutekh
+[ 72%] Built target worker_stub
+[ 72%] Built target sutekh
+[ 72%] Building C object CMakeFiles/test_control.dir/tests/control/test_control.c.o
+[ 73%] Building C object CMakeFiles/test_tick_workers.dir/tests/scheduler/test_tick_workers.c.o
+[ 74%] Linking C executable test_tick_workers
+[ 75%] Linking C executable test_control
+[ 75%] Built target test_tick_workers
+[ 76%] Building C object CMakeFiles/test_host_entry.dir/tests/scheduler/test_host_entry.c.o
+[ 76%] Built target test_control
+[ 77%] Building C object CMakeFiles/test_host_entry.dir/tests/rts/host/host_test_ops.c.o
+[ 78%] Building C object CMakeFiles/test_host_restore.dir/tests/rts/host/test_host_restore.c.o
+[ 78%] Linking C executable test_host_entry
+[ 78%] Built target test_host_entry
+[ 79%] Building C object CMakeFiles/test_rts_ops.dir/tests/rts/native/test_rts_ops.c.o
+[ 80%] Building C object CMakeFiles/test_host_restore.dir/tests/rts/host/host_test_ops.c.o
+[ 80%] Linking C executable test_host_restore
+[ 81%] Linking C executable test_rts_ops
+[ 81%] Built target test_host_restore
+[ 81%] Building C object CMakeFiles/test_rts_records.dir/tests/rts/native/test_rts_records.c.o
+[ 82%] Linking C executable test_rts_records
+[ 82%] Built target test_rts_ops
+[ 83%] Building C object CMakeFiles/test_rts_diff.dir/tests/rts/native/test_rts_diff.c.o
+[ 83%] Linking C executable test_rts_diff
+[ 83%] Built target test_rts_records
+[ 84%] Building C object CMakeFiles/test_reload.dir/tests/reload/test_reload.c.o
+[ 84%] Built target test_rts_diff
+[ 85%] Building C object CMakeFiles/test_snapshot_cp.dir/tests/snapshot_cp/test_snapshot_cp.c.o
+[ 85%] Linking C executable test_snapshot_cp
+[ 85%] Linking C executable test_reload
+[ 85%] Built target test_snapshot_cp
+[ 85%] Built target test_reload
+[ 85%] Building C object CMakeFiles/recovery_worker.dir/tests/recovery/recovery_worker.c.o
+[ 85%] Building C object CMakeFiles/test_recovery.dir/tests/recovery/test_recovery.c.o
+[ 86%] Building C object CMakeFiles/recovery_worker.dir/src/runtime/worker.c.o
+[ 87%] Linking C executable test_recovery
+[ 88%] Linking C executable recovery_worker
+[ 88%] Built target test_recovery
+[ 89%] Building C object CMakeFiles/test_hardening.dir/tests/recovery/test_hardening.c.o
+[ 89%] Linking C executable test_hardening
+[ 89%] Built target recovery_worker
+[ 89%] Building C object CMakeFiles/test_world_set_fields.dir/tests/rts/control/test_world_set_fields.c.o
+[ 89%] Built target test_hardening
+[ 90%] Building C object CMakeFiles/test_world_spawn_batch.dir/tests/rts/control/test_world_spawn_batch.c.o
+[ 91%] Linking C executable test_world_set_fields
+[ 91%] Linking C executable test_world_spawn_batch
+[ 91%] Built target test_world_set_fields
+[ 92%] Building C object CMakeFiles/test_rts_capacity.dir/tests/entities/test_rts_capacity.c.o
+[ 92%] Built target test_world_spawn_batch
+[ 93%] Linking C executable test_rts_capacity
+[ 93%] Building C object CMakeFiles/test_rts_churn.dir/tests/entities/test_rts_churn.c.o
+[ 94%] Linking C executable test_rts_churn
+[ 94%] Built target test_rts_capacity
+[ 94%] Building C object CMakeFiles/test_entity_tick.dir/tests/entities/test_entity_tick.c.o
+[ 94%] Built target test_rts_churn
+[ 95%] Building C object CMakeFiles/test_migrate_runtime.dir/tests/migration-runtime/test_migrate_runtime.c.o
+[ 96%] Linking C executable test_entity_tick
+[ 97%] Linking C executable test_migrate_runtime
+[ 97%] Built target test_entity_tick
+[ 98%] Building C object CMakeFiles/test_rts_snapshot_limit.dir/tests/entities/test_rts_snapshot_limit.c.o
+[ 98%] Linking C executable test_rts_snapshot_limit
+[ 98%] Built target test_migrate_runtime
+[ 99%] Building C object CMakeFiles/test_containment.dir/tests/recovery/test_containment.c.o
+[100%] Linking C executable test_containment
+[100%] Built target test_rts_snapshot_limit
+[100%] Built target test_containment

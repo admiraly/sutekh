@@ -29,7 +29,7 @@ MASK = 0xFFFFFFFF
 NONE = 0xFFFFFFFF
 DOMAIN_MAX = 32767
 BIAS = 16384
-K_BUDGET = 128
+K_BUDGET = 160
 CELL_SHIFT = 6
 GRID = 512
 CELLS = GRID * GRID
@@ -449,7 +449,7 @@ def spatial_phase(world: World) -> dict:
 
 
 def _target_query(world: World, grid: dict, r: int):
-    """4.1(c): ring-ordered scan with the K = 128 examined-entry budget. Returns (best, truncated),
+    """4.1(c): ring-ordered scan with the K = 160 examined-entry budget. Returns (best, truncated),
     best = (dist_sq, slot) or None."""
     cols = world.cols
     x, y = cols["pos_x"][r], cols["pos_y"][r]

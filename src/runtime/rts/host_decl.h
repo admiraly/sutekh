@@ -46,7 +46,7 @@ void su_host_decl_free(SuLirModule *m);
  * (refused: SU_E_SCHEMA_MISMATCH), capsule_format "0.1", system_id equal to d->system_id (SU_E_INVALID_ARGUMENT),
  * schema.id equal to d->schema_id (SU_E_SCHEMA_MISMATCH), numeric_profile "u32_mod_v1" (SU_E_TYPE), a
  * schedule block with a phase (SU_E_SCHEMA_MISMATCH when missing), and the host object: operator
- * SU_HOST_OPERATOR_NAME, operator_version and constants_hash equal to the descriptor's, and fields equal to
+ * rts_ops_v<operator_version>, operator_version and constants_hash equal to the descriptor's, and fields equal to
  * the descriptor's table exactly (count, ID, name, type u32, access). Any of those is SU_E_SCHEMA_MISMATCH.
  * On SU_OK *out is a heap declaration module (free with su_host_decl_free unless it is passed to
  * su_sched_add_host), and schema_version and layout_generation are the record's schema values.

@@ -1,0 +1,136 @@
+$ cmake --build build -j 2
+[  2%] Built target su_platform
+[  5%] Built target su_ir
+[  6%] Built target su_ents
+[  7%] Built target su_cmdq
+[  9%] Built target su_world_acct_objs
+[ 10%] Built target test_lir_oom
+[ 12%] Built target test_path_fifo
+[ 14%] Built target test_cmdq
+[ 15%] Built target su_cmdq_admission_objs
+[ 16%] Built target su_rts_control
+[ 17%] Built target test_cmdq_percap
+[ 19%] Built target su_world
+[ 21%] Built target test_world_acct
+[ 23%] Built target test_entities
+[ 24%] Built target test_world_ext_retired
+[ 26%] Built target test_world_restore_null
+[ 28%] Built target test_control_domains
+[ 28%] Built target test_cmdq_admission
+[ 29%] Built target test_churn
+[ 30%] Built target test_world_ents
+[ 31%] Building C object CMakeFiles/su_snapshot.dir/src/world/snapshot.c.o
+[ 32%] Built target su_vm
+[ 32%] Building C object CMakeFiles/su_snapshot.dir/src/runtime/checkpoint.c.o
+[ 33%] Built target test_world
+[ 36%] Built target test_ir
+[ 36%] Linking C static library libsu_snapshot.a
+[ 37%] Built target test_vm
+[ 37%] Built target su_snapshot
+[ 39%] Built target su_jobs
+[ 40%] Built target su_migrate
+[ 40%] Building C object CMakeFiles/test_snapshot.dir/tests/snapshot/test_snapshot.c.o
+[ 42%] Built target test_scheduler
+[ 43%] Building C object CMakeFiles/test_migrate.dir/tests/migration/test_migrate.c.o
+[ 44%] Linking C executable test_snapshot
+[ 44%] Linking C executable test_migrate
+[ 44%] Built target test_migrate
+[ 44%] Built target test_snapshot
+[ 45%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/worker.c.o
+[ 46%] Building C object CMakeFiles/su_agent.dir/src/runtime/worker.c.o
+[ 46%] Building C object CMakeFiles/su_agent.dir/src/runtime/schedule.c.o
+[ 47%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/schedule.c.o
+[ 48%] Building C object CMakeFiles/su_agent.dir/src/runtime/rts/host_decl.c.o
+[ 49%] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/rts/host_decl.c.o
+[ 49%] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_ops_common.c.o
+[ 50%] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_spatial.c.o
+[ 51%] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_ops_common.c.o
+[ 52%] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_spatial.c.o
+[ 53%] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_scatter.c.o
+[ 53%] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_scatter.c.o
+[ 53%] Linking C static library libsu_agent.a
+[ 54%] Linking C static library libsu_agent_hooks.a
+[ 62%] Built target su_agent
+[ 62%] Building C object CMakeFiles/sutekh.dir/src/platform/sutekh_main.c.o
+[ 69%] Built target su_agent_hooks
+[ 70%] Linking C executable worker_stub
+[ 71%] Linking C executable sutekh
+[ 71%] Built target sutekh
+[ 72%] Built target worker_stub
+[ 74%] Linking C executable test_tick_workers
+[ 74%] Linking C executable test_control
+[ 75%] Built target test_tick_workers
+[ 75%] Built target test_control
+[ 76%] Building C object CMakeFiles/test_host_entry.dir/tests/scheduler/test_host_entry.c.o
+[ 77%] Building C object CMakeFiles/test_host_restore.dir/tests/rts/host/test_host_restore.c.o
+[ 77%] Linking C executable test_host_entry
+[ 77%] Linking C executable test_host_restore
+[ 78%] Built target test_host_entry
+[ 79%] Building C object CMakeFiles/test_rts_ops.dir/tests/rts/native/test_rts_ops.c.o
+[ 80%] Linking C executable test_rts_ops
+[ 81%] Built target test_host_restore
+[ 81%] Building C object CMakeFiles/test_rts_records.dir/tests/rts/native/test_rts_records.c.o
+[ 82%] Linking C executable test_rts_records
+[ 82%] Built target test_rts_ops
+[ 83%] Building C object CMakeFiles/test_rts_diff.dir/tests/rts/native/test_rts_diff.c.o
+[ 83%] Linking C executable test_rts_diff
+[ 83%] Built target test_rts_records
+[ 83%] Linking C executable test_reload
+[ 83%] Built target test_rts_diff
+[ 83%] Linking C executable test_snapshot_cp
+[ 84%] Built target test_reload
+[ 85%] Building C object CMakeFiles/recovery_worker.dir/src/runtime/worker.c.o
+[ 86%] Built target test_snapshot_cp
+[ 87%] Linking C executable test_recovery
+[ 88%] Linking C executable recovery_worker
+[ 88%] Built target test_recovery
+[ 88%] Linking C executable test_hardening
+[ 88%] Built target recovery_worker
+[ 88%] Building C object CMakeFiles/test_world_set_fields.dir/tests/rts/control/test_world_set_fields.c.o
+[ 89%] Built target test_hardening
+[ 90%] Building C object CMakeFiles/test_world_spawn_batch.dir/tests/rts/control/test_world_spawn_batch.c.o
+[ 91%] Linking C executable test_world_set_fields
+[ 91%] Linking C executable test_world_spawn_batch
+[ 91%] Built target test_world_set_fields
+[ 92%] Building C object CMakeFiles/test_rts_capacity.dir/tests/entities/test_rts_capacity.c.o
+[ 93%] Linking C executable test_rts_capacity
+[ 93%] Built target test_world_spawn_batch
+[ 93%] Building C object CMakeFiles/test_rts_churn.dir/tests/entities/test_rts_churn.c.o
+[ 94%] Linking C executable test_rts_churn
+[ 94%] Built target test_rts_capacity
+[ 95%] Linking C executable test_entity_tick
+[ 95%] Built target test_rts_churn
+[ 96%] Linking C executable test_migrate_runtime
+[ 96%] Built target test_entity_tick
+[ 97%] Building C object CMakeFiles/test_rts_snapshot_limit.dir/tests/entities/test_rts_snapshot_limit.c.o
+[ 97%] Linking C executable test_rts_snapshot_limit
+[ 98%] Built target test_migrate_runtime
+[ 99%] Linking C executable test_containment
+[ 99%] Built target test_rts_snapshot_limit
+[100%] Built target test_containment
+$ ctest --test-dir build -R ^(rts_native_ops|rts_native_records|rts_native_diff|host_entry|rts_model_digest|rts_snapshot_limit|rts_load_engine|rts_replay|rts_replay_engine|recovery)$ --output-on-failure -j 2
+Test project /root/sutekh-scale-v2/build
+      Start 13: rts_native_records
+      Start 14: rts_native_diff
+ 1/10 Test #13: rts_native_records ...............   Passed    0.00 sec
+      Start 17: rts_load_engine
+ 2/10 Test #17: rts_load_engine ..................   Passed    1.35 sec
+      Start 19: rts_replay_engine
+ 3/10 Test #19: rts_replay_engine ................   Passed    1.61 sec
+      Start 20: rts_model_digest
+ 4/10 Test #20: rts_model_digest .................   Passed    1.50 sec
+      Start 28: recovery
+ 5/10 Test #28: recovery .........................   Passed    1.50 sec
+      Start 16: rts_replay
+ 6/10 Test #16: rts_replay .......................   Passed    0.32 sec
+      Start 12: rts_native_ops
+ 7/10 Test #12: rts_native_ops ...................   Passed    0.04 sec
+      Start 10: host_entry
+ 8/10 Test #10: host_entry .......................   Passed    0.01 sec
+ 9/10 Test #14: rts_native_diff ..................   Passed    7.21 sec
+      Start 47: rts_snapshot_limit
+10/10 Test #47: rts_snapshot_limit ...............   Passed    5.02 sec
+
+100% tests passed, 0 tests failed out of 10
+
+Total Test time (real) =  12.23 sec

@@ -169,7 +169,7 @@ class Backend:
 
 def _model_operator_hash() -> str:
     # The model has no engine operator manifest. Its hash names the model and is not the engine's.
-    return "sha256:" + hashlib.sha256(b"rts-model-operators/0.1 (not the engine manifest)").hexdigest()
+    return "sha256:" + hashlib.sha256(b"rts-model-operators/0.2; rts_ops_v2; K=160 (not the engine manifest)").hexdigest()
 
 
 class ModelBackend(Backend):
@@ -215,7 +215,7 @@ class ModelBackend(Backend):
                 # Q2: liveness against the state before the batch (rows of this batch are not yet alive).
                 w.check_formation_live(specs[-1]["formation_slot"])
             try:
-                limits.check_prechecks(len(rows), w.cap, sum(w.alive), w.hw)
+                limits.check_prechecks(len(rows), w.cap, sum(w.alive), w.hw, w.retired)
             except limits.BatchRefused as exc:
                 raise ModelError(exc.code, "world", exc.detail)
             for r in rows:
@@ -395,7 +395,7 @@ class Recorder:
             "system_manifest_hash": getattr(self.backend, "system_manifest_hash", "sha256:" + "0" * 64),
             "operator_manifest_hash": self.backend.operator_manifest_hash,
             "engine": self.engine, "caps": self.caps,
-            "spool": {"checkpoint_retain": 0, "spool_bytes_max": 0},
+            "spool": getattr(self.backend, "spool_config", {"checkpoint_retain": 0, "spool_bytes_max": 0}),
             "checkpoint_every": self.checkpoint_every, "digest_every": self.digest_every,
             "ticks": self.ticks,
         }

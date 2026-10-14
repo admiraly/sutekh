@@ -1,0 +1,103 @@
+Test project /root/sutekh-scale-v2/build-release
+      Start 42: migration_model
+      Start 14: rts_native_diff
+ 1/49 Test #42: migration_model ...................   Passed    0.15 sec
+      Start 28: recovery
+ 2/49 Test #28: recovery ..........................   Passed    1.95 sec
+      Start 20: rts_model_digest
+ 3/49 Test #20: rts_model_digest ..................   Passed    2.45 sec
+      Start 19: rts_replay_engine
+ 4/49 Test #19: rts_replay_engine .................   Passed    1.66 sec
+      Start 48: rts_e2e_edges
+ 5/49 Test #48: rts_e2e_edges .....................   Passed    0.66 sec
+      Start 17: rts_load_engine
+ 6/49 Test #17: rts_load_engine ...................   Passed    1.16 sec
+      Start 44: migration_runtime
+ 7/49 Test #44: migration_runtime .................   Passed    0.81 sec
+      Start 43: migration
+ 8/49 Test #43: migration .........................   Passed    1.16 sec
+      Start 21: rts_ctrl_engine
+ 9/49 Test #21: rts_ctrl_engine ...................   Passed    1.12 sec
+      Start 49: rts_projectile_mutant
+10/49 Test #14: rts_native_diff ...................   Passed   11.46 sec
+      Start 18: rts_caps_engine
+11/49 Test #49: rts_projectile_mutant .............   Passed    0.36 sec
+      Start 16: rts_replay
+12/49 Test #18: rts_caps_engine ...................   Passed    0.42 sec
+      Start 15: rts_ref_m3_mutants
+13/49 Test #16: rts_replay ........................   Passed    0.69 sec
+      Start 23: snapshot_cp
+14/49 Test #23: snapshot_cp .......................   Passed    0.14 sec
+      Start 10: host_entry
+15/49 Test #10: host_entry ........................   Passed    0.03 sec
+      Start 35: rts_control_domains
+16/49 Test #35: rts_control_domains ...............   Passed    0.01 sec
+      Start 12: rts_native_ops
+17/49 Test #12: rts_native_ops ....................   Passed    0.02 sec
+      Start 33: rts_world_set_fields
+18/49 Test #33: rts_world_set_fields ..............   Passed    0.01 sec
+      Start 34: rts_world_spawn_batch
+19/49 Test #15: rts_ref_m3_mutants ................   Passed    0.60 sec
+      Start 25: world_restore_null
+20/49 Test #25: world_restore_null ................   Passed    0.01 sec
+      Start 24: world_ext_retired
+21/49 Test #34: rts_world_spawn_batch .............   Passed    0.02 sec
+      Start 11: host_restore
+22/49 Test #24: world_ext_retired .................   Passed    0.00 sec
+      Start 13: rts_native_records
+23/49 Test #11: host_restore ......................   Passed    0.01 sec
+      Start  7: snapshot
+24/49 Test #13: rts_native_records ................   Passed    0.01 sec
+      Start  1: world
+25/49 Test  #7: snapshot ..........................   Passed    0.01 sec
+      Start  2: entities
+26/49 Test  #1: world .............................   Passed    0.13 sec
+      Start  3: world_acct
+27/49 Test  #3: world_acct ........................   Passed    0.01 sec
+      Start  4: ir
+28/49 Test  #4: ir ................................   Passed    0.05 sec
+      Start  5: vm
+29/49 Test  #5: vm ................................   Passed    0.01 sec
+      Start  6: control
+30/49 Test  #2: entities ..........................   Passed    1.45 sec
+      Start  8: scheduler
+31/49 Test  #6: control ...........................   Passed   15.06 sec
+      Start  9: tick_workers
+32/49 Test  #9: tick_workers ......................   Passed   13.22 sec
+      Start 22: reload
+33/49 Test #22: reload ............................   Passed    4.26 sec
+      Start 26: lir_oom
+34/49 Test #26: lir_oom ...........................   Passed    0.01 sec
+      Start 27: path_fifo
+35/49 Test #27: path_fifo .........................   Passed    0.01 sec
+      Start 29: containment
+36/49 Test #29: containment .......................   Passed    0.21 sec
+      Start 30: hardening
+37/49 Test #30: hardening .........................   Passed    0.08 sec
+      Start 31: cmdq
+38/49 Test  #8: scheduler .........................   Passed   32.92 sec
+      Start 32: cmdq_admission
+39/49 Test #32: cmdq_admission ....................   Passed    0.01 sec
+      Start 36: cmdq_percap
+40/49 Test #36: cmdq_percap .......................   Passed    0.01 sec
+      Start 39: world_entities
+41/49 Test #39: world_entities ....................   Passed    0.02 sec
+      Start 40: churn
+42/49 Test #40: churn .............................   Passed    0.02 sec
+      Start 41: entity_tick
+43/49 Test #41: entity_tick .......................   Passed    0.26 sec
+      Start 45: migration_alloc_points
+44/49 Test #45: migration_alloc_points ............   Passed    0.07 sec
+      Start 46: migration_alloc_points_selftest
+45/49 Test #46: migration_alloc_points_selftest ...   Passed    0.05 sec
+46/49 Test #31: cmdq ..............................   Passed    6.23 sec
+      Start 37: rts_capacity
+47/49 Test #37: rts_capacity ......................   Passed    4.17 sec
+      Start 47: rts_snapshot_limit
+48/49 Test #47: rts_snapshot_limit ................   Passed    4.36 sec
+      Start 38: rts_churn
+49/49 Test #38: rts_churn .........................   Passed    1.44 sec
+
+100% tests passed, 0 tests failed out of 49
+
+Total Test time (real) =  61.79 sec

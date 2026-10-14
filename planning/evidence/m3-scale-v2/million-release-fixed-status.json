@@ -1,0 +1,42 @@
+{
+  "job": {
+    "argv": [
+      "python3",
+      "tests/rts/load/test_scale_v2.py",
+      "--binary",
+      "build-release/sutekh",
+      "--rows",
+      "1000000",
+      "--recover",
+      "--out",
+      "/root/sutekh-scale-v2/planning/evidence/m3-scale-v2/million-release-fixed.json"
+    ],
+    "bind": {},
+    "child_pid": null,
+    "cwd": "/root/sutekh-scale-v2",
+    "env": {},
+    "exit_code": 0,
+    "finished_mono_ns": 1031636310930,
+    "finished_wall": 1791987574.0438874,
+    "inputs": {
+      "artifact_sha256": "685d027ef2bb3cf8b728feef6d737729ff926c8a74258708baefcd5a1e04c0b9",
+      "source_hash": "4e6be93a43eff1c6e60db740066e824e10e04af7e012aa826cc4fccd3a7e497e"
+    },
+    "job_id": 4,
+    "job_key": "aace67ccdc40b031c8c785c15ad062dc46a4f534ee6bb68d74e69c61a3968886",
+    "log_path": "/root/sutekh-scale-v2/build/broker/logs/job-4.log",
+    "log_sha256": "9153e22689a570c1b9ecb302bb8ca2c56e9586dc9c94152a8c5cd072c456be33",
+    "memory_bytes": 6442450944,
+    "owner_pid": 2037,
+    "reason": "",
+    "started_mono_ns": 404847837793,
+    "started_wall": 1791986947.2555873,
+    "state": "succeeded",
+    "submitted_mono_ns": 391877193798,
+    "submitted_wall": 1791986934.2845411,
+    "superseded_by": null,
+    "system_id": "m3-scale-v2-recovery-fixed",
+    "timeout_s": 1800.0
+  },
+  "ok": true
+}

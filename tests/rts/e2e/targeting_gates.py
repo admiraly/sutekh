@@ -30,16 +30,15 @@ def measure(spec):
     for i, name in enumerate(model.FIELD_NAMES):
         w.cols[name] = list(arr[i::39])
     queriers = oracle.sample_queriers(w, 1024, SEED)
-    # Preserve sampling without replacement: a 1024-row scene has only 964 armed units.
-    # Record the shortfall rather than duplicate queriers or alter the locked scene.
+    # OD-6 amendment: sample up to 1024 distinct armed units; use every eligible unit if fewer.
     metrics = oracle.targeting_metrics(w, queriers, "committed:"+spec["name"])
     metrics["requested_queriers"] = 1024
-    metrics["sample_count_met"] = len(queriers) == 1024
+    metrics["sample_count_met"] = len(queriers) == min(1024, len(oracle.armed_units(w)))
     metrics["gates_applicable"] = metrics["sample_count_met"]
     metrics["gates"] = oracle.gate_verdicts(metrics)
     metrics["thin_margin"] = metrics["thin_margin_point_estimate"]
     metrics["owner_decision"] = "OD-6" if metrics["thin_margin"] or not metrics["gates"]["pass"] else None
-    metrics["sampling_limitation"] = None if metrics["sample_count_met"] else "only 964 distinct armed units; no resampling or scene changes"
+    metrics["sampling_limitation"] = None if metrics["sample_count_met"] else "sampling invariant failed"
     metrics["querier_seed"] = SEED
     metrics["querier_sha256"] = hashlib.sha256(json.dumps(queriers, separators=(",", ":")).encode()).hexdigest()
     metrics["scene_digest"] = "sha256:"+digest

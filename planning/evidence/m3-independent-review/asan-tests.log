@@ -1,0 +1,17 @@
+['ctest', '--test-dir', '/tmp/sutekh-independent-asan-review', '-R', '^(snapshot|host_restore|migration_model|migration|migration_runtime)$', '--output-on-failure']
+Test project /tmp/sutekh-independent-asan-review
+    Start  7: snapshot
+1/5 Test  #7: snapshot .........................   Passed    0.06 sec
+    Start 11: host_restore
+2/5 Test #11: host_restore .....................   Passed    0.05 sec
+    Start 42: migration_model
+3/5 Test #42: migration_model ..................   Passed    0.09 sec
+    Start 43: migration
+4/5 Test #43: migration ........................   Passed    6.79 sec
+    Start 44: migration_runtime
+5/5 Test #44: migration_runtime ................   Passed    2.56 sec
+
+100% tests passed, 0 tests failed out of 5
+
+Total Test time (real) =   9.56 sec
+EXIT 0

@@ -229,8 +229,10 @@ static uint32_t check_host_object(const SuJsonValue *host, const SuHostOpDesc *d
         HOST_MSG_SET(msg, cap, "host capsule has no host object");
         return SU_E_SCHEMA_MISMATCH;
     }
-    if (strcmp(jstr(jmember(host, "operator")) != NULL ? jstr(jmember(host, "operator")) : "", SU_HOST_OPERATOR_NAME) != 0) {
-        HOST_MSG_SET(msg, cap, "host.operator is not %s", SU_HOST_OPERATOR_NAME);
+    char operator_name[32];
+    snprintf(operator_name, sizeof operator_name, "rts_ops_v%u", (unsigned)d->operator_version);
+    if (strcmp(jstr(jmember(host, "operator")) != NULL ? jstr(jmember(host, "operator")) : "", operator_name) != 0) {
+        HOST_MSG_SET(msg, cap, "host.operator is not %s", operator_name);
         return SU_E_SCHEMA_MISMATCH;
     }
     if (!juint(jmember(host, "operator_version"), &ver) || ver != d->operator_version) {

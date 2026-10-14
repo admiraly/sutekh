@@ -1,0 +1,28 @@
+/root/sutekh-limits/tests/rts/native/mutants.py:139: SyntaxWarning: 'return' in a 'finally' block
+  return 3
+M3-M01       KILLED         by test_rts_ops and diff_driver    tie-break: higher slot wins
+M3-M02       KILLED         by test_rts_ops and diff_driver    grid cell column off by one (both grid passes)
+M3-M03       KILLED         by test_rts_ops                    range check uses <
+M3-M04       KILLED         by test_rts_ops                    budget ignored: unbounded scan
+M3-M04b      KILLED         by test_rts_ops and diff_driver    truncated flag at box_total = K
+M3-M05       KILLED         by test_rts_ops and diff_driver    generation check removed from gather
+M3-M24       KILLED         by test_rts_ops and diff_driver    gather without alive check (contract says equivalent; not equivalent under forged formation_gen)
+M3-M21       KILLED         by test_rts_ops and diff_driver    grid indexes every alive row (anchors included)
+M3-M22       KILLED         by test_rts_ops and diff_driver    team filter removed (the extra term is never true: range_sq <= 262144)
+M3-M23a      KILLED         by test_rts_ops                    column clip removed (unsigned wrap at x < d)
+M3-M23b      KILLED         by test_rts_ops                    row clip removed (unsigned wrap at y < d)
+M3-R0        KILLED         by test_rts_ops and diff_driver    ring 0 (own cell) skipped
+M3-G         KILLED         by test_rts_ops and diff_driver    anchor position read from the member
+M3-DOM       KILLED         by test_rts_ops                    position domain check removed
+M3-RANGE     KILLED         by test_rts_ops                    range_sq domain check removed
+M3-FAULT-S   KILLED         by test_rts_ops                    spatial query fault seam disabled
+M3-NOTE-S    KILLED         by test_rts_ops                    store hook missing for truncated (instrumentation coverage)
+M3-ADD       KILLED         by test_rts_ops and diff_driver    wrapping add instead of saturating add (M3-M08)
+M3-M07       KILLED         by test_rts_ops and diff_driver    non-unit (anchor) target accepted (M3-M07)
+M3-M09       KILLED         by test_rts_ops and diff_driver    only the first contribution to a target applies (M3-M09)
+M3-M05s      KILLED         by test_rts_ops and diff_driver    generation check removed from scatter (M3-M05)
+M3-M06       EQUIVALENT     no test failed                     dead target accepted: the write lands in a dead row and su_world_zero_dead erases it before the commit is read; the alive check is kept as defence (a defensive dead-unit state does not detect it)
+M3-M09b      EQUIVALENT     no test failed                     descending shooter order: equivalent under saturating add (M3-M09b, 4.3)
+M3-FAULT-C   KILLED         by test_rts_ops                    scatter fault seam disabled (the call stays so the helper is still used)
+M3-NOTE-C    KILLED         by test_rts_ops                    store hook missing for incoming (instrumentation coverage)
+mutants: 25 total, 23 killed, 2 equivalent, 0 not accepted

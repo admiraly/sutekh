@@ -1,0 +1,18 @@
+{
+  "format": "rts-scale-v2/0.1",
+  "rows": 1000000,
+  "status": "cancelled",
+  "calls": 576,
+  "performance_qualification": false,
+  "recovery_requested": true,
+  "limits": {
+    "checkpoint_interval_ticks": 32,
+    "checkpoint_retain": 1,
+    "log_max_entries": 256,
+    "quarantine_after": 2,
+    "spool_bytes_max": 2147483648
+  },
+  "accepted_rows": 589824,
+  "elapsed_seconds": 623.3031104289985,
+  "reason": "bounded validation budget: quadratic Debug capture cost projected beyond 1800s; switch to validated Release artifact, same checked VM source"
+}

@@ -78,9 +78,14 @@ static int run_serve(int argc, char **argv) {
     /* Workers and disposable admission children run under RLIMIT_AS (constitution C07). Default
      * 4 GiB; SUTEKH_WORKER_AS_BYTES overrides it (0 = unlimited, needed under AddressSanitizer). */
     cfg.worker_address_space_bytes = UINT64_C(4) * 1024u * 1024u * 1024u;
-    /* Recovery spool default 512 MiB: RTS conservative admission binds at 588,630 rows
-     * (retain=1, event_log_max=65,536). Recovery claim N<=65,536; SUTEKH_SPOOL_BYTES_MAX overrides. */
-    cfg.spool_bytes_max = UINT64_C(512) * 1024u * 1024u;
+    /* Runtime limits v2: 2 GiB spool and one retained checkpoint admit the 1M-row RTS
+     * conservative bound. Larger recovery claims still require measured validation. */
+    cfg.spool_bytes_max = UINT64_C(2) * 1024u * 1024u * 1024u;
+    cfg.checkpoint_retain = 1u;
+    cfg.checkpoint_interval_ticks = 32u;
+    /* Large canonical snapshot restoration needs a bounded request window.
+     * Library callers retain their default; this binary uses the supported maximum. */
+    cfg.request_timeout_ms = 60000u;
     {
         const char *sp_env = getenv("SUTEKH_SPOOL_BYTES_MAX");
         if (sp_env != NULL && sp_env[0] >= '1' && sp_env[0] <= '9') {
@@ -91,7 +96,7 @@ static int run_serve(int argc, char **argv) {
             }
         }
     }
-    /* Checkpoint interval in accepted ticks (default 64). SUTEKH_CHECKPOINT_INTERVAL_TICKS=N (1..1,048,576)
+    /* Checkpoint interval in accepted ticks (binary default 32). SUTEKH_CHECKPOINT_INTERVAL_TICKS=N (1..1,048,576)
      * overrides it; the M3 replay header records checkpoint_every = 32 (contract M3 9.1, T-RTS-REPLAY-3). */
     {
         const char *ci_env = getenv("SUTEKH_CHECKPOINT_INTERVAL_TICKS");
@@ -101,6 +106,19 @@ static int run_serve(int argc, char **argv) {
             if (end != NULL && *end == '\0' && v >= 1u && v <= 1048576u) {
                 cfg.checkpoint_interval_ticks = (uint32_t)v;
             }
+        }
+    }
+    /* Explicit retention override; invalid settings fail rather than silently change policy. */
+    {
+        const char *retain_env = getenv("SUTEKH_CHECKPOINT_RETAIN");
+        if (retain_env != NULL) {
+            char *end = NULL;
+            unsigned long long v = strtoull(retain_env, &end, 10);
+            if (retain_env[0] < '1' || retain_env[0] > '9' || end == NULL || *end != '\0' || v < 1u || v > 8u) {
+                fprintf(stderr, "SUTEKH_CHECKPOINT_RETAIN must be 1..8\n");
+                return 2;
+            }
+            cfg.checkpoint_retain = (uint32_t)v;
         }
     }
     {

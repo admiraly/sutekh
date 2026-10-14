@@ -1,0 +1,29 @@
+{
+  "paths": {
+    "bench/rts/ref/model.py": "09f50deff4a246f715d0ff26098d3cacde71ed4a9ca4f983e7731d3d7110108e",
+    "bench/rts/replay/engine_backend.py": "6cc9737a0862884761b6d2076b834d253fed1a307619b448e4576e664e4ec9f0",
+    "bench/rts/replay/rts_replay.py": "2a09f1983da363da3c88f171b313aaf4ba141a1ffe3b1a10ee25cdbfb69fa404",
+    "bench/rts/replay/spawn_batch_limits.py": "3ee3d6f704bc85e3f465af25da4126a8004e6c473e8adb24bfe01f7167e5d1f4",
+    "capsules/rts/host/scatter.capsule.json": "ae02432a5f048c2c9d41a9fe7342e3cd5f3579a39508c2e282171d2f9c71d003",
+    "capsules/rts/host/spatial.capsule.json": "dd28d5623ad731fb897ac2daedd34ca5c216c72fd9d8a23b94254fd09bfee16e",
+    "profiles/rts/native/rts_ops.h": "87bbd9713f16433b3396b0904557c3a22e1724230b7ca0dfbc297fec084723e5",
+    "profiles/rts/native/rts_ops_common.c": "23cf9ee47f5f4c1f0acc7b5b67261f123b81265143af2efa07312ad96ba754ca",
+    "profiles/rts/native/rts_scatter.c": "787d77c6dbf6e225c5711fffb0116ffb9d3ff4b54c1f55221a00da053ac100db",
+    "profiles/rts/native/rts_spatial.c": "60d08baa0dc304ccb2a042fe56846b71c86479ffd862a4f5d08f3e29d16205a6",
+    "schemas/capsule.schema.json": "f83ce55d0869f9af2f9a0022ef0e38c2b4c99d7001e78629dd148c6dcd4cfe59",
+    "src/platform/sutekh_main.c": "a1526d622bd60aa33f30593294db405101fa6fb59dd11b052026b230e252cb8f",
+    "src/runtime/rts/host_decl.c": "7cacd69373a5c4c373988870b7cdf88e828d86465abd098122851fb06389baec",
+    "src/runtime/rts/host_decl.h": "8646920544e30d62015334ced1d1c3b20d2e9958091c862c86740a7622214904",
+    "src/runtime/worker.c": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+    "src/world/snapshot.c": "5a97c4b1aaed96ba3dada5c5489d80cb35bee7ad8fdb50f5cb682b2944397e7b",
+    "src/world/snapshot.h": "4ee3a11e81c69a3638ab90c87f6c065a25311ae293e94794510bc6cd8daff842",
+    "tests/entities/test_rts_snapshot_limit.c": "33331533d410ddc9881cc56bde210e12920ad63d8e09f32ea948641d33e96ae4",
+    "tests/rts/e2e/targeting_gates.py": "5df55b560b82b985b3f2dd8d9abd2a8b8160370fb16c0f65bd9ac7f5ecc743f6",
+    "tests/rts/native/test_rts_ops.c": "da801081da971d326d6a74afce6d8c5b91c44d70789a65be1f07e179cbcdb476",
+    "tests/rts/ref/checks.py": "f20000e6add1f2bdee2ee9d1f81e45cafb8bd0993c724bcaa3526d720b88cf4b",
+    "tests/rts/replay/test_replay.py": "15a8824662c192f60ce406b9fe0567ee25748ba274c15f53d0bba41eb0c332cf",
+    "profiles/rts/runtime_limits_v2.json": "6aecd14fda66178b6f7ab33695db0aa4384087d445c7db6edf6227fc2186b668",
+    "tests/rts/load/test_scale_v2.py": "11f8778a1baedafbc367628942c6261223e69ffa5b7098228aa188fb875e691a"
+  },
+  "artifact_sha256": "685d027ef2bb3cf8b728feef6d737729ff926c8a74258708baefcd5a1e04c0b9"
+}

@@ -1,0 +1,4 @@
+['cc', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-g', '-I/root/sutekh-scale-v2/src', '-I/root/sutekh-scale-v2/include', '/tmp/sutekh-independent-asan-review/oversize_guard.c', '-o', '/tmp/sutekh-independent-asan-review/oversize_guard', '/tmp/sutekh-independent-asan-review/libsu_snapshot.a', '/tmp/sutekh-independent-asan-review/libsu_world.a', '/tmp/sutekh-independent-asan-review/libsu_ents.a', '/tmp/sutekh-independent-asan-review/libsu_ir.a', '/tmp/sutekh-independent-asan-review/libsu_platform.a']
+compile_exit=0
+status=11 expected=11 world_null=1
+run_exit=0

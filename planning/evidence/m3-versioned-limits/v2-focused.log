@@ -1,0 +1,30 @@
+Test project /root/sutekh-limits/build
+    Start 10: host_entry
+    Start 12: rts_native_ops
+1/9 Test #10: host_entry .......................   Passed    0.02 sec
+    Start 13: rts_native_records
+2/9 Test #13: rts_native_records ...............   Passed    0.00 sec
+    Start 14: rts_native_diff
+3/9 Test #12: rts_native_ops ...................***Failed    0.03 sec
+FAIL /root/sutekh-limits/tests/rts/native/test_rts_ops.c:98: spatial constants_hash equals SHA-256 of its text
+test_rts_ops: 148 checks, 1 failures
+
+    Start 19: rts_replay_engine
+4/9 Test #19: rts_replay_engine ................   Passed    0.97 sec
+    Start 20: rts_model_digest
+5/9 Test #20: rts_model_digest .................   Passed    0.81 sec
+    Start 28: recovery
+6/9 Test #28: recovery .........................   Passed    1.07 sec
+    Start 48: rts_e2e_edges
+7/9 Test #48: rts_e2e_edges ....................   Passed    0.40 sec
+    Start 49: rts_projectile_mutant
+8/9 Test #49: rts_projectile_mutant ............   Passed    0.16 sec
+9/9 Test #14: rts_native_diff ..................   Passed    4.28 sec
+
+89% tests passed, 1 tests failed out of 9
+
+Total Test time (real) =   4.31 sec
+
+The following tests FAILED:
+	 12 - rts_native_ops (Failed)
+Errors while running CTest

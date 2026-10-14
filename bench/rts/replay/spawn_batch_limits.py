@@ -7,14 +7,14 @@ These are the checks the engine handler must apply, in order, and that the Pytho
   2. the row count is 1..ROWS_MAX;
   3. every row is valid (the caller validates rows; this module does not parse them);
   4. rows fit the free slots, rows <= capacity - alive;
-  5. the high-water bound holds, hw + rows <= HW_MAX (N-c, 838,860).
+  5. the high-water bound holds, exact lowest-slot high-water growth <= HW_MAX (limits v2).
 Nothing here mutates state. The engine applies these before its first su_world_spawn.
 """
 from __future__ import annotations
 
 REQUEST_BYTES_MAX = 1048576  # 1 MiB request cap (agent protocol)
 ROWS_MAX = 1024  # OD-3b
-HW_MAX = 838860  # N-c precheck bound
+HW_MAX = 1000000  # runtime limits v2; SU_LIMIT_ROWS remains 1M
 
 
 class BatchRefused(Exception):
@@ -37,9 +37,10 @@ def check_row_count(rows: int) -> None:
         raise BatchRefused("SU_E_RESOURCE_LIMIT", f"spawn_batch takes 1 to {ROWS_MAX} rows")
 
 
-def check_prechecks(rows: int, capacity: int, alive: int, high_water: int) -> None:
+def check_prechecks(rows: int, capacity: int, alive: int, high_water: int, retired: int = 0) -> None:
     """Free-slot and high-water prechecks (D3, N-c). Run before the first spawn."""
-    if rows > capacity - alive:
+    if rows > capacity - alive - retired:
         raise BatchRefused("SU_E_RESOURCE_LIMIT", "not enough free slots; world unchanged")
-    if high_water + rows > HW_MAX:
+    holes = high_water - alive - retired
+    if high_water + max(0, rows - holes) > HW_MAX:
         raise BatchRefused("SU_E_RESOURCE_LIMIT", "high water would pass the bound; world unchanged")

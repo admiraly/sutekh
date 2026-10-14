@@ -94,7 +94,7 @@
       "description": "Host variant (M3-03a, OD-16; M3-04a). A host system is an operator compiled into the engine, not IR. Its declared field table must equal the operator descriptor exactly (checked by the loader).",
       "properties": {
         "operator": {
-          "const": "rts_ops_v1"
+          "enum": ["rts_ops_v1", "rts_ops_v2"]
         },
         "operator_version": {
           "type": "integer",

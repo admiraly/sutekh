@@ -1,0 +1,38 @@
+{
+  "format": "0.1",
+  "task_ids": [
+    "M3-05",
+    "M3-06"
+  ],
+  "owner": "root_integrator",
+  "authorization": "owner limit-change approval 2026-10-14",
+  "state": "integrated",
+  "base_revision": "5de97822056ee37b1411706bd75be6b2a0ff12d7",
+  "worktrees": [
+    "/root/sutekh-limits",
+    "/root/sutekh-scale-v2"
+  ],
+  "write_scope": [
+    "profiles/rts/",
+    "capsules/rts/host/",
+    "schemas/capsule.schema.json",
+    "src/runtime/rts/host_decl.c",
+    "src/runtime/rts/host_decl.h",
+    "src/runtime/worker.c",
+    "src/world/snapshot.h",
+    "src/platform/sutekh_main.c",
+    "bench/rts/ref/model.py",
+    "bench/rts/replay/",
+    "tests/rts/",
+    "tests/entities/test_rts_snapshot_limit.c",
+    "planning/",
+    "docs/AGENT_RPC.md",
+    "src/world/snapshot.c"
+  ],
+  "pending_jobs": [],
+  "independent_review": {
+    "author": "/root/review_limits_v2",
+    "report": "planning/evidence/m3-independent-review/limits-review.md",
+    "status": "code review, sanitizer and full recovery passed"
+  }
+}

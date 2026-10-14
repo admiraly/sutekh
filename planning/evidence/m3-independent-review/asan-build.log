@@ -1,0 +1,101 @@
+COMMAND ['cmake', '-S', '/root/sutekh-scale-v2', '-B', '/tmp/sutekh-independent-asan-review', '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Debug', '-DSUTEKH_ENABLE_NATIVE=OFF', '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer', '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined']
+-- The C compiler identification is GNU 15.2.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Configuring done (6.4s)
+-- Generating done (0.1s)
+CMake Warning:
+  Manually-specified variables were not used by the project:
+
+    SUTEKH_ENABLE_NATIVE
+
+
+-- Build files have been written to: /tmp/sutekh-independent-asan-review
+EXIT 0
+COMMAND ['cmake', '--build', '/tmp/sutekh-independent-asan-review', '--parallel', '1', '--target', 'test_snapshot', 'test_host_restore', 'test_migration', 'test_migration_runtime', 'worker_stub']
+[0/2] Re-checking globbed directories...
+ninja: error: unknown target 'test_migration', did you mean 'test_migrate'?
+EXIT 1
+COMMAND ['cmake', '--build', '/tmp/sutekh-independent-asan-review', '--parallel', '1', '--target', 'test_snapshot', 'test_host_restore', 'test_migrate', 'test_migrate_runtime', 'recovery_worker', 'worker_stub']
+[0/2] Re-checking globbed directories...
+[1/75] Building C object CMakeFiles/su_ents.dir/src/world/entities/su_ents.c.o
+[2/75] Building C object CMakeFiles/su_ir.dir/src/ir/su_sha256.c.o
+[3/75] Building C object CMakeFiles/su_ir.dir/src/ir/su_json.c.o
+[4/75] Building C object CMakeFiles/su_ir.dir/src/ir/su_lir.c.o
+[5/75] Building C object CMakeFiles/su_platform.dir/src/platform/su_platform.c.o
+[6/75] Building C object CMakeFiles/su_world.dir/src/world/su_world.c.o
+[7/75] Linking C static library libsu_ents.a
+[8/75] Linking C static library libsu_ir.a
+[9/75] Linking C static library libsu_platform.a
+[10/75] Linking C static library libsu_world.a
+[11/75] Building C object CMakeFiles/su_vm.dir/src/vm/su_vm.c.o
+[12/75] Building C object CMakeFiles/su_snapshot.dir/src/world/snapshot.c.o
+[13/75] Building C object CMakeFiles/su_snapshot.dir/src/runtime/checkpoint.c.o
+[14/75] Linking C static library libsu_vm.a
+[15/75] Linking C static library libsu_snapshot.a
+[16/75] Building C object CMakeFiles/su_jobs.dir/src/runtime/jobs/su_jobs.c.o
+[17/75] Building C object CMakeFiles/su_jobs.dir/src/runtime/jobs/su_effects.c.o
+[18/75] Building C object CMakeFiles/su_cmdq.dir/src/world/entities/su_cmdq.c.o
+[19/75] Building C object CMakeFiles/su_migrate.dir/src/world/migration/su_migrate.c.o
+[20/75] Building C object CMakeFiles/su_agent.dir/src/agent/su_agent.c.o
+[21/75] Building C object CMakeFiles/su_agent.dir/src/agent/su_module.c.o
+[22/75] Building C object CMakeFiles/su_agent.dir/src/agent/su_path.c.o
+[23/75] Building C object CMakeFiles/su_agent.dir/src/agent/su_proc.c.o
+[24/75] Building C object CMakeFiles/su_agent.dir/src/agent/su_proto.c.o
+[25/75] Building C object CMakeFiles/su_agent.dir/src/agent/su_sandbox.c.o
+[26/75] Building C object CMakeFiles/su_agent.dir/src/agent/su_spool.c.o
+[27/75] Building C object CMakeFiles/su_agent.dir/src/runtime/worker.c.o
+[28/75] Building C object CMakeFiles/su_agent.dir/src/runtime/registry.c.o
+[29/75] Building C object CMakeFiles/su_agent.dir/src/runtime/schedule.c.o
+[30/75] Building C object CMakeFiles/su_agent.dir/src/runtime/reload.c.o
+[31/75] Building C object CMakeFiles/su_agent.dir/src/runtime/rts/control_domains.c.o
+[32/75] Building C object CMakeFiles/su_agent.dir/src/runtime/entity_tick.c.o
+[33/75] Building C object CMakeFiles/su_agent.dir/src/runtime/rts/host_decl.c.o
+[34/75] Building C object CMakeFiles/su_agent.dir/src/runtime/rts/host_registry.c.o
+[35/75] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_ops_common.c.o
+[36/75] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_spatial.c.o
+[37/75] Building C object CMakeFiles/su_agent.dir/profiles/rts/native/rts_scatter.c.o
+[38/75] Linking C static library libsu_jobs.a
+[39/75] Linking C static library libsu_cmdq.a
+[40/75] Linking C static library libsu_migrate.a
+[41/75] Linking C static library libsu_agent.a
+[42/75] Building C object CMakeFiles/recovery_worker.dir/tests/recovery/recovery_worker.c.o
+[43/75] Building C object CMakeFiles/recovery_worker.dir/src/runtime/worker.c.o
+[44/75] Linking C executable recovery_worker
+[45/75] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_agent.c.o
+[46/75] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_module.c.o
+[47/75] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_path.c.o
+[48/75] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_proc.c.o
+[49/75] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_proto.c.o
+[50/75] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_sandbox.c.o
+[51/75] Building C object CMakeFiles/su_agent_hooks.dir/src/agent/su_spool.c.o
+[52/75] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/worker.c.o
+[53/75] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/registry.c.o
+[54/75] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/schedule.c.o
+[55/75] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/reload.c.o
+[56/75] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/rts/control_domains.c.o
+[57/75] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/entity_tick.c.o
+[58/75] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/rts/host_decl.c.o
+[59/75] Building C object CMakeFiles/su_agent_hooks.dir/src/runtime/rts/host_registry.c.o
+[60/75] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_ops_common.c.o
+[61/75] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_spatial.c.o
+[62/75] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_scatter.c.o
+[63/75] Building C object CMakeFiles/worker_stub.dir/tests/control/worker_stub.c.o
+[64/75] Building C object CMakeFiles/test_snapshot.dir/tests/snapshot/test_snapshot.c.o
+[65/75] Building C object CMakeFiles/test_host_restore.dir/tests/rts/host/test_host_restore.c.o
+[66/75] Building C object CMakeFiles/test_host_restore.dir/tests/rts/host/host_test_ops.c.o
+[67/75] Building C object CMakeFiles/test_migrate.dir/tests/migration/test_migrate.c.o
+[68/75] Linking C static library libsu_agent_hooks.a
+[69/75] Building C object CMakeFiles/test_migrate_runtime.dir/tests/migration-runtime/test_migrate_runtime.c.o
+[70/75] Linking C executable worker_stub
+[71/75] Linking C executable test_snapshot
+[72/75] Linking C executable test_host_restore
+[73/75] Linking C executable test_migrate
+[74/75] Linking C executable test_migrate_runtime
+EXIT 0

@@ -37,7 +37,7 @@
 #define SU_SNAPSHOT_FORMAT "0.2"                     /* written by capture */
 #define SU_SNAPSHOT_FORMAT_01 "0.1"                  /* accepted by parse and restore */
 #define SU_SNAPSHOT_FORMAT_03 "0.3"                  /* written by capture when lineage or retired ids exist */
-#define SU_SNAPSHOT_MAX_BYTES (64u * 1024u * 1024u)  /* input and output cap */
+#define SU_SNAPSHOT_MAX_BYTES (512u * 1024u * 1024u) /* runtime limits v2; input/output cap */
 #define SU_SNAPSHOT_MAX_DEPTH 8u                     /* JSON nesting depth */
 #define SU_SNAPSHOT_MAX_MANIFEST 1024u               /* manifest entries */
 #define SU_SNAPSHOT_MAX_NAME 255u                    /* system IDs, revisions */

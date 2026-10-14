@@ -1,0 +1,301 @@
+$ cmake --build build -j 2
+[  3%] Built target su_ir
+[  5%] Built target su_platform
+[  6%] Built target su_cmdq
+[  7%] Built target su_ents
+[  9%] Built target su_world_acct_objs
+[ 10%] Built target test_lir_oom
+[ 14%] Built target test_path_fifo
+[ 14%] Built target test_cmdq
+[ 15%] Built target su_rts_control
+[ 16%] Built target su_cmdq_admission_objs
+[ 17%] Built target test_cmdq_percap
+[ 19%] Built target su_world
+[ 21%] Built target test_entities
+[ 23%] Built target test_world_acct
+[ 24%] Built target test_world_ext_retired
+[ 26%] Built target test_world_restore_null
+[ 27%] Built target test_cmdq_admission
+[ 28%] Built target test_control_domains
+[ 29%] Built target test_world_ents
+[ 30%] Built target test_churn
+[ 32%] Built target su_snapshot
+[ 33%] Built target su_vm
+[ 34%] Built target test_snapshot
+[ 35%] Built target test_world
+[ 36%] Built target su_migrate
+[ 38%] Built target su_jobs
+[ 39%] Built target test_vm
+[ 41%] Built target test_ir
+[ 43%] Built target test_scheduler
+[ 44%] Built target test_migrate
+[ 57%] Built target su_agent_hooks
+[ 69%] Built target su_agent
+[ 70%] Built target sutekh
+[ 72%] Built target worker_stub
+[ 73%] Built target test_control
+[ 75%] Built target test_tick_workers
+[ 77%] Built target test_host_entry
+[ 79%] Built target test_host_restore
+[ 81%] Built target test_rts_ops
+[ 82%] Built target test_rts_records
+[ 83%] Built target test_rts_diff
+[ 84%] Built target test_reload
+[ 85%] Built target test_snapshot_cp
+[ 87%] Built target recovery_worker
+[ 88%] Built target test_hardening
+[ 89%] Built target test_recovery
+[ 90%] Built target test_world_set_fields
+[ 91%] Built target test_world_spawn_batch
+[ 93%] Built target test_rts_capacity
+[ 94%] Built target test_rts_churn
+[ 95%] Built target test_entity_tick
+[ 97%] Built target test_migrate_runtime
+[ 98%] Built target test_rts_snapshot_limit
+[100%] Built target test_containment
+$ ctest --test-dir build -R ^(rts_native_ops|rts_native_records|rts_native_diff|host_entry|rts_model_digest|rts_snapshot_limit|rts_load_engine|rts_replay|rts_replay_engine|recovery)$ --output-on-failure -j 2
+Test project /root/sutekh-scale-v2/build
+      Start 47: rts_snapshot_limit
+ 1/10 Test #47: rts_snapshot_limit ...............   Passed    4.62 sec
+      Start 28: recovery
+      Start 19: rts_replay_engine
+ 2/10 Test #19: rts_replay_engine ................***Failed    0.34 sec
+Traceback (most recent call last):
+  File "/root/sutekh-scale-v2/tests/rts/replay/test_replay_engine.py", line 199, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/root/sutekh-scale-v2/tests/rts/replay/test_replay_engine.py", line 136, in main
+    record(binary, path)
+    ~~~~~~^^^^^^^^^^^^^^
+  File "/root/sutekh-scale-v2/tests/rts/replay/test_replay_engine.py", line 78, in record
+    be = eb.EngineBackend(binary, CAP, env=ENV)
+  File "/root/sutekh-scale-v2/tests/rts/replay/../../../bench/rts/replay/engine_backend.py", line 49, in __init__
+    self.wid, self.rev = self.session.create_rts(capacity, event_log_max=event_log_max)
+                         ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/sutekh-scale-v2/bench/rts/replay/rts_session.py", line 108, in create_rts
+    r = self.call("world.create", params)
+  File "/root/sutekh-scale-v2/bench/rts/replay/rts_session.py", line 98, in call
+    raise RpcError(e.get("status", 0), e.get("code", ""), e.get("message", ""))
+rts_session.RpcError: SU_E_SCHEMA_MISMATCH (9): host.operator is not rts_ops_v1
+
+      Start 17: rts_load_engine
+ 3/10 Test #17: rts_load_engine ..................***Failed    0.18 sec
+Traceback (most recent call last):
+  File "/root/sutekh-scale-v2/tests/rts/load/test_load_engine.py", line 211, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/root/sutekh-scale-v2/tests/rts/load/test_load_engine.py", line 203, in main
+    case_a_and_recovery(binary)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/root/sutekh-scale-v2/tests/rts/load/test_load_engine.py", line 66, in case_a_and_recovery
+    wid, rev = ctl.create_rts(CAPACITY, event_log_max=4096)
+               ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/sutekh-scale-v2/tests/rts/load/../../../bench/rts/replay/rts_session.py", line 108, in create_rts
+    r = self.call("world.create", params)
+  File "/root/sutekh-scale-v2/tests/rts/load/../../../bench/rts/replay/rts_session.py", line 98, in call
+    raise RpcError(e.get("status", 0), e.get("code", ""), e.get("message", ""))
+rts_session.RpcError: SU_E_SCHEMA_MISMATCH (9): host.operator is not rts_ops_v1
+
+      Start 16: rts_replay
+ 4/10 Test #16: rts_replay .......................   Passed    0.27 sec
+      Start 10: host_entry
+ 5/10 Test #10: host_entry .......................   Passed    0.02 sec
+      Start 12: rts_native_ops
+ 6/10 Test #12: rts_native_ops ...................   Passed    0.03 sec
+      Start 13: rts_native_records
+ 7/10 Test #13: rts_native_records ...............***Failed    0.00 sec
+FAIL /root/sutekh-scale-v2/tests/rts/native/test_rts_records.c:128: spatial record equals the descriptor except constants_hash (9: host.operator is not rts_ops_v1)
+FAIL /root/sutekh-scale-v2/tests/rts/native/test_rts_records.c:131: scatter record equals the descriptor except constants_hash (9: host.operator is not rts_ops_v1)
+FAIL /root/sutekh-scale-v2/tests/rts/native/test_rts_records.c:135: committed spatial record loads against the descriptor (9: host.operator is not rts_ops_v1)
+FAIL /root/sutekh-scale-v2/tests/rts/native/test_rts_records.c:138: committed scatter record loads against the descriptor (9: host.operator is not rts_ops_v1)
+test_rts_records: 4 checks, 4 failures
+
+      Start 14: rts_native_diff
+ 8/10 Test #28: recovery .........................***Failed    1.08 sec
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:917: CHECK failed: create_rts_world(&p.ctl, p.wid, sizeof p.wid, p.crev, sizeof p.crev)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:918: CHECK failed: create_rts_world(&p.rec, wid_r, sizeof wid_r, p.rrev, sizeof p.rrev)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:919: CHECK failed: strcmp(p.wid, wid_r) == 0 && strcmp(p.crev, p.rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:925: CHECK failed: ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:926: CHECK failed: ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:925: CHECK failed: ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:926: CHECK failed: ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:925: CHECK failed: ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:926: CHECK failed: ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:925: CHECK failed: ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:926: CHECK failed: ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:890: CHECK failed: a == want
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:891: CHECK failed: b == want
+world.spawn_batch [{"values":{"kind":1,"hp":1}},{"values":{"kind":1,"hp":1}},{"values":{"kind":1,"hp":1}},{"values":{"kind":1,"hp":1}},{"values":{"kind":1,"hp":1}}]: want 11, got 2 / 2
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:890: CHECK failed: a == want
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:891: CHECK failed: b == want
+world.spawn_batch [{"values":{"kind":1,"hp":7,"pos_x":40,"range_sq":900},"external_id":77},{"values":{"kind":2,"team":1,"pos_x":50}},{"values":{"kind":1,"hp":9,"pos_x":60,"formation_slot":2,"formation_gen":2}},{"values":{"kind":1,"hp":3,"team":1,"pos_x":70}}]: want 0, got 2 / 2
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:890: CHECK failed: a == want
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:891: CHECK failed: b == want
+world.set_fields [{"entity":4294967296,"values":{"pos_x":5,"pos_y":6}},{"entity":4294967297,"values":{"formation_slot":5,"formation_gen":2,"range_sq":1}}]: want 0, got 2 / 2
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:531: CHECK failed: resp_error_status(r) == SU_E_WORKER_FAILED
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:492: CHECK failed: rec != NULL
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:470: CHECK failed: digest(&p->ctl, p->wid, p->crev, a, &ta)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:471: CHECK failed: digest(&p->rec, p->wid, p->rrev, b, &tb)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:474: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:890: CHECK failed: a == want
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:891: CHECK failed: b == want
+world.set_fields [{"entity":4294967298,"values":{"pos_y":3}}]: want 0, got 2 / 2
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:461: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:470: CHECK failed: digest(&p->ctl, p->wid, p->crev, a, &ta)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:471: CHECK failed: digest(&p->rec, p->wid, p->rrev, b, &tb)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:474: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:917: CHECK failed: create_rts_world(&p.ctl, p.wid, sizeof p.wid, p.crev, sizeof p.crev)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:918: CHECK failed: create_rts_world(&p.rec, wid_r, sizeof wid_r, p.rrev, sizeof p.rrev)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:919: CHECK failed: strcmp(p.wid, wid_r) == 0 && strcmp(p.crev, p.rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:461: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:925: CHECK failed: ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:926: CHECK failed: ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:925: CHECK failed: ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:926: CHECK failed: ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:925: CHECK failed: ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:926: CHECK failed: ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:925: CHECK failed: ent_despawn(&p.ctl, p.wid, p.crev, sizeof p.crev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:926: CHECK failed: ent_despawn(&p.rec, p.wid, p.rrev, sizeof p.rrev, h)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:890: CHECK failed: a == want
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:891: CHECK failed: b == want
+world.spawn_batch [{"values":{"kind":1,"hp":1}},{"values":{"kind":1,"hp":1}},{"values":{"kind":1,"hp":1}},{"values":{"kind":1,"hp":1}},{"values":{"kind":1,"hp":1}}]: want 11, got 2 / 2
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:890: CHECK failed: a == want
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:891: CHECK failed: b == want
+world.spawn_batch [{"values":{"kind":1,"hp":7,"pos_x":40,"range_sq":900},"external_id":77},{"values":{"kind":2,"team":1,"pos_x":50}},{"values":{"kind":1,"hp":9,"pos_x":60,"formation_slot":2,"formation_gen":2}},{"values":{"kind":1,"hp":3,"team":1,"pos_x":70}}]: want 0, got 2 / 2
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:890: CHECK failed: a == want
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:891: CHECK failed: b == want
+world.set_fields [{"entity":4294967296,"values":{"pos_x":5,"pos_y":6}},{"entity":4294967297,"values":{"formation_slot":5,"formation_gen":2,"range_sq":1}}]: want 0, got 2 / 2
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:531: CHECK failed: resp_error_status(r) == SU_E_WORKER_FAILED
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:492: CHECK failed: rec != NULL
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:470: CHECK failed: digest(&p->ctl, p->wid, p->crev, a, &ta)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:471: CHECK failed: digest(&p->rec, p->wid, p->rrev, b, &tb)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:474: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:890: CHECK failed: a == want
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:891: CHECK failed: b == want
+world.set_fields [{"entity":4294967298,"values":{"pos_y":3}}]: want 0, got 2 / 2
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:896: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:461: CHECK failed: strcmp(p->crev, p->rrev) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:470: CHECK failed: digest(&p->ctl, p->wid, p->crev, a, &ta)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:471: CHECK failed: digest(&p->rec, p->wid, p->rrev, b, &tb)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:474: CHECK failed: strcmp(p->crev, p->rrev) == 0
+create_rts_full: {"protocol":"0.1","id":"cw","ok":false,"error":{"code":"SU_E_SCHEMA_MISMATCH","status":9,"message":"host.operator is not rts_ops_v1","retry":false}}
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:1066: CHECK failed: create_rts_full(&p.ctl, p.wid, sizeof p.wid, p.crev, sizeof p.crev)
+create_rts_full: {"protocol":"0.1","id":"cw","ok":false,"error":{"code":"SU_E_SCHEMA_MISMATCH","status":9,"message":"host.operator is not rts_ops_v1","retry":false}}
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:1067: CHECK failed: create_rts_full(&p.rec, wid_r, sizeof wid_r, p.rrev, sizeof p.rrev)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:890: CHECK failed: a == want
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:891: CHECK failed: b == want
+world.spawn_batch [{"values":{"kind":1,"team":0,"hp":40,"pos_x":100,"pos_y":100,"range_sq":400,"reload":2,"damage":3,"flight":2}},{"values":{"kind":1,"team":1,"hp":40,"pos_x":100,"pos_y":100,"range_sq":400,"reload":3,"damage":2,"flight":1}},{"values":{"kind":1,"team":0,"hp":30,"pos_x":5000,"pos_y":100,"range_sq":400,"reload":1,"damage":1,"flight":3}},{"values":{"kind":1,"team":1,"hp":30,"pos_x":5000,"pos_y":100,"range_sq":400,"reload":2,"damage":2,"flight":2}}]: want 0, got 2 / 2
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:531: CHECK failed: resp_error_status(r) == SU_E_WORKER_FAILED
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:492: CHECK failed: rec != NULL
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:1079: CHECK failed: uint_of(rec, "from_checkpoint_tick") == 4u
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:1082: CHECK failed: access(token, F_OK) != 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:470: CHECK failed: digest(&p->ctl, p->wid, p->crev, a, &ta)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:471: CHECK failed: digest(&p->rec, p->wid, p->rrev, b, &tb)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:470: CHECK failed: digest(&p->ctl, p->wid, p->crev, a, &ta)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:471: CHECK failed: digest(&p->rec, p->wid, p->rrev, b, &tb)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+create_rts_full: {"protocol":"0.1","id":"cw","ok":false,"error":{"code":"SU_E_SCHEMA_MISMATCH","status":9,"message":"host.operator is not rts_ops_v1","retry":false}}
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:1066: CHECK failed: create_rts_full(&p.ctl, p.wid, sizeof p.wid, p.crev, sizeof p.crev)
+create_rts_full: {"protocol":"0.1","id":"cw","ok":false,"error":{"code":"SU_E_SCHEMA_MISMATCH","status":9,"message":"host.operator is not rts_ops_v1","retry":false}}
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:1067: CHECK failed: create_rts_full(&p.rec, wid_r, sizeof wid_r, p.rrev, sizeof p.rrev)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:890: CHECK failed: a == want
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:891: CHECK failed: b == want
+world.spawn_batch [{"values":{"kind":1,"team":0,"hp":40,"pos_x":100,"pos_y":100,"range_sq":400,"reload":2,"damage":3,"flight":2}},{"values":{"kind":1,"team":1,"hp":40,"pos_x":100,"pos_y":100,"range_sq":400,"reload":3,"damage":2,"flight":1}},{"values":{"kind":1,"team":0,"hp":30,"pos_x":5000,"pos_y":100,"range_sq":400,"reload":1,"damage":1,"flight":3}},{"values":{"kind":1,"team":1,"hp":30,"pos_x":5000,"pos_y":100,"range_sq":400,"reload":2,"damage":2,"flight":2}}]: want 0, got 2 / 2
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:531: CHECK failed: resp_error_status(r) == SU_E_WORKER_FAILED
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:492: CHECK failed: rec != NULL
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:1079: CHECK failed: uint_of(rec, "from_checkpoint_tick") == 4u
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:1082: CHECK failed: access(token, F_OK) != 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:470: CHECK failed: digest(&p->ctl, p->wid, p->crev, a, &ta)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:471: CHECK failed: digest(&p->rec, p->wid, p->rrev, b, &tb)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:457: CHECK failed: step(&p->ctl, p->wid, p->crev, sizeof p->crev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:459: CHECK failed: step(&p->rec, p->wid, p->rrev, sizeof p->rrev, ticks, &r)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:470: CHECK failed: digest(&p->ctl, p->wid, p->crev, a, &ta)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:471: CHECK failed: digest(&p->rec, p->wid, p->rrev, b, &tb)
+/root/sutekh-scale-v2/tests/recovery/test_recovery.c:472: CHECK failed: strcmp(a, b) == 0
+test_recovery: 3700 checks, 125 failures
+
+      Start 20: rts_model_digest
+ 9/10 Test #20: rts_model_digest .................***Failed    0.15 sec
+Traceback (most recent call last):
+  File "/root/sutekh-scale-v2/tests/rts/replay/test_model_snapshot.py", line 110, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/root/sutekh-scale-v2/tests/rts/replay/test_model_snapshot.py", line 105, in main
+    run(os.path.abspath(args.binary), spec, args.ticks)
+    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/sutekh-scale-v2/tests/rts/replay/test_model_snapshot.py", line 41, in run
+    engine = eb.EngineBackend(binary, spec["rows"], event_log_max=7, env={"TMPDIR":spool.name})
+  File "/root/sutekh-scale-v2/bench/rts/replay/engine_backend.py", line 49, in __init__
+    self.wid, self.rev = self.session.create_rts(capacity, event_log_max=event_log_max)
+                         ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/sutekh-scale-v2/bench/rts/replay/rts_session.py", line 108, in create_rts
+    r = self.call("world.create", params)
+  File "/root/sutekh-scale-v2/bench/rts/replay/rts_session.py", line 98, in call
+    raise RpcError(e.get("status", 0), e.get("code", ""), e.get("message", ""))
+rts_session.RpcError: SU_E_SCHEMA_MISMATCH (9): host.operator is not rts_ops_v1
+
+10/10 Test #14: rts_native_diff ..................***Failed    5.04 sec
+PASS duel16-o1: alive 14/16, valid targets 4, truncated 0 (model truncated_rows 0), nonzero incoming 5, digest C 962eedd2776bee33 model 962eedd2776bee33
+PASS duel16-o2: alive 14/16, valid targets 4, truncated 0 (model truncated_rows 0), nonzero incoming 4, digest C 0414c078efa36e44 model 0414c078efa36e44
+PASS mixed-1024-o1: alive 908/1024, valid targets 0, truncated 0 (model truncated_rows 0), nonzero incoming 322, digest C 160f66e092fbad7d model 160f66e092fbad7d
+PASS mixed-1024-o2: alive 896/1024, valid targets 0, truncated 0 (model truncated_rows 0), nonzero incoming 305, digest C a318fde3cd75dcdb model a318fde3cd75dcdb
+FAIL congested-1024-o1: alive 891/1024, valid targets 617, truncated 141 (model truncated_rows 141), nonzero incoming 304, digest C 8401dd53670610cb model 374b4467f5489839; slot 7 truncated: C 1 model 0 (alive 1); slot 11 truncated: C 1 model 0 (alive 1); slot 53 truncated: C 1 model 0 (alive 1); slot 54 truncated: C 1 model 0 (alive 1); slot 56 truncated: C 1 model 0 (alive 1); slot 59 truncated: C 1 model 0 (alive 1); slot 121 truncated: C 1 model 0 (alive 1); slot 123 truncated: C 1 model 0 (alive 1)
+FAIL congested-1024-o2: alive 906/1024, valid targets 628, truncated 138 (model truncated_rows 138), nonzero incoming 310, digest C 053cf24724ca8708 model 6e2f97e83ca4cf2c; slot 7 truncated: C 1 model 0 (alive 1); slot 9 truncated: C 1 model 0 (alive 1); slot 11 truncated: C 1 model 0 (alive 1); slot 12 truncated: C 1 model 0 (alive 1); slot 54 truncated: C 1 model 0 (alive 1); slot 59 truncated: C 1 model 0 (alive 1); slot 123 truncated: C 1 model 0 (alive 1); slot 125 truncated: C 1 model 0 (alive 1)
+FAIL congested-16384-o1: alive 14347/16384, valid targets 12182, truncated 8884 (model truncated_rows 8884), nonzero incoming 4680, digest C 919ed0134680b13b model f9068b7d762b91f2; slot 6 truncated: C 1 model 0 (alive 1); slot 9 truncated: C 1 model 0 (alive 1); slot 13 truncated: C 1 model 0 (alive 1); slot 76 truncated: C 1 model 0 (alive 1); slot 84 truncated: C 1 model 0 (alive 1); slot 188 truncated: C 1 model 0 (alive 1); slot 190 truncated: C 1 model 0 (alive 1); slot 192 truncated: C 1 model 0 (alive 1)
+FAIL congested-16384-o2: alive 14344/16384, valid targets 12191, truncated 8876 (model truncated_rows 8876), nonzero incoming 4919, digest C e29ad5e04ba3dca3 model 50bf4c78756cc050; slot 6 truncated: C 1 model 0 (alive 1); slot 7 truncated: C 1 model 0 (alive 1); slot 9 truncated: C 1 model 0 (alive 1); slot 13 truncated: C 1 model 0 (alive 1); slot 76 truncated: C 1 model 0 (alive 1); slot 80 truncated: C 1 model 0 (alive 1); slot 84 truncated: C 1 model 0 (alive 1); slot 190 truncated: C 1 model 0 (alive 1)
+PASS sparse-16384-o1: alive 14316/16384, valid targets 5442, truncated 0 (model truncated_rows 0), nonzero incoming 4930, digest C e86eb0184c3ed143 model e86eb0184c3ed143
+PASS sparse-16384-o2: alive 14313/16384, valid targets 5400, truncated 0 (model truncated_rows 0), nonzero incoming 4874, digest C 8dc39d7246bc60a4 model 8dc39d7246bc60a4
+rts_native_diff: 10 runs, 4 failures
+
+
+40% tests passed, 6 tests failed out of 10
+
+Total Test time (real) =  10.52 sec
+
+The following tests FAILED:
+	 13 - rts_native_records (Failed)
+	 14 - rts_native_diff (Failed)
+	 17 - rts_load_engine (Failed)
+	 19 - rts_replay_engine (Failed)
+	 20 - rts_model_digest (Failed)
+	 28 - recovery (Failed)
+Errors while running CTest

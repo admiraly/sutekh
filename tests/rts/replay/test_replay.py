@@ -280,7 +280,7 @@ class BatchLimits(unittest.TestCase):
         with self.assertRaises(limits.BatchRefused):
             limits.check_prechecks(rows=5, capacity=10, alive=6, high_water=10)
         with self.assertRaises(limits.BatchRefused):
-            limits.check_prechecks(rows=2, capacity=1000000, alive=0,
+            limits.check_prechecks(rows=2, capacity=limits.HW_MAX + 1, alive=limits.HW_MAX - 1,
                                    high_water=limits.HW_MAX - 1)
 
     def test_worst_case_request_fits_the_cap(self):
@@ -300,9 +300,15 @@ class BatchLimits(unittest.TestCase):
             limits.check_request_size(b"x" * (limits.REQUEST_BYTES_MAX + 1))
 
     def test_high_water_exact_boundary_is_accepted(self):
-        limits.check_prechecks(rows=2, capacity=1000000, alive=0, high_water=limits.HW_MAX - 2)
+        limits.check_prechecks(rows=2, capacity=limits.HW_MAX, alive=limits.HW_MAX - 2, high_water=limits.HW_MAX - 2)
         with self.assertRaises(limits.BatchRefused):
-            limits.check_prechecks(rows=3, capacity=1000000, alive=0, high_water=limits.HW_MAX - 2)
+            limits.check_prechecks(rows=3, capacity=limits.HW_MAX + 1, alive=limits.HW_MAX - 2, high_water=limits.HW_MAX - 2)
+
+    def test_holes_at_limit_are_reused_and_retired_slots_are_not(self):
+        limits.check_prechecks(rows=1, capacity=limits.HW_MAX, alive=limits.HW_MAX-1, high_water=limits.HW_MAX)
+        with self.assertRaises(limits.BatchRefused):
+            limits.check_prechecks(rows=1, capacity=limits.HW_MAX, alive=limits.HW_MAX-1,
+                                   high_water=limits.HW_MAX, retired=1)
 
     def test_full_capacity_batch_is_accepted(self):
         limits.check_prechecks(rows=4, capacity=10, alive=6, high_water=10)

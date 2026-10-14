@@ -47,6 +47,8 @@ class EngineBackend(rr.Backend):
         self.session = rs.Session(binary, env)
         self.world = SimpleNamespace(cap=capacity, event_log_max=event_log_max)
         self.wid, self.rev = self.session.create_rts(capacity, event_log_max=event_log_max)
+        limits = self.session.call("engine.info", {})["recovery"]["limits"]
+        self.spool_config = {k: limits[k] for k in ("checkpoint_retain", "spool_bytes_max")}
         ins = self._inspect()
         man = ins["semantic_manifest"]
         host = [m for m in man if m["source_hash"] == rs.EMPTY_SHA256]

@@ -1,0 +1,18 @@
+{
+  "format": "rts-runtime-limits/0.2",
+  "source": "Owner-authorized OD-6/OD-15 development fixes, 2026-10-14",
+  "operator": "rts_ops_v2",
+  "query_budget": 160,
+  "query_sample_cap": 1024,
+  "query_sampling": "without replacement; all eligible armed units when fewer than the cap",
+  "snapshot_format": "0.2",
+  "snapshot_max_bytes": 536870912,
+  "binary_spool_bytes_max": 2147483648,
+  "binary_checkpoint_retain": 1,
+  "binary_checkpoint_interval_ticks": 32,
+  "high_water_max": 1000000,
+  "row_limit": 1000000,
+  "worker_address_space_bytes": 4294967296,
+  "recovery_claim": "only sizes actually validated; see planning/evidence/m3-scale-v2",
+  "binary_request_timeout_ms": 60000
+}

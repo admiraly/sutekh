@@ -1741,6 +1741,14 @@ static uint32_t header_desc(const uint8_t *bytes, size_t len, SuJsonDoc *doc, Su
     memset(doc, 0, sizeof *doc);
     *fields = NULL;
     memset(desc, 0, sizeof *desc);
+    if (len > SU_SNAPSHOT_MAX_BYTES) {
+        fail_msg(err, "snapshot exceeds the size limit");
+        return SU_E_RESOURCE_LIMIT;
+    }
+    if (bytes == NULL || len == 0u) {
+        fail_msg(err, "empty snapshot");
+        return SU_E_PARSE;
+    }
     lim.max_bytes = len;
     lim.max_depth = SU_SNAPSHOT_MAX_DEPTH;
     st = su_json_parse(bytes, len, &lim, doc, &jerr);
@@ -1816,6 +1824,7 @@ uint32_t su_snapshot_restore_world(const uint8_t *bytes, size_t len, const SuWor
     SuJsonDoc hdoc;
     SuWorldDesc hd;
     SuWorldFieldDesc *hf = NULL;
+    char *header_names = NULL;
     const SuWorldDesc *use = desc;
     SuSnapshotData local;
     SuSnapshotData *d = data_out != NULL ? data_out : &local;
@@ -1835,6 +1844,22 @@ uint32_t su_snapshot_restore_world(const uint8_t *bytes, size_t len, const SuWor
         if (st != SU_OK) {
             goto done;
         }
+        /* Keep only bounded schema names, not a second full JSON tree. Holding hdoc
+         * during parse_core doubled row-node memory and exhausted a 4 GiB worker at 1M RTS rows. */
+        header_names = malloc(((size_t)hd.field_count + 1u) * (SU_WORLD_NAME_MAX + 1u));
+        if (header_names == NULL) {
+            st = SU_E_RESOURCE_LIMIT;
+            fail_msg(err, "out of memory copying schema names");
+            goto done;
+        }
+        memcpy(header_names, hd.schema_id, strlen(hd.schema_id) + 1u);
+        hd.schema_id = header_names;
+        for (uint32_t i = 0; i < hd.field_count; i++) {
+            char *name = header_names + ((size_t)i + 1u) * (SU_WORLD_NAME_MAX + 1u);
+            memcpy(name, hf[i].name, strlen(hf[i].name) + 1u);
+            hf[i].name = name;
+        }
+        su_json_doc_free(&hdoc);
         use = &hd;
     } else if (desc == NULL) {
         return SU_E_INVALID_ARGUMENT;
@@ -1852,6 +1877,7 @@ done:
     if (data_out == NULL) {
         data_free(&local);
     }
+    free(header_names);
     free(hf);
     su_json_doc_free(&hdoc);
     return st;

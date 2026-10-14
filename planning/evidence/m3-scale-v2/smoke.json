@@ -1,0 +1,26 @@
+{
+  "format": "rts-scale-v2/0.1",
+  "rows": 2048,
+  "status": "passed",
+  "calls": 2,
+  "performance_qualification": false,
+  "recovery_requested": true,
+  "limits": {
+    "checkpoint_interval_ticks": 32,
+    "checkpoint_retain": 1,
+    "log_max_entries": 256,
+    "quarantine_after": 2,
+    "spool_bytes_max": 2147483648
+  },
+  "capture": {
+    "snapshot_id": "41d78fa03c995cc99193efd1860c1eccfc50b84608625ee7e9f8a93ed191f0ff",
+    "world_revision": "world-1.r3",
+    "tick": 0,
+    "bytes": 345974,
+    "sha256": "41d78fa03c995cc99193efd1860c1eccfc50b84608625ee7e9f8a93ed191f0ff",
+    "capture_ns": 6171898
+  },
+  "accepted_rows": 2048,
+  "elapsed_seconds": 0.1511125799988804,
+  "recovery": "passed_replacement_worker_checkpoint_restore"
+}

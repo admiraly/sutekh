@@ -1,0 +1,29 @@
+minimum_payload_838860=73819639
+rows=65536 capture_status=0 bytes=6271779 cap=536870912
+rows=838860 capture_status=0 bytes=81988607 cap=536870912
+rows=1000000 capture_status=0 bytes=97780331 cap=536870912
+large restore status=0 error=
+snapshot limit: 20 checks, 0 failures
+	Command being timed: "build-release/test_rts_snapshot_limit --restore-large"
+	User time (seconds): 4.61
+	System time (seconds): 5.21
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:09.84
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2456420
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 1231214
+	Voluntary context switches: 1
+	Involuntary context switches: 42
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

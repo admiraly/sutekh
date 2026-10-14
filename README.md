@@ -11,7 +11,7 @@ Specification v0.1 • 6 October 2026
 
 **Objective:** maximize verified game functionality delivered per agent-hour, while retaining a path to workload-specific, near-hardware-limit execution. Ordinary gameplay edits must not trigger native project builds, link steps, or executable restarts.
 
-**Status:** Sutekh has an implemented headless C17 runtime, checked JSON gameplay IR, a local structured control plane, worker recovery, generational entities, and a six-system RTS prototype. M0–M2 are owner-accepted with documented caveats; M3 is in progress. There is no full editor, renderer, or Windows-native runtime. Timing observations are not performance qualification, and BFME compatibility has not been established. See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [durable task state](planning/status.json). “Sutekh” remains a working name, not a cleared product name.
+**Status:** Sutekh has an implemented headless C17 runtime, checked JSON gameplay IR, a local structured control plane, worker recovery, generational entities, and a six-system RTS prototype. M0–M2 are owner-accepted with documented caveats; M3 is in progress. There is no full editor, renderer, or Windows-native runtime. Timing observations are not performance qualification, and BFME compatibility has not been established. See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [durable task state](planning/status.json). “Sutekh” remains a working name, not a cleared product name. The owner-authorized [runtime limits v2](planning/handoffs/2026-10-14-m3-limits-v2.md) has validated a million-row load, canonical capture and replacement-worker recovery; this is a correctness result, not a throughput guarantee.
 
 ### Start here
 

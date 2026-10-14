@@ -1,0 +1,24 @@
+loaded 65536
+loaded 131072
+loaded 196608
+loaded 262144
+loaded 327680
+loaded 393216
+loaded 458752
+loaded 524288
+loaded 589824
+loaded 655360
+loaded 720896
+loaded 786432
+loaded 851968
+loaded 917504
+loaded 983040
+Traceback (most recent call last):
+  File "/root/sutekh-scale-v2/tests/rts/load/test_scale_v2.py", line 105, in <module>
+    if __name__=="__main__":sys.exit(main())
+                                     ~~~~^^
+  File "/root/sutekh-scale-v2/tests/rts/load/test_scale_v2.py", line 92, in main
+    ins=s.call("world.inspect",dict(world_id=wid,limit=1))
+  File "/root/sutekh-scale-v2/bench/rts/replay/rts_session.py", line 98, in call
+    raise RpcError(e.get("status", 0), e.get("code", ""), e.get("message", ""))
+rts_session.RpcError: SU_E_INTERNAL (19): world is unrecoverable: replacement workers kept dying while replaying accepted operations

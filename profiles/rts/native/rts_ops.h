@@ -1,7 +1,7 @@
-/* RTS host operators rts_ops_v1 (M3-04, contract M3_RTS_CONTRACT r4 sections 4.1 to 4.4, 3.1).
+/* RTS host operators rts_ops_v2 (M3-04, contract M3_RTS_CONTRACT r4 sections 4.1 to 4.4, 3.1).
  *
  * Two phase operators run as host entries (src/runtime/schedule.h, SU_SYS_KIND_HOST):
- *   rts.spatial  gather of formation anchors, grid build, ring-ordered target query with budget K = 128
+ *   rts.spatial  gather of formation anchors, grid build, ring-ordered target query with budget K = 160
  *   rts.scatter  saturating add of damage into the incoming field of target rows
  *
  * Contract of every operator here:
@@ -27,12 +27,12 @@
 
 #include "runtime/schedule.h"
 
-#define RTS_OPS_VERSION 1u
+#define RTS_OPS_VERSION 2u
 #define RTS_OPS_NONE 0xFFFFFFFFu
 #define RTS_OPS_DOMAIN_MAX 32767u
 #define RTS_OPS_RANGE_SQ_MAX 262144u
 #define RTS_OPS_KIND_UNIT 1u
-#define RTS_OPS_BUDGET_K 128u
+#define RTS_OPS_BUDGET_K 160u
 #define RTS_OPS_GRID 512u
 #define RTS_OPS_CELL_SHIFT 6u
 #define RTS_OPS_CELLS (RTS_OPS_GRID * RTS_OPS_GRID)

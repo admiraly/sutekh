@@ -14,7 +14,9 @@
   "active_leases": [],
   "pending_jobs": [],
   "next_ready_tasks": [
-    "M3-05"
+    "M3-06",
+    "M3-07",
+    "M3-08"
   ],
   "note": "M0, M1, M2 closed by owner decision (see blocks). M3 in progress. accepted_source_revision/accepted_artifact_hash refer to the M0 closure only. Spec-conformance and regression audits under planning/audit/ list open deviations.",
   "repository_visibility": "public",
@@ -124,9 +126,10 @@
       "M3-08a",
       "M3-02",
       "M3-03",
-      "M3-04"
+      "M3-04",
+      "M3-05"
     ],
-    "note": "M3-05 next (OD-3, OD-3b, OD-3c, OD-20 accepted 2026-10-12). Owner delegated remaining approvals on 2026-10-12: OD-11 accepted as stated (native lane for M3-10 allowed now that M1 is owner-accepted); OD-15 not changed (recovery claim stays N<=65,536; raising the limit needs a snapshot-owner change not yet scoped); docs/AGENT_RPC.md edit for M3-05 approved, limited to recording the new control methods. Q2 liveness refusal implemented in M3-05 (2026-10-13; see planning/handoffs/2026-10-13-m3-05-ctrl-caps-q2.md).",
+    "note": "M3-05 integrated under owner-authorized limits v2; M3-06 final inventory reconciliation and M3-07 behavior experiments next. Dated handoffs preserve exact evidence and historical failures.",
     "m3_05_progress": {
       "date": "2026-10-14",
       "done": [
@@ -144,33 +147,38 @@
         "Command-queue dimensions refused before proportional allocation or cap-array reads; allocation-counter regression and sanitizer checks",
         "T-RTS-CAPS-3: six-system ticks at capacity 699051/1000000, queue at 1048576, zero-cap empty commit, checked cap-span refusal; M3-M33 detected",
         "T-RTS-CHURN-1: 100000 accepted world-library spawn/despawn operations on 16384 RTS rows, independent 39-field/handle model",
-        "Q8: independent snapshot 0.2 model encoding; seven committed scenes through four ticks and three small scenes through 64 ticks; state/events/counts equal, three model mutants detected"
+        "Q8: independent snapshot 0.2 model encoding; seven committed scenes through four ticks and three small scenes through 64 ticks; state/events/counts equal, three model mutants detected",
+        "Owner-authorized runtime limits v2; million-row supervisor load/capture/reuse/replacement recovery/tick passed; independent code and sanitizer review passed"
       ],
-      "open": [
-        "T-RTS-LOAD-1 (e)(f): incompatible million-row/capture success gates under retained row/spool/snapshot limits; native refusal reproduction recorded"
-      ],
-      "load_gate_conflict": "planning/handoffs/2026-10-14-m3-05-load-limit-conflict.md"
+      "open": [],
+      "load_gate_conflict": "planning/handoffs/2026-10-14-m3-05-load-limit-conflict.md",
+      "limits_v2_evidence": "planning/handoffs/2026-10-14-m3-limits-v2.md"
     },
     "m3_06_progress": {
       "date": "2026-10-14",
-      "state": "independent_checks_partial",
+      "state": "checking_inventory",
       "done": [
         "Q8 engine/model comparison in M3-05",
         "Five full-RPC edge fixtures with worker counts1/2",
         "M3-M27 scratch-IR semantic mutant detected and restored baseline passed",
-        "Refreshed host campaign25 variants (23 killed/2 equivalent) and reference campaign33 variants (32 detected/1 equivalent); restored baselines passed"
+        "Refreshed host campaign25 variants (23 killed/2 equivalent) and reference campaign33 variants (32 detected/1 equivalent); restored baselines passed",
+        "Operator v2 K160 gates and up-to1024 unique sampling passed unchanged scenes/seeds; refreshed v2 mutation campaigns and goldens passed"
       ],
       "open": [
-        "OD6: retained K128 misses2/938 on committed16k scene >0.1%",
-        "1024-row committed scene has only964 distinct armed queriers",
-        "Remaining end-to-end/mutation campaign and dependency M3-05 scale gate"
+        "Final end-to-end/mutation inventory reconciliation including amended M3-M31 before closure"
       ],
       "evidence": "planning/evidence/m3-e2e-targeting/result.json"
+    },
+    "runtime_limits_v2": "planning/amendments/2026-10-14-m3-runtime-limits-v2.md",
+    "limits_v2_owner_authorization": {
+      "date": "2026-10-14",
+      "decision": "Prepare a versioned fix and validate it; limits may change to help development",
+      "evidence": "planning/handoffs/2026-10-14-m3-limits-v2.md"
     }
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
   "m0_accepted_artifact_hash": "d5714cb06c351ec16a2709ff2bd9c12eaf7b3bb8cbafa7148980ca7fd7fa8acf",
-  "head_at_last_status_update": "7948f33ffa189fac1ec5d6dc27458bf7fc7d255b",
+  "head_at_last_status_update": "5de97822056ee37b1411706bd75be6b2a0ff12d7",
   "owner_ratifications": [
     {
       "date": "2026-10-12",

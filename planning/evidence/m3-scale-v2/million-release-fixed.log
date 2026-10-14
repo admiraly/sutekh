@@ -1,0 +1,16 @@
+loaded 65536
+loaded 131072
+loaded 196608
+loaded 262144
+loaded 327680
+loaded 393216
+loaded 458752
+loaded 524288
+loaded 589824
+loaded 655360
+loaded 720896
+loaded 786432
+loaded 851968
+loaded 917504
+loaded 983040
+{"format": "rts-scale-v2/0.1", "rows": 1000000, "status": "passed", "calls": 977, "performance_qualification": false, "recovery_requested": true, "limits": {"checkpoint_interval_ticks": 32, "checkpoint_retain": 1, "log_max_entries": 256, "quarantine_after": 2, "spool_bytes_max": 2147483648}, "accepted_rows": 1000000, "elapsed_seconds": 625.925604886, "capture": {"snapshot_id": "0f94c94c607905a17881d4a8f36345c147ffc4e7526da7faeb8be4a532684699", "world_revision": "world-1.r978", "tick": 0, "bytes": 127345544, "sha256": "0f94c94c607905a17881d4a8f36345c147ffc4e7526da7faeb8be4a532684699", "capture_ns": 1249016028}, "recovery": "passed_replacement_worker_checkpoint_restore"}

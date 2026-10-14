@@ -853,7 +853,7 @@
       "acceptance": [
         "T-RTS-LOAD-1 (a)-(g); T-RTS-CTRL-1; T-RTS-REPLAY-1..3; T-RTS-CAPS-1..3 (CAPS-3 confirmed at 699,051 before the patch); high-water and spool prechecks; config check (9.4); recovery-log entries; OD-3c exclusion recorded. Needs OD-3, OD-3b, OD-3c and OD-20 approval."
       ],
-      "status": "implementing"
+      "status": "integrated"
     },
     {
       "id": "M3-06",

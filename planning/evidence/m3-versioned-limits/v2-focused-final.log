@@ -1,0 +1,122 @@
+$ cmake --build build -j 2
+[  2%] Built target su_platform
+[  5%] Built target su_ir
+[  7%] Built target su_cmdq
+[  7%] Built target su_ents
+[  9%] Built target test_lir_oom
+[ 10%] Built target su_world_acct_objs
+[ 14%] Built target test_cmdq
+[ 13%] Built target test_path_fifo
+[ 16%] Built target su_rts_control
+[ 16%] Built target su_cmdq_admission_objs
+[ 18%] Built target su_world
+[ 19%] Built target test_cmdq_percap
+[ 21%] Built target test_entities
+[ 23%] Built target test_world_acct
+[ 25%] Built target test_world_restore_null
+[ 26%] Built target test_world_ext_retired
+[ 28%] Built target test_control_domains
+[ 28%] Built target test_cmdq_admission
+[ 29%] Built target test_world_ents
+[ 30%] Built target test_churn
+[ 32%] Built target su_snapshot
+[ 33%] Built target su_vm
+[ 34%] Built target test_world
+[ 35%] Built target test_snapshot
+[ 38%] Built target su_migrate
+[ 38%] Built target su_jobs
+[ 40%] Built target test_vm
+[ 41%] Built target test_ir
+[ 44%] Built target test_migrate
+[ 44%] Built target test_scheduler
+[ 56%] Built target su_agent
+[ 57%] Building C object CMakeFiles/su_agent_hooks.dir/profiles/rts/native/rts_spatial.c.o
+[ 58%] Built target sutekh
+[ 59%] Linking C executable worker_stub
+[ 60%] Linking C static library libsu_agent_hooks.a
+[ 71%] Built target su_agent_hooks
+[ 72%] Linking C executable test_control
+[ 73%] Built target worker_stub
+[ 74%] Linking C executable test_tick_workers
+[ 74%] Built target test_control
+[ 74%] Linking C executable test_host_entry
+[ 75%] Built target test_tick_workers
+[ 75%] Linking C executable test_host_restore
+[ 77%] Built target test_host_entry
+[ 79%] Built target test_rts_ops
+[ 80%] Linking C executable test_rts_records
+[ 82%] Built target test_host_restore
+[ 83%] Built target test_rts_diff
+[ 83%] Linking C executable test_reload
+[ 83%] Built target test_rts_records
+[ 83%] Linking C executable test_snapshot_cp
+[ 84%] Built target test_reload
+[ 85%] Linking C executable recovery_worker
+[ 86%] Built target test_snapshot_cp
+[ 87%] Linking C executable test_recovery
+[ 88%] Built target recovery_worker
+[ 88%] Linking C executable test_hardening
+[ 88%] Built target test_recovery
+[ 89%] Linking C executable test_world_set_fields
+[ 90%] Built target test_hardening
+[ 90%] Linking C executable test_world_spawn_batch
+[ 90%] Built target test_world_set_fields
+[ 91%] Linking C executable test_rts_capacity
+[ 92%] Built target test_rts_capacity
+[ 93%] Built target test_world_spawn_batch
+[ 94%] Linking C executable test_rts_churn
+[ 95%] Linking C executable test_entity_tick
+[ 95%] Built target test_rts_churn
+[ 95%] Built target test_entity_tick
+[ 95%] Linking C executable test_rts_snapshot_limit
+[ 96%] Linking C executable test_migrate_runtime
+[ 97%] Built target test_rts_snapshot_limit
+[ 98%] Built target test_migrate_runtime
+[ 99%] Linking C executable test_containment
+[100%] Built target test_containment
+$ ctest --test-dir build -R ^(rts_native_ops|rts_native_records|rts_native_diff|host_entry|rts_model_digest|rts_e2e_edges|rts_projectile_mutant|rts_replay_engine|recovery)$ --output-on-failure -j 2
+Test project /root/sutekh-limits/build
+    Start 13: rts_native_records
+    Start 28: recovery
+1/9 Test #13: rts_native_records ...............   Passed    0.01 sec
+    Start 14: rts_native_diff
+2/9 Test #28: recovery .........................   Passed    1.03 sec
+    Start 19: rts_replay_engine
+3/9 Test #19: rts_replay_engine ................   Passed    0.98 sec
+    Start 20: rts_model_digest
+4/9 Test #20: rts_model_digest .................   Passed    0.80 sec
+    Start 48: rts_e2e_edges
+5/9 Test #48: rts_e2e_edges ....................   Passed    0.50 sec
+    Start 49: rts_projectile_mutant
+6/9 Test #49: rts_projectile_mutant ............   Passed    0.16 sec
+    Start 12: rts_native_ops
+7/9 Test #12: rts_native_ops ...................   Passed    0.03 sec
+    Start 10: host_entry
+8/9 Test #10: host_entry .......................   Passed    0.01 sec
+9/9 Test #14: rts_native_diff ..................   Passed    4.13 sec
+
+100% tests passed, 0 tests failed out of 9
+
+Total Test time (real) =   4.14 sec
+$ python3 -m unittest discover -s tests/rts/ref -p test_*.py
+.....................F
+======================================================================
+FAIL: test_every_mutant_meets_its_expected_outcome (test_targeting_digest_budget.MutantsSuite.test_every_mutant_meets_its_expected_outcome)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/root/sutekh-limits/tests/rts/ref/test_targeting_digest_budget.py", line 115, in test_every_mutant_meets_its_expected_outcome
+    self.assertEqual(result["mismatches"], [], [r for r in result["rows"] if not r["ok"]])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: ['M3-M23'] != []
+
+First list contains 1 additional elements.
+First extra element 0:
+'M3-M23'
+
+- ['M3-M23']
++ [] : [{'id': 'M3-M23', 'contract': 'M3-M23', 'module': 'model', 'description': 'domain-edge box clipping removed (wraps into the previous row)', 'expected': 'detected', 'status': 'survives', 'ok': False, 'failing_checks': [], 'note': ''}]
+
+----------------------------------------------------------------------
+Ran 22 tests in 13.446s
+
+FAILED (failures=1)
