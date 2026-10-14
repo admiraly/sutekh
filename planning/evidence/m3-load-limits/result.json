@@ -1,0 +1,52 @@
+{
+  "format": "0.1",
+  "date": "2026-10-14",
+  "task": "M3-05 T-RTS-LOAD-1(e)(f)",
+  "status": "blocked_contract_contradiction",
+  "base_revision": "563b739",
+  "modified_paths": [
+    "tests/entities/test_rts_snapshot_limit.c",
+    "CMakeLists.txt"
+  ],
+  "source_hashes": {
+    "tests/entities/test_rts_snapshot_limit.c": "b0563507191789fa1e18441b4774720c7a89b63c745ce094932d48b684c6a5b9",
+    "CMakeLists.txt": "3f76d6f767b6b3c64ae94e71345060c74b754aea36e8068c1d37f6c8c80deb2b"
+  },
+  "artifact_sha256": "6b13e16a4fc53002f38359959a038f1f7a05f376522d304e755e6165c76ecea8",
+  "checks": [
+    {
+      "command": "cmake -S /root/sutekh-scale -B /root/sutekh-scale/build -DCMAKE_BUILD_TYPE=Debug",
+      "exit_code": 0
+    },
+    {
+      "command": "cmake --build /root/sutekh-scale/build --target test_rts_snapshot_limit -j 2",
+      "exit_code": 0
+    },
+    {
+      "command": "ctest --test-dir build -R ^rts_snapshot_limit$ -V",
+      "exit_code": 0,
+      "checks": 11
+    },
+    {
+      "command": "cmake -S . -B build; cmake --build build --target test_rts_snapshot_limit -j 2; ctest --test-dir build -R ^(rts_snapshot_limit|rts_model_digest)$ --output-on-failure",
+      "exit_code": 0,
+      "tests": 2
+    }
+  ],
+  "observations": {
+    "snapshot_cap_bytes": 67108864,
+    "minimum_838860_payload_bytes": 73819639,
+    "capture_65536_bytes": 6271779,
+    "capture_838860_status": "SU_E_RESOURCE_LIMIT",
+    "row_guard": 838860,
+    "default_spool_admission_max_rows": 588630
+  },
+  "limitations": [
+    "Library-level snapshot reproduction; not supervisor bulk-load acceptance.",
+    "All-zero columns make the lower-bound conservative; not a domain-valid RTS scene.",
+    "Successful million-row supervisor load and successful 838860 snapshot are not achieved.",
+    "No limit, schema, architecture or specification changes.",
+    "Independent reviewer, sanitizer run and Windows-native validation not run."
+  ],
+  "integration_artifact_sha256": "e54d0cdd3d8c04191f1c1d5342585b6de53a1249644ae5393b65bc934f78752b"
+}

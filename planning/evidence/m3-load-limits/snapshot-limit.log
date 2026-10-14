@@ -1,0 +1,26 @@
+UpdateCTestConfiguration  from :/root/sutekh-scale/build/DartConfiguration.tcl
+Test project /root/sutekh-scale/build
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 47
+    Start 47: rts_snapshot_limit
+
+47: Test command: /root/sutekh-scale/build/test_rts_snapshot_limit
+47: Working Directory: /root/sutekh-scale/build
+47: Test timeout computed to be: 120
+47: minimum_payload_838860=73819639
+47: rows=65536 capture_status=0 bytes=6271779 cap=67108864
+47: rows=838860 capture_status=11 bytes=0 cap=67108864
+47: snapshot limit: 11 checks, 0 failures
+1/1 Test #47: rts_snapshot_limit ...............   Passed    0.63 sec
+
+The following tests passed:
+	rts_snapshot_limit
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.64 sec

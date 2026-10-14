@@ -566,3 +566,11 @@ add_test(NAME migration_alloc_points COMMAND python3 -I
 add_test(NAME migration_alloc_points_selftest COMMAND python3 -I
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/migration-runtime/check_alloc_points.py" --self-test)
 # ---- END M2-01b migration runtime ----
+
+# T-RTS-LOAD-1(f) limit regression: explicit current refusal, not a successful scale gate.
+add_executable(test_rts_snapshot_limit tests/entities/test_rts_snapshot_limit.c)
+target_include_directories(test_rts_snapshot_limit PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/native")
+target_link_libraries(test_rts_snapshot_limit PRIVATE su_agent)
+sutekh_apply_warnings(test_rts_snapshot_limit)
+add_test(NAME rts_snapshot_limit COMMAND test_rts_snapshot_limit)
+set_tests_properties(rts_snapshot_limit PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)

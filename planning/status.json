@@ -147,8 +147,9 @@
         "Q8: independent snapshot 0.2 model encoding; seven committed scenes through four ticks and three small scenes through 64 ticks; state/events/counts equal, three model mutants detected"
       ],
       "open": [
-        "T-RTS-LOAD-1 (e)(f) engine (near-million-row world)"
-      ]
+        "T-RTS-LOAD-1 (e)(f): incompatible million-row/capture success gates under retained row/spool/snapshot limits; native refusal reproduction recorded"
+      ],
+      "load_gate_conflict": "planning/handoffs/2026-10-14-m3-05-load-limit-conflict.md"
     }
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",

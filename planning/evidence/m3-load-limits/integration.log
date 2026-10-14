@@ -1,0 +1,18 @@
+$ cmake -S . -B build
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /root/sutekh/build
+$ cmake --build build --target test_rts_snapshot_limit -j 2
+[0/2] Re-checking globbed directories...
+[1/3] Building C object CMakeFiles/test_rts_snapshot_limit.dir/tests/entities/test_rts_snapshot_limit.c.o
+[2/3] Linking C executable test_rts_snapshot_limit
+$ ctest --test-dir build -R ^(rts_snapshot_limit|rts_model_digest)$ --output-on-failure
+Test project /root/sutekh/build
+    Start 20: rts_model_digest
+1/2 Test #20: rts_model_digest .................   Passed    0.96 sec
+    Start 47: rts_snapshot_limit
+2/2 Test #47: rts_snapshot_limit ...............   Passed    0.63 sec
+
+100% tests passed, 0 tests failed out of 2
+
+Total Test time (real) =   1.60 sec

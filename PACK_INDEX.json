@@ -92,8 +92,8 @@
     },
     {
       "path": "CMakeLists.txt",
-      "bytes": 36858,
-      "sha256": "d1f98ab54f6852ed86097413621c159bdc93ddfe074430757c273e8919da78d1"
+      "bytes": 37425,
+      "sha256": "3f76d6f767b6b3c64ae94e71345060c74b754aea36e8068c1d37f6c8c80deb2b"
     },
     {
       "path": "COMMERCIAL_LICENSE.md",
@@ -138,7 +138,7 @@
     {
       "path": "PACK_VALIDATION.json",
       "bytes": 557,
-      "sha256": "f7e7fef09bc4e8a162b9caef985c5d02ef190e060ef4098daa1d9eb1907daa3f"
+      "sha256": "6033032df07c62a229716a80ebdf4fe4210084734de10fd5c25e3aaeeeddf5a2"
     },
     {
       "path": "README.md",
@@ -1031,6 +1031,21 @@
       "sha256": "c4be313b1a9b70c0cae057a46c74f61c48381b903fbb04fc0ac0bf17775f4277"
     },
     {
+      "path": "planning/evidence/m3-load-limits/integration.log",
+      "bytes": 794,
+      "sha256": "3e9ac2eac8d0495dad23c40026bedbe6e0ad6e8c9d8f54540f3cd4f61865d7bb"
+    },
+    {
+      "path": "planning/evidence/m3-load-limits/result.json",
+      "bytes": 2024,
+      "sha256": "a9127b6f4616e42c093e7b79666985f96b15ce02653dc252955dfb19f47a9434"
+    },
+    {
+      "path": "planning/evidence/m3-load-limits/snapshot-limit.log",
+      "bytes": 910,
+      "sha256": "5a50f7e3fc884c1570571d51a1411c56190c9fadb7bbc54c1ff4869dbe3f9557"
+    },
+    {
       "path": "planning/evidence/m3-model-digest/combat-64.log",
       "bytes": 1282,
       "sha256": "a9e5d5e378e65eee97de016c6a733637c336b2e614bd6d0b21d2cd36bea069c1"
@@ -1446,14 +1461,19 @@
       "sha256": "7975b52675a1cff861dceccc1feff1955a41163eaf988c512cf4f8f20061bed1"
     },
     {
+      "path": "planning/handoffs/2026-10-14-m3-05-load-limit-conflict.md",
+      "bytes": 1967,
+      "sha256": "63278fe7af8787ee098fb84abd873030169c8ebbd89be9fcf9097238e9aa38be"
+    },
+    {
       "path": "planning/handoffs/2026-10-14-m3-05-model-digest.md",
       "bytes": 2286,
       "sha256": "1f0ce70b830daf9a23d64e4313a5762000038b7e8df4fab83b80cb3a994aac82"
     },
     {
       "path": "planning/status.json",
-      "bytes": 9241,
-      "sha256": "e7926c2c0af74c0ed3eabe39eb4843eb556a70c1de0d9b62cb9cac9ad2fea301"
+      "bytes": 9425,
+      "sha256": "572a74f06ce0381d0d19af5f994b70481a7f0eef20779e0fd80a3ef3ddab5978"
     },
     {
       "path": "planning/tasks.json",
@@ -1969,6 +1989,11 @@
       "path": "tests/entities/test_rts_churn.c",
       "bytes": 5588,
       "sha256": "1cf85fc11921c2d66ace6b67a9bd01012586fc14f3aba026af60d148bd35f94c"
+    },
+    {
+      "path": "tests/entities/test_rts_snapshot_limit.c",
+      "bytes": 2544,
+      "sha256": "b0563507191789fa1e18441b4774720c7a89b63c745ce094932d48b684c6a5b9"
     },
     {
       "path": "tests/entities/test_world_ents.c",
