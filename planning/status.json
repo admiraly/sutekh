@@ -115,7 +115,7 @@
         "OD-5 host-operator effects exception to C04"
       ],
       "not_decided": [
-        "OD-15 snapshot limit change: not proposed, recovery claim stays N<=65,536"
+        "Remaining milestone acceptance; OD-15 development amendment authorized and validated 2026-10-14"
       ]
     },
     "integrated": [
@@ -174,6 +174,21 @@
       "date": "2026-10-14",
       "decision": "Prepare a versioned fix and validate it; limits may change to help development",
       "evidence": "planning/handoffs/2026-10-14-m3-limits-v2.md"
+    },
+    "m3_07_progress": {
+      "date": "2026-10-14",
+      "state": "verified_experiments",
+      "done": [
+        "Blind independent fixture author locked six phase fixtures",
+        "B3/B2/B1 candidates pass hidden and earlier fixtures; required baseline/predecessor rejection checked",
+        "Full six-system candidate installs, position/combat checks and worker preservation passed",
+        "Independent code reviews and legal-domain differential checks passed",
+        "Canonical full existing suite55/55 and separate byte-identical regeneration1/1 passed"
+      ],
+      "open": [
+        "M3-06 dependency inventory closure; M3 stress and optimization gates"
+      ],
+      "evidence": "bench/rts/agent_experiments/"
     }
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",

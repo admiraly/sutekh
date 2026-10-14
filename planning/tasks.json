@@ -898,7 +898,7 @@
       "acceptance": [
         "Records per section 11; hidden fixtures written by a different party; each fixture fails on the baseline and on the last accepted candidate; no direct edits to capsules/rts/ on the canonical branch."
       ],
-      "status": "planned"
+      "status": "implementing"
     },
     {
       "id": "M3-08a",

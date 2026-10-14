@@ -1,0 +1,38 @@
+{
+  "test_format": "0.1",
+  "system_id": "rts.move",
+  "capsule": "move.capsule.json",
+  "world": "b3_axis_threshold_cap.world.json",
+  "cases": [
+    {
+      "name": "b3_axis_threshold_cap",
+      "ticks": 1,
+      "expected_columns": {
+        "pos_x": [
+          1192,
+          1065,
+          1064,
+          1063,
+          808,
+          1064,
+          1096,
+          1096,
+          1096,
+          1000
+        ],
+        "pos_y": [
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "test_format": "0.1",
+  "system_id": "rts.combat",
+  "capsule": "combat.capsule.json",
+  "world": "b1_combat_no_fire.world.json",
+  "cases": [
+    {
+      "name": "b1_combat_no_fire",
+      "ticks": 1,
+      "expected_columns": {
+        "cooldown": [
+          0,
+          0,
+          5
+        ],
+        "proj_active": [
+          0,
+          0,
+          1
+        ],
+        "proj_left": [
+          0,
+          0,
+          2
+        ],
+        "proj_target": [
+          4294967295,
+          4294967295,
+          7
+        ],
+        "proj_target_gen": [
+          0,
+          0,
+          9
+        ],
+        "proj_damage": [
+          0,
+          0,
+          3
+        ],
+        "dmg_out": [
+          0,
+          0,
+          0
+        ],
+        "dmg_target": [
+          4294967295,
+          4294967295,
+          4294967295
+        ],
+        "dmg_target_gen": [
+          0,
+          0,
+          0
+        ],
+        "incoming": [
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ]
+}

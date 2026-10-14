@@ -1,0 +1,140 @@
+{
+  "status": "passed_hidden_phase_checks",
+  "implementation_author": "/root",
+  "fixture_author": "/root/hidden_behavior_fixtures",
+  "manifest_sha256": "43c05f8688807a4a2d6f5fd4716a0b65ec5082c41f1ad31a3aa7efb94fc9bd08",
+  "binary_sha256": "ef1fbac145331e42786222c04bfce9b6dd5977bff34b2badd1b588bbd516c81b",
+  "results": {
+    "baseline": {
+      "submission": {
+        "candidate_id": "candidate-1",
+        "status": "effects_verified",
+        "system_id": "rts.move",
+        "source_hash": "b833926ef960233185721412ab14e72d6645dba6ee964b3365c9d4587a2b58dd",
+        "capsule_hash": "1a93a49c06b1c2505e74720e337d3a474849eeb6a83e3b9b3c1948f5305b5ad3",
+        "semantic_hash": "429d5326d250c5dc807124a66c0ec68176858a6edc10cbe82a8f2567c94f66b3",
+        "artifact_format": 1
+      },
+      "outcomes": [
+        {
+          "fixture_id": "b3_axis_threshold_cap",
+          "result": {
+            "candidate_id": "candidate-1",
+            "evaluation_id": "eval-1",
+            "containment": {
+              "reported": true,
+              "rlimit_as": 4294967296,
+              "rlimit_cpu": 62,
+              "rlimit_fsize": 268435456,
+              "rlimit_nofile": 64,
+              "no_network": "seccomp",
+              "fs_write_denied": "landlock",
+              "fs_abi": 7,
+              "fs_reason": "landlock ABI 7 applied: file creation, writes, removal and truncation denied; reads not restricted",
+              "reason": "seccomp filter installed; socket creation denied with EPERM (verified in the child)"
+            },
+            "status": "failed",
+            "cases_total": 1,
+            "cases_passed": 0,
+            "failures": [
+              {
+                "name": "b3_axis_threshold_cap",
+                "reason": "column_mismatch:pos_x[0]"
+              }
+            ]
+          }
+        },
+        {
+          "fixture_id": "b3_threshold_probe",
+          "result": {
+            "candidate_id": "candidate-1",
+            "evaluation_id": "eval-2",
+            "containment": {
+              "reported": true,
+              "rlimit_as": 4294967296,
+              "rlimit_cpu": 62,
+              "rlimit_fsize": 268435456,
+              "rlimit_nofile": 64,
+              "no_network": "seccomp",
+              "fs_write_denied": "landlock",
+              "fs_abi": 7,
+              "fs_reason": "landlock ABI 7 applied: file creation, writes, removal and truncation denied; reads not restricted",
+              "reason": "seccomp filter installed; socket creation denied with EPERM (verified in the child)"
+            },
+            "status": "failed",
+            "cases_total": 1,
+            "cases_passed": 0,
+            "failures": [
+              {
+                "name": "b3_threshold_probe",
+                "reason": "column_mismatch:pos_x[0]"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "candidate": {
+      "submission": {
+        "candidate_id": "candidate-2",
+        "status": "effects_verified",
+        "system_id": "rts.move",
+        "source_hash": "11f7941c2fedff45ef0f851ebae6fd4c3e076cea7d00b7131e74177949c52039",
+        "capsule_hash": "2da86c59ba5730e5abc2c79beb3976e6ee2fd995b5ac7312bc1bc85357a49671",
+        "semantic_hash": "610c158baf1d59ba2a49e5ef9d69879222094cbb523048a3fe0f11bdc0a44986",
+        "artifact_format": 1
+      },
+      "outcomes": [
+        {
+          "fixture_id": "b3_axis_threshold_cap",
+          "result": {
+            "candidate_id": "candidate-2",
+            "evaluation_id": "eval-3",
+            "containment": {
+              "reported": true,
+              "rlimit_as": 4294967296,
+              "rlimit_cpu": 62,
+              "rlimit_fsize": 268435456,
+              "rlimit_nofile": 64,
+              "no_network": "seccomp",
+              "fs_write_denied": "landlock",
+              "fs_abi": 7,
+              "fs_reason": "landlock ABI 7 applied: file creation, writes, removal and truncation denied; reads not restricted",
+              "reason": "seccomp filter installed; socket creation denied with EPERM (verified in the child)"
+            },
+            "status": "passed",
+            "cases_total": 1,
+            "cases_passed": 1,
+            "failures": []
+          }
+        },
+        {
+          "fixture_id": "b3_threshold_probe",
+          "result": {
+            "candidate_id": "candidate-2",
+            "evaluation_id": "eval-4",
+            "containment": {
+              "reported": true,
+              "rlimit_as": 4294967296,
+              "rlimit_cpu": 62,
+              "rlimit_fsize": 268435456,
+              "rlimit_nofile": 64,
+              "no_network": "seccomp",
+              "fs_write_denied": "landlock",
+              "fs_abi": 7,
+              "fs_reason": "landlock ABI 7 applied: file creation, writes, removal and truncation denied; reads not restricted",
+              "reason": "seccomp filter installed; socket creation denied with EPERM (verified in the child)"
+            },
+            "status": "passed",
+            "cases_total": 1,
+            "cases_passed": 1,
+            "failures": []
+          }
+        }
+      ]
+    }
+  },
+  "limitations": [
+    "phase fixtures only; full schedule/install and independent source review are separate gates"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "check": "schema_validation",
+  "status": "passed",
+  "files": 12,
+  "jsonschema_version": "4.19.2",
+  "shape_checks": "passed: all six worlds have 39 equal-length columns"
+}

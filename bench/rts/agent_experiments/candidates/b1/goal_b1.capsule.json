@@ -1,0 +1,132 @@
+{
+  "capsule_format": "0.1",
+  "system_id": "rts.goal",
+  "system_rev": 2,
+  "capabilities": [],
+  "ir_version": "0.1",
+  "source": "goal_b1.lir.json",
+  "schema": {
+    "id": "rts",
+    "version": 1,
+    "layout_generation": 1
+  },
+  "numeric_profile": "u32_mod_v1",
+  "fields": [
+    {
+      "id": 2,
+      "name": "team",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 3,
+      "name": "hp",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 4,
+      "name": "pos_x",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 5,
+      "name": "pos_y",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 12,
+      "name": "order_mode",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 13,
+      "name": "order_x",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 14,
+      "name": "order_y",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 17,
+      "name": "formation_ox",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 18,
+      "name": "formation_oy",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 19,
+      "name": "goal_x",
+      "type": "u32",
+      "read": false,
+      "write": true
+    },
+    {
+      "id": 20,
+      "name": "goal_y",
+      "type": "u32",
+      "read": false,
+      "write": true
+    },
+    {
+      "id": 21,
+      "name": "anchor_x",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 22,
+      "name": "anchor_y",
+      "type": "u32",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": 23,
+      "name": "anchor_valid",
+      "type": "u32",
+      "read": true,
+      "write": false
+    }
+  ],
+  "schedule": {
+    "phase": "rts",
+    "after": [
+      "rts.spatial"
+    ],
+    "before": [
+      "rts.damage"
+    ],
+    "parallel": "serial"
+  },
+  "limits": {
+    "max_instructions": 4096,
+    "max_rows": 0,
+    "allocation": "forbidden"
+  },
+  "tests": [
+    "T-RTS-GOAL-*"
+  ]
+}

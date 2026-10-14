@@ -1,0 +1,32 @@
+{
+  "test_format": "0.1",
+  "system_id": "rts.move",
+  "capsule": "move_b3.capsule.json",
+  "world": "b3_author.world.json",
+  "cases": [
+    {
+      "name": "author_B3_distance_boundary_and_stop_gate",
+      "ticks": 1,
+      "expected_columns": {
+        "pos_x": [
+          292,
+          116,
+          132,
+          196,
+          196,
+          100,
+          132
+        ],
+        "pos_y": [
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          132
+        ]
+      }
+    }
+  ]
+}

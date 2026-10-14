@@ -1,0 +1,23 @@
+{
+  "format": "0.1",
+  "owner": "root_integrator",
+  "task_ids": [
+    "M3-07"
+  ],
+  "base_revision": "3f9d9a5",
+  "state": "verified_experiments",
+  "write_scope": [
+    "bench/rts/agent_experiments/",
+    "CMakeLists.txt",
+    "planning/evidence/m3-independent-review/",
+    "planning/status.json",
+    "planning/tasks.json",
+    "planning/handoffs/"
+  ],
+  "authors": {
+    "implementation": "/root",
+    "hidden_fixtures": "/root/hidden_behavior_fixtures",
+    "review": "/root/review_limits_v2"
+  },
+  "pending_jobs": []
+}

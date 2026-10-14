@@ -1,0 +1,11 @@
+# M3-07 behavior experiment evidence
+
+B3, B2 and B1 were authored in the isolated limits-v2 candidate workspace and integrated as reproducible experiments. Canonical gameplay capsules remain intact. Distinct agents authored blind hidden fixtures and independently reviewed source. Exact candidate, fixture, artifact and review identities are in bench/rts/agent_experiments/records/ and planning/evidence/m3-independent-review/.
+
+All required baseline/predecessor fixture rejections were real column mismatches, not schema refusals. Each successor passed all earlier hidden fixtures. Full six-system submit/evaluate/install/step runs passed, checked movement/combat outputs, preserved the worker PID and performed zero native build commands during gameplay edits. All55 existing/default tests, including six new live experiment regressions, passed; subsequent regeneration1/1 passed for ten exact reviewed files. Source compilation was reused unchanged from validated limits-v2; CMake only registers the Python experiment checks.
+
+Independent source comparisons passed B3 10000 rows; B2 10000 rows including7242 predecessor-preservation cases; B1 30000 module comparisons including538 low-HP projectile arrivals. These are bounded experiment checks, not claims about general agent capability or timing targets. Euclidean B3 distance, per-axis cap, post-combat B2 cooldown and positive-HP B1 unit interpretations are documented in the experiment README; ambiguous diagonal/anchor behavior was excluded from the blind oracle.
+
+Initial live-driver setup errors (anchor kind/default controls; insufficient B1 target range) were refused or failed assertions and corrected before final results. One regeneration launch mistakenly addressed CMakeLists as Python; the actual Python check then passed and was registered/rerun through CTest. No failure was counted as success. Token/tool-call counts and whole-workflow acceptance time remain null where not recorded. All outputs and hashes distinguish earlier author-only checks from canonical hidden-fixture results.
+
+M3-07 experiment verification is complete; task/milestone closure still depends on M3-06 inventory reconciliation and later stress/optimization gates. Next work: remaining mutation inventory and M3-08 stress instrumentation/harness. Native Windows and prior WSL AVX2 feasibility remain unresolved.

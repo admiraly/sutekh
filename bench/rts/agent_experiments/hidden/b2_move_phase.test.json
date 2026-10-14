@@ -1,0 +1,28 @@
+{
+  "test_format": "0.1",
+  "system_id": "rts.move",
+  "capsule": "move.capsule.json",
+  "world": "b2_move_phase.world.json",
+  "cases": [
+    {
+      "name": "b2_move_phase",
+      "ticks": 1,
+      "expected_columns": {
+        "pos_x": [
+          1096,
+          1000,
+          1096,
+          1096,
+          1096
+        ],
+        "pos_y": [
+          1000,
+          1000,
+          1000,
+          1000,
+          1000
+        ]
+      }
+    }
+  ]
+}

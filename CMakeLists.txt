@@ -567,7 +567,7 @@ add_test(NAME migration_alloc_points_selftest COMMAND python3 -I
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/migration-runtime/check_alloc_points.py" --self-test)
 # ---- END M2-01b migration runtime ----
 
-# T-RTS-LOAD-1(f) limit regression: explicit current refusal, not a successful scale gate.
+# Owner-amended T-RTS-LOAD-1(f): bounded large captures; supervisor recovery has separate broker evidence.
 add_executable(test_rts_snapshot_limit tests/entities/test_rts_snapshot_limit.c)
 target_include_directories(test_rts_snapshot_limit PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/native")
 target_link_libraries(test_rts_snapshot_limit PRIVATE su_agent)
@@ -579,3 +579,14 @@ set_tests_properties(rts_snapshot_limit PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
 add_test(NAME rts_e2e_edges COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/e2e/edge_fixtures.py" --binary $<TARGET_FILE:sutekh>)
 add_test(NAME rts_projectile_mutant COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/e2e/projectile_mutant.py" --binary $<TARGET_FILE:sutekh>)
 set_tests_properties(rts_e2e_edges rts_projectile_mutant PROPERTIES TIMEOUT 120)
+
+# M3-07 independently authored hidden phase fixtures and full-schedule candidate installs.
+foreach(behavior b3 b2 b1)
+  add_test(NAME rts_${behavior}_hidden COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/bench/rts/agent_experiments/evaluate_${behavior}_hidden.py"
+           --binary $<TARGET_FILE:sutekh> --out "${CMAKE_BINARY_DIR}/${behavior}-hidden-results.json")
+  add_test(NAME rts_${behavior}_install COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/bench/rts/agent_experiments/install_${behavior}_live.py"
+           --binary $<TARGET_FILE:sutekh> --out "${CMAKE_BINARY_DIR}/${behavior}-install-results.json")
+  set_tests_properties(rts_${behavior}_hidden rts_${behavior}_install PROPERTIES TIMEOUT 120)
+endforeach()
+
+add_test(NAME rts_behavior_regeneration COMMAND python3 -I "${CMAKE_CURRENT_SOURCE_DIR}/bench/rts/agent_experiments/check_regeneration.py")

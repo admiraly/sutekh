@@ -1,0 +1,26 @@
+{
+  "test_format": "0.1",
+  "system_id": "rts.move",
+  "capsule": "move.capsule.json",
+  "world": "b3_threshold_probe.world.json",
+  "cases": [
+    {
+      "name": "b3_threshold_probe",
+      "ticks": 1,
+      "expected_columns": {
+        "pos_x": [
+          1032,
+          1016,
+          1016,
+          1000
+        ],
+        "pos_y": [
+          1000,
+          1000,
+          1000,
+          1000
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,520 @@
+{
+  "status": "author_live_install_only",
+  "candidate": {
+    "candidate_id": "candidate-1",
+    "status": "effects_verified",
+    "system_id": "rts.move",
+    "source_hash": "11f7941c2fedff45ef0f851ebae6fd4c3e076cea7d00b7131e74177949c52039",
+    "capsule_hash": "2da86c59ba5730e5abc2c79beb3976e6ee2fd995b5ac7312bc1bc85357a49671",
+    "semantic_hash": "610c158baf1d59ba2a49e5ef9d69879222094cbb523048a3fe0f11bdc0a44986",
+    "artifact_format": 1
+  },
+  "evaluation": {
+    "candidate_id": "candidate-1",
+    "evaluation_id": "eval-1",
+    "containment": {
+      "reported": true,
+      "rlimit_as": 4294967296,
+      "rlimit_cpu": 12,
+      "rlimit_fsize": 268435456,
+      "rlimit_nofile": 64,
+      "no_network": "seccomp",
+      "fs_write_denied": "landlock",
+      "fs_abi": 7,
+      "fs_reason": "landlock ABI 7 applied: file creation, writes, removal and truncation denied; reads not restricted",
+      "reason": "seccomp filter installed; socket creation denied with EPERM (verified in the child)"
+    },
+    "status": "passed",
+    "cases_total": 1,
+    "cases_passed": 1,
+    "failures": []
+  },
+  "installed": {
+    "world_id": "world-1",
+    "candidate_id": "candidate-1",
+    "txid": 7,
+    "state": "installed",
+    "system_id": "rts.move",
+    "system_revision": 2,
+    "effective_tick": 0,
+    "previous_txid": 4,
+    "previous_semantic_hash": "429d5326d250c5dc807124a66c0ec68176858a6edc10cbe82a8f2567c94f66b3",
+    "semantic_hash": "610c158baf1d59ba2a49e5ef9d69879222094cbb523048a3fe0f11bdc0a44986",
+    "source_hash": "11f7941c2fedff45ef0f851ebae6fd4c3e076cea7d00b7131e74177949c52039",
+    "capsule_hash": "2da86c59ba5730e5abc2c79beb3976e6ee2fd995b5ac7312bc1bc85357a49671",
+    "world_revision": "world-1.r4",
+    "tick": 0,
+    "worker_pid": 55531,
+    "bindings_prepared": true,
+    "prepare_ns": 3437228,
+    "critical_section_ns": 5639
+  },
+  "stepped": {
+    "world_id": "world-1",
+    "world_revision": "world-1.r5",
+    "ticks_completed": 1,
+    "tick": 1,
+    "worker_pid": 55531
+  },
+  "inspect": {
+    "world_id": "world-1",
+    "world_revision": "world-1.r5",
+    "worker_pid": 55531,
+    "tick": 1,
+    "row_count": 0,
+    "offset": 0,
+    "returned_rows": 0,
+    "entity_ids": [],
+    "entities": {
+      "capacity": 4,
+      "alive": 2,
+      "retired": 0,
+      "high_water": 2,
+      "truncated_rows": 0
+    },
+    "layout_generation": 1,
+    "migration_lineage": [],
+    "schema": [
+      {
+        "id": 1,
+        "name": "kind",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 2,
+        "name": "team",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 3,
+        "name": "hp",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 4,
+        "name": "pos_x",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 5,
+        "name": "pos_y",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 6,
+        "name": "speed",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 7,
+        "name": "range_sq",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 8,
+        "name": "reload",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 9,
+        "name": "cooldown",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 10,
+        "name": "damage",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 11,
+        "name": "flight",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 12,
+        "name": "order_mode",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 13,
+        "name": "order_x",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 14,
+        "name": "order_y",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 15,
+        "name": "formation_slot",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 16,
+        "name": "formation_gen",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 17,
+        "name": "formation_ox",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 18,
+        "name": "formation_oy",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 1
+      },
+      {
+        "id": 19,
+        "name": "goal_x",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 20,
+        "name": "goal_y",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 21,
+        "name": "anchor_x",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 22,
+        "name": "anchor_y",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 23,
+        "name": "anchor_valid",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 24,
+        "name": "target_slot",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 25,
+        "name": "target_gen",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 26,
+        "name": "target_dist_sq",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 2
+      },
+      {
+        "id": 27,
+        "name": "target_valid",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 28,
+        "name": "target_x",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 2
+      },
+      {
+        "id": 29,
+        "name": "target_y",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 2
+      },
+      {
+        "id": 30,
+        "name": "truncated",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 2
+      },
+      {
+        "id": 31,
+        "name": "proj_active",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 32,
+        "name": "proj_left",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 33,
+        "name": "proj_target",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 34,
+        "name": "proj_target_gen",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 35,
+        "name": "proj_damage",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 36,
+        "name": "dmg_out",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 37,
+        "name": "dmg_target",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 38,
+        "name": "dmg_target_gen",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      },
+      {
+        "id": 39,
+        "name": "incoming",
+        "type": 1,
+        "default": 0,
+        "used": true,
+        "access": 3
+      }
+    ],
+    "needs_resubmission": [],
+    "entity": {
+      "handle": 4294967297,
+      "slot": 1,
+      "generation": 1,
+      "external_id": 0,
+      "values": {
+        "kind": 1,
+        "team": 0,
+        "hp": 12,
+        "pos_x": 292,
+        "pos_y": 100,
+        "speed": 96,
+        "range_sq": 0,
+        "reload": 6,
+        "cooldown": 0,
+        "damage": 3,
+        "flight": 2,
+        "order_mode": 0,
+        "order_x": 0,
+        "order_y": 0,
+        "formation_slot": 0,
+        "formation_gen": 1,
+        "formation_ox": 16384,
+        "formation_oy": 16384,
+        "goal_x": 300,
+        "goal_y": 100,
+        "anchor_x": 300,
+        "anchor_y": 100,
+        "anchor_valid": 1,
+        "target_slot": 4294967295,
+        "target_gen": 0,
+        "target_dist_sq": 0,
+        "target_valid": 0,
+        "target_x": 0,
+        "target_y": 0,
+        "truncated": 0,
+        "proj_active": 0,
+        "proj_left": 0,
+        "proj_target": 4294967295,
+        "proj_target_gen": 0,
+        "proj_damage": 0,
+        "dmg_out": 0,
+        "dmg_target": 4294967295,
+        "dmg_target_gen": 0,
+        "incoming": 0
+      }
+    },
+    "columns": {
+      "pos_x": [],
+      "pos_y": []
+    },
+    "schema_id": "rts",
+    "semantic_manifest": [
+      {
+        "system_id": "rts.spatial",
+        "semantic_hash": "3290eab73d3a774b64f3075867fe053456b1557b35c8561c3b1ca1b830733618",
+        "source_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "capsule_hash": "dd28d5623ad731fb897ac2daedd34ca5c216c72fd9d8a23b94254fd09bfee16e",
+        "txid": 1,
+        "system_revision": 1,
+        "installed_tick": 0
+      },
+      {
+        "system_id": "rts.goal",
+        "semantic_hash": "1ab0d3ececbcbc5ae170fdb8dbcbada6c230a4f362536f8de69ad98a089d0631",
+        "source_hash": "6c5328ae7d4daa0e24cfda6511234f6dc16fa04c7cdacac05cb48a0b43184fc1",
+        "capsule_hash": "6b0d61205266a6abeba5476d4b0a0ff8613e7014d6b5544315ed9a8bccf70a23",
+        "txid": 2,
+        "system_revision": 1,
+        "declared_system_rev": 1,
+        "installed_tick": 0
+      },
+      {
+        "system_id": "rts.combat",
+        "semantic_hash": "0447156f83c1ad8119388a059971cd496a920482f9c6a4cab07eff43c7543c99",
+        "source_hash": "2ffa3d0e15921ec64aa2bb1dbaaa3a2d7610a0978a952bffbc041e95bea858cb",
+        "capsule_hash": "01a7fe4b60d469e399a2ae4a2811f4e8a8506d6c65e564ed28d73c3ec24b8ee6",
+        "txid": 3,
+        "system_revision": 1,
+        "declared_system_rev": 1,
+        "installed_tick": 0
+      },
+      {
+        "system_id": "rts.move",
+        "semantic_hash": "610c158baf1d59ba2a49e5ef9d69879222094cbb523048a3fe0f11bdc0a44986",
+        "source_hash": "11f7941c2fedff45ef0f851ebae6fd4c3e076cea7d00b7131e74177949c52039",
+        "capsule_hash": "2da86c59ba5730e5abc2c79beb3976e6ee2fd995b5ac7312bc1bc85357a49671",
+        "txid": 7,
+        "system_revision": 2,
+        "declared_system_rev": 2,
+        "installed_tick": 0
+      },
+      {
+        "system_id": "rts.scatter",
+        "semantic_hash": "ac5bae54c5ee6a48e68a621644ef3f7ccae5a17eed27b0367c3fe3ce4b357942",
+        "source_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "capsule_hash": "ae02432a5f048c2c9d41a9fe7342e3cd5f3579a39508c2e282171d2f9c71d003",
+        "txid": 5,
+        "system_revision": 1,
+        "installed_tick": 0
+      },
+      {
+        "system_id": "rts.damage",
+        "semantic_hash": "dae3bda2ae81bf6f1c4a2dc25c49c466f6def1f6520b0de95b4df7ea316892bf",
+        "source_hash": "8a5a54dad0521048e152fae040d8cae2aaf2737665dc9d2993e7e0b443bdacbc",
+        "capsule_hash": "261581d97ccaf2a6a1e39809537a81a60b53f109d2a8c448b342eed278b02377",
+        "txid": 6,
+        "system_revision": 1,
+        "declared_system_rev": 1,
+        "installed_tick": 0
+      }
+    ],
+    "registry": {
+      "capacity": 128,
+      "in_use": 7,
+      "installed": 6,
+      "evictions": 0
+    }
+  },
+  "worker_preserved": true,
+  "native_project_builds": 0,
+  "independent_review": "not_run",
+  "artifact_sha256": "c3883be5f832bb12c5b2687d19d9b6b37279959397df99e653bf874a27b3382a",
+  "expected_position": [
+    292,
+    100
+  ],
+  "position_check": "passed"
+}

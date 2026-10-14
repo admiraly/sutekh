@@ -1,0 +1,417 @@
+{
+  "ir_version": "0.1",
+  "system_id": "rts.combat",
+  "numeric_profile": "u32_mod_v1",
+  "query": "rts",
+  "instructions": [
+    {
+      "op": "const_u32",
+      "dst": "b1_zero",
+      "value": 0
+    },
+    {
+      "op": "const_u32",
+      "dst": "b1_one",
+      "value": 1
+    },
+    {
+      "op": "const_u32",
+      "dst": "b1_three",
+      "value": 3
+    },
+    {
+      "op": "load_u32",
+      "dst": "b1_hp",
+      "field": "hp"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "b1_positive",
+      "a": "b1_zero",
+      "b": "b1_hp"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "b1_healthy",
+      "a": "b1_three",
+      "b": "b1_hp"
+    },
+    {
+      "op": "select_u32",
+      "dst": "b1_lowflag",
+      "cond": "b1_healthy",
+      "on_true": "b1_zero",
+      "on_false": "b1_one"
+    },
+    {
+      "op": "select_u32",
+      "dst": "b1_retreatflag",
+      "cond": "b1_positive",
+      "on_true": "b1_lowflag",
+      "on_false": "b1_zero"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "b1_retreat",
+      "a": "b1_retreatflag",
+      "b": "b1_one"
+    },
+    {
+      "op": "const_u32",
+      "dst": "k1",
+      "value": 0
+    },
+    {
+      "op": "const_u32",
+      "dst": "k2",
+      "value": 1
+    },
+    {
+      "op": "const_u32",
+      "dst": "k3",
+      "value": 4294967295
+    },
+    {
+      "op": "load_u32",
+      "dst": "v4",
+      "field": "target_valid"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t5",
+      "a": "v4",
+      "b": "k2"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v6",
+      "field": "cooldown"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t7",
+      "a": "v6",
+      "b": "k1"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v8",
+      "field": "proj_active"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t9",
+      "a": "v8",
+      "b": "k1"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s10",
+      "cond": "t9",
+      "on_true": "k2",
+      "on_false": "k1"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s11",
+      "cond": "t7",
+      "on_true": "s10",
+      "on_false": "k1"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s12",
+      "cond": "t5",
+      "on_true": "s11",
+      "on_false": "k1"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t13",
+      "a": "s12",
+      "b": "k2"
+    },
+    {
+      "op": "select_u32",
+      "dst": "b1_fireflag",
+      "cond": "b1_healthy",
+      "on_true": "s12",
+      "on_false": "k1"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "b1_fire",
+      "a": "b1_fireflag",
+      "b": "k2"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t14",
+      "a": "v8",
+      "b": "k2"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v15",
+      "field": "proj_left"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t16",
+      "a": "v15",
+      "b": "k2"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s17",
+      "cond": "t16",
+      "on_true": "k2",
+      "on_false": "k1"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s18",
+      "cond": "t14",
+      "on_true": "s17",
+      "on_false": "k1"
+    },
+    {
+      "op": "eq_u32",
+      "dst": "t19",
+      "a": "s18",
+      "b": "k2"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v20",
+      "field": "reload"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t21",
+      "a": "v20",
+      "b": "k2"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t22",
+      "a": "k1",
+      "b": "v6"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t23",
+      "a": "v6",
+      "b": "k2"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s24",
+      "cond": "t22",
+      "on_true": "t23",
+      "on_false": "k1"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s25",
+      "cond": "b1_fire",
+      "on_true": "t21",
+      "on_false": "s24"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s26",
+      "cond": "t19",
+      "on_true": "k1",
+      "on_false": "v8"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s27",
+      "cond": "b1_fire",
+      "on_true": "k2",
+      "on_false": "s26"
+    },
+    {
+      "op": "lt_u32",
+      "dst": "t28",
+      "a": "k1",
+      "b": "v15"
+    },
+    {
+      "op": "sub_u32",
+      "dst": "t29",
+      "a": "v15",
+      "b": "k2"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s30",
+      "cond": "t28",
+      "on_true": "t29",
+      "on_false": "k1"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v31",
+      "field": "flight"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s32",
+      "cond": "t19",
+      "on_true": "k1",
+      "on_false": "s30"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s33",
+      "cond": "b1_fire",
+      "on_true": "v31",
+      "on_false": "s32"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v34",
+      "field": "target_slot"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v35",
+      "field": "proj_target"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s36",
+      "cond": "t19",
+      "on_true": "k3",
+      "on_false": "v35"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s37",
+      "cond": "b1_fire",
+      "on_true": "v34",
+      "on_false": "s36"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v38",
+      "field": "target_gen"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v39",
+      "field": "proj_target_gen"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s40",
+      "cond": "t19",
+      "on_true": "k1",
+      "on_false": "v39"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s41",
+      "cond": "b1_fire",
+      "on_true": "v38",
+      "on_false": "s40"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v42",
+      "field": "damage"
+    },
+    {
+      "op": "load_u32",
+      "dst": "v43",
+      "field": "proj_damage"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s44",
+      "cond": "t19",
+      "on_true": "k1",
+      "on_false": "v43"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s45",
+      "cond": "b1_fire",
+      "on_true": "v42",
+      "on_false": "s44"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s46",
+      "cond": "t19",
+      "on_true": "v43",
+      "on_false": "k1"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s47",
+      "cond": "t19",
+      "on_true": "v35",
+      "on_false": "k3"
+    },
+    {
+      "op": "select_u32",
+      "dst": "s48",
+      "cond": "t19",
+      "on_true": "v39",
+      "on_false": "k1"
+    },
+    {
+      "op": "store_u32",
+      "field": "cooldown",
+      "src": "s25"
+    },
+    {
+      "op": "store_u32",
+      "field": "proj_active",
+      "src": "s27"
+    },
+    {
+      "op": "store_u32",
+      "field": "proj_left",
+      "src": "s33"
+    },
+    {
+      "op": "store_u32",
+      "field": "proj_target",
+      "src": "s37"
+    },
+    {
+      "op": "store_u32",
+      "field": "proj_target_gen",
+      "src": "s41"
+    },
+    {
+      "op": "store_u32",
+      "field": "proj_damage",
+      "src": "s45"
+    },
+    {
+      "op": "store_u32",
+      "field": "dmg_out",
+      "src": "s46"
+    },
+    {
+      "op": "store_u32",
+      "field": "dmg_target",
+      "src": "s47"
+    },
+    {
+      "op": "store_u32",
+      "field": "dmg_target_gen",
+      "src": "s48"
+    },
+    {
+      "op": "store_u32",
+      "field": "incoming",
+      "src": "k1"
+    }
+  ]
+}

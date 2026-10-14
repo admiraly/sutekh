@@ -1,0 +1,51 @@
+{
+  "status": "author_checks_only",
+  "results": {
+    "baseline": {
+      "candidate_id": "candidate-1",
+      "evaluation_id": "eval-1",
+      "containment": {
+        "reported": true,
+        "rlimit_as": 4294967296,
+        "rlimit_cpu": 12,
+        "rlimit_fsize": 268435456,
+        "rlimit_nofile": 64,
+        "no_network": "seccomp",
+        "fs_write_denied": "landlock",
+        "fs_abi": 7,
+        "fs_reason": "landlock ABI 7 applied: file creation, writes, removal and truncation denied; reads not restricted",
+        "reason": "seccomp filter installed; socket creation denied with EPERM (verified in the child)"
+      },
+      "status": "failed",
+      "cases_total": 1,
+      "cases_passed": 0,
+      "failures": [
+        {
+          "name": "author_B3_distance_boundary_and_stop_gate",
+          "reason": "column_mismatch:pos_x[0]"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "candidate-2",
+      "evaluation_id": "eval-2",
+      "containment": {
+        "reported": true,
+        "rlimit_as": 4294967296,
+        "rlimit_cpu": 12,
+        "rlimit_fsize": 268435456,
+        "rlimit_nofile": 64,
+        "no_network": "seccomp",
+        "fs_write_denied": "landlock",
+        "fs_abi": 7,
+        "fs_reason": "landlock ABI 7 applied: file creation, writes, removal and truncation denied; reads not restricted",
+        "reason": "seccomp filter installed; socket creation denied with EPERM (verified in the child)"
+      },
+      "status": "passed",
+      "cases_total": 1,
+      "cases_passed": 1,
+      "failures": []
+    }
+  },
+  "independent_review": "not_run"
+}

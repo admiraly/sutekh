@@ -1,0 +1,381 @@
+{
+  "format": "sutekh_hidden_behavior_fixtures_0.1",
+  "author_agent": "/root/hidden_behavior_fixtures",
+  "base_revision": "5de97822056ee37b1411706bd75be6b2a0ff12d7",
+  "blind_authorship": {
+    "read": [
+      "ENGINE_CONSTITUTION.md",
+      "AGENT_PROTOCOL.md",
+      "planning/contracts/M3_RTS_CONTRACT.md",
+      "planning/tasks.json",
+      "schemas/test.schema.json",
+      "schemas/world.schema.json",
+      "docs/TEST_SPEC.md",
+      "tests/scheduler/fixtures/pipe/advance.test.json",
+      "tests/scheduler/fixtures/pipe/pipe_world.json"
+    ],
+    "candidate_implementation_read": false,
+    "reference_model_read": false,
+    "candidate_outputs_read": false
+  },
+  "status": "locked_not_executed",
+  "fixtures": [
+    {
+      "id": "b3_axis_threshold_cap",
+      "system_id": "rts.move",
+      "test": "b3_axis_threshold_cap.test.json",
+      "world": "b3_axis_threshold_cap.world.json",
+      "expected_columns": {
+        "pos_x": [
+          1192,
+          1065,
+          1064,
+          1063,
+          808,
+          1064,
+          1096,
+          1096,
+          1096,
+          1000
+        ],
+        "pos_y": [
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000
+        ]
+      },
+      "baseline_columns": {
+        "pos_x": [
+          1096,
+          1065,
+          1064,
+          1063,
+          904,
+          1032,
+          1096,
+          1096,
+          1096,
+          1000
+        ],
+        "pos_y": [
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000,
+          1000
+        ]
+      },
+      "must_reject_baseline": true,
+      "derivation": "Section 11 B3 doubles speed only for anchor_valid=1, mode=0, distance>64; section 5.3 axis min cap and stop gate remain. Axis positions avoid unspecified diagonal distance metric. Row6 speed32 distinguishes boost above threshold; rows3/4 use speed96 and are capped, so additional threshold probe follows.",
+      "files": {
+        "b3_axis_threshold_cap.test.json": "6148ff02e1140e43b06d081677d8e0b81e18aaa966f327f2db0060f67fbe66b0",
+        "b3_axis_threshold_cap.world.json": "7cb8a50a3acd1a20fc04788264a32aba1ad0dc35ebef77f061224dc5358a20a0"
+      }
+    },
+    {
+      "id": "b3_threshold_probe",
+      "system_id": "rts.move",
+      "test": "b3_threshold_probe.test.json",
+      "world": "b3_threshold_probe.world.json",
+      "expected_columns": {
+        "pos_x": [
+          1032,
+          1016,
+          1016,
+          1000
+        ],
+        "pos_y": [
+          1000,
+          1000,
+          1000,
+          1000
+        ]
+      },
+      "baseline_columns": {
+        "pos_x": [
+          1016,
+          1016,
+          1016,
+          1000
+        ],
+        "pos_y": [
+          1000,
+          1000,
+          1000,
+          1000
+        ]
+      },
+      "must_reject_baseline": true,
+      "derivation": "Strict greater-than64; zero speed remains zero.",
+      "files": {
+        "b3_threshold_probe.test.json": "bbe0b07a49d1a1aca29f32a0a2c55193725a1ab3b1bd0487234f2d024daba28b",
+        "b3_threshold_probe.world.json": "8ee6bc7893df40a34e9246a17487d489ce7ef02186e25612acc7c921cfd28034"
+      }
+    },
+    {
+      "id": "b2_move_phase",
+      "system_id": "rts.move",
+      "test": "b2_move_phase.test.json",
+      "world": "b2_move_phase.world.json",
+      "expected_columns": {
+        "pos_x": [
+          1096,
+          1000,
+          1096,
+          1096,
+          1096
+        ],
+        "pos_y": [
+          1000,
+          1000,
+          1000,
+          1000,
+          1000
+        ]
+      },
+      "baseline_columns": {
+        "pos_x": [
+          1000,
+          1000,
+          1000,
+          1096,
+          1096
+        ],
+        "pos_y": [
+          1000,
+          1000,
+          1000,
+          1000,
+          1000
+        ]
+      },
+      "must_reject_baseline": true,
+      "derivation": "B2 stop gate target valid AND cooldown=0; these are inputs to move after combat, so precombat4 becomes phase input3. anchor_valid0 makes B3 predecessor insufficient.",
+      "files": {
+        "b2_move_phase.test.json": "ee029d3bb4192851ababbdbb67b716ccdff51efeca8183fea5ba687fc008753e",
+        "b2_move_phase.world.json": "4aaa3b2a28be0cafd8ab5371e0d93b9ec453f9686f304208ce660e6b38e0d09c"
+      }
+    },
+    {
+      "id": "b1_goal",
+      "system_id": "rts.goal",
+      "test": "b1_goal.test.json",
+      "world": "b1_goal.world.json",
+      "expected_columns": {
+        "goal_x": [
+          2048,
+          30720,
+          7000
+        ],
+        "goal_y": [
+          16384,
+          16384,
+          8000
+        ]
+      },
+      "baseline_columns": {
+        "goal_x": [
+          9000,
+          0,
+          7000
+        ],
+        "goal_y": [
+          9000,
+          0,
+          8000
+        ]
+      },
+      "must_reject_baseline": true,
+      "derivation": "B1 hp<=3 team base constants override explicit orders; hp4 retains section5.1 order.",
+      "files": {
+        "b1_goal.test.json": "21139a597a0ec43deecb80b00e4c0ed196c9ea4b56187c36c54d687e48c86bf1",
+        "b1_goal.world.json": "444bf260e4ff5fc0e02b4e1dc8c552e23a7ed86e9ef2d58d4928436d27bf7299"
+      }
+    },
+    {
+      "id": "b1_move",
+      "system_id": "rts.move",
+      "test": "b1_move.test.json",
+      "world": "b1_move.world.json",
+      "expected_columns": {
+        "pos_x": [
+          3904,
+          28096,
+          1000
+        ],
+        "pos_y": [
+          16384,
+          16384,
+          1000
+        ]
+      },
+      "baseline_columns": {
+        "pos_x": [
+          4000,
+          28000,
+          1000
+        ],
+        "pos_y": [
+          16384,
+          16300,
+          1000
+        ]
+      },
+      "must_reject_baseline": true,
+      "derivation": "B1 retreat moves despite valid target; cd0 prevents B2 from passing. Baseline movement per-axis, capped y84.",
+      "files": {
+        "b1_move.test.json": "6713f923f741eb436749e24689ed116abb01089960a1dc0ad3b4d93e0e0f6689",
+        "b1_move.world.json": "43efd7dd1aec336f31cb6d5ee2450cd2eb6c04fefb43e90a74a00a0dff686d53"
+      }
+    },
+    {
+      "id": "b1_combat_no_fire",
+      "system_id": "rts.combat",
+      "test": "b1_combat_no_fire.test.json",
+      "world": "b1_combat_no_fire.world.json",
+      "expected_columns": {
+        "cooldown": [
+          0,
+          0,
+          5
+        ],
+        "proj_active": [
+          0,
+          0,
+          1
+        ],
+        "proj_left": [
+          0,
+          0,
+          2
+        ],
+        "proj_target": [
+          4294967295,
+          4294967295,
+          7
+        ],
+        "proj_target_gen": [
+          0,
+          0,
+          9
+        ],
+        "proj_damage": [
+          0,
+          0,
+          3
+        ],
+        "dmg_out": [
+          0,
+          0,
+          0
+        ],
+        "dmg_target": [
+          4294967295,
+          4294967295,
+          4294967295
+        ],
+        "dmg_target_gen": [
+          0,
+          0,
+          0
+        ],
+        "incoming": [
+          0,
+          0,
+          0
+        ]
+      },
+      "baseline_columns": {
+        "cooldown": [
+          5,
+          5,
+          5
+        ],
+        "proj_active": [
+          1,
+          1,
+          1
+        ],
+        "proj_left": [
+          2,
+          2,
+          2
+        ],
+        "proj_target": [
+          7,
+          7,
+          7
+        ],
+        "proj_target_gen": [
+          9,
+          9,
+          9
+        ],
+        "proj_damage": [
+          3,
+          3,
+          3
+        ],
+        "dmg_out": [
+          0,
+          0,
+          0
+        ],
+        "dmg_target": [
+          4294967295,
+          4294967295,
+          4294967295
+        ],
+        "dmg_target_gen": [
+          0,
+          0,
+          0
+        ],
+        "incoming": [
+          0,
+          0,
+          0
+        ]
+      },
+      "must_reject_baseline": true,
+      "derivation": "B1 gates new fire by hp>3; section5.2 unchanged cooldown/projectile idle formulas; hp4 fires.",
+      "files": {
+        "b1_combat_no_fire.test.json": "404d66219c1e9658cab8e0f0dc809f63f0eaa23f51dc0278789acaf686dbf8b6",
+        "b1_combat_no_fire.world.json": "3b8cf3db0ca94a71e94d8b4e75fe1fd6ef3b86b1244d35a296be55d52f0243aa"
+      }
+    }
+  ],
+  "uncertainties": [
+    "B3 diagonal distance metric and axis versus vector step not explicit; excluded diagonal B3 threshold cases.",
+    "B1 hp0 anchor retreat applicability not explicit; excluded anchors.",
+    "Capsule reference is basename placeholder to bind to prepared candidate capsule; binding must preserve world/expected hashes.",
+    "Phase fixtures prove row-local semantics; full schedule, effects and installation require orchestrator gates."
+  ],
+  "required_execution": [
+    "Each B3 fixture rejects baseline.",
+    "Each B2 fixture rejects baseline and accepted B3.",
+    "Each B1 fixture rejects baseline and accepted B3+B2.",
+    "Every candidate reruns earlier fixtures and full suite."
+  ],
+  "unrun_checks": [
+    "candidate.evaluate",
+    "baseline evaluation",
+    "predecessor evaluation",
+    "JSON schema validation"
+  ],
+  "source_hashes": {
+    "contract_sha256": "4208f9264bb44135d56408df8a4f26abf98957c6b7d5539ceff2210429a585d4"
+  }
+}

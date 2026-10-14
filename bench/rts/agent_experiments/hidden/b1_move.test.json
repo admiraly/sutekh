@@ -1,0 +1,24 @@
+{
+  "test_format": "0.1",
+  "system_id": "rts.move",
+  "capsule": "move.capsule.json",
+  "world": "b1_move.world.json",
+  "cases": [
+    {
+      "name": "b1_move",
+      "ticks": 1,
+      "expected_columns": {
+        "pos_x": [
+          3904,
+          28096,
+          1000
+        ],
+        "pos_y": [
+          16384,
+          16384,
+          1000
+        ]
+      }
+    }
+  ]
+}

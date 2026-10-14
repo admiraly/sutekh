@@ -1,0 +1,13 @@
+{
+  "status": "verified_only_not_installed",
+  "result": {
+    "candidate_id": "candidate-1",
+    "status": "effects_verified",
+    "system_id": "rts.move",
+    "source_hash": "11f7941c2fedff45ef0f851ebae6fd4c3e076cea7d00b7131e74177949c52039",
+    "capsule_hash": "2da86c59ba5730e5abc2c79beb3976e6ee2fd995b5ac7312bc1bc85357a49671",
+    "semantic_hash": "610c158baf1d59ba2a49e5ef9d69879222094cbb523048a3fe0f11bdc0a44986",
+    "artifact_format": 1
+  },
+  "independent_review": "not_run"
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "M3-07-B3",
+  "status": "verified_experiment",
+  "implementation_agent": "/root",
+  "fixture_author": "/root/hidden_behavior_fixtures",
+  "reviewer": "/root/review_limits_v2",
+  "session_id": "038ddcb5-ba53-4670-b983-0e203b1dd01c",
+  "model_id": "gpt-6.1-sol",
+  "candidate_submissions_in_canonical_checks": 3,
+  "verifier_rejections_by_code": {},
+  "reference_test_failures_by_fixture_id": "required baseline/predecessor column mismatches in hidden canonical result",
+  "hidden_fixture_result": "bench/rts/agent_experiments/records/b3-hidden-canonical.json",
+  "live_install_result": "bench/rts/agent_experiments/records/b3-install-canonical.json",
+  "review": "planning/evidence/m3-independent-review/b3-review.md",
+  "source_hashes": {
+    "bench/rts/agent_experiments/candidates/b3/move_b3.lir.json": "11f7941c2fedff45ef0f851ebae6fd4c3e076cea7d00b7131e74177949c52039",
+    "bench/rts/agent_experiments/candidates/b3/move_b3.capsule.json": "2da86c59ba5730e5abc2c79beb3976e6ee2fd995b5ac7312bc1bc85357a49671"
+  },
+  "native_lane_status": "not_applicable: IR0.1; no native build during gameplay edit loop",
+  "wall_time_to_accept_seconds": null,
+  "wall_time_reason": "workflow start not_recorded",
+  "tokens": null,
+  "tool_calls": null,
+  "unavailable_usage_reason": "not_recorded",
+  "full_existing_suite": "55/55 passed; regeneration subsequently1/1 passed",
+  "limitations": [
+    "bounded behavior experiment only; no general agent capability or performance claim",
+    "M3-06 inventory and M3 milestone closure remain open"
+  ]
+}

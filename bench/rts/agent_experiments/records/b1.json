@@ -1,0 +1,34 @@
+{
+  "task_id": "M3-07-B1",
+  "status": "verified_experiment",
+  "implementation_agent": "/root",
+  "fixture_author": "/root/hidden_behavior_fixtures",
+  "reviewer": "/root/review_limits_v2",
+  "session_id": "038ddcb5-ba53-4670-b983-0e203b1dd01c",
+  "model_id": "gpt-6.1-sol",
+  "candidate_submissions_in_canonical_checks": 21,
+  "verifier_rejections_by_code": {},
+  "reference_test_failures_by_fixture_id": "required baseline/predecessor column mismatches in hidden canonical result",
+  "hidden_fixture_result": "bench/rts/agent_experiments/records/b1-hidden-canonical.json",
+  "live_install_result": "bench/rts/agent_experiments/records/b1-install-canonical.json",
+  "review": "planning/evidence/m3-independent-review/b1-review.md",
+  "source_hashes": {
+    "bench/rts/agent_experiments/candidates/b1/move_b1.lir.json": "c879901d9cb0da080a43a538516ae51ffc4629fa4a9af264e8d10665dc74e8e6",
+    "bench/rts/agent_experiments/candidates/b1/combat_b1.lir.json": "db406e9d4afd8f4abe38eccba9867be9af35a7f94b0a55b7bf45fed1d6614ad8",
+    "bench/rts/agent_experiments/candidates/b1/goal_b1.capsule.json": "5d704e51e91ccd3be692a520008d6cf8def1b3b0b7f279869cd40ff09238b7f8",
+    "bench/rts/agent_experiments/candidates/b1/move_b1.capsule.json": "5f62070743658421125634a5ca1d74509feaca1fefe8e576979c39b69b73cd89",
+    "bench/rts/agent_experiments/candidates/b1/goal_b1.lir.json": "8853c9c7863a06e34b7163f061d821ee1eaf4f21ec9e90f50361ec820f3b13e9",
+    "bench/rts/agent_experiments/candidates/b1/combat_b1.capsule.json": "4598fe0372829b49350d2bcca8c9be6dcb794f483f02643625f3fefaee0583ca"
+  },
+  "native_lane_status": "not_applicable: IR0.1; no native build during gameplay edit loop",
+  "wall_time_to_accept_seconds": null,
+  "wall_time_reason": "workflow start not_recorded",
+  "tokens": null,
+  "tool_calls": null,
+  "unavailable_usage_reason": "not_recorded",
+  "full_existing_suite": "55/55 passed; regeneration subsequently1/1 passed",
+  "limitations": [
+    "bounded behavior experiment only; no general agent capability or performance claim",
+    "M3-06 inventory and M3 milestone closure remain open"
+  ]
+}
