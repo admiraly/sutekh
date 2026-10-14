@@ -1,0 +1,78 @@
+{
+  "format": "0.1",
+  "task": "M3-05 Q8",
+  "date": "2026-10-14",
+  "base_revision": "7f9be851cf4761f42d1f86bd7dc60ab5bc35c31c",
+  "modified_paths": [
+    "CMakeLists.txt",
+    "bench/rts/ref/model.py",
+    "bench/rts/replay/model_snapshot.py",
+    "bench/rts/replay/engine_backend.py",
+    "tests/rts/replay/test_model_snapshot.py"
+  ],
+  "source_hashes": {
+    "CMakeLists.txt": "d1f98ab54f6852ed86097413621c159bdc93ddfe074430757c273e8919da78d1",
+    "bench/rts/ref/model.py": "0190f15f5ad9ae229ab50989b9e6c82dae0ab4fdbcf7efb6b25ee75aecd88f36",
+    "bench/rts/replay/model_snapshot.py": "aa60f4b8c0f69aa6e84c48c7ebb61a99683a64b15faea0dda71ec6b47b1b49b1",
+    "bench/rts/replay/engine_backend.py": "fcad02a37cecc46fc6ee2df388a9041a6e1f2f681846f8a595dd4b32a794d3a5",
+    "tests/rts/replay/test_model_snapshot.py": "ce63efba7f20ea77e8f0255bbffba709129a5e9f3ce28e5e4ca7d275fdf35d3e"
+  },
+  "artifact": {
+    "path": "/root/sutekh/build/sutekh",
+    "sha256": "c2ba406829ca57b0ec3f11b9673e53d6077182c4a5fa8506b419b4f1522b69dc"
+  },
+  "checks": [
+    {
+      "command": "python3 -m unittest discover -s tests/rts/ref -p test_*.py",
+      "exit_code": 0,
+      "tests": 22
+    },
+    {
+      "command": "python3 -m unittest discover -s tests/rts/replay -p test_*.py",
+      "exit_code": 0,
+      "tests": 26
+    },
+    {
+      "command": "python3 tests/rts/replay/test_model_snapshot.py --binary /root/sutekh/build/sutekh --ticks 4",
+      "status": "passed",
+      "exit_code": 0,
+      "scenes": 7,
+      "ticks_per_scene": 4
+    },
+    {
+      "command": "python3 tests/rts/replay/test_model_snapshot.py --binary /root/sutekh/build/sutekh --max-rows 1024 --ticks 64",
+      "exit_code": 0,
+      "scenes": 3
+    },
+    {
+      "command": "cmake -S . -B build && ctest --test-dir build --output-on-failure -j 2",
+      "exit_code": 0,
+      "tests": 46
+    }
+  ],
+  "mutations": [
+    {
+      "name": "retired-every-despawn",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "name": "dead-target-sentinel",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "name": "count-dead-truncated",
+      "exit_code": 1,
+      "detected": true
+    }
+  ],
+  "limitations": [
+    "Only snapshot 0.2 RTS schema; no migration lineage or schema mutation.",
+    "Standalone model replay digest retained; SnapshotModel provides explicitly pinned comparison encoding.",
+    "Engine revision and initial semantic manifest are identity inputs, never engine rows or event history.",
+    "No recovery, native specialization, timing qualification or million-row claim in this slice.",
+    "Native compilation not required: production native source unchanged.",
+    "Independent reviewer and native Windows not run."
+  ]
+}

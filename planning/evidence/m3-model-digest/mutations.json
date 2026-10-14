@@ -1,0 +1,17 @@
+[
+  {
+    "name": "retired-every-despawn",
+    "exit_code": 1,
+    "detected": true
+  },
+  {
+    "name": "dead-target-sentinel",
+    "exit_code": 1,
+    "detected": true
+  },
+  {
+    "name": "count-dead-truncated",
+    "exit_code": 1,
+    "detected": true
+  }
+]

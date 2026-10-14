@@ -4,7 +4,8 @@
 
 The backend drives a real `sutekh serve` supervisor (rts_session.Session) with the full six-system RTS world.
 Digests are the engine's own, so an engine-recorded file is replayed against the engine; they are not
-byte-compatible with the model backend's digests (handoff 2026-10-12-m3-02, Q8):
+byte-compatible with the standalone model backend's digests. The independent
+model_snapshot.SnapshotModel adapter reproduces the engine encoding for Q8 checks:
   - state: "sha256:" + the SHA-256 of the canonical snapshot bytes (world.snapshot, snapshot format 0.2: rows up
     to high water, entity table, retired count, event counters and retained records);
   - events: SHA-256 over canonical JSON lines (sorted keys, no whitespace) of the retained event records of

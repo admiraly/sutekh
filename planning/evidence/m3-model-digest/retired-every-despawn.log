@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/root/sutekh-q8/tests/rts/replay/test_model_snapshot.py", line 110, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/root/sutekh-q8/tests/rts/replay/test_model_snapshot.py", line 98, in main
+    assert w.retired == 0 and w.gen[0] == 2
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

@@ -1,0 +1,15 @@
+{"scene": "duel16", "scene_digest": "sha256:2fbc8d26e724cb185917d0c4c8995041c2c771d3d63f60b586cf8fdff4d2aee4", "ticks": 4, "result": "passed", "final": {"t": 4, "state": "sha256:d7cdfd4a5df0550f2890cfe43db30219442f0af59f0abcf58657cdc64f5a2dd9", "events": "sha256:cbed5e3ce944131fdeafd4c3b825b99101f171151f82a6423107db7d95cdce95", "counts": {"alive": 15, "retired": 0, "events": 7, "dropped": 10, "truncated_rows": 0}}}
+{"scene": "mixed-1024", "scene_digest": "sha256:a43264adb3291a55a61c81da1c7dbce886984d5e1c73b897394f6e9104002b20", "ticks": 4, "result": "passed", "final": {"t": 4, "state": "sha256:971d8b52002e585e3da96272458b02daac12468b1839a117903f7d48c8e97976", "events": "sha256:d7b4290d134dd3335614656274fb3135845d6a24a63223b793ffae2086264e8b", "counts": {"alive": 1024, "retired": 0, "events": 7, "dropped": 1017, "truncated_rows": 0}}}
+Traceback (most recent call last):
+  File "/root/sutekh-q8/tests/rts/replay/test_model_snapshot.py", line 110, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/root/sutekh-q8/tests/rts/replay/test_model_snapshot.py", line 105, in main
+    run(os.path.abspath(args.binary), spec, args.ticks)
+    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/sutekh-q8/tests/rts/replay/test_model_snapshot.py", line 80, in run
+    engine.step(); reference.step(); final = compare(engine, reference, t)
+                                             ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/sutekh-q8/tests/rts/replay/test_model_snapshot.py", line 35, in compare
+    raise AssertionError(f"tick {t}: metadata/events divergence: {actual} != {expected}")
+AssertionError: tick 3: metadata/events divergence: {'t': 3, 'state': 'sha256:60b55d511f6b7d1cb2f6a4d27ddff04d368ef06937f5394634f1ebd95bdc1180', 'events': 'sha256:72cae64798009aa93309989e4559f4fde8ee8d979e621a1d92d01b13522e2f11', 'counts': {'alive': 1020, 'retired': 0, 'events': 7, 'dropped': 1021, 'truncated_rows': 234}} != {'t': 3, 'state': 'sha256:60b55d511f6b7d1cb2f6a4d27ddff04d368ef06937f5394634f1ebd95bdc1180', 'events': 'sha256:72cae64798009aa93309989e4559f4fde8ee8d979e621a1d92d01b13522e2f11', 'counts': {'alive': 1020, 'retired': 0, 'events': 7, 'dropped': 1021, 'truncated_rows': 236}}

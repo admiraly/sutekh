@@ -173,7 +173,7 @@ class World:
         """Spawn one row from named fields; returns the handle. Omitted fields take the 2.2 defaults."""
         vals = validate_spawn(spec, self.cap)
         self.check_formation_live(vals["formation_slot"])
-        slot = next((s for s in range(self.cap) if not self.alive[s]), None)
+        slot = next((s for s in range(self.cap) if not self.alive[s] and self.gen[s] != MASK), None)
         if slot is None:
             raise ModelError("SU_E_RESOURCE_LIMIT", "world", "no free slot")
         for name in FIELD_NAMES:
@@ -195,7 +195,8 @@ class World:
         self._log("SU_EVENT_DESPAWNED", slot, self.gen[slot])
         self.alive[slot] = 0
         self.gen[slot] = (self.gen[slot] + 1) & MASK
-        self.retired += 1
+        if self.gen[slot] == MASK:
+            self.retired += 1
         for name in FIELD_NAMES:
             self.cols[name][slot] = 0
 
@@ -409,7 +410,9 @@ def spatial_phase(world: World) -> dict:
     # (c) target query
     truncated_rows = 0
     for r in range(cap):
-        if not (alive[r] and kind[r] == KIND_UNIT and range_sq_col[r] > 0):
+        if not alive[r]:
+            continue  # dead committed rows remain canonically zero
+        if not (kind[r] == KIND_UNIT and range_sq_col[r] > 0):
             cols["target_slot"][r] = NONE
             cols["target_gen"][r] = 0
             cols["target_dist_sq"][r] = 0
@@ -540,5 +543,7 @@ def tick(world: World, systems: dict = None) -> dict:
     for s in deaths:  # canonical merge order: ascending slot
         world._despawn_slot(s)
     info["deaths"] = len(deaths)
+    world.last_truncated_rows = sum(1 for s in range(world.hw)
+                                    if world.alive[s] and world.cols["truncated"][s])
     world.tick_no += 1
     return info

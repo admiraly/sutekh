@@ -92,8 +92,8 @@
     },
     {
       "path": "CMakeLists.txt",
-      "bytes": 36528,
-      "sha256": "b2fc24179fa4a101cc006caf681a8a32ca0a9d42de3c853192cce9e0bfc77851"
+      "bytes": 36858,
+      "sha256": "d1f98ab54f6852ed86097413621c159bdc93ddfe074430757c273e8919da78d1"
     },
     {
       "path": "COMMERCIAL_LICENSE.md",
@@ -138,7 +138,7 @@
     {
       "path": "PACK_VALIDATION.json",
       "bytes": 557,
-      "sha256": "6cf9a77f818630b09c4439eb311e15e911f62d33f3d9186baed6842a422c7639"
+      "sha256": "f7e7fef09bc4e8a162b9caef985c5d02ef190e060ef4098daa1d9eb1907daa3f"
     },
     {
       "path": "README.md",
@@ -292,8 +292,8 @@
     },
     {
       "path": "bench/rts/ref/model.py",
-      "bytes": 22706,
-      "sha256": "a6dab2b21c45e38d43d84cd3fb0d564e4e2ee6da9c7fef689733a333461af34d"
+      "bytes": 22998,
+      "sha256": "0190f15f5ad9ae229ab50989b9e6c82dae0ab4fdbcf7efb6b25ee75aecd88f36"
     },
     {
       "path": "bench/rts/ref/oracle.py",
@@ -322,8 +322,13 @@
     },
     {
       "path": "bench/rts/replay/engine_backend.py",
-      "bytes": 4325,
-      "sha256": "c986af423346e90b89aa6bb8abe6fb87c9f5f9ca05d70ae498786813f6530e5e"
+      "bytes": 4404,
+      "sha256": "fcad02a37cecc46fc6ee2df388a9041a6e1f2f681846f8a595dd4b32a794d3a5"
+    },
+    {
+      "path": "bench/rts/replay/model_snapshot.py",
+      "bytes": 3939,
+      "sha256": "aa60f4b8c0f69aa6e84c48c7ebb61a99683a64b15faea0dda71ec6b47b1b49b1"
     },
     {
       "path": "bench/rts/replay/rts_replay.py",
@@ -1026,6 +1031,56 @@
       "sha256": "c4be313b1a9b70c0cae057a46c74f61c48381b903fbb04fc0ac0bf17775f4277"
     },
     {
+      "path": "planning/evidence/m3-model-digest/combat-64.log",
+      "bytes": 1282,
+      "sha256": "a9e5d5e378e65eee97de016c6a733637c336b2e614bd6d0b21d2cd36bea069c1"
+    },
+    {
+      "path": "planning/evidence/m3-model-digest/count-dead-truncated.log",
+      "bytes": 2213,
+      "sha256": "7ea428beacb524d7c6f2b42412fb2606eb27ff5f7c6d6afd6d3fd49b97238323"
+    },
+    {
+      "path": "planning/evidence/m3-model-digest/dead-target-sentinel.log",
+      "bytes": 861,
+      "sha256": "f2b0c30902cd679930862dff5789661ed2fdd94106b3a3f77500016293ade3ea"
+    },
+    {
+      "path": "planning/evidence/m3-model-digest/engine-model.log",
+      "bytes": 3010,
+      "sha256": "4b46ba18f777563dd0c8a54478644caf35e15e131fef4c4fe4b4bf12e8d11701"
+    },
+    {
+      "path": "planning/evidence/m3-model-digest/integration.log",
+      "bytes": 5003,
+      "sha256": "e2ff03ecc374d756049cf5bbb51b9765ebdaf7e7ef99db72b3c4b0b88f957d2a"
+    },
+    {
+      "path": "planning/evidence/m3-model-digest/mutations.json",
+      "bytes": 262,
+      "sha256": "d163605fd058e2b4a7b8c2e76b903a373415412e6773279f35f5e8e6175d573e"
+    },
+    {
+      "path": "planning/evidence/m3-model-digest/reference.log",
+      "bytes": 122,
+      "sha256": "7f877798f7b171985d3e96c2fee1cd9d3fac68ce6a3d7677be0def67528400f8"
+    },
+    {
+      "path": "planning/evidence/m3-model-digest/replay.log",
+      "bytes": 358,
+      "sha256": "cfb3407adf19aaeaee0d6c0950c74b98a05c63923641733a9b73e16547e7fef3"
+    },
+    {
+      "path": "planning/evidence/m3-model-digest/result.json",
+      "bytes": 2726,
+      "sha256": "c75c4a731d8208fea0e71763bfdf399d934fa4708542e6a5d8eb5b0b70d0c2dc"
+    },
+    {
+      "path": "planning/evidence/m3-model-digest/retired-every-despawn.log",
+      "bytes": 350,
+      "sha256": "544cc250039d2608a8ae53d7d1f172e2e46e6120ad2f4e023cdf63edaff4d9ba"
+    },
+    {
       "path": "planning/handoffs/2026-10-07-dependencies.md",
       "bytes": 2654,
       "sha256": "5c02dfea834bf7f613a694cd5013733417db13ea14d13df4249544ab2a2caf93"
@@ -1391,9 +1446,14 @@
       "sha256": "7975b52675a1cff861dceccc1feff1955a41163eaf988c512cf4f8f20061bed1"
     },
     {
+      "path": "planning/handoffs/2026-10-14-m3-05-model-digest.md",
+      "bytes": 2286,
+      "sha256": "1f0ce70b830daf9a23d64e4313a5762000038b7e8df4fab83b80cb3a994aac82"
+    },
+    {
       "path": "planning/status.json",
-      "bytes": 9198,
-      "sha256": "8c4631a2ce8d881f27364f8810fee8491a3a158d2088bba0000346c77cfe4965"
+      "bytes": 9241,
+      "sha256": "e7926c2c0af74c0ed3eabe39eb4843eb556a70c1de0d9b62cb9cac9ad2fea301"
     },
     {
       "path": "planning/tasks.json",
@@ -3809,6 +3869,11 @@
       "path": "tests/rts/ref/test_targeting_digest_budget.py",
       "bytes": 4682,
       "sha256": "1bed07bc51323c3658b5ef774d429eab06d3a082d7db17f01d64977acfb01930"
+    },
+    {
+      "path": "tests/rts/replay/test_model_snapshot.py",
+      "bytes": 5125,
+      "sha256": "ce63efba7f20ea77e8f0255bbffba709129a5e9f3ce28e5e4ca7d275fdf35d3e"
     },
     {
       "path": "tests/rts/replay/test_replay.py",
