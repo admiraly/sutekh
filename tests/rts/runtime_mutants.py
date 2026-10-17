@@ -104,6 +104,11 @@ MUTANTS = [
 
 # Mutants that survive by design, with the reason (reviewed; not counted as killed).
 EQUIVALENT = {
+    "M3-M20": "rts.scatter: a dead sender's projectile fields are already zero when scatter runs (su_world_despawn "
+              "zeroes the slot at once and su_world_zero_dead zeroes rows that die in a tick), so dmg_out is 0 and the "
+              "row is skipped before the alive gate; the gate is defence in depth, as for M3-M06. The reference model "
+              "detects the same gate on a forged state (check_scatter_dead_sender_gated). A native white-box test "
+              "that runs the operator on an unzeroed dead row would kill it and is not written.",
     "M3-M30c": "set_fields: su_rts_ctl_check_value also returns SU_E_TYPE for every name outside the writable set, so "
                "the explicit writable check is a redundant first guard; M3-M30g removes both.",
 }
