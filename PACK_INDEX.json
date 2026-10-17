@@ -4647,8 +4647,8 @@
     },
     {
       "path": "tests/scheduler/run_host_mutants.sh",
-      "bytes": 5855,
-      "sha256": "3dca69ad633142e739476e44e81fc8a712f73f89029416ab16ab2512a83ddfa6"
+      "bytes": 6775,
+      "sha256": "66d43aaa5f40ae8a8884a8caf8cf1da2be7a6a17fb38b5868ecc02230c45a915"
     },
     {
       "path": "tests/scheduler/run_mutants.sh",

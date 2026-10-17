@@ -24,6 +24,28 @@ if [ ! -f "$REPO/tests/scheduler/test_host_entry.c" ]; then
 fi
 mkdir -p "$SCRATCH" || exit 2
 
+copy_tree() {
+    cp -r "$REPO/CMakeLists.txt" "$REPO/cmake" "$REPO/src" "$REPO/include" "$REPO/tests" "$REPO/capsules" \
+        "$REPO/profiles" "$REPO/examples" "$1/" || exit 2
+}
+
+# The unmutated tree must configure, build and pass both host tests; otherwise no mutant result means anything.
+baseline() {
+    dir="$SCRATCH/_baseline"
+    rm -rf "$dir"
+    mkdir -p "$dir" || exit 2
+    copy_tree "$dir"
+    if ! cmake -S "$dir" -B "$dir/build" -DCMAKE_BUILD_TYPE=Debug >"$dir/cfg.log" 2>&1 ||
+        ! cmake --build "$dir/build" --target test_host_entry test_host_restore -j4 >"$dir/build.log" 2>&1 ||
+        ! (cd "$dir" && ./build/test_host_entry "$dir/run") >"$dir/run.log" 2>&1 ||
+        ! (cd "$dir" && ./build/test_host_restore "$dir/run_restore") >"$dir/run_restore.log" 2>&1; then
+        echo "BASELINE FAILED: the unmutated tree does not build or pass (see $dir/*.log); no mutant was run" >&2
+        exit 3
+    fi
+    echo "BASELINE ok: unmutated tree builds and both host tests pass"
+}
+baseline
+
 # mutant NAME FILE PERL_SUBSTITUTION
 mutant() {
     name=$1
@@ -32,8 +54,7 @@ mutant() {
     dir="$SCRATCH/$name"
     rm -rf "$dir"
     mkdir -p "$dir" || exit 2
-    cp -r "$REPO/CMakeLists.txt" "$REPO/cmake" "$REPO/src" "$REPO/include" "$REPO/tests" "$REPO/capsules" \
-        "$REPO/examples" "$dir/" || exit 2
+    copy_tree "$dir"
     perl -0pi -e "$expr" "$dir/$file" || exit 2
     if cmp -s "$REPO/$file" "$dir/$file"; then
         echo "MUTANT $name: substitution did not apply (NOT APPLIED)"
@@ -41,7 +62,7 @@ mutant() {
     fi
     if ! cmake -S "$dir" -B "$dir/build" -DCMAKE_BUILD_TYPE=Debug >"$dir/cfg.log" 2>&1 ||
         ! cmake --build "$dir/build" --target test_host_entry test_host_restore -j4 >"$dir/build.log" 2>&1; then
-        echo "MUTANT $name: killed (does not build; see $dir/build.log)"
+        echo "MUTANT $name: BUILD FAILED (a compile or link error, not a semantic kill; see $dir/build.log)"
         return
     fi
     if (cd "$dir" && ./build/test_host_entry "$dir/run") >"$dir/run.log" 2>&1 &&
