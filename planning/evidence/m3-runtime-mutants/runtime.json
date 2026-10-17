@@ -1,0 +1,411 @@
+{
+  "campaign": "M3 control-plane runtime mutants",
+  "base_revision": "db5af7d8d4a968512f376a981b0d455023c6f958",
+  "started": "2026-10-17T19:00:23Z",
+  "baseline": {
+    "recovery": 0,
+    "rts_caps_engine": 0,
+    "rts_control_domains": 0,
+    "rts_ctrl_engine": 0,
+    "rts_world_set_fields": 0,
+    "rts_world_spawn_batch": 0
+  },
+  "tool_sha256": "3cd863b2f44603e9344a3edadfa4cc9cfa56911fad5bdf655609899af7f1e228",
+  "mutants": [
+    {
+      "id": "M3-M19a",
+      "mutation": "spawn_batch ignores expected_world_revision",
+      "file": "src/runtime/worker.c",
+      "detectors": [
+        "rts_world_spawn_batch",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+      "source_sha256_after": "88de0c9bf52defb638f8bfb475eb4b3ca860f37045f28d194c0d857bcc359ad3",
+      "detector_exit": {
+        "rts_world_spawn_batch": 8,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_world_spawn_batch",
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M19b",
+      "mutation": "set_fields ignores expected_world_revision",
+      "file": "src/runtime/worker.c",
+      "detectors": [
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+      "source_sha256_after": "41aa26ba1f187a10c24053564f416aa7cf771b7483cb6e4f0937b541a113a05d",
+      "detector_exit": {
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M19c",
+      "mutation": "world.spawn ignores expected_world_revision",
+      "file": "src/runtime/worker.c",
+      "detectors": [
+        "rts_ctrl_engine",
+        "recovery"
+      ],
+      "source_sha256_before": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+      "source_sha256_after": "b6079d8f422a1b5002d6bff897c160f69991bb5c8fe30d47c5a2ffb0a9aecd22",
+      "detector_exit": {
+        "rts_ctrl_engine": 8,
+        "recovery": 0
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M28a",
+      "mutation": "world.create accepts max_struct_per_tick below capacity",
+      "file": "src/runtime/worker.c",
+      "detectors": [
+        "rts_caps_engine"
+      ],
+      "source_sha256_before": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+      "source_sha256_after": "93c2230061831ece04adb33b6f69ad283dbc1c5ca7b851a1070124718106c7c5",
+      "detector_exit": {
+        "rts_caps_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_caps_engine"
+      ]
+    },
+    {
+      "id": "M3-M28b",
+      "mutation": "world.create accepts max_events_per_tick below capacity",
+      "file": "src/runtime/worker.c",
+      "detectors": [
+        "rts_caps_engine"
+      ],
+      "source_sha256_before": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+      "source_sha256_after": "bd41e87deaa874714ede017c8ab3aac45eab3bfba28419737ccbe67de7aa06d3",
+      "detector_exit": {
+        "rts_caps_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_caps_engine"
+      ]
+    },
+    {
+      "id": "M3-M28c",
+      "mutation": "config check applies to no schema (rts profile test dropped)",
+      "file": "src/runtime/worker.c",
+      "detectors": [
+        "rts_caps_engine"
+      ],
+      "source_sha256_before": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+      "source_sha256_after": "ba323141af9e4e03c4a78c89ffcef1c2627da834104aa545dfbc4093b0ddc415",
+      "detector_exit": {
+        "rts_caps_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_caps_engine"
+      ]
+    },
+    {
+      "id": "M3-M30a",
+      "mutation": "flight = 0 accepted",
+      "file": "src/runtime/rts/control_domains.c",
+      "detectors": [
+        "rts_control_domains",
+        "rts_world_spawn_batch",
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "6c914668357cbba51dfd4cd65af13656d94a68236d0878e89dc3c5ba4fd7501e",
+      "source_sha256_after": "fe9e4038189212b5fc446b9363da06c76d64fa723707299d7e727170130f7c6d",
+      "detector_exit": {
+        "rts_control_domains": 8,
+        "rts_world_spawn_batch": 0,
+        "rts_world_set_fields": 0,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_control_domains",
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M30b",
+      "mutation": "flight above 64 accepted",
+      "file": "src/runtime/rts/control_domains.c",
+      "detectors": [
+        "rts_control_domains",
+        "rts_world_spawn_batch",
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "6c914668357cbba51dfd4cd65af13656d94a68236d0878e89dc3c5ba4fd7501e",
+      "source_sha256_after": "ca72e523aaa8ecd0ef436031a85e9d85fa0f1355a388d7a3f51c83e0449391ba",
+      "detector_exit": {
+        "rts_control_domains": 8,
+        "rts_world_spawn_batch": 0,
+        "rts_world_set_fields": 0,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_control_domains",
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M30c",
+      "mutation": "set_fields writes any schema field (writable set not enforced)",
+      "file": "src/runtime/worker.c",
+      "detectors": [
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+      "source_sha256_after": "29c22910bbc5eabd77e8f8b94cedb9faf1acad6abda35b1af84b9f8b58d9cc8a",
+      "detector_exit": {
+        "rts_world_set_fields": 0,
+        "rts_ctrl_engine": 0
+      },
+      "status": "equivalent",
+      "killed_by": [],
+      "equivalent_reason": "set_fields: su_rts_ctl_check_value also returns SU_E_TYPE for every name outside the writable set, so the explicit writable check is a redundant first guard; M3-M30g removes both."
+    },
+    {
+      "id": "M3-M30d",
+      "mutation": "spawn accepts a nonzero system-owned field",
+      "file": "src/runtime/rts/control_domains.c",
+      "detectors": [
+        "rts_world_spawn_batch",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "6c914668357cbba51dfd4cd65af13656d94a68236d0878e89dc3c5ba4fd7501e",
+      "source_sha256_after": "d8ff703b690e620a8f0ae3cbd706cb607671bcd83e9e5d3ee1925c507c470b0e",
+      "detector_exit": {
+        "rts_world_spawn_batch": 8,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_world_spawn_batch",
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M30e",
+      "mutation": "set_fields skips the per-field domain check",
+      "file": "src/runtime/worker.c",
+      "detectors": [
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+      "source_sha256_after": "3a3919ab21e537ce683a890023ec4ea9aec8b757448df98765b3b12e04425b49",
+      "detector_exit": {
+        "rts_world_set_fields": 8,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M30g",
+      "mutation": "writable set not enforced anywhere (worker check off and check_value accepts unknown names)",
+      "file": "src/runtime/worker.c",
+      "detectors": [
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+      "source_sha256_after": "29c22910bbc5eabd77e8f8b94cedb9faf1acad6abda35b1af84b9f8b58d9cc8a",
+      "detector_exit": {
+        "rts_world_set_fields": 8,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M35a",
+      "mutation": "spawn accepts an omitted reload, damage or flight (default 0)",
+      "file": "src/runtime/rts/control_domains.c",
+      "detectors": [
+        "rts_world_spawn_batch",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "6c914668357cbba51dfd4cd65af13656d94a68236d0878e89dc3c5ba4fd7501e",
+      "source_sha256_after": "69cdb3ef4a72a3b6c2dc88d117c9bdcf796bfdbe28be2ffb92c0650bf39d3b9f",
+      "detector_exit": {
+        "rts_world_spawn_batch": 0,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M35b",
+      "mutation": "spawn accepts an omitted kind",
+      "file": "src/runtime/rts/control_domains.c",
+      "detectors": [
+        "rts_world_spawn_batch",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "6c914668357cbba51dfd4cd65af13656d94a68236d0878e89dc3c5ba4fd7501e",
+      "source_sha256_after": "fef167f5730a627cf2c3a4cfead5cd16eac62e6e6ddf0ee0e8d06495603d70d2",
+      "detector_exit": {
+        "rts_world_spawn_batch": 8,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_world_spawn_batch",
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M35c",
+      "mutation": "set_fields: formation_gen / range_sq resulting-row rules not applied",
+      "file": "src/runtime/worker.c",
+      "detectors": [
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1",
+      "source_sha256_after": "85eccd52495028d31175251b858f9005cc85a201261c3e4bc8c50ed65ced6436",
+      "detector_exit": {
+        "rts_world_set_fields": 8,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M35d",
+      "mutation": "formation_gen allowed to be nonzero with slot NONE",
+      "file": "src/runtime/rts/control_domains.c",
+      "detectors": [
+        "rts_control_domains",
+        "rts_world_spawn_batch",
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "6c914668357cbba51dfd4cd65af13656d94a68236d0878e89dc3c5ba4fd7501e",
+      "source_sha256_after": "798aa7367bd7faa6c0260d5323da00cae32a4454a664fdcb01ef4598f41724e2",
+      "detector_exit": {
+        "rts_control_domains": 8,
+        "rts_world_spawn_batch": 0,
+        "rts_world_set_fields": 8,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_control_domains",
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M35e",
+      "mutation": "formation_gen 0 allowed with a real slot (generation never validates)",
+      "file": "src/runtime/rts/control_domains.c",
+      "detectors": [
+        "rts_control_domains",
+        "rts_world_spawn_batch",
+        "rts_world_set_fields",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "6c914668357cbba51dfd4cd65af13656d94a68236d0878e89dc3c5ba4fd7501e",
+      "source_sha256_after": "13425288bf0da1f9429c1a0e7feb794040a7959588b27ac81871d24617975e0e",
+      "detector_exit": {
+        "rts_control_domains": 8,
+        "rts_world_spawn_batch": 0,
+        "rts_world_set_fields": 0,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_control_domains",
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M35f",
+      "mutation": "spawn omits the formation_ox/formation_oy requirement with a real slot",
+      "file": "src/runtime/rts/control_domains.c",
+      "detectors": [
+        "rts_world_spawn_batch",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "6c914668357cbba51dfd4cd65af13656d94a68236d0878e89dc3c5ba4fd7501e",
+      "source_sha256_after": "2cde2d4977adc00e4798dfb7d0dbc878e8e0b86052935271237c3a77e184794e",
+      "detector_exit": {
+        "rts_world_spawn_batch": 0,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_ctrl_engine"
+      ]
+    },
+    {
+      "id": "M3-M35g",
+      "mutation": "spawn omits the formation_oy requirement with a real slot",
+      "file": "src/runtime/rts/control_domains.c",
+      "detectors": [
+        "rts_world_spawn_batch",
+        "rts_ctrl_engine"
+      ],
+      "source_sha256_before": "6c914668357cbba51dfd4cd65af13656d94a68236d0878e89dc3c5ba4fd7501e",
+      "source_sha256_after": "b81d2cb4e1289194a312f362aa1ef432ff0556439920f3f8335368da8354a420",
+      "detector_exit": {
+        "rts_world_spawn_batch": 0,
+        "rts_ctrl_engine": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_ctrl_engine"
+      ]
+    }
+  ],
+  "restored": {
+    "recovery": 0,
+    "rts_caps_engine": 0,
+    "rts_control_domains": 0,
+    "rts_ctrl_engine": 0,
+    "rts_world_set_fields": 0,
+    "rts_world_spawn_batch": 0
+  },
+  "finished": "2026-10-17T19:00:45Z",
+  "summary": {
+    "killed": 18,
+    "equivalent": 1,
+    "survived": 0,
+    "build_failed": 0,
+    "not_applied": 0
+  }
+}

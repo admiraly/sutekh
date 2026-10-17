@@ -1,0 +1,39 @@
+M01-PRNG-GOLDEN         detect      killed                          KAT fails   congested-1024,congested-16384,mixed-1024,mixed-16384,sparse-16384,sparse-65536
+                        PRNG increment constant (GOLDEN) changed by 1
+M02-PRNG-MIX1           detect      killed                          KAT fails   congested-1024,congested-16384,mixed-1024,mixed-16384,sparse-16384,sparse-65536
+                        PRNG first mix constant changed
+M03-PRNG-MIX2           detect      killed                          KAT fails   congested-1024,congested-16384,mixed-1024,mixed-16384,sparse-16384,sparse-65536
+                        PRNG second mix constant changed
+M04-PRNG-SHIFT          detect      KNOWN GAP (no digest change)    KAT fails   -
+                        PRNG final shift 31 changed to 30
+                        gap: digest-insensitive for committed scenes; caught by PRNG KAT only (7.1 change needed to close; owner decision)
+M05-PRNG-U32            detect      killed                          KAT fails   congested-1024,congested-16384,mixed-1024,mixed-16384,sparse-16384,sparse-65536
+                        u32 taken from the low 32 bits instead of the high 32 bits
+M06-PRNG-UNIFORM        detect      killed                          KAT fails   congested-1024,congested-16384,mixed-1024,mixed-16384,sparse-16384,sparse-65536
+                        uniform(n) as modulo instead of multiply-high
+M07-SEED-MASK32         detect      killed                          KAT fails   congested-1024,congested-16384,mixed-1024,mixed-16384,sparse-16384,sparse-65536
+                        seed truncated to 32 bits
+M08-SEED-IGNORED        detect      killed                          KAT fails   congested-1024,congested-16384,mixed-1024,mixed-16384,sparse-16384,sparse-65536
+                        seed ignored (state starts at 0)
+M09-FIELD-ORDER         detect      killed                          KAT passes  congested-1024,congested-16384,duel16,mixed-1024,mixed-16384,sparse-16384,sparse-65536
+                        row encoding swaps the pos_x and pos_y columns
+M10-REMAINDER-GROUP     detect      killed                          KAT passes  congested-1024,congested-16384,mixed-1024,mixed-16384
+                        group size used for the split is 16 instead of 17 (remainder rule)
+M11-REMAINDER-ORDER     detect      killed                          KAT passes  congested-1024,congested-16384,mixed-1024,mixed-16384
+                        remainder rows get order_mode 0 instead of attack-move
+M12-ANCHOR-IDLE         detect      killed                          KAT passes  congested-1024,congested-16384,duel16,mixed-1024,mixed-16384
+                        anchor reload written as 2 instead of 1 (7.3 idle value)
+M13-FORMATION-ORIGIN    detect      killed                          KAT passes  congested-1024,congested-16384,mixed-1024,mixed-16384
+                        member offset origin -48 changed to -16
+M14-BAND-CENTRE         detect      killed                          KAT passes  mixed-1024,mixed-16384
+                        attack-move target uses the band centre without the +1 (half-open)
+M15-WEAPON-TABLE        detect      killed                          KAT passes  congested-1024,congested-16384,duel16,mixed-1024,mixed-16384,sparse-16384,sparse-65536
+                        rifle reload 6 changed to 7 (7.4 table)
+E01-STATE-MODULO        equivalent  equivalent (unchanged)          KAT passes  -
+                        state wrap written as % (1 << 64) instead of & MASK64 (same value)
+E02-ASCII-FLAG          equivalent  equivalent (unchanged)          KAT passes  -
+                        canonical JSON with ensure_ascii=False (output is ASCII for all inputs)
+E03-PROFILE-FILE-ORDER  equivalent  equivalent (unchanged)          KAT passes  -
+                        profile fields listed in reverse order in the file (ids unchanged)
+detect: 14/15 killed by a scene digest, 1 known gap(s); equivalent: 3 listed
+unexpected failures: 0

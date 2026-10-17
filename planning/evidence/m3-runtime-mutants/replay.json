@@ -1,0 +1,101 @@
+{
+  "campaign": "M3-M18 replay validator mutants",
+  "base_revision": "db5af7d8d4a968512f376a981b0d455023c6f958",
+  "started": "2026-10-17T19:00:46Z",
+  "source_sha256": "2a09f1983da363da3c88f171b313aaf4ba141a1ffe3b1a10ee25cdbfb69fa404",
+  "baseline": {
+    "test_replay": 0,
+    "test_replay_engine": 0
+  },
+  "mutants": [
+    {
+      "id": "M3-M18a",
+      "mutation": "replay compares only the digest record at t = 0",
+      "source_sha256_after": "ed7210daba6c1b47ff88b4fe1356bd3b01b713f6219b87d114198d132ac000d0",
+      "exit": {
+        "test_replay": 1,
+        "test_replay_engine": 1
+      },
+      "status": "killed",
+      "killed_by": [
+        "test_replay",
+        "test_replay_engine"
+      ]
+    },
+    {
+      "id": "M3-M18b",
+      "mutation": "replay skips the final digest record",
+      "source_sha256_after": "78645ee9c02e6fe2d62d512a6229bfba5043ef048cd6ee0f460478ef7b12c9cb",
+      "exit": {
+        "test_replay": 1,
+        "test_replay_engine": 1
+      },
+      "status": "killed",
+      "killed_by": [
+        "test_replay",
+        "test_replay_engine"
+      ]
+    },
+    {
+      "id": "M3-M18c",
+      "mutation": "replay ignores the missing-digest check",
+      "source_sha256_after": "74a8a58e362da2c72d383e1131246a85b35e848da576dac8f0d6d308d456acd2",
+      "exit": {
+        "test_replay": 1,
+        "test_replay_engine": 0
+      },
+      "status": "killed",
+      "killed_by": [
+        "test_replay"
+      ]
+    },
+    {
+      "id": "M3-M18d",
+      "mutation": "reader ignores seq order within a boundary",
+      "source_sha256_after": "f1a73b5a0c43c6cc80412b3c05644d031ff739f3b240adda7102e6b9567ebfd4",
+      "exit": {
+        "test_replay": 1,
+        "test_replay_engine": 0
+      },
+      "status": "killed",
+      "killed_by": [
+        "test_replay"
+      ]
+    },
+    {
+      "id": "M3-M18e",
+      "mutation": "replay applies a boundary's commands in reverse seq order",
+      "source_sha256_after": "a98bb5b7eb2b159fa6191fb0eaacadcf3d40a850ae8a99d36f608341fcc57543",
+      "exit": {
+        "test_replay": 1,
+        "test_replay_engine": 0
+      },
+      "status": "killed",
+      "killed_by": [
+        "test_replay"
+      ]
+    },
+    {
+      "id": "M3-M18f",
+      "mutation": "reader ignores digest record order",
+      "source_sha256_after": "29e9b08ca04dbcb2db2e3139831b4e0fc1334b4de83db6a551112b30df4a5fef",
+      "exit": {
+        "test_replay": 1,
+        "test_replay_engine": 0
+      },
+      "status": "killed",
+      "killed_by": [
+        "test_replay"
+      ]
+    }
+  ],
+  "restored": {
+    "test_replay": 0,
+    "test_replay_engine": 0
+  },
+  "summary": {
+    "killed": 6,
+    "survived": 0,
+    "not_applied": 0
+  }
+}

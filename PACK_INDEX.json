@@ -138,7 +138,7 @@
     {
       "path": "PACK_VALIDATION.json",
       "bytes": 557,
-      "sha256": "ba3b712b17b5e6fc653a31a292f10fff7d2e2e9db818b79a771ef67160dac0f8"
+      "sha256": "795767e24af246459a380f798c1a9bc52afa679aa70c887f7ded1d666e8adce0"
     },
     {
       "path": "README.md",
@@ -1531,6 +1531,31 @@
       "sha256": "ba249b5ff7a8c14db758cb0314665ce8d989f9a46251d163b47f2e76d9a0f762"
     },
     {
+      "path": "planning/evidence/m3-runtime-mutants/README.md",
+      "bytes": 4738,
+      "sha256": "70ea4aabea460de6b0b42aaea703230cf935aea8a4293a7e4fc7fe64a17ad3de"
+    },
+    {
+      "path": "planning/evidence/m3-runtime-mutants/gen-mutants.log",
+      "bytes": 3987,
+      "sha256": "9f8f5ebc4b42243ed05296c06a491bd9e87b37ce3bac9c902543cade6a4728a3"
+    },
+    {
+      "path": "planning/evidence/m3-runtime-mutants/host-mutants.log",
+      "bytes": 1523,
+      "sha256": "20ea291ae95f1d30449a6974a682e4c25c5609306c5825b441c1ca423b209045"
+    },
+    {
+      "path": "planning/evidence/m3-runtime-mutants/replay.json",
+      "bytes": 2681,
+      "sha256": "eaff7ee04866dfd741a115ddec1937d43fe81754473e4d7c8fe76b3193b80a30"
+    },
+    {
+      "path": "planning/evidence/m3-runtime-mutants/runtime.json",
+      "bytes": 13274,
+      "sha256": "4969bfcc14001eeae3112435b44f47e0686d8566f46092d74c013edc5eb0a65b"
+    },
+    {
       "path": "planning/evidence/m3-scale-v2/build-focused.log",
       "bytes": 13953,
       "sha256": "b57a78df5ad95ba7c32a9e2b1303d65b7c8f1356bc098211dde69321f5fdee87"
@@ -2126,6 +2151,11 @@
       "sha256": "4d10fad5c4ea0a2eab5508ec072e26406cf89dc07c0ae4f171d49a4f73eb2a8b"
     },
     {
+      "path": "planning/handoffs/2026-10-17-m3-06-runtime-mutants.md",
+      "bytes": 1901,
+      "sha256": "6274be28d0287e64452199dd4c1fadcf283a37ad386835590978135f7b7a898f"
+    },
+    {
       "path": "planning/leases/m3-behavior-experiments.json",
       "bytes": 529,
       "sha256": "daf8dbc3c88d9ccbada4d48423da6e265ea58668ed6c5d70734259d56e26db49"
@@ -2137,8 +2167,8 @@
     },
     {
       "path": "planning/status.json",
-      "bytes": 11192,
-      "sha256": "05fa15bba765d364d459712d8db59a821d49d8f3f12a9350c1f5053101dd972c"
+      "bytes": 11908,
+      "sha256": "b52e31914511d6b211c92c640543ad9817218288d9cd604a9f4d28bef9ddef62"
     },
     {
       "path": "planning/tasks.json",

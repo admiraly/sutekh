@@ -1,0 +1,27 @@
+base_revision f5486562ecc8186fd19c4e8f5b4ccfa3db3d847a
+tracked_changes 0
+script_sha256 25cf461807267291b5b79a3d37877d631a2ea1607de44e6d35f1eda03f99869c
+source_sha256 src/runtime/schedule.c 992872d48b7209147be1642fe523d785a0b03239a46b2c25a7d16ec971b3b9a3
+source_sha256 src/runtime/worker.c 5c6c3e7a0e34191f00b8d0158e943bde62747b8ebe6bb73c1dd985336953d4e1
+source_sha256 src/runtime/rts/host_decl.c 7cacd69373a5c4c373988870b7cdf88e828d86465abd098122851fb06389baec
+source_sha256 src/runtime/jobs/su_effects.c 05d55651854da57ed41ddb734d0e9df1c0e13902f48899fa47aa1fc82605a1d5
+compiler gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+start 2026-10-17T19:05:07Z
+BASELINE ok: unmutated tree builds and both host tests pass
+MUTANT host_effects_ignored: killed ()
+MUTANT dispatch_host_branch_skipped: killed ()
+MUTANT host_commit_skipped: killed ()
+MUTANT host_dead_rows_not_zeroed: killed ()
+MUTANT host_failure_ignored: killed ()
+MUTANT candidate_host_accepted: killed ()
+MUTANT host_gets_vm_context: killed ()
+MUTANT load_constants_hash_unchecked: killed ()
+MUTANT load_access_unchecked: killed ()
+MUTANT load_field_count_unchecked: killed ()
+MUTANT host_field_order_reversed_equivalent: SURVIVED (both host tests passed)
+MUTANT restore_host_branch_removed: killed ()
+MUTANT restore_registry_lookup_unchecked: killed ()
+MUTANT host_staging_copy_removed: killed ()
+MUTANT native_host_guard_removed: SURVIVED (both host tests passed)
+host mutants finished; equivalents and gaps are judged by the caller from the output
+end 2026-10-17T19:05:56Z

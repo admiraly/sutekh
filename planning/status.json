@@ -189,6 +189,32 @@
         "M3-06 dependency inventory closure; M3 stress and optimization gates"
       ],
       "evidence": "bench/rts/agent_experiments/"
+    },
+    "m3_06_mutation_campaigns": {
+      "date": "2026-10-17",
+      "evidence": "planning/evidence/m3-runtime-mutants/README.md",
+      "handoff": "planning/handoffs/2026-10-17-m3-06-runtime-mutants.md",
+      "closed": [
+        "M3-M18",
+        "M3-M19",
+        "M3-M26",
+        "M3-M28",
+        "M3-M29",
+        "M3-M30",
+        "M3-M32",
+        "M3-M34",
+        "M3-M35",
+        "M3-M17 (M04 known gap)"
+      ],
+      "open": [
+        "M3-M10 late arrival",
+        "M3-M11 blocked/underflow",
+        "M3-M13 double kill",
+        "M3-M20 exact variant",
+        "M3-M33 current-source re-verification",
+        "native host harness gap",
+        "independent review of this evidence"
+      ]
     }
   },
   "m0_accepted_source_revision": "9af40ccee115231b5682e7f0248c9cbd1729ed6b",
