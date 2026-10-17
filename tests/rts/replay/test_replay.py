@@ -158,6 +158,52 @@ class RecordAndReplay(unittest.TestCase):
         with self.assertRaises(rr.ReplayError):
             rr.read_replay(self.path)
 
+    SAME_BOUNDARY = [
+        (3, rr.CMD_SET_FIELDS, {"entities": [{"entity": handle(2), "values": {"pos_x": 100}}]}),
+        (3, rr.CMD_SET_FIELDS, {"entities": [{"entity": handle(2), "values": {"pos_x": 200}}]}),
+        (6, rr.CMD_DESPAWN, {"entity": handle(1)}),
+    ]
+
+    def test_same_boundary_seq_order_is_enforced_by_the_reader(self):  # M3-M18 (ignores seq order)
+        record(self.path, self.SAME_BOUNDARY)
+
+        def swap(lines):
+            idx = [i for i, ln in enumerate(lines) if '"t":3}' in ln]
+            self.assertEqual(len(idx), 2)
+            lines[idx[0]], lines[idx[1]] = lines[idx[1]], lines[idx[0]]
+            return lines
+        edit_lines(self.path, swap)
+        with self.assertRaises(rr.ReplayError) as cm:
+            rr.read_replay(self.path)
+        self.assertIn("out of (t, seq) order", str(cm.exception))
+
+    def test_same_boundary_commands_apply_in_seq_order(self):  # M3-M18 (applies out of seq order)
+        # pos_x 100 then 200 on one entity at one boundary: the final value, and so every later digest, depends on
+        # the order. A replayer that applies them in any other order diverges at the next digest record.
+        rec = record(self.path, self.SAME_BOUNDARY)
+        self.assertTrue(self.replay_fresh()["ok"])
+        be = rr.ModelBackend(CAP)
+        be.load_scene(SCENE)
+        for _ in range(3):
+            be.step()
+        be.apply({"cmd": rr.CMD_SET_FIELDS, "args": self.SAME_BOUNDARY[1][2]})
+        be.apply({"cmd": rr.CMD_SET_FIELDS, "args": self.SAME_BOUNDARY[0][2]})
+        be.step()
+        self.assertNotEqual(be.digest(4)["state"], rec.digests[1]["state"],
+                            "the two orders must differ, or this test cannot detect an order bug")
+
+    def test_digest_records_out_of_order_are_refused(self):  # M3-M18 (ignores digest order)
+        record(self.path)
+
+        def swap(lines):
+            idx = [i for i, ln in enumerate(lines) if '"state"' in ln]
+            lines[idx[0]], lines[idx[1]] = lines[idx[1]], lines[idx[0]]
+            return lines
+        edit_lines(self.path, swap)
+        with self.assertRaises(rr.ReplayError) as cm:
+            rr.read_replay(self.path)
+        self.assertIn("digest records out of order", str(cm.exception))
+
     def test_noncanonical_line_is_refused(self):
         record(self.path)
         edit_lines(self.path, lambda ls: [ls[0] + " "] + ls[1:])

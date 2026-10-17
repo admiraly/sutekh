@@ -60,7 +60,7 @@ def main() -> int:
     base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     tree = tempfile.mkdtemp(prefix="replay-mutants-")
     try:
-        for rel in ("bench/rts", "tests/rts/replay", "tests/rts/ref"):
+        for rel in ("bench/rts", "tests/rts/replay", "tests/rts/ref", "capsules/rts"):
             shutil.copytree(os.path.join(REPO, rel), os.path.join(tree, rel), ignore=shutil.ignore_patterns("__pycache__"))
         target = os.path.join(tree, TARGET)
         orig = open(target, encoding="utf-8").read()

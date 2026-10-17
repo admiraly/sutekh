@@ -1391,6 +1391,11 @@
       "sha256": "05d6523f345a17ee7f24522e2ded10bcf00ad4366f87009500b5f7e8d24f65ff"
     },
     {
+      "path": "planning/evidence/m3-independent-review/mutation-inventory-review.md",
+      "bytes": 11504,
+      "sha256": "1efc9cfdf7caa6c6dc56c3d1a370bef5f812409ba3bc6a4a7f6d83e7d6509630"
+    },
+    {
       "path": "planning/evidence/m3-independent-review/oversize-guard.log",
       "bytes": 582,
       "sha256": "a4f109926e1754298f1e88a16dbfa2a0c3b27e1e8672fc7bbeb7f5e8078e297a"
@@ -4497,8 +4502,8 @@
     },
     {
       "path": "tests/rts/load/test_ctrl_engine.py",
-      "bytes": 11772,
-      "sha256": "be9c58e3159a4b8ffbc2f4a440a3f34523d99138f1d2efaa16b13ab2ac393b50"
+      "bytes": 12715,
+      "sha256": "dfd497833083661d15a0cd381612cf1253e6cd05110405bf48e0d63a87a96126"
     },
     {
       "path": "tests/rts/load/test_load_engine.py",
@@ -4581,19 +4586,29 @@
       "sha256": "1bed07bc51323c3658b5ef774d429eab06d3a082d7db17f01d64977acfb01930"
     },
     {
+      "path": "tests/rts/replay/replay_mutants.py",
+      "bytes": 4962,
+      "sha256": "085d4651fb8c38a864e999e96506e7f85206dcbef78ce6265769715765a7f761"
+    },
+    {
       "path": "tests/rts/replay/test_model_snapshot.py",
       "bytes": 5125,
       "sha256": "ce63efba7f20ea77e8f0255bbffba709129a5e9f3ce28e5e4ca7d275fdf35d3e"
     },
     {
       "path": "tests/rts/replay/test_replay.py",
-      "bytes": 14593,
-      "sha256": "15a8824662c192f60ce406b9fe0567ee25748ba274c15f53d0bba41eb0c332cf"
+      "bytes": 16844,
+      "sha256": "04e62b508a9bcaf57ce0b43915b1d48c3f658fa46708c9a40e4fe21a5dfbc829"
     },
     {
       "path": "tests/rts/replay/test_replay_engine.py",
       "bytes": 10248,
       "sha256": "e2fea82071397c1424ed7d73e6eb676f79b3e58ae38c782651c26be13843a7a2"
+    },
+    {
+      "path": "tests/rts/runtime_mutants.py",
+      "bytes": 12742,
+      "sha256": "3cd863b2f44603e9344a3edadfa4cc9cfa56911fad5bdf655609899af7f1e228"
     },
     {
       "path": "tests/scheduler/fixtures/pipe/advance.capsule.json",
