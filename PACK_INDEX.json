@@ -4637,8 +4637,8 @@
     },
     {
       "path": "tests/rts/runtime_mutants.py",
-      "bytes": 12742,
-      "sha256": "3cd863b2f44603e9344a3edadfa4cc9cfa56911fad5bdf655609899af7f1e228"
+      "bytes": 13549,
+      "sha256": "57abd768a709ee5085ffbb52459f08858bd92e1c63010b944a04233301a8e068"
     },
     {
       "path": "tests/scheduler/fixtures/pipe/advance.capsule.json",

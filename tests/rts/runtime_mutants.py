@@ -3,7 +3,7 @@
 """Runtime mutation campaign for the M3 control plane (contract M3 section 15: M3-M19, M3-M28, M3-M30, M3-M35).
 
 Every mutant edits real engine source in an isolated git worktree of HEAD, builds it, and runs the named detectors
-(ctest names). A mutant is
+(ctest names; also M3-M20 and M3-M33). A mutant is
   killed        a detector failed on the built mutant;
   survived      every detector passed (an evidence gap or a missing test, never counted as killed);
   build_failed  the mutant did not compile or link (classified apart from a semantic kill);
@@ -70,6 +70,15 @@ MUTANTS = [
      "static uint32_t h_world_set_fields(", "if (!su_rts_ctl_writable(name)) {", "if (0 && !su_rts_ctl_writable(name)) {",
      SETF_DET, [(DOMAINS, "uint32_t su_rts_ctl_check_value(", "    return SU_E_TYPE;\n}\n\nuint32_t su_rts_ctl_check_formation_slot",
                  "    return SU_OK;\n}\n\nuint32_t su_rts_ctl_check_formation_slot")]),
+    ("M3-M20", "rts.scatter delivers damage from a dead sender (stale projectile fields of a despawned shooter)",
+     "profiles/rts/native/rts_scatter.c", None, "if (g_alive[r] == 0u) {", "if (0) {",
+     ["rts_native_ops", "rts_native_diff", "rts_native_records"]),
+    ("M3-M33a", "structural per-row caps use one global value for every system (OD-20 reverted)",
+     "src/runtime/entity_tick.c", "static void sys_row_caps(",
+     "ps[i] = m->uses_entity_ops ? m->max_struct_per_row : 0u;", "ps[i] = 1u;", ["rts_capacity"]),
+    ("M3-M33b", "event per-row caps use one global value for every system (OD-20 reverted)",
+     "src/runtime/entity_tick.c", "static void sys_row_caps(",
+     "pe[i] = m->uses_entity_ops ? m->max_events_per_row : 0u;", "pe[i] = 1u;", ["rts_capacity"]),
     ("M3-M35a", "spawn accepts an omitted reload, damage or flight (default 0)", DOMAINS, "uint32_t su_rts_ctl_spawn_row(",
      "if (has(required[i], ctx) && find_named(in, n, required[i]) < 0) {",
      "if (strcmp(required[i], \"kind\") == 0 && has(required[i], ctx) && find_named(in, n, required[i]) < 0) {",
