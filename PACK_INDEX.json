@@ -2157,8 +2157,8 @@
     },
     {
       "path": "planning/handoffs/2026-10-17-m3-06-runtime-mutants.md",
-      "bytes": 1901,
-      "sha256": "6274be28d0287e64452199dd4c1fadcf283a37ad386835590978135f7b7a898f"
+      "bytes": 2037,
+      "sha256": "3810330acdb6f517b516e0e8bb28ef11e3b4ebce49891d3a9ff49c2f464bc9eb"
     },
     {
       "path": "planning/leases/m3-behavior-experiments.json",

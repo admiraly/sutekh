@@ -21,6 +21,7 @@ Base: `2b32abd` (start), campaigns at `db5af7d` and `f548656`. Evidence and mapp
 Ubuntu, gcc 15.2.0). The native lane was not re-run; no native-compiled source changed in this slice.
 
 ## Open (M3-06 stays `implementing`)
-M3-M10 late-arrival, M3-M11 blocked/underflow, M3-M13 double-kill variants; M3-M20 exact projectile-clear variant;
-M3-M33 coherent current-source re-verification; native-build host harness (`native_host_guard_removed`); an
-independent reviewer pass over this evidence. No whole-inventory PASS is claimed.
+Native-build host harness (`native_host_guard_removed`); a native white-box scatter test on an unzeroed dead row
+(M3-M20 is classified equivalent by review, see the evidence README); an independent reviewer pass over this
+evidence. Done since the first draft: M3-M10b/M11b/M11c/M13b added to the model suite (37 mutants, baseline ok) and
+M3-M33 re-verified on the current source (`runtime-m20-m33.json`). No whole-inventory PASS is claimed.
