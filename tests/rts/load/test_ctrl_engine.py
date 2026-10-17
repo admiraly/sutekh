@@ -114,15 +114,26 @@ def spawn_cases(t: Twin) -> None:
     t.case("kind 2 with hp", "world.spawn", {"values": unit(kind=2, hp=1)}, "SU_E_TYPE")
     t.case("kind 2 with range_sq", "world.spawn", {"values": unit(kind=2, hp=0, range_sq=1)}, "SU_E_TYPE")
     t.case("kind 2 anchor", "world.spawn", {"values": unit(kind=2, hp=0)}, "SU_OK")
+    live = t.last["slot"]  # a live row that formation_slot may name (Q2), so the cases below test their own rule
+    # A stale expected_world_revision refuses every mutating method with SU_E_STALE_REVISION (M3-M19).
+    stale = t.wid + ".r0"
+    for method, params in (("world.spawn", {"values": unit()}), ("world.spawn_batch", {"rows": [{"values": unit()}]}),
+                           ("world.despawn", {"entity": t.last["entity"]})):
+        before = t.state()
+        resp = t.s.raw(t.s.line(method, dict(params, world_id=t.wid, expected_world_revision=stale)))
+        check(resp.get("error", {}).get("code") == "SU_E_STALE_REVISION", f"{method} stale revision refused: {resp}")
+        check(t.state() == before, f"{method} stale revision changes nothing")
     # D1 spawn defaults.
     for name in ("reload", "damage", "flight", "kind"):
         v = unit()
         del v[name]
         t.case(f"spawn omitting {name}", "world.spawn", {"values": v}, "SU_E_TYPE")
-    t.case("formation_slot 3 without formation_ox", "world.spawn",
-           {"values": unit(formation_slot=3, formation_gen=1, formation_oy=5)}, "SU_E_TYPE")
-    t.case("formation_slot 3 without formation_gen", "world.spawn",
-           {"values": unit(formation_slot=3, formation_ox=5, formation_oy=5)}, "SU_E_TYPE")
+    t.case("live formation_slot without formation_ox", "world.spawn",
+           {"values": unit(formation_slot=live, formation_gen=1, formation_oy=5)}, "SU_E_TYPE")
+    t.case("live formation_slot without formation_oy", "world.spawn",
+           {"values": unit(formation_slot=live, formation_gen=1, formation_ox=5)}, "SU_E_TYPE")
+    t.case("live formation_slot without formation_gen", "world.spawn",
+           {"values": unit(formation_slot=live, formation_ox=5, formation_oy=5)}, "SU_E_TYPE")
     t.case("target_slot 0 named", "world.spawn", {"values": unit(target_slot=0)}, "SU_E_TYPE")
     t.case("system-owned cooldown nonzero", "world.spawn", {"values": unit(cooldown=1)}, "SU_E_TYPE")
     t.case("unknown field", "world.spawn", {"values": unit(no_such_field=1)}, "SU_E_SCHEMA_MISMATCH")
