@@ -110,6 +110,9 @@ mutant host_field_order_reversed_equivalent src/runtime/schedule.c \
 # Restore: the host branch of rebuild_schedule is removed (M3-M34, T-HOST-11).
 mutant restore_host_branch_removed src/runtime/worker.c \
     's/if \(c->kind == SU_SYS_KIND_HOST\) \{/if (0) {/'
+# Restore: a host system with no registered operator is not refused (M3-M34 registry alternative, r4 A1).
+mutant restore_registry_lookup_unchecked src/runtime/worker.c \
+    's/(const SuHostOpDesc \*desc = su_host_find\(c->system_id\);\n\s+)if \(desc == NULL\) \{/$1if (0) {/'
 # No working-to-staging copy before run (M3-M32, T-HOST-13 a): non-target rows keep stale staging.
 mutant host_staging_copy_removed src/runtime/schedule.c \
     's/memcpy\(full_out\.bindings\[j\]\.data, full_inv\.bindings\[k\]\.data,/if (0) memcpy(full_out.bindings[j].data, full_inv.bindings[k].data,/'
