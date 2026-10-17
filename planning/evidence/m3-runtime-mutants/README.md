@@ -52,6 +52,12 @@ claim.
 
 ## Still open in the M3-06 inventory
 
-M3-M10 late-arrival, M3-M11 blocked and underflow, M3-M13 double-kill variants; M3-M20 exact projectile-clear
-variant; coherent re-verification of M3-M33 on the current source; native-build run of the host harness (the
-`native_host_guard_removed` gap); the final-gate statement of M3-06 is not made here.
+M3-M20 exact projectile-clear variant; coherent re-verification of M3-M33 on the current source; native-build run
+of the host harness (the `native_host_guard_removed` gap); an independent review of this evidence. The final-gate
+statement of M3-06 is not made here.
+
+Added after the campaigns above, in the reference-model suite (`tests/rts/ref/mutants.py`, 37 mutants, baseline ok,
+no mismatch): M3-M10b arrival one tick late (detected), M3-M11b cooldown underflow (detected), M3-M11c cooldown not
+zeroed when fire is blocked (survives, equivalent: that branch is reached only with cooldown already 0), M3-M13b
+repeat kill of a row already at hp 0 (detected). These are model-level mutants, not engine runtime mutations; the
+native checked-IR records for M10/M11/M13 are unchanged.
