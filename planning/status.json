@@ -204,15 +204,14 @@
         "M3-M32",
         "M3-M34",
         "M3-M35",
-        "M3-M17 (M04 known gap)"
+        "M3-M17 (M04 known gap)",
+        "M3-M10b/M11b/M13b model variants",
+        "M3-M33 (current source)",
+        "M3-M20 (equivalent by review; needs independent confirmation)"
       ],
       "open": [
-        "M3-M10 late arrival",
-        "M3-M11 blocked/underflow",
-        "M3-M13 double kill",
-        "M3-M20 exact variant",
-        "M3-M33 current-source re-verification",
-        "native host harness gap",
+        "native host harness gap (native_host_guard_removed)",
+        "native white-box scatter test on an unzeroed dead row",
         "independent review of this evidence"
       ]
     }

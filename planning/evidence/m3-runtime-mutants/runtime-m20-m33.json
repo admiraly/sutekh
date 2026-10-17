@@ -1,0 +1,94 @@
+{
+  "campaign": "M3 control-plane runtime mutants",
+  "base_revision": "ea46242e67ceae06b5a34d33edfc778670d983c3",
+  "started": "2026-10-17T19:09:58Z",
+  "baseline": {
+    "recovery": 0,
+    "rts_capacity": 0,
+    "rts_caps_engine": 0,
+    "rts_control_domains": 0,
+    "rts_ctrl_engine": 0,
+    "rts_native_diff": 0,
+    "rts_native_ops": 0,
+    "rts_native_records": 0,
+    "rts_world_set_fields": 0,
+    "rts_world_spawn_batch": 0
+  },
+  "tool_sha256": "5dde4c6421487d9728e01379e7c05051c917a991382138ac4e43a583f8eab0ff",
+  "mutants": [
+    {
+      "id": "M3-M20",
+      "mutation": "rts.scatter delivers damage from a dead sender (stale projectile fields of a despawned shooter)",
+      "file": "profiles/rts/native/rts_scatter.c",
+      "detectors": [
+        "rts_native_ops",
+        "rts_native_diff",
+        "rts_native_records"
+      ],
+      "source_sha256_before": "787d77c6dbf6e225c5711fffb0116ffb9d3ff4b54c1f55221a00da053ac100db",
+      "source_sha256_after": "33bf5169e2eb39b06bd440f3f7dfbb4ecc99e76574ac691b0a061bf9573cbeb7",
+      "detector_exit": {
+        "rts_native_ops": 0,
+        "rts_native_diff": 0,
+        "rts_native_records": 0
+      },
+      "status": "equivalent",
+      "killed_by": [],
+      "equivalent_reason": "rts.scatter: a dead sender's projectile fields are already zero when scatter runs (su_world_despawn zeroes the slot at once and su_world_zero_dead zeroes rows that die in a tick), so dmg_out is 0 and the row is skipped before the alive gate; the gate is defence in depth, as for M3-M06. The reference model detects the same gate on a forged state (check_scatter_dead_sender_gated). A native white-box test that runs the operator on an unzeroed dead row would kill it and is not written."
+    },
+    {
+      "id": "M3-M33a",
+      "mutation": "structural per-row caps use one global value for every system (OD-20 reverted)",
+      "file": "src/runtime/entity_tick.c",
+      "detectors": [
+        "rts_capacity"
+      ],
+      "source_sha256_before": "e5014df505483931a76a1f4f1d819a6418e94de95bbdfaedc82a3db07ad45927",
+      "source_sha256_after": "2c025601122fab82c530140722231212c83550d4a608e34b7165ee97643784cf",
+      "detector_exit": {
+        "rts_capacity": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_capacity"
+      ]
+    },
+    {
+      "id": "M3-M33b",
+      "mutation": "event per-row caps use one global value for every system (OD-20 reverted)",
+      "file": "src/runtime/entity_tick.c",
+      "detectors": [
+        "rts_capacity"
+      ],
+      "source_sha256_before": "e5014df505483931a76a1f4f1d819a6418e94de95bbdfaedc82a3db07ad45927",
+      "source_sha256_after": "880a8aed93a61e5267e03defb5e36cf47c8a03e8c3ec0a7eb796ea0581005276",
+      "detector_exit": {
+        "rts_capacity": 8
+      },
+      "status": "killed",
+      "killed_by": [
+        "rts_capacity"
+      ]
+    }
+  ],
+  "restored": {
+    "recovery": 0,
+    "rts_capacity": 0,
+    "rts_caps_engine": 0,
+    "rts_control_domains": 0,
+    "rts_ctrl_engine": 0,
+    "rts_native_diff": 0,
+    "rts_native_ops": 0,
+    "rts_native_records": 0,
+    "rts_world_set_fields": 0,
+    "rts_world_spawn_batch": 0
+  },
+  "finished": "2026-10-17T19:10:11Z",
+  "summary": {
+    "killed": 2,
+    "equivalent": 1,
+    "survived": 0,
+    "build_failed": 0,
+    "not_applied": 0
+  }
+}

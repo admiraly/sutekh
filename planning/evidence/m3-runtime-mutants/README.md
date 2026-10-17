@@ -52,9 +52,17 @@ claim.
 
 ## Still open in the M3-06 inventory
 
-M3-M20 exact projectile-clear variant; coherent re-verification of M3-M33 on the current source; native-build run
-of the host harness (the `native_host_guard_removed` gap); an independent review of this evidence. The final-gate
-statement of M3-06 is not made here.
+the native-build run of the host harness (the `native_host_guard_removed` gap); a native white-box test that runs
+`rts.scatter` on an unzeroed dead row (it would kill M3-M20 at operator level); an independent review of this
+evidence, including of the M3-M20 equivalence. The final-gate statement of M3-06 is not made here.
+
+Added in `runtime-m20-m33.json` (base `13b7051` for the first run, `ea46242` for the final one; same source):
+- M3-M33 (global structural and event per-row caps) killed by `rts_capacity` on the current source, closing the
+  "coherent current-source re-verification" item.
+- M3-M20 (dead-sender gate removed in the real `rts.scatter`) survives all native detectors. Classified equivalent by
+  review, not killed: a dead row's projectile fields are already zero when scatter runs (`su_world_despawn` zeroes the
+  slot at once, `su_world_zero_dead` zeroes rows that die in a tick), so the row is skipped before the gate. The
+  reference model kills the same gate on a forged state. This relies on the zeroing invariant that M3-M26 tests.
 
 Added after the campaigns above, in the reference-model suite (`tests/rts/ref/mutants.py`, 37 mutants, baseline ok,
 no mismatch): M3-M10b arrival one tick late (detected), M3-M11b cooldown underflow (detected), M3-M11c cooldown not
