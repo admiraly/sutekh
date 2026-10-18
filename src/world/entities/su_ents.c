@@ -553,24 +553,14 @@ uint32_t su_ents_canonical_write(const SuEnts *e, uint8_t *buf, size_t cap, size
     return SU_OK;
 }
 
-uint32_t su_ents_canonical_parse(const uint8_t *buf, size_t len, SuEnts **out) {
+/* Header checks shared by both parsers: on SU_OK the counts are consistent and len is exact. */
+static uint32_t su_parse_header(const uint8_t *buf, size_t len, uint32_t *capacity, uint32_t *hw,
+                                uint64_t *alive_claim, uint64_t *retired_claim) {
     uint64_t cap64;
     uint64_t hw64;
-    uint64_t alive_claim;
-    uint64_t retired_claim;
-    uint32_t capacity;
-    uint32_t hw;
-    uint32_t i;
-    uint32_t alive_n = 0;
-    uint32_t ret_n = 0;
     size_t expected = 0;
     size_t off;
     uint32_t st;
-    SuEnts *e;
-    if (buf == NULL || out == NULL) {
-        return SU_E_INVALID_ARGUMENT;
-    }
-    *out = NULL;
     if (len < SU_ENTS_HEADER_BYTES) {
         return SU_E_PARSE;
     }
@@ -587,44 +577,49 @@ uint32_t su_ents_canonical_parse(const uint8_t *buf, size_t len, SuEnts **out) {
     off = 17u + SU_ENTS_POLICY_LEN;
     cap64 = su_get_u64(buf + off);
     hw64 = su_get_u64(buf + off + 8u);
-    alive_claim = su_get_u64(buf + off + 16u);
-    retired_claim = su_get_u64(buf + off + 24u);
-    off += 32u;
+    *alive_claim = su_get_u64(buf + off + 16u);
+    *retired_claim = su_get_u64(buf + off + 24u);
     /* Oversize is refused before any size arithmetic or allocation. */
     if (cap64 > SU_LIMIT_ROWS) {
         return SU_E_RESOURCE_LIMIT;
     }
-    if (hw64 > cap64 || alive_claim > hw64 || retired_claim > hw64 ||
-        alive_claim + retired_claim > hw64) {
+    if (hw64 > cap64 || *alive_claim > hw64 || *retired_claim > hw64 ||
+        *alive_claim + *retired_claim > hw64) {
         return SU_E_PARSE;
     }
-    capacity = (uint32_t)cap64;
-    hw = (uint32_t)hw64;
-    st = su_canonical_bytes(hw, &expected);
+    *capacity = (uint32_t)cap64;
+    *hw = (uint32_t)hw64;
+    st = su_canonical_bytes(*hw, &expected);
     if (st != SU_OK) {
         return st;
     }
     if (len != expected) {
         return SU_E_PARSE; /* truncated (len < expected) or trailing bytes (len > expected) */
     }
-    st = su_raw_new(capacity, &e);
-    if (st != SU_OK) {
-        return st;
-    }
-    for (i = 0; i < capacity; i++) {
+    return SU_OK;
+}
+
+/* Fills e (capacity set, every array zeroed, hint_word 0) from the records. SU_E_PARSE on any
+ * inconsistency; e is then partially filled. */
+static uint32_t su_parse_records(SuEnts *e, const uint8_t *rec, uint32_t hw, uint64_t alive_claim,
+                                 uint64_t retired_claim) {
+    uint32_t alive_n = 0;
+    uint32_t ret_n = 0;
+    uint32_t i;
+    for (i = 0; i < e->capacity; i++) {
         if (i < hw) {
-            const uint8_t *r = buf + off + (size_t)i * SU_ENTS_RECORD_BYTES;
+            const uint8_t *r = rec + (size_t)i * SU_ENTS_RECORD_BYTES;
             uint32_t g = su_get_u32(r);
             uint32_t x = su_get_u32(r + 4);
             uint8_t a = r[8];
             if (a > 1u) {
-                goto fail;
+                return SU_E_PARSE;
             }
             e->gen[i] = g;
             e->ext[i] = x;
             if (a == 1u) {
                 if (g == 0u || g == SU_GEN_RETIRED) {
-                    goto fail;
+                    return SU_E_PARSE;
                 }
                 su_bit_set(e->alive, i);
                 e->chunk_alive[i / SU_CHUNK_SLOTS]++;
@@ -632,7 +627,7 @@ uint32_t su_ents_canonical_parse(const uint8_t *buf, size_t len, SuEnts **out) {
                 continue;
             }
             if (x != 0u || g == 0u) {
-                goto fail;
+                return SU_E_PARSE;
             }
             if (g == SU_GEN_RETIRED) {
                 ret_n++;
@@ -646,19 +641,84 @@ uint32_t su_ents_canonical_parse(const uint8_t *buf, size_t len, SuEnts **out) {
     }
     /* high_water must be exact: the top slot was really allocated (alive, or despawned at least once). */
     if (hw > 0u && su_bit_get(e->alive, hw - 1u) == 0u && e->gen[hw - 1u] == SU_GEN_FIRST) {
-        goto fail;
+        return SU_E_PARSE;
     }
     if (alive_n != alive_claim || ret_n != retired_claim) {
-        goto fail;
+        return SU_E_PARSE;
     }
     e->high_water = hw;
     e->alive_count = alive_n;
     e->retired_count = ret_n;
+    return SU_OK;
+}
+
+uint32_t su_ents_canonical_parse(const uint8_t *buf, size_t len, SuEnts **out) {
+    uint64_t alive_claim = 0;
+    uint64_t retired_claim = 0;
+    uint32_t capacity = 0;
+    uint32_t hw = 0;
+    uint32_t st;
+    SuEnts *e;
+    if (buf == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    st = su_parse_header(buf, len, &capacity, &hw, &alive_claim, &retired_claim);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = su_raw_new(capacity, &e);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (su_parse_records(e, buf + SU_ENTS_HEADER_BYTES, hw, alive_claim, retired_claim) != SU_OK) {
+        su_ents_destroy(e);
+        return SU_E_PARSE;
+    }
     *out = e;
     return SU_OK;
-fail:
-    su_ents_destroy(e);
-    return SU_E_PARSE;
+}
+
+uint32_t su_ents_canonical_parse_into(SuEnts *e, const uint8_t *buf, size_t len) {
+    uint64_t alive_claim = 0;
+    uint64_t retired_claim = 0;
+    uint32_t capacity = 0;
+    uint32_t hw = 0;
+    uint32_t words;
+    uint32_t st;
+    if (e == NULL || buf == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    st = su_parse_header(buf, len, &capacity, &hw, &alive_claim, &retired_claim);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (capacity != e->capacity) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    /* Back to the zeroed shape su_raw_new produces, without allocating. */
+    words = su_words_for(e->capacity);
+    memset(e->alive, 0, (size_t)(words > 0u ? words : 1u) * sizeof(uint64_t));
+    memset(e->avail, 0, (size_t)(words > 0u ? words : 1u) * sizeof(uint64_t));
+    memset(e->chunk_alive, 0, (size_t)(e->chunks > 0u ? e->chunks : 1u) * sizeof(uint32_t));
+    memset(e->chunk_free, 0, (size_t)(e->chunks > 0u ? e->chunks : 1u) * sizeof(uint32_t));
+    memset(e->summary, 0, (size_t)(e->summary_words > 0u ? e->summary_words : 1u) * sizeof(uint64_t));
+    e->hint_word = 0;
+    e->high_water = 0;
+    e->alive_count = 0;
+    e->retired_count = 0;
+    return su_parse_records(e, buf + SU_ENTS_HEADER_BYTES, hw, alive_claim, retired_claim);
+}
+
+uint32_t su_ents_swap(SuEnts *a, SuEnts *b) {
+    SuEnts t;
+    if (a == NULL || b == NULL || a->capacity != b->capacity) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    t = *a;
+    *a = *b;
+    *b = t;
+    return SU_OK;
 }
 
 uint32_t su_ents_state_equal(const SuEnts *a, const SuEnts *b, int *equal) {

@@ -662,7 +662,7 @@ add_test(NAME rts_behavior_regeneration COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CUR
 # ---- BEGIN in-process host API (include/sutekh/host.h; planning/amendments/2026-10-18-downstream-host-work.md) ----
 # The schedule, entity tick and host-operator declaration sources are compiled into the host library in their
 # default configuration (no native tier, no test seams), so it does not pull in the control plane.
-set(SU_HOST_SOURCES src/host/su_host.c src/host/su_host_clock.c src/host/su_replay.c src/runtime/schedule.c src/runtime/entity_tick.c src/runtime/rts/host_decl.c)
+set(SU_HOST_SOURCES src/host/su_host.c src/host/su_host_clock.c src/host/su_replay.c src/host/su_xxh64.c src/runtime/schedule.c src/runtime/entity_tick.c src/runtime/rts/host_decl.c)
 add_library(su_host STATIC ${SU_HOST_SOURCES})
 target_include_directories(su_host PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
 target_link_libraries(su_host PUBLIC su_vm su_world su_ents su_ir su_jobs su_cmdq su_platform)
@@ -686,6 +686,16 @@ add_executable(test_host_dll tests/host/test_host.c)
 target_link_libraries(test_host_dll PRIVATE sutekh_host)
 sutekh_apply_warnings(test_host_dll)
 add_test(NAME host_api_dll COMMAND test_host_dll WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# Host events, in-place restore and the fast digest (static: also the internal XXH64 vectors; DLL: public API only).
+add_executable(test_host_rollback tests/host/test_host_rollback.c)
+target_include_directories(test_host_rollback PRIVATE src)
+target_link_libraries(test_host_rollback PRIVATE su_host)
+sutekh_apply_warnings(test_host_rollback)
+add_test(NAME host_rollback COMMAND test_host_rollback WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_executable(test_host_rollback_dll tests/host/test_host_rollback.c)
+target_link_libraries(test_host_rollback_dll PRIVATE sutekh_host)
+sutekh_apply_warnings(test_host_rollback_dll)
+add_test(NAME host_rollback_dll COMMAND test_host_rollback_dll WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # Fixed-step clock (include/sutekh/clock.h).
 add_executable(test_clock tests/host/test_clock.c)
 target_link_libraries(test_clock PRIVATE su_host)
@@ -716,3 +726,4 @@ target_include_directories(bench_host PRIVATE src)
 target_link_libraries(bench_host PRIVATE su_host)
 sutekh_apply_warnings(bench_host)
 # ---- END in-process host API ----
+include(cmake/SutekhPresentation.cmake)

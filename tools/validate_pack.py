@@ -30,7 +30,8 @@ def pack_files():
     for directory, dirs, files in os.walk(ROOT, followlinks=False):
         dirs[:] = sorted(d for d in dirs if d not in excluded
                          and not d.startswith('build-')
-                         and not (Path(directory) == ROOT / 'third_party' and d == 'asmjit')  # fetched, git-ignored
+                         and not (Path(directory) == ROOT / 'third_party'
+                                  and d in ('asmjit', 'vulkan-headers'))  # fetched, git-ignored
                          and not (Path(directory) / d).is_symlink())
         for name in sorted(files):
             path = Path(directory) / name

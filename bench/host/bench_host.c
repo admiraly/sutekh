@@ -1,6 +1,8 @@
 /* Observation bench for the in-process host API: per-call wall time of su_host_step (1 tick, with a 4-write
- * input record), su_host_snapshot_write, su_host_snapshot_restore and su_host_digest, on the examples/
- * movement capsule (2 fields) with N live entities. Output is one JSON object on stdout.
+ * input record), su_host_snapshot_write, su_host_snapshot_restore, su_host_digest, and the rollback
+ * operations su_host_snapshot_restore_inplace, su_host_digest_fast, su_host_events_for_tick and a composite
+ * rollback (in-place restore, 8 re-simulated ticks, fast digest), on the examples/ movement capsule
+ * (2 fields) with N live entities. Output is one JSON object on stdout.
  *
  * These are observations on the machine that ran it, not qualification against any target (constitution
  * C10). The workload is the 2-field demo capsule; costs scale with fields x capacity and the event log.
@@ -15,6 +17,8 @@
 
 #include "platform/su_platform.h"
 #include "sutekh/host.h"
+
+#define OPS 9u
 
 static uint8_t *slurp(const char *path, size_t *len) {
     FILE *f = fopen(path, "rb");
@@ -54,6 +58,9 @@ static void stats(uint64_t *s, uint32_t n, double *median_us, double *p95_us) {
 
 int main(int argc, char **argv) {
     static const uint64_t sizes[] = {64u, 1024u, 16384u};
+    static const char *const names[OPS] = {"step_us", "snapshot_write_us", "snapshot_restore_us", "digest_us",
+                                           "snapshot_restore_inplace_us", "digest_fast_us", "events_for_tick_us",
+                                           "rollback_8_ticks_us", "rollback_8_ticks_batched_us"};
     uint32_t iters = argc > 1 ? (uint32_t)strtoul(argv[1], NULL, 10) : 1000u;
     SuHostCapsule cap;
     uint32_t si;
@@ -69,17 +76,13 @@ int main(int argc, char **argv) {
         SuHostWorldDesc d;
         SuHostWorld *w = NULL;
         SuHostError e;
-        uint64_t *t_step = malloc(iters * sizeof *t_step);
-        uint64_t *t_snap = malloc(iters * sizeof *t_snap);
-        uint64_t *t_rest = malloc(iters * sizeof *t_rest);
-        uint64_t *t_dig = malloc(iters * sizeof *t_dig);
+        uint64_t *t[OPS];
         uint8_t *snap;
         size_t snap_len = 0;
         uint64_t ents[4];
         uint64_t k;
         uint32_t i;
-        double m[4];
-        double p[4];
+        uint32_t op;
 
         memset(&d, 0, sizeof d);
         d.struct_size = sizeof d;
@@ -90,8 +93,13 @@ int main(int argc, char **argv) {
         d.event_log_max = 64;
         d.max_struct_per_tick = sizes[si];
         d.max_events_per_tick = sizes[si];
-        if (t_step == NULL || t_snap == NULL || t_rest == NULL || t_dig == NULL ||
-            su_host_world_create(&d, &w, &e) != SU_OK) {
+        for (op = 0; op < OPS; op++) {
+            t[op] = malloc(iters * sizeof *t[op]);
+            if (t[op] == NULL) {
+                return 1;
+            }
+        }
+        if (su_host_world_create(&d, &w, &e) != SU_OK) {
             fprintf(stderr, "setup failed: %s\n", e.message);
             return 1;
         }
@@ -113,7 +121,10 @@ int main(int argc, char **argv) {
         }
         for (i = 0; i < iters; i++) {
             SuHostInput in[4];
+            SuHostEvent ev[16];
             uint64_t t0;
+            uint64_t fast = 0;
+            uint32_t n = 0;
             uint32_t j;
             for (j = 0; j < 4u; j++) {
                 in[j].entity = ents[j];
@@ -123,37 +134,83 @@ int main(int argc, char **argv) {
             (void)su_host_input_push(w, su_host_tick(w), in, 4, &e);
             t0 = now_ns();
             (void)su_host_step(w, 1, NULL, &e);
-            t_step[i] = now_ns() - t0;
+            t[0][i] = now_ns() - t0;
             t0 = now_ns();
             (void)su_host_snapshot_write(w, snap, snap_len, &snap_len);
-            t_snap[i] = now_ns() - t0;
+            t[1][i] = now_ns() - t0;
             t0 = now_ns();
             if (su_host_snapshot_restore(w, snap, snap_len, &e) != SU_OK) {
                 fprintf(stderr, "restore failed: %s\n", e.message);
                 return 1;
             }
-            t_rest[i] = now_ns() - t0;
+            t[2][i] = now_ns() - t0;
             {
                 uint8_t dg[32];
                 t0 = now_ns();
                 (void)su_host_digest(w, dg);
-                t_dig[i] = now_ns() - t0;
+                t[3][i] = now_ns() - t0;
+            }
+            t0 = now_ns();
+            if (su_host_snapshot_restore_inplace(w, snap, snap_len, &e) != SU_OK) {
+                fprintf(stderr, "in-place restore failed: %s\n", e.message);
+                return 1;
+            }
+            t[4][i] = now_ns() - t0;
+            t0 = now_ns();
+            (void)su_host_digest_fast(w, &fast);
+            t[5][i] = now_ns() - t0;
+            t0 = now_ns();
+            (void)su_host_events_for_tick(w, su_host_tick(w), ev, 16, &n, NULL, NULL);
+            t[6][i] = now_ns() - t0;
+            /* A rollback frame: restore in place, re-run 8 ticks (4 input writes each), fast digest. The
+             * world ends 8 ticks ahead of the snapshot; the next iteration snapshots there. */
+            t0 = now_ns();
+            (void)su_host_snapshot_restore_inplace(w, snap, snap_len, &e);
+            for (j = 0; j < 8u; j++) {
+                uint32_t q;
+                for (q = 0; q < 4u; q++) {
+                    in[q].value = i + j + q;
+                }
+                (void)su_host_input_push(w, su_host_tick(w), in, 4, &e);
+                (void)su_host_step(w, 1, NULL, &e);
+            }
+            (void)su_host_digest_fast(w, &fast);
+            t[7][i] = now_ns() - t0;
+            /* The same rollback with the 8 records queued first and one su_host_step call for all 8 ticks
+             * (same inputs, so the same final state as the loop above). */
+            {
+                uint64_t ref = fast;
+                uint64_t base;
+                t0 = now_ns();
+                (void)su_host_snapshot_restore_inplace(w, snap, snap_len, &e);
+                base = su_host_tick(w);
+                for (j = 0; j < 8u; j++) {
+                    uint32_t q;
+                    for (q = 0; q < 4u; q++) {
+                        in[q].value = i + j + q;
+                    }
+                    (void)su_host_input_push(w, base + j, in, 4, &e);
+                }
+                (void)su_host_step(w, 8, NULL, &e);
+                (void)su_host_digest_fast(w, &fast);
+                t[8][i] = now_ns() - t0;
+                if (fast != ref) {
+                    fprintf(stderr, "batched rollback reached a different state\n");
+                    return 1;
+                }
             }
         }
-        stats(t_step, iters, &m[0], &p[0]);
-        stats(t_snap, iters, &m[1], &p[1]);
-        stats(t_rest, iters, &m[2], &p[2]);
-        stats(t_dig, iters, &m[3], &p[3]);
-        printf("%s{\"entities\":%llu,\"snapshot_bytes\":%zu,"
-               "\"step_us\":{\"median\":%.2f,\"p95\":%.2f},\"snapshot_write_us\":{\"median\":%.2f,\"p95\":%.2f},"
-               "\"snapshot_restore_us\":{\"median\":%.2f,\"p95\":%.2f},\"digest_us\":{\"median\":%.2f,\"p95\":%.2f}}",
-               si > 0u ? "," : "", (unsigned long long)sizes[si], snap_len, m[0], p[0], m[1], p[1], m[2], p[2], m[3],
-               p[3]);
+        printf("%s{\"entities\":%llu,\"snapshot_bytes\":%zu", si > 0u ? "," : "", (unsigned long long)sizes[si],
+               snap_len);
+        for (op = 0; op < OPS; op++) {
+            double m = 0.0;
+            double p = 0.0;
+            stats(t[op], iters, &m, &p);
+            printf(",\"%s\":{\"median\":%.2f,\"p95\":%.2f}", names[op], m, p);
+            free(t[op]);
+        }
+        printf("}");
         free(snap);
-        free(t_step);
-        free(t_snap);
-        free(t_rest);
-        free(t_dig);
         su_host_world_destroy(w);
     }
     printf("]}\n");

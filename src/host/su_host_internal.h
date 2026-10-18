@@ -8,6 +8,7 @@
 
 #include "runtime/schedule.h"
 #include "sutekh/host.h"
+#include "world/entities/su_cmdq.h"
 #include "world/su_world.h"
 
 /* One tick's input record: writes sorted by (slot, field id), unique. */
@@ -30,6 +31,8 @@ struct SuHostWorld {
     HostRecord *recs;              /* ascending tick */
     uint32_t rec_count;
     uint32_t rec_cap;
+    SuEnts *rb_ents;               /* scratch for su_host_snapshot_restore_inplace (allocated on first use) */
+    SuEventLog *rb_log;
 };
 
 #endif
