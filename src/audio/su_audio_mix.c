@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sutekh/audio.h"
+#include "su_audio_int.h"
 
 #define PI_F 3.14159265358979f
 
@@ -186,25 +186,7 @@ uint32_t su_audio_clip_from_wav(const void *bytes, size_t len, SuAudioClip **out
         return SU_E_RESOURCE_LIMIT;
     }
     for (i = 0; i < frames * channels; i++) {
-        const uint8_t *p = data + (size_t)i * (bits / 8u);
-        float s;
-        if (format == 3u) {
-            uint32_t u = rd32(p);
-            memcpy(&s, &u, 4);
-            if (!isfinite(s)) {
-                s = 0.0f;
-            }
-        } else if (bits == 8u) {
-            s = ((float)p[0] - 128.0f) / 128.0f;
-        } else if (bits == 16u) {
-            s = (float)(int16_t)rd16(p) / 32768.0f;
-        } else if (bits == 24u) {
-            int32_t v = (int32_t)(((uint32_t)p[0] << 8) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 24)) >> 8;
-            s = (float)v / 8388608.0f;
-        } else {
-            s = (float)((double)(int32_t)rd32(p) / 2147483648.0);
-        }
-        c->samples[i] = s;
+        c->samples[i] = su_wav_sample(data + (size_t)i * (bits / 8u), format, bits);
     }
     *out = c;
     return SU_OK;
@@ -267,12 +249,15 @@ float su_audio_doppler(SuVec3f lp, SuVec3f lv, SuVec3f sp, SuVec3f sv, float c, 
 #define CMD_STOP 3u
 #define CMD_LISTENER 4u
 #define CMD_MASTER 5u
+#define CMD_SEEK 6u
 
 typedef struct Cmd {
     uint32_t type;
     uint32_t slot;
     uint32_t gen;
     float a;
+    uint64_t frame;       /* PLAY: start frame; SEEK: target */
+    uint64_t ls, le;      /* PLAY: resolved loop region */
     SuAudioVoiceDesc d;   /* PLAY; UPDATE uses pos, vel, gain; LISTENER uses pos, vel and rot */
     SuQuatf rot;
 } Cmd;
@@ -282,6 +267,11 @@ typedef struct Voice {
     int active;
     SuAudioVoiceDesc d;
     double pos;           /* frames into the clip */
+    uint64_t frames;      /* source length */
+    uint64_t ls, le;      /* loop region [ls, le) */
+    uint32_t channels;
+    uint32_t src_rate;
+    SuAudioStream *stream; /* claimed by the game thread at play, released when the voice ends */
     float cur_l, cur_r;   /* gains at the end of the last block */
     int fresh;            /* no ramp on the first block */
     float fade;           /* 1 = full */
@@ -293,6 +283,8 @@ typedef struct GtSlot {
     int busy;
     uint32_t priority;
     uint64_t order;
+    uint64_t limit;       /* exclusive seek bound */
+    uint32_t src_rate;
 } GtSlot;
 
 struct SuAudioMixer {
@@ -311,6 +303,7 @@ struct SuAudioMixer {
     _Atomic uint32_t end_tail;
     /* render side */
     Voice *v;
+    _Atomic uint64_t *vpos;   /* per slot: bits of the voice's position after the last render */
     SuWorldPos lpos;
     SuQuatf lrot;
     SuVec3f lvel;
@@ -347,7 +340,8 @@ uint32_t su_audio_mixer_create(const SuAudioMixerDesc *d, SuAudioMixer **out) {
     m->ended = calloc(m->ended_cap * 2u, sizeof *m->ended);
     m->v = calloc(m->max_voices, sizeof *m->v);
     m->gt = calloc(m->max_voices, sizeof *m->gt);
-    if (m->cmds == NULL || m->ended == NULL || m->v == NULL || m->gt == NULL) {
+    m->vpos = calloc(m->max_voices, sizeof *m->vpos);
+    if (m->cmds == NULL || m->ended == NULL || m->v == NULL || m->gt == NULL || m->vpos == NULL) {
         su_audio_mixer_destroy(m);
         return SU_E_RESOURCE_LIMIT;
     }
@@ -367,6 +361,24 @@ uint32_t su_audio_mixer_create(const SuAudioMixerDesc *d, SuAudioMixer **out) {
 
 void su_audio_mixer_destroy(SuAudioMixer *m) {
     if (m != NULL) {
+        if (m->v != NULL) {
+            uint32_t i;
+            for (i = 0; i < m->max_voices; i++) {
+                if (m->v[i].stream != NULL) {
+                    su_stream_release(m->v[i].stream);
+                }
+            }
+        }
+        if (m->cmds != NULL) {   /* plays queued but never rendered still hold their streams */
+            uint32_t h = atomic_load_explicit(&m->cmd_head, memory_order_relaxed);
+            uint32_t t = atomic_load_explicit(&m->cmd_tail, memory_order_relaxed);
+            for (; h != t; h++) {
+                if (m->cmds[h % m->cmd_cap].type == CMD_PLAY) {
+                    su_stream_release(m->cmds[h % m->cmd_cap].d.stream);
+                }
+            }
+        }
+        free(m->vpos);
         free(m->cmds);
         free(m->ended);
         free(m->v);
@@ -400,13 +412,51 @@ static int voice_slot(const SuAudioMixer *m, SuAudioVoice h, uint32_t *slot) {
     return 1;
 }
 
+/* Frames from a frames field or, while that is 0, its seconds field. 0 on success. */
+static int resolve_field(uint64_t fr, double sec, uint32_t rate, uint64_t *out) {
+    if (!(sec >= 0.0) || sec > 1.0e9) {
+        return 1;
+    }
+    if (fr != 0u && sec != 0.0) {
+        return 1;
+    }
+    *out = fr != 0u ? fr : (uint64_t)llround(sec * (double)rate);
+    return 0;
+}
+
 uint32_t su_audio_play(SuAudioMixer *m, const SuAudioVoiceDesc *d, SuAudioVoice *out) {
     uint32_t i;
     uint32_t slot = UINT32_MAX;
+    uint64_t frames;
+    uint64_t start = 0;
+    uint64_t ls = 0;
+    uint64_t le = 0;
+    uint32_t rate;
+    int claimed = 0;
     Cmd c;
-    if (m == NULL || d == NULL || out == NULL || d->clip == NULL || d->clip->frames == 0u || d->clip->samples == NULL ||
-        (d->clip->channels != 1u && d->clip->channels != 2u) || !(d->gain >= 0.0f) || !(d->pitch >= 0.0f) ||
-        (d->flags & ~(SU_AUDIO_LOOP | SU_AUDIO_SPATIAL)) != 0u) {
+    if (m == NULL || d == NULL || out == NULL || !(d->gain >= 0.0f) || !(d->pitch >= 0.0f) ||
+        (d->flags & ~(SU_AUDIO_LOOP | SU_AUDIO_SPATIAL)) != 0u || (d->clip == NULL) == (d->stream == NULL)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (d->clip != NULL) {
+        if (d->clip->frames == 0u || d->clip->samples == NULL || (d->clip->channels != 1u && d->clip->channels != 2u)) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        frames = d->clip->frames;
+        rate = d->clip->sample_rate;
+    } else {
+        frames = su_stream_frames(d->stream);
+        rate = su_stream_rate(d->stream);
+    }
+    if (resolve_field(d->start_frame, d->start_seconds, rate, &start) ||
+        resolve_field(d->loop_start, d->loop_start_seconds, rate, &ls) ||
+        resolve_field(d->loop_end, d->loop_end_seconds, rate, &le)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (le == 0u) {
+        le = frames;
+    }
+    if (start >= frames || ls >= le || le > frames || ((d->flags & SU_AUDIO_LOOP) != 0u && start >= le)) {
         return SU_E_INVALID_ARGUMENT;
     }
     *out = 0;
@@ -420,6 +470,12 @@ uint32_t su_audio_play(SuAudioMixer *m, const SuAudioVoiceDesc *d, SuAudioVoice 
             slot = i;
         }
     }
+    if (d->stream != NULL) {
+        if (!su_stream_claim(d->stream)) {
+            return SU_E_INVALID_ARGUMENT; /* already playing */
+        }
+        claimed = 1;
+    }
     if (slot == UINT32_MAX) {
         /* steal the oldest voice whose priority is not above the new one */
         uint64_t oldest = UINT64_MAX;
@@ -430,6 +486,9 @@ uint32_t su_audio_play(SuAudioMixer *m, const SuAudioVoiceDesc *d, SuAudioVoice 
             }
         }
         if (slot == UINT32_MAX) {
+            if (claimed) {
+                su_stream_release(d->stream);
+            }
             m->refused++;
             return SU_E_RESOURCE_LIMIT;
         }
@@ -439,13 +498,61 @@ uint32_t su_audio_play(SuAudioMixer *m, const SuAudioVoiceDesc *d, SuAudioVoice 
     m->gt[slot].busy = 1;
     m->gt[slot].priority = d->priority;
     m->gt[slot].order = m->order++;
+    m->gt[slot].limit = (d->flags & SU_AUDIO_LOOP) != 0u ? le : frames;
+    m->gt[slot].src_rate = rate;
     memset(&c, 0, sizeof c);
     c.type = CMD_PLAY;
+    c.frame = start;
+    c.ls = ls;
+    c.le = le;
     c.slot = slot;
     c.gen = m->gt[slot].gen;
     c.d = *d;
     (void)push_cmd(m, &c);
     *out = voice_handle(slot, m->gt[slot].gen);
+    return SU_OK;
+}
+
+static uint32_t seek_cmd(SuAudioMixer *m, SuAudioVoice v, uint64_t frame) {
+    uint32_t slot;
+    Cmd c;
+    if (!voice_slot(m, v, &slot)) {
+        return SU_E_STALE_HANDLE;
+    }
+    if (frame >= m->gt[slot].limit) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memset(&c, 0, sizeof c);
+    c.type = CMD_SEEK;
+    c.slot = slot;
+    c.gen = m->gt[slot].gen;
+    c.frame = frame;
+    return push_cmd(m, &c) ? SU_OK : SU_E_RESOURCE_LIMIT;
+}
+
+uint32_t su_audio_seek(SuAudioMixer *m, SuAudioVoice v, uint64_t frame) {
+    return seek_cmd(m, v, frame);
+}
+
+uint32_t su_audio_seek_seconds(SuAudioMixer *m, SuAudioVoice v, double seconds) {
+    uint32_t slot;
+    if (!voice_slot(m, v, &slot)) {
+        return SU_E_STALE_HANDLE;
+    }
+    if (!(seconds >= 0.0) || seconds > 1.0e9) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return seek_cmd(m, v, (uint64_t)llround(seconds * (double)m->gt[slot].src_rate));
+}
+
+uint32_t su_audio_voice_position(const SuAudioMixer *m, SuAudioVoice v, double *frames) {
+    uint32_t slot;
+    uint64_t bits;
+    if (frames == NULL || !voice_slot(m, v, &slot)) {
+        return SU_E_STALE_HANDLE;
+    }
+    bits = atomic_load_explicit(&m->vpos[slot], memory_order_relaxed);
+    memcpy(frames, &bits, sizeof *frames);
     return SU_OK;
 }
 
@@ -551,12 +658,36 @@ static void apply_commands(SuAudioMixer *m) {
             if (v->active && v->gen != c->gen) {
                 report_end(m, c->slot, v->gen); /* stolen: the old generation ends */
             }
+            if (v->active) {
+                su_stream_release(v->stream);
+            }
             memset(v, 0, sizeof *v);
             v->gen = c->gen;
             v->active = 1;
             v->d = c->d;
             v->fade = 1.0f;
             v->fresh = 1;
+            v->pos = (double)c->frame;
+            v->ls = c->ls;
+            v->le = c->le;
+            v->stream = c->d.stream;
+            if (v->stream != NULL) {
+                v->frames = su_stream_frames(v->stream);
+                v->channels = su_stream_channels(v->stream);
+                v->src_rate = su_stream_rate(v->stream);
+                if ((v->d.flags & SU_AUDIO_LOOP) != 0u) {
+                    su_stream_prepare_loop(v->stream, v->ls);
+                }
+            } else {
+                v->frames = v->d.clip->frames;
+                v->channels = v->d.clip->channels;
+                v->src_rate = v->d.clip->sample_rate;
+            }
+            break;
+        case CMD_SEEK:
+            if (v->active && v->gen == c->gen) {
+                v->pos = (double)c->frame;
+            }
             break;
         case CMD_UPDATE:
             if (v->active && v->gen == c->gen) {
@@ -596,26 +727,43 @@ static SuVec3f rotate_inv(SuQuatf q, SuVec3f v) {
     return su_quatf_rotate(c, v);
 }
 
-static float sample_at(const SuAudioClip *c, double pos, uint32_t ch, int loop) {
-    uint32_t i0 = (uint32_t)pos;
-    double fr = pos - (double)i0;
-    uint32_t i1 = i0 + 1u;
-    float a;
-    float b;
-    if (i1 >= c->frames) {
-        i1 = loop ? 0u : c->frames - 1u;
-    }
-    if (c->channels == 1u) {
-        a = c->samples[i0];
-        b = c->samples[i1];
-    } else if (ch < 2u) {
-        a = c->samples[i0 * 2u + ch];
-        b = c->samples[i1 * 2u + ch];
+static void src_frame(const Voice *v, uint64_t i, float *l, float *r) {
+    if (v->stream != NULL) {
+        su_stream_frame(v->stream, i, l, r);
+    } else if (v->channels == 1u) {
+        *l = *r = v->d.clip->samples[i];
     } else {
-        a = 0.5f * (c->samples[i0 * 2u] + c->samples[i0 * 2u + 1u]);
-        b = 0.5f * (c->samples[i1 * 2u] + c->samples[i1 * 2u + 1u]);
+        *l = v->d.clip->samples[i * 2u];
+        *r = v->d.clip->samples[i * 2u + 1u];
     }
-    return fr == 0.0 ? a : a + (b - a) * (float)fr;
+}
+
+/* Linearly interpolated sample at pos: mix = 1 gives the mono mix of both channels (spatial voices), else the
+ * channels separately (mono sources feed both). The partner of the last frame before the loop end is the loop
+ * start; without a loop, the last frame. */
+static void voice_sample(const Voice *v, double pos, int loop, int mix, float *sl, float *sr) {
+    uint64_t i0 = (uint64_t)pos;
+    double fr = pos - (double)i0;
+    float l0;
+    float r0;
+    float l1 = 0.0f;
+    float r1 = 0.0f;
+    src_frame(v, i0, &l0, &r0);
+    if (fr != 0.0) {
+        uint64_t i1 = i0 + 1u;
+        if (i1 >= (loop ? v->le : v->frames)) {
+            i1 = loop ? v->ls : v->frames - 1u;
+        }
+        src_frame(v, i1, &l1, &r1);
+    }
+    if (mix) {
+        float a = v->channels == 1u ? l0 : 0.5f * (l0 + r0);
+        float b = v->channels == 1u ? l1 : 0.5f * (l1 + r1);
+        *sl = *sr = fr == 0.0 ? a : a + (b - a) * (float)fr;
+    } else {
+        *sl = fr == 0.0 ? l0 : l0 + (l1 - l0) * (float)fr;
+        *sr = v->channels == 1u ? *sl : (fr == 0.0 ? r0 : r0 + (r1 - r0) * (float)fr);
+    }
 }
 
 void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
@@ -631,7 +779,6 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
     memset(out, 0, (size_t)frames * 2u * sizeof *out);
     for (vi = 0; vi < m->max_voices; vi++) {
         Voice *v = &m->v[vi];
-        const SuAudioClip *c;
         float gl;
         float gr;
         float rate;
@@ -644,9 +791,8 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
             continue;
         }
         active++;
-        c = v->d.clip;
         loop = (v->d.flags & SU_AUDIO_LOOP) != 0u;
-        rate = (float)c->sample_rate / (float)m->rate * (v->d.pitch > 0.0f ? v->d.pitch : 1.0f);
+        rate = (float)v->src_rate / (float)m->rate * (v->d.pitch > 0.0f ? v->d.pitch : 1.0f);
         mono_mix = 0;
         if ((v->d.flags & SU_AUDIO_SPATIAL) != 0u) {
             SuVec3f rel = su_wpos_delta(v->d.pos, m->lpos);
@@ -678,12 +824,7 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
             if (v->fade_step == -1.0f) {
                 f = 1.0f - (float)(i + 1u) / (float)frames; /* immediate stop: one-block ramp */
             }
-            if (mono_mix) {
-                sl = sr = sample_at(c, v->pos, c->channels == 1u ? 0u : 2u, loop);
-            } else {
-                sl = sample_at(c, v->pos, 0u, loop);
-                sr = c->channels == 1u ? sl : sample_at(c, v->pos, 1u, loop);
-            }
+            voice_sample(v, v->pos, loop, mono_mix, &sl, &sr);
             out[i * 2u] += sl * l * f;
             out[i * 2u + 1u] += sr * r * f;
             if (v->fade_step < 0.0f && v->fade_step != -1.0f) {
@@ -694,9 +835,9 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
                 }
             }
             v->pos += (double)rate;
-            if (v->pos >= (double)c->frames) {
+            if (v->pos >= (double)(loop ? v->le : v->frames)) {
                 if (loop) {
-                    v->pos = fmod(v->pos, (double)c->frames);
+                    v->pos = (double)v->ls + fmod(v->pos - (double)v->ls, (double)(v->le - v->ls));
                 } else {
                     ended = 1;
                     break;
@@ -708,8 +849,15 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
         if (v->fade_step == -1.0f) {
             ended = 1;
         }
+        {
+            uint64_t pb;
+            memcpy(&pb, &v->pos, sizeof pb);
+            atomic_store_explicit(&m->vpos[vi], pb, memory_order_relaxed);
+        }
         if (ended) {
             v->active = 0;
+            su_stream_release(v->stream);
+            v->stream = NULL;
             report_end(m, vi, v->gen);
         }
     }

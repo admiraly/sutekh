@@ -53,6 +53,40 @@ uint32_t su_audio_clip_tone(uint32_t wave, float frequency, float seconds, uint3
                             SuAudioClip **out);
 void su_audio_clip_free(SuAudioClip *clip);
 
+/* ---- streamed clips ----
+ * For long music: nothing is decoded up front. A stream holds a decoder (WAV or Ogg Vorbis, from a file or from
+ * memory the caller keeps alive) and a bounded window of decoded frames (ring_frames, default 16384); resident
+ * memory is the window plus the decoder state, independent of the clip's length. Decoding happens in the mixer's
+ * render call (chunks of 1024 frames, on whatever thread renders), so offline output is deterministic and a stream
+ * is sample-identical to the same clip decoded whole (same decoder, same float conversion). Because decoding and
+ * file reads run on the render thread, short sounds should stay SuAudioClip; seeks (a seek command, a loop wrap
+ * outside the window) cost one decoder seek.
+ * One stream serves one voice at a time (su_audio_play refuses a stream that is in use); a finished or stolen
+ * voice frees it. Streams are not owned by the mixer. */
+typedef struct SuAudioStream SuAudioStream;
+
+typedef struct SuAudioStreamInfo {
+    uint64_t frames;
+    uint32_t channels;
+    uint32_t sample_rate;
+    uint32_t ring_frames;
+    uint64_t ring_bytes;           /* the window */
+    uint64_t decoder_bytes;        /* decoder state (Ogg: the codebooks and per-frame buffers stb_vorbis reports) */
+    uint64_t resident_bytes;       /* everything the stream holds, accounted */
+    uint64_t frames_decoded;       /* since open, including re-decodes after seeks */
+    uint32_t seeks;                /* decoder seeks since open */
+} SuAudioStreamInfo;
+
+/* Format is detected from the first bytes (RIFF WAVE or Ogg). ring_frames 0 = 16384; at least 2048.
+ * SU_E_IO (cannot open), SU_E_PARSE (with a reason), SU_E_UNSUPPORTED_METHOD (Ogg without stb_vorbis). */
+uint32_t su_audio_stream_open_file(const char *path, uint32_t ring_frames, SuAudioStream **out, char message[256]);
+uint32_t su_audio_stream_open_memory(const void *bytes, size_t len, uint32_t ring_frames, SuAudioStream **out,
+                                     char message[256]);
+/* SU_E_INVALID_ARGUMENT while a voice is using it (stop the voice and render once first). */
+uint32_t su_audio_stream_close(SuAudioStream *s);
+void su_audio_stream_info(const SuAudioStream *s, SuAudioStreamInfo *out);
+int su_audio_stream_in_use(const SuAudioStream *s);
+
 /* ---- mixer ---- */
 
 typedef struct SuAudioMixer SuAudioMixer;
@@ -87,6 +121,21 @@ typedef struct SuAudioVoiceDesc {
     float doppler;                 /* 0 = none, 1 = physical */
     uint32_t priority;             /* when every voice is busy, the oldest voice of a lower or equal priority is
                                     * stolen; otherwise the play is refused */
+    /* Exactly one of clip and stream is set. */
+    SuAudioStream *stream;
+    /* Start offset and loop points, in frames of the source (its own sample rate), or in seconds. A seconds field
+     * is used only while its frames field is 0 (both non-zero: SU_E_INVALID_ARGUMENT); seconds convert with
+     * llround(seconds * clip rate). Defaults: start 0, loop start 0, loop end 0 = the end of the clip. Playback
+     * begins at the start offset (also when looping, where it may lie inside or before the loop region); on
+     * reaching loop_end a looping voice continues at loop_start. Without SU_AUDIO_LOOP the clip plays to its real
+     * end and the loop points are ignored. Requires start < frames, loop_start < loop_end <= frames, and, when
+     * looping, start < loop_end; otherwise SU_E_INVALID_ARGUMENT. */
+    uint64_t start_frame;
+    uint64_t loop_start;
+    uint64_t loop_end;
+    double start_seconds;
+    double loop_start_seconds;
+    double loop_end_seconds;
 } SuAudioVoiceDesc;
 
 /* Starts a voice (applied at the next render). SU_E_RESOURCE_LIMIT when no voice could be had or the command
@@ -96,6 +145,13 @@ uint32_t su_audio_play(SuAudioMixer *m, const SuAudioVoiceDesc *d, SuAudioVoice 
 uint32_t su_audio_voice_update(SuAudioMixer *m, SuAudioVoice v, SuWorldPos pos, SuVec3f vel, float gain);
 /* Stops a voice with a linear fade of fade_s seconds (0: at the next render, still click-free over one block). */
 uint32_t su_audio_stop(SuAudioMixer *m, SuAudioVoice v, float fade_s);
+/* Jumps a voice to an exact source frame (applied at the next render; the next output sample is that frame, no
+ * interpolation offset). frame must be below the voice's loop end when it loops, else below the clip length:
+ * SU_E_INVALID_ARGUMENT. Streams seek the decoder, accurate to the sample. */
+uint32_t su_audio_seek(SuAudioMixer *m, SuAudioVoice v, uint64_t frame);
+uint32_t su_audio_seek_seconds(SuAudioMixer *m, SuAudioVoice v, double seconds);
+/* Position of a voice in source frames (the next frame to play, fractional with pitch) as of the last render. */
+uint32_t su_audio_voice_position(const SuAudioMixer *m, SuAudioVoice v, double *frames);
 /* 1 while a voice is queued or playing (as known to the game thread after su_audio_update). */
 int su_audio_voice_active(const SuAudioMixer *m, SuAudioVoice v);
 /* Listener (the camera): position, orientation (+x right, +y up, looking down -z), velocity. */
