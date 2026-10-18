@@ -16,10 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
-#include <sys/mman.h>
-#include <sys/wait.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "backends/native/su_native.h"
 #include "ir/su_lir.h"
@@ -28,6 +25,8 @@
 #include "sutekh/native/abi.h"
 #include "sutekh/status.h"
 #include "vm/su_vm.h"
+
+#include "tests/native/native_test_mem.h" /* OS helpers: mappings, faults, AVX2 oracle, clocks */
 
 static int g_checks = 0;
 static int g_failures = 0;
@@ -76,8 +75,7 @@ typedef struct Col {
 } Col;
 
 static size_t page_size(void) {
-    long p = sysconf(_SC_PAGESIZE);
-    return p > 0 ? (size_t)p : 4096u;
+    return su_nt_page_size();
 }
 
 static int col_alloc(Col *c, uint64_t rows) {
@@ -94,12 +92,8 @@ static int col_alloc(Col *c, uint64_t rows) {
         nd = 1u;
     }
     total = (nd + 2u) * pg;
-    base = mmap(NULL, total, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (base == MAP_FAILED) {
-        return 0;
-    }
-    if (mprotect(base + pg, nd * pg, PROT_READ | PROT_WRITE) != 0) {
-        munmap(base, total);
+    base = su_nt_guarded_map(total, 1u, nd);
+    if (base == NULL) {
         return 0;
     }
     boundary = base + pg + nd * pg;
@@ -110,9 +104,7 @@ static int col_alloc(Col *c, uint64_t rows) {
 }
 
 static void col_free(Col *c) {
-    if (c->map != NULL) {
-        munmap(c->map, c->map_bytes);
-    }
+    su_nt_unmap(c->map, c->map_bytes);
     c->map = NULL;
     c->data = NULL;
 }
@@ -382,23 +374,10 @@ static int diff_module(const SuLirModule *m, uint64_t seed_base, const char *tag
 
 /* ---------- 1. capabilities and fallback ---------- */
 
-/* Independent oracle: /proc/cpuinfo flags (kernel-reported CPU and OS-enabled features). Returns
- * -1 when the file cannot be read. */
+/* Independent oracle: the OS's view (/proc/cpuinfo flags on Linux, IsProcessorFeaturePresent on Windows).
+ * Returns -1 when unknown. */
 static int cpuinfo_has_avx2(void) {
-    FILE *f = fopen("/proc/cpuinfo", "r");
-    char line[8192];
-    int found = -1;
-    if (f == NULL) {
-        return -1;
-    }
-    while (fgets(line, sizeof line, f) != NULL) {
-        if (strncmp(line, "flags", 5) == 0) {
-            found = strstr(line, " avx2") != NULL ? 1 : 0;
-            break;
-        }
-    }
-    fclose(f);
-    return found;
+    return su_nt_os_avx2();
 }
 
 static void run_capabilities(void) {
@@ -411,7 +390,7 @@ static void run_capabilities(void) {
     SuNativeArtifact *art = NULL;
     SuNativeDiag d;
 
-    printf("host caps: 0x%x (AVX2 %s; /proc/cpuinfo says %s)\n", caps,
+    printf("host caps: 0x%x (AVX2 %s; the OS says %s)\n", caps,
            (caps & SU_NCAP_X86_64_AVX2) ? "usable" : "not usable",
            oracle < 0 ? "unknown" : (oracle ? "avx2" : "no avx2"));
     CHECK(caps & SU_NCAP_X86_64_SCALAR);
@@ -1240,42 +1219,17 @@ static void run_metadata(void) {
 
 /* ---------- 9. W^X of the AVX2 mapping ---------- */
 
+/* 1 when any mapping is writable and executable, 0 when none. */
 static int count_rwx_lines(void) {
-    FILE *f = fopen("/proc/self/maps", "r");
-    char line[512];
-    int n = 0;
-    if (f == NULL) {
-        return -1;
-    }
-    while (fgets(line, sizeof line, f) != NULL) {
-        if (strstr(line, "rwx") != NULL) {
-            n++;
-        }
-    }
-    fclose(f);
-    return n;
+    char p[8];
+    int any = 0;
+    (void)su_nt_perms_at(0u, p, &any);
+    return any;
 }
 
 /* Permissions of the mapping containing addr, as "r-xp" style text. Returns 0 when not found. */
 static int perms_at(uintptr_t addr, char perms[8]) {
-    FILE *f = fopen("/proc/self/maps", "r");
-    char line[512];
-    int found = 0;
-    if (f == NULL) {
-        return 0;
-    }
-    while (fgets(line, sizeof line, f) != NULL) {
-        unsigned long lo;
-        unsigned long hi;
-        char p[8];
-        if (sscanf(line, "%lx-%lx %7s", &lo, &hi, p) == 3 && addr >= lo && addr < hi) {
-            memcpy(perms, p, sizeof p);
-            found = 1;
-            break;
-        }
-    }
-    fclose(f);
-    return found;
+    return su_nt_perms_at(addr, perms, NULL);
 }
 
 static void run_wx(void) {
@@ -1287,8 +1241,6 @@ static void run_wx(void) {
     const uint8_t *code = NULL;
     size_t code_size = 0;
     char perms[8] = {0};
-    pid_t pid;
-    int status = 0;
 
     if (!g_avx_host) {
         printf("W^X (AVX2): not run (no AVX2 on host)\n");
@@ -1303,20 +1255,8 @@ static void run_wx(void) {
     CHECK(perms_at((uintptr_t)code, perms) == 1);
     CHECK(strcmp(perms, "r-xp") == 0);
     CHECK(count_rwx_lines() == 0);
-    fflush(stdout);
-    pid = fork();
-    if (pid == 0) {
-        /* Child: writing into the code mapping must fault. */
-        volatile uint8_t *p = (volatile uint8_t *)code;
-        *p = 0xCC;
-        _exit(0);
-    }
-    if (pid > 0) {
-        waitpid(pid, &status, 0);
-        CHECK(WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) != 0));
-    } else {
-        CHECK(0);
-    }
+    /* Writing into the code mapping must fault (a forked child on POSIX, SEH on Windows). */
+    CHECK(su_nt_store_faults(code, 0xCCu) == 1);
     su_native_artifact_free(va);
     printf("W^X (AVX2 code mapping %s, no rwx mapping, store into code faults): ok\n", perms);
 }
@@ -1339,17 +1279,7 @@ static void run_failure_injection(void) {
     }
     make_copy_module(&m, f, ins);
     CHECK_ST(su_native_compile(&m, 1u, SU_NCAP_X86_64_SCALAR, &base, &d), SU_OK);
-    before = 0;
-    {
-        FILE *f0 = fopen("/proc/self/maps", "r");
-        char line[512];
-        if (f0 != NULL) {
-            while (fgets(line, sizeof line, f0) != NULL) {
-                before++;
-            }
-            fclose(f0);
-        }
-    }
+    before = su_nt_count_maps();
     su_native_test_inject_failure(SU_NATIVE_FAIL_MMAP);
     CHECK_ST(su_native_compile(&m, 1u, SU_NCAP_X86_64_AVX2, &va, &d), SU_E_RESOURCE_LIMIT);
     CHECK(va == NULL);
@@ -1357,18 +1287,8 @@ static void run_failure_injection(void) {
     CHECK_ST(su_native_compile(&m, 1u, SU_NCAP_X86_64_AVX2, &va, &d), SU_E_RESOURCE_LIMIT);
     CHECK(va == NULL);
     su_native_test_inject_failure(0u);
-    after = 0;
-    {
-        FILE *f1 = fopen("/proc/self/maps", "r");
-        char line[512];
-        if (f1 != NULL) {
-            while (fgets(line, sizeof line, f1) != NULL) {
-                after++;
-            }
-            fclose(f1);
-        }
-    }
-    CHECK(before == after);
+    after = su_nt_count_maps();
+    CHECK(before == after && before >= 0);
     CHECK_ST(su_native_compile(&m, 1u, SU_NCAP_X86_64_AVX2, &va, &d), SU_OK);
     su_native_artifact_free(va);
     su_native_artifact_free(base);

@@ -134,7 +134,7 @@ def gen_program(rng, idx):
 
 
 def dump(path, obj):
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(obj, fh, indent=1, sort_keys=False)
         fh.write("\n")
 
@@ -166,7 +166,7 @@ def main(argv):
         dump(os.path.join(args.out, base + ".capsule.json"), capsule)
         dump(os.path.join(args.out, base + ".lir.json"), lir)
         names.append(base)
-    with open(os.path.join(args.out, "index.txt"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(args.out, "index.txt"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(names) + "\n")
 
     digest = corpus_digest(args.out, names)

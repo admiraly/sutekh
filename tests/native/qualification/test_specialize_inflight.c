@@ -21,10 +21,13 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#if !defined(_WIN32)
 #include <sys/wait.h>
 #include <unistd.h>
 #include <dirent.h>
+#endif
 
+#include "../../common/su_test_os.h"
 #include "agent/su_agent.h"
 #include "agent/su_proc.h"
 #include "agent/su_proto.h"
@@ -51,7 +54,7 @@ static char g_proj[1100];
 static int g_seq;
 
 typedef struct Sess {
-    pid_t pid;
+    SuTestServe serve; /* supervisor under test (tests/common/su_test_os.h) */
     int wfd;
     SuLineReader rd;
 } Sess;
@@ -113,12 +116,23 @@ static uint64_t err_status(const Resp *r) {
 
 /* ---------- agent sessions: one agent process per scenario ---------- */
 
+/* Sets (value != NULL) or removes an environment variable before a session starts. */
+static void fault_env(const char *name, const char *value) {
+    if (value != NULL) {
+        setenv(name, value, 1);
+    } else {
+        unsetenv(name);
+    }
+}
+
+/* Seam variables are set before the supervisor starts. POSIX: the forked agent keeps its copy. Windows: the agent
+ * is a thread of this process and reads this environment, so su_test_unset_after_start removes them only when the
+ * session ends. */
 static Sess sess_start(const char *fault, const char *fault_ms, uint64_t timeout_ms, const char *tag) {
     Sess s;
-    int req[2];
-    int rsp[2];
-    pid_t pid;
-    char spool[1200];
+    int wfd;
+    int rfd;
+    static char spool[1200]; /* static: on Windows the supervisor thread reads cfg strings after this returns */
     SuAgentConfig cfg;
     static const char *argv[2];
 
@@ -131,47 +145,25 @@ static Sess sess_start(const char *fault, const char *fault_ms, uint64_t timeout
     cfg.worker_argv = argv;
     cfg.request_timeout_ms = timeout_ms;
     cfg.spool_dir = spool;
-    if (pipe(req) != 0 || pipe(rsp) != 0) {
-        perror("pipe");
-        exit(2);
-    }
-    pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        exit(2);
-    }
-    if (pid == 0) {
-        int rc;
-        close(req[1]);
-        close(rsp[0]);
-        if (fault != NULL) {
-            setenv("SU_TEST_FAULT", fault, 1);
-        } else {
-            unsetenv("SU_TEST_FAULT");
-        }
-        if (fault_ms != NULL) {
-            setenv("SU_TEST_FAULT_MS", fault_ms, 1);
-        } else {
-            unsetenv("SU_TEST_FAULT_MS");
-        }
-        rc = su_agent_serve(req[0], rsp[1], &cfg);
-        _exit(rc == 0 ? 0 : 1);
-    }
-    close(req[0]);
-    close(rsp[1]);
+    fault_env("SU_TEST_FAULT", fault);
+    fault_env("SU_TEST_FAULT_MS", fault_ms);
     memset(&s, 0, sizeof s);
-    s.pid = pid;
-    s.wfd = req[1];
-    su_line_reader_init(&s.rd, rsp[0], -1);
+    su_test_serve_start(&s.serve, &cfg, &wfd, &rfd);
+    if (fault != NULL) {
+        su_test_unset_after_start("SU_TEST_FAULT");
+    }
+    if (fault_ms != NULL) {
+        su_test_unset_after_start("SU_TEST_FAULT_MS");
+    }
+    s.wfd = wfd;
+    su_line_reader_init(&s.rd, rfd, -1);
     return s;
 }
 
 static void sess_stop(Sess *s) {
-    int status = 0;
     close(s->wfd);
     su_line_reader_free(&s->rd);
-    waitpid(s->pid, &status, 0);
-    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(su_test_serve_wait(&s->serve));
 }
 
 static int call(Sess *s, const char *line, Resp *r, int64_t wait_ms) {
@@ -236,6 +228,59 @@ static void copy_example(const char *name) {
     fclose(fo);
 }
 
+#if defined(_WIN32)
+/* Creation time of a process (GetProcessTimes, 100 ns units since 1601), or -1. Like the /proc start time it
+ * identifies the process instance (a replacement reusing the pid differs); unlike it, it cannot be read once the
+ * process is gone. */
+static long long proc_starttime(pid_t pid) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    FILETIME created, ended, kern, user;
+    long long st = -1;
+    if (h == NULL) {
+        return -1;
+    }
+    if (GetProcessTimes(h, &created, &ended, &kern, &user)) {
+        st = (long long)(((unsigned long long)created.dwHighDateTime << 32) | created.dwLowDateTime);
+    }
+    CloseHandle(h);
+    return st;
+}
+
+/* Windows has no zombies (an ended child leaves nothing to reap). The counterpart of "no zombie child" is: no
+ * child of the agent (this test process: the supervisor is a thread) created after it is still running except the
+ * active worker. Toolhelp snapshot; parent ids survive their parent and pids are reused, hence the time filter. */
+static int leftover_children(uint64_t agent, uint64_t keep) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32 pe;
+    long long born = proc_starttime((pid_t)agent);
+    int n = 0;
+    if (snap == INVALID_HANDLE_VALUE || born < 0) {
+        if (snap != INVALID_HANDLE_VALUE) {
+            CloseHandle(snap);
+        }
+        return -1;
+    }
+    memset(&pe, 0, sizeof pe);
+    pe.dwSize = sizeof pe;
+    if (Process32First(snap, &pe)) {
+        do {
+            uint64_t id = (uint64_t)pe.th32ProcessID;
+            if ((uint64_t)pe.th32ParentProcessID == agent && id != keep && su_test_pid_alive(id) &&
+                proc_starttime((pid_t)id) >= born) {
+                n++;
+            }
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+    return n;
+}
+
+/* Zombie children (POSIX) or leftover running children other than the active worker (Windows) of the agent. */
+static int zombies_of(const Sess *s, uint64_t active) {
+    (void)s;
+    return leftover_children((uint64_t)GetCurrentProcessId(), active);
+}
+#else
 /* Start time (clock ticks since boot) of a process, or -1. */
 static long long proc_starttime(pid_t pid) {
     char path[64];
@@ -307,6 +352,12 @@ static int zombie_children(pid_t ppid) {
     closedir(d);
     return n;
 }
+
+static int zombies_of(const Sess *s, uint64_t active) {
+    (void)active;
+    return zombie_children(s->serve.pid);
+}
+#endif
 
 /* ---------- world helpers ---------- */
 
@@ -479,7 +530,7 @@ static void scenario_interleave_candidate(void) {
 
     setenv("SU_TEST_INTERLEAVE", "candidate", 1);
     s = sess_start(NULL, NULL, 120000, "ilc");
-    unsetenv("SU_TEST_INTERLEAVE");
+    su_test_unset_after_start("SU_TEST_INTERLEAVE");
     CHECK(create_movement(&s, wid, sizeof wid, rev0, sizeof rev0));
     active = active_pid(&s);
     start = proc_starttime((pid_t)active);
@@ -505,7 +556,7 @@ static void scenario_interleave_candidate(void) {
         resp_free(&ir);
     }
     CHECK(active_pid(&s) == active);
-    CHECK(zombie_children(s.pid) == 0);
+    CHECK(zombies_of(&s, active) == 0);
 
     /* The next specialization, made for the new revision, installs (the seam is one-shot). */
     specialize(&s, wid, rev1, "scalar", &r);
@@ -515,7 +566,7 @@ static void scenario_interleave_candidate(void) {
     resp_free(&r);
     CHECK(active_pid(&s) == active);
     CHECK(proc_starttime((pid_t)active) == start);
-    CHECK(zombie_children(s.pid) == 0);
+    CHECK(zombies_of(&s, active) == 0);
     sess_stop(&s);
 }
 
@@ -532,7 +583,7 @@ static void scenario_interleave_close(void) {
 
     setenv("SU_TEST_INTERLEAVE", "close", 1);
     s = sess_start(NULL, NULL, 120000, "ilcl");
-    unsetenv("SU_TEST_INTERLEAVE");
+    su_test_unset_after_start("SU_TEST_INTERLEAVE");
     CHECK(create_movement(&s, wid, sizeof wid, rev, sizeof rev));
     active = active_pid(&s);
     specialize(&s, wid, rev, "scalar", &r);
@@ -547,7 +598,7 @@ static void scenario_interleave_close(void) {
     resp_free(&r);
     CHECK(!world_exists(&s, wid));
     CHECK(active_pid(&s) == active);
-    CHECK(zombie_children(s.pid) == 0);
+    CHECK(zombies_of(&s, active) == 0);
     sess_stop(&s);
 }
 
@@ -702,7 +753,7 @@ static void scenario_interleave_migrate(void) {
 
     setenv("SU_TEST_INTERLEAVE", "migrate", 1);
     s = sess_start(NULL, NULL, 120000, "ilm");
-    unsetenv("SU_TEST_INTERLEAVE");
+    su_test_unset_after_start("SU_TEST_INTERLEAVE");
     CHECK(create_movement(&s, wid, sizeof wid, rev0, sizeof rev0));
     active = active_pid(&s);
     start = proc_starttime((pid_t)active);
@@ -729,11 +780,11 @@ static void scenario_interleave_migrate(void) {
         resp_free(&ir);
     }
     CHECK(active_pid(&s) == active);
-    CHECK(zombie_children(s.pid) == 0);
+    CHECK(zombies_of(&s, active) == 0);
 
     /* The released kernel is not brought back: a worker death while the world is idle recovers it at generation 2
      * with the VM tier (the supervisor's records of the replaced schedule were cleared by the commit). */
-    CHECK(kill((pid_t)active, SIGKILL) == 0);
+    CHECK(su_test_kill_pid(active) == 0);
     {
         Resp ir;
         /* The first request after the death reports SU_E_WORKER_FAILED (retry: true) and starts the replacement. */
@@ -786,7 +837,7 @@ static void scenario_interleave_migrate(void) {
         resp_free(&ir);
     }
     CHECK(active_pid(&s) == active);
-    CHECK(zombie_children(s.pid) == 0);
+    CHECK(zombies_of(&s, active) == 0);
     sess_stop(&s);
 }
 
@@ -854,8 +905,8 @@ static void scenario_rollback_native(void) {
     setenv("SUTEKH_TEST_KILL_AT_TICK", "1", 1);
     setenv("SUTEKH_TEST_KILL_TOKEN", tok, 1);
     s = sess_start(NULL, NULL, 120000, "rbn");
-    unsetenv("SUTEKH_TEST_KILL_AT_TICK");
-    unsetenv("SUTEKH_TEST_KILL_TOKEN");
+    su_test_unset_after_start("SUTEKH_TEST_KILL_AT_TICK");
+    su_test_unset_after_start("SUTEKH_TEST_KILL_TOKEN");
     CHECK(create_movement(&s, wid, sizeof wid, rev, sizeof rev));
     copy_fixture("movement_gen2.capsule.json");
     copy_fixture("movement_gen2.test.json");
@@ -955,8 +1006,8 @@ static void scenario_migrate_step_death(void) {
     setenv("SUTEKH_TEST_KILL_AT_TICK", "1", 1);
     setenv("SUTEKH_TEST_KILL_TOKEN", tok, 1);
     s = sess_start(NULL, NULL, 120000, "ilmd");
-    unsetenv("SUTEKH_TEST_KILL_AT_TICK");
-    unsetenv("SUTEKH_TEST_KILL_TOKEN");
+    su_test_unset_after_start("SUTEKH_TEST_KILL_AT_TICK");
+    su_test_unset_after_start("SUTEKH_TEST_KILL_TOKEN");
     CHECK(create_movement(&s, wid, sizeof wid, rev, sizeof rev));
     copy_fixture("movement_gen2.capsule.json");
     copy_fixture("movement_gen2.test.json");

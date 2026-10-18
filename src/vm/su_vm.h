@@ -57,6 +57,39 @@ uint32_t su_vm_context_set_row_limit(SuExecContext *ctx, uint64_t limit);
  * failure was not attributable to one instruction or no failure occurred. */
 uint32_t su_vm_context_last_failed_insn(const SuExecContext *ctx);
 
+/* VM tiers (2026-10-18). Both tiers give bit-identical staged columns, emissions, statuses and failed_insn.
+ *   SU_VM_TIER_REFERENCE  the checked interpreter: per-read register tag checks, per-row store bookkeeping.
+ *   SU_VM_TIER_PLANNED    (default) a plan built at context creation when one static pass over the body proves
+ *                         those per-row checks redundant (src/vm/su_vm_plan.h): pre-decoded dispatch,
+ *                         row-invariant instructions evaluated once, and rows proven to store their own loaded
+ *                         values (no emission) copied instead of executed. A module without a plan, or an
+ *                         invocation that leaves a lane the plan uses unbound, runs on the reference tier.
+ * The default for new contexts is planned unless su_vm_set_default_tier chose otherwise or the environment
+ * variable SUTEKH_VM_TIER is "reference". su_vm_set_default_tier(0) restores that rule. It is a plain
+ * process-wide setting: call it before contexts are created on other threads. */
+#define SU_VM_TIER_REFERENCE 1u
+#define SU_VM_TIER_PLANNED 2u
+void su_vm_set_default_tier(uint32_t tier);
+uint32_t su_vm_default_tier(void);
+/* SU_E_INVALID_ARGUMENT on NULL ctx or an unknown tier. */
+uint32_t su_vm_context_set_tier(SuExecContext *ctx, uint32_t tier);
+
+typedef struct SuVmTierInfo {
+    uint32_t tier;               /* requested tier of the context */
+    uint32_t has_plan;           /* 1 when the module has a plan */
+    uint32_t plan_reason;        /* 0 = plan built; else why not (su_vm_plan.h SU_VM_PLAN_*) */
+    uint32_t insns;              /* module instructions */
+    uint32_t body_insns;         /* instructions executed per row by the plan */
+    uint32_t hoisted_insns;      /* row-invariant instructions evaluated at plan build */
+    uint32_t has_guard;          /* 1 when the plan has an identity-row guard */
+    uint32_t guard_insns;        /* guard instructions per row */
+    uint32_t guard_requirements; /* boolean definitions the guard checks */
+    uint32_t last_tier;          /* tier that ran the last invocation's rows (0 before any) */
+    uint64_t last_rows_body;     /* planned tier: live rows the body executed in the last invocation */
+    uint64_t last_rows_skipped;  /* planned tier: live rows the guard copied in the last invocation */
+} SuVmTierInfo;
+uint32_t su_vm_context_tier_info(const SuExecContext *ctx, SuVmTierInfo *info);
+
 uint32_t su_vm_invoke_v1(SuExecContext *ctx, const SuInvocation *input,
                          SuOutputs *staged_output);
 

@@ -5,9 +5,10 @@
  *  2. fixture differential: t02, t03, m0_neg valid, edit movement_v2, examples/movement
  *  3. seeded random corpus from gen/gen_corpus.py (argv[1] = corpus directory)
  *  4. wrapper rejections: native returns the VM's status and touches no column
- *  5. ABI: callee-saved clobber trampoline (SysV x86-64 only)
- *  6. W^X: /proc/self/maps permissions, no rwx mapping, a write to the code page faults
+ *  5. ABI: callee-saved clobber trampoline (SysV x86-64 and Win64)
+ *  6. W^X: code mapping permissions, no rwx mapping, a write to the code page faults
  *  7. failure injection: mmap/mprotect failure returns SU_E_RESOURCE_LIMIT, no mapping leak
+ * OS-specific helpers (mappings, faults, clocks) are in tests/native/native_test_mem.h.
  *  8. source map invariants, artifact hash sensitivity, disassembly
  *  9. observation: 1M-row timing, VM vs native (printed, not asserted)
  *
@@ -24,10 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <sys/wait.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "backends/native/su_native.h"
 #include "ir/su_lir.h"
@@ -38,6 +36,8 @@
 #include "sutekh/status.h"
 #include "vm/su_vm.h"
 #include "world/su_world.h"
+
+#include "tests/native/native_test_mem.h"
 
 static int g_checks = 0;
 static int g_failures = 0;
@@ -133,8 +133,7 @@ typedef struct Col {
 } Col;
 
 static size_t page_size(void) {
-    long p = sysconf(_SC_PAGESIZE);
-    return p > 0 ? (size_t)p : 4096u;
+    return su_nt_page_size();
 }
 
 static int col_alloc(Col *c, uint64_t rows) {
@@ -151,12 +150,8 @@ static int col_alloc(Col *c, uint64_t rows) {
         nd = 1u;
     }
     total = (nd + 2u) * pg;
-    base = mmap(NULL, total, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (base == MAP_FAILED) {
-        return 0;
-    }
-    if (mprotect(base + pg, nd * pg, PROT_READ | PROT_WRITE) != 0) {
-        munmap(base, total);
+    base = su_nt_guarded_map(total, 1u, nd);
+    if (base == NULL) {
         return 0;
     }
     boundary = base + pg + nd * pg;
@@ -167,9 +162,7 @@ static int col_alloc(Col *c, uint64_t rows) {
 }
 
 static void col_free(Col *c) {
-    if (c->map != NULL) {
-        munmap(c->map, c->map_bytes);
-    }
+    su_nt_unmap(c->map, c->map_bytes);
     c->map = NULL;
     c->data = NULL;
 }
@@ -845,55 +838,203 @@ static int run_abi_clobber(void) {
     printf("ABI clobber trampoline (SysV x86-64, rbx rbp r12-r15 poisoned and checked): %s\n", ok ? "ok" : "FAILED");
     return ok;
 }
+#elif defined(_WIN32) && defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+/* Win64 trampoline: su_test_clobber_call(fn = rcx, args = rdx, regs = r8). Saves every Win64 callee-saved
+ * register (rbx rbp rdi rsi r12-r15, xmm6-xmm15), poisons them with known values, calls the kernel with args in
+ * rcx and 32 bytes of shadow space on a 16-byte aligned stack, then records what the kernel left in them:
+ * regs[0..7] the general registers, regs[8] rax, regs[9 + 2k], regs[10 + 2k] the two halves of xmm(6 + k). */
+__asm__(
+    ".text\n"
+    ".globl su_test_clobber_call\n"
+    ".def su_test_clobber_call; .scl 2; .type 32; .endef\n"
+    "su_test_clobber_call:\n"
+    "    push %rbp\n"
+    "    push %rbx\n"
+    "    push %rdi\n"
+    "    push %rsi\n"
+    "    push %r12\n"
+    "    push %r13\n"
+    "    push %r14\n"
+    "    push %r15\n"
+    "    sub $200, %rsp\n"
+    "    mov %r8, 32(%rsp)\n"
+    "    movdqu %xmm6, 40(%rsp)\n"
+    "    movdqu %xmm7, 56(%rsp)\n"
+    "    movdqu %xmm8, 72(%rsp)\n"
+    "    movdqu %xmm9, 88(%rsp)\n"
+    "    movdqu %xmm10, 104(%rsp)\n"
+    "    movdqu %xmm11, 120(%rsp)\n"
+    "    movdqu %xmm12, 136(%rsp)\n"
+    "    movdqu %xmm13, 152(%rsp)\n"
+    "    movdqu %xmm14, 168(%rsp)\n"
+    "    movdqu %xmm15, 184(%rsp)\n"
+    "    mov %rcx, %rax\n"
+    "    mov %rdx, %rcx\n"
+    "    movabs $0x1111111111111111, %rbx\n"
+    "    movabs $0x2222222222222222, %rbp\n"
+    "    movabs $0x7777777777777777, %rdi\n"
+    "    movabs $0x8888888888888888, %rsi\n"
+    "    movabs $0x3333333333333333, %r12\n"
+    "    movabs $0x4444444444444444, %r13\n"
+    "    movabs $0x5555555555555555, %r14\n"
+    "    movabs $0x6666666666666666, %r15\n"
+    "    movabs $0xA6A6A6A6A6A6A606, %r11\n movq %r11, %xmm6\n  punpcklqdq %xmm6, %xmm6\n"
+    "    movabs $0xA7A7A7A7A7A7A707, %r11\n movq %r11, %xmm7\n  punpcklqdq %xmm7, %xmm7\n"
+    "    movabs $0xA8A8A8A8A8A8A808, %r11\n movq %r11, %xmm8\n  punpcklqdq %xmm8, %xmm8\n"
+    "    movabs $0xA9A9A9A9A9A9A909, %r11\n movq %r11, %xmm9\n  punpcklqdq %xmm9, %xmm9\n"
+    "    movabs $0xAAAAAAAAAAAAAA0A, %r11\n movq %r11, %xmm10\n punpcklqdq %xmm10, %xmm10\n"
+    "    movabs $0xABABABABABABAB0B, %r11\n movq %r11, %xmm11\n punpcklqdq %xmm11, %xmm11\n"
+    "    movabs $0xACACACACACACAC0C, %r11\n movq %r11, %xmm12\n punpcklqdq %xmm12, %xmm12\n"
+    "    movabs $0xADADADADADADAD0D, %r11\n movq %r11, %xmm13\n punpcklqdq %xmm13, %xmm13\n"
+    "    movabs $0xAEAEAEAEAEAEAE0E, %r11\n movq %r11, %xmm14\n punpcklqdq %xmm14, %xmm14\n"
+    "    movabs $0xAFAFAFAFAFAFAF0F, %r11\n movq %r11, %xmm15\n punpcklqdq %xmm15, %xmm15\n"
+    "    call *%rax\n"
+    "    mov 32(%rsp), %rcx\n"
+    "    mov %rbx, 0(%rcx)\n"
+    "    mov %rbp, 8(%rcx)\n"
+    "    mov %rdi, 16(%rcx)\n"
+    "    mov %rsi, 24(%rcx)\n"
+    "    mov %r12, 32(%rcx)\n"
+    "    mov %r13, 40(%rcx)\n"
+    "    mov %r14, 48(%rcx)\n"
+    "    mov %r15, 56(%rcx)\n"
+    "    mov %rax, 64(%rcx)\n"
+    "    movdqu %xmm6, 72(%rcx)\n"
+    "    movdqu %xmm7, 88(%rcx)\n"
+    "    movdqu %xmm8, 104(%rcx)\n"
+    "    movdqu %xmm9, 120(%rcx)\n"
+    "    movdqu %xmm10, 136(%rcx)\n"
+    "    movdqu %xmm11, 152(%rcx)\n"
+    "    movdqu %xmm12, 168(%rcx)\n"
+    "    movdqu %xmm13, 184(%rcx)\n"
+    "    movdqu %xmm14, 200(%rcx)\n"
+    "    movdqu %xmm15, 216(%rcx)\n"
+    "    movdqu 40(%rsp), %xmm6\n"
+    "    movdqu 56(%rsp), %xmm7\n"
+    "    movdqu 72(%rsp), %xmm8\n"
+    "    movdqu 88(%rsp), %xmm9\n"
+    "    movdqu 104(%rsp), %xmm10\n"
+    "    movdqu 120(%rsp), %xmm11\n"
+    "    movdqu 136(%rsp), %xmm12\n"
+    "    movdqu 152(%rsp), %xmm13\n"
+    "    movdqu 168(%rsp), %xmm14\n"
+    "    movdqu 184(%rsp), %xmm15\n"
+    "    add $200, %rsp\n"
+    "    pop %r15\n"
+    "    pop %r14\n"
+    "    pop %r13\n"
+    "    pop %r12\n"
+    "    pop %rsi\n"
+    "    pop %rdi\n"
+    "    pop %rbx\n"
+    "    pop %rbp\n"
+    "    ret\n");
+
+uint32_t su_test_clobber_call(SuNativeKernelFn fn, const SuNativeArgs *args, uint64_t regs[29]);
+
+/* Win64 callee-saved check of one compiled kernel (scalar or AVX2 capability set). */
+static int abi_clobber_w64(uint32_t caps, const char *name) {
+    SuLirField f[2];
+    SuInsn ins[2];
+    SuLirModule m;
+    SuNativeArtifact *art = NULL;
+    SuNativeDiag d;
+    SuNativeKernelFn fn;
+    Col ca;
+    Col co;
+    SuNativeArgs args;
+    const uint32_t *in_cols[1];
+    uint32_t *out_cols[1];
+    uint64_t regs[29];
+    uint32_t st;
+    uint32_t r;
+    int ok = 1;
+    static const uint64_t want[8] = {0x1111111111111111ull, 0x2222222222222222ull, 0x7777777777777777ull,
+                                     0x8888888888888888ull, 0x3333333333333333ull, 0x4444444444444444ull,
+                                     0x5555555555555555ull, 0x6666666666666666ull};
+    static const uint64_t want_xmm[10] = {0xA6A6A6A6A6A6A606ull, 0xA7A7A7A7A7A7A707ull, 0xA8A8A8A8A8A8A808ull,
+                                          0xA9A9A9A9A9A9A909ull, 0xAAAAAAAAAAAAAA0Aull, 0xABABABABABABAB0Bull,
+                                          0xACACACACACACAC0Cull, 0xADADADADADADAD0Dull, 0xAEAEAEAEAEAEAE0Eull,
+                                          0xAFAFAFAFAFAFAF0Full};
+
+    make_copy_module(&m, f, ins);
+    st = su_native_compile(&m, 1u, caps, &art, &d);
+    if (st == SU_E_CAPABILITY_DENIED) {
+        printf("ABI clobber trampoline (Win64, %s): not run (capability not on this host)\n", name);
+        return 1;
+    }
+    CHECK_ST(st, SU_OK);
+    fn = su_native_entry(art);
+    if (fn == NULL || !col_alloc(&ca, 33) || !col_alloc(&co, 33)) {
+        CHECK(0);
+        su_native_artifact_free(art);
+        return 0;
+    }
+    for (r = 0; r < 33; r++) {
+        ca.data[r] = r * 7u + 3u;
+        co.data[r] = 0u;
+    }
+    in_cols[0] = ca.data;
+    out_cols[0] = co.data;
+    args.struct_size = (uint32_t)sizeof args;
+    args.abi_version = SU_NATIVE_ABI_VERSION;
+    args.row_count = 33u;
+    args.in_cols = in_cols;
+    args.out_cols = out_cols;
+    memset(regs, 0, sizeof regs);
+    st = su_test_clobber_call(fn, &args, regs);
+    CHECK(st == SU_OK);
+    for (r = 0; r < 8; r++) {
+        if (regs[r] != want[r]) {
+            fprintf(stderr, "Win64 %s: callee-saved general register %u clobbered: %016llx\n", name, r,
+                    (unsigned long long)regs[r]);
+            ok = 0;
+        }
+    }
+    CHECK((uint32_t)regs[8] == SU_OK);
+    for (r = 0; r < 10; r++) {
+        if (regs[9 + 2 * r] != want_xmm[r] || regs[10 + 2 * r] != want_xmm[r]) {
+            fprintf(stderr, "Win64 %s: callee-saved xmm%u clobbered\n", name, r + 6);
+            ok = 0;
+        }
+    }
+    for (r = 0; r < 33; r++) {
+        if (co.data[r] != ca.data[r]) {
+            fprintf(stderr, "Win64 %s clobber call: row %u not copied\n", name, r);
+            ok = 0;
+            break;
+        }
+    }
+    CHECK(ok);
+    col_free(&ca);
+    col_free(&co);
+    su_native_artifact_free(art);
+    printf("ABI clobber trampoline (Win64 %s, rbx rbp rdi rsi r12-r15 xmm6-xmm15 poisoned and checked): %s\n", name,
+           ok ? "ok" : "FAILED");
+    return ok;
+}
+
+static int run_abi_clobber(void) {
+    int ok = abi_clobber_w64(SU_NCAP_X86_64_SCALAR, "scalar");
+    return abi_clobber_w64(SU_NCAP_X86_64_AVX2, "AVX2") && ok;
+}
 #else
 static int run_abi_clobber(void) {
-    printf("ABI clobber trampoline: not run (needs SysV x86-64 with GNU-compatible asm)\n");
+    printf("ABI clobber trampoline: not run (needs x86-64 SysV or Win64 with GNU-compatible asm)\n");
     return 1;
 }
 #endif
 
 /* ---------- 6. W^X ---------- */
 
-/* Counts /proc/self/maps lines, or -1. */
+/* Mapping count, or -1 (native_test_mem.h). */
 static int count_maps(void) {
-    FILE *f = fopen("/proc/self/maps", "r");
-    char line[512];
-    int n = 0;
-    if (f == NULL) {
-        return -1;
-    }
-    while (fgets(line, sizeof line, f) != NULL) {
-        n++;
-    }
-    fclose(f);
-    return n;
+    return su_nt_count_maps();
 }
 
 /* Permission string of the mapping containing addr; sets *any_rwx when any mapping is rwx. */
 static int perms_at(uintptr_t addr, char perms[8], int *any_rwx) {
-    FILE *f = fopen("/proc/self/maps", "r");
-    char line[512];
-    int found = 0;
-    *any_rwx = 0;
-    if (f == NULL) {
-        return 0;
-    }
-    while (fgets(line, sizeof line, f) != NULL) {
-        unsigned long lo = 0;
-        unsigned long hi = 0;
-        char p[8] = {0};
-        if (sscanf(line, "%lx-%lx %7s", &lo, &hi, p) == 3) {
-            if (p[0] == 'r' && p[1] == 'w' && p[2] == 'x') {
-                *any_rwx = 1;
-            }
-            if (!found && addr >= (uintptr_t)lo && addr < (uintptr_t)hi) {
-                memcpy(perms, p, sizeof p);
-                found = 1;
-            }
-        }
-    }
-    fclose(f);
-    return found;
+    return su_nt_perms_at(addr, perms, any_rwx);
 }
 
 /* M2-00c2: a verified IR 0.2 module is refused by every native capability set with
@@ -916,21 +1057,23 @@ static int run_ir02_refusal(void) {
     }
     su_lir_module_free(&m02);
 
-    /* IR 0.3 (fixed_q32_v1) is refused with its own reason by every capability set. */
+    /* IR 0.3 (fixed_q32_v1): the scalar lowering compiles it; AVX2 is refused with its own reason. */
     if (!verify_pair("tests/fixtures/ir03/kinematics.capsule.json", "tests/fixtures/ir03/kinematics.lir.json", &m02)) {
         return 0;
     }
     st = su_native_compile(&m02, 1u, SU_NCAP_X86_64_SCALAR | SU_NCAP_X86_64_AVX2, &art, &d);
-    if (st != SU_E_CAPABILITY_DENIED || art != NULL || strcmp(d.message, "ir_0_3_not_lowered") != 0) {
-        fprintf(stderr, "ir03 avx2: got %s (%s), want SU_E_CAPABILITY_DENIED ir_0_3_not_lowered\n",
+    if (st != SU_E_CAPABILITY_DENIED || art != NULL || strcmp(d.message, "ir_0_3_avx2_not_lowered") != 0) {
+        fprintf(stderr, "ir03 avx2: got %s (%s), want SU_E_CAPABILITY_DENIED ir_0_3_avx2_not_lowered\n",
                 su_status_name(st), d.message);
         ok = 0;
     }
     st = su_native_compile(&m02, 1u, SU_NCAP_X86_64_SCALAR, &art, &d);
-    if (st != SU_E_CAPABILITY_DENIED || art != NULL || strcmp(d.message, "ir_0_3_not_lowered") != 0) {
-        fprintf(stderr, "ir03 scalar: got %s, want SU_E_CAPABILITY_DENIED\n", su_status_name(st));
+    if (st != SU_OK || art == NULL) {
+        fprintf(stderr, "ir03 scalar: got %s (%s), want SU_OK\n", su_status_name(st), d.message);
         ok = 0;
     }
+    su_native_artifact_free(art);
+    art = NULL;
     su_lir_module_free(&m02);
 
     if (!verify_pair("examples/movement.capsule.json", "examples/movement.lir.json", &m01)) {
@@ -959,8 +1102,7 @@ static int run_wx(void) {
     int ok = 1;
     const uint8_t *code = NULL;
     size_t size = 0;
-    pid_t pid;
-    int status = 0;
+    int faults;
 
     make_copy_module(&m, f, ins);
     CHECK_ST(su_native_compile(&m, 1u, SU_NCAP_X86_64_SCALAR, &art, &d), SU_OK);
@@ -972,7 +1114,7 @@ static int run_wx(void) {
     fn_addr = NULL;
     memcpy(&fn_addr, &fn, sizeof fn);
     if (!perms_at((uintptr_t)fn_addr, perms, &any_rwx)) {
-        fprintf(stderr, "W^X: code mapping not found in /proc/self/maps\n");
+        fprintf(stderr, "W^X: code mapping not found\n");
         ok = 0;
     } else if (strcmp(perms, "r-xp") != 0) {
         fprintf(stderr, "W^X: code mapping permissions %s, want r-xp\n", perms);
@@ -982,24 +1124,13 @@ static int run_wx(void) {
         fprintf(stderr, "W^X: an rwx mapping exists in this process\n");
         ok = 0;
     }
-    /* A store into the code page must fault. The child is killed by the fault or exits nonzero
-     * under a sanitizer runtime; a clean exit means the store succeeded. */
-    fflush(stdout);
-    fflush(stderr);
-    pid = fork();
-    if (pid == 0) {
-        volatile uint8_t *p = (volatile uint8_t *)(void *)code;
-        *p = 0x90u;
-        _exit(0);
-    }
-    if (pid < 0) {
+    /* A store into the code page must fault (a forked child on POSIX, SEH on Windows). */
+    faults = su_nt_store_faults(code, 0x90u);
+    if (faults < 0) {
         ok = 0;
-    } else {
-        waitpid(pid, &status, 0);
-        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-            fprintf(stderr, "W^X: store into the code page did not fault\n");
-            ok = 0;
-        }
+    } else if (faults == 0) {
+        fprintf(stderr, "W^X: store into the code page did not fault\n");
+        ok = 0;
     }
     CHECK(ok);
     su_native_artifact_free(art);

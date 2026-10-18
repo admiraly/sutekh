@@ -16,6 +16,8 @@
 
 #include "backends/native/su_native_internal.h"
 #include "backends/native/su_native_lower.h"
+#include "backends/native/su_native_ops03.h"
+#include "vm/su_vm_plan.h"
 #include "ir/su_lir.h"
 #include "ir/su_sha256.h"
 
@@ -176,6 +178,57 @@ void su_native_exec_release(uint8_t *code, size_t map_size) {
 
 /* ---- lowering glue ---------------------------------------------------- */
 
+/* The C++ lowering of IR 0.3 cannot include the C-only contract headers; its opcode numbers must match. */
+_Static_assert(SU_NLOW_OP_CONST_I32 == SU_OP_CONST_I32 && SU_NLOW_OP_CONST_I64 == SU_OP_CONST_I64 &&
+                   SU_NLOW_OP_CONST_Q32 == SU_OP_CONST_Q32 && SU_NLOW_OP_LOAD_I32 == SU_OP_LOAD_I32 &&
+                   SU_NLOW_OP_STORE_I32 == SU_OP_STORE_I32 && SU_NLOW_OP_LOAD_I64 == SU_OP_LOAD_I64 &&
+                   SU_NLOW_OP_STORE_I64 == SU_OP_STORE_I64 && SU_NLOW_OP_LOAD_Q32 == SU_OP_LOAD_Q32 &&
+                   SU_NLOW_OP_STORE_Q32 == SU_OP_STORE_Q32 && SU_NLOW_OP_LOAD_V3 == SU_OP_LOAD_V3 &&
+                   SU_NLOW_OP_STORE_V3 == SU_OP_STORE_V3 && SU_NLOW_OP_AND_BOOL == SU_OP_AND_BOOL &&
+                   SU_NLOW_OP_OR_BOOL == SU_OP_OR_BOOL && SU_NLOW_OP_NOT_BOOL == SU_OP_NOT_BOOL,
+               "IR 0.3 field and bool opcodes");
+_Static_assert(SU_NLOW_OP_I32_BASE == SU_OP_I32_BASE && SU_NLOW_OP_I64_BASE == SU_OP_I64_BASE &&
+                   SU_NLOW_OP_Q32_BASE == SU_OP_Q32_BASE && SU_NLOW_X_ADD == SU_OPX_ADD && SU_NLOW_X_SUB == SU_OPX_SUB &&
+                   SU_NLOW_X_MUL == SU_OPX_MUL && SU_NLOW_X_DIV == SU_OPX_DIV && SU_NLOW_X_NEG == SU_OPX_NEG &&
+                   SU_NLOW_X_ABS == SU_OPX_ABS && SU_NLOW_X_MIN == SU_OPX_MIN && SU_NLOW_X_MAX == SU_OPX_MAX &&
+                   SU_NLOW_X_CLAMP == SU_OPX_CLAMP && SU_NLOW_X_EQ == SU_OPX_EQ && SU_NLOW_X_LT == SU_OPX_LT &&
+                   SU_NLOW_X_LE == SU_OPX_LE && SU_NLOW_X_SELECT == SU_OPX_SELECT && SU_NLOW_X_SHL == SU_OPX_SHL &&
+                   SU_NLOW_X_SHR == SU_OPX_SHR && SU_NLOW_X_COUNT == SU_OPX_COUNT,
+               "IR 0.3 scalar families");
+_Static_assert(SU_NLOW_OP_SQRT_Q32 == SU_OP_SQRT_Q32 && SU_NLOW_OP_RSQRT_Q32 == SU_OP_RSQRT_Q32 &&
+                   SU_NLOW_OP_I32_FROM_U32 == SU_OP_I32_FROM_U32 && SU_NLOW_OP_U32_FROM_I32 == SU_OP_U32_FROM_I32 &&
+                   SU_NLOW_OP_I64_FROM_I32 == SU_OP_I64_FROM_I32 && SU_NLOW_OP_I32_FROM_I64 == SU_OP_I32_FROM_I64 &&
+                   SU_NLOW_OP_Q32_FROM_I32 == SU_OP_Q32_FROM_I32 && SU_NLOW_OP_Q32_FROM_I64 == SU_OP_Q32_FROM_I64 &&
+                   SU_NLOW_OP_Q32_TO_I32_FLOOR == SU_OP_Q32_TO_I32_FLOOR &&
+                   SU_NLOW_OP_Q32_TO_I32_ROUND == SU_OP_Q32_TO_I32_ROUND && SU_NLOW_OP_Q32_FROM_RAW == SU_OP_Q32_FROM_RAW &&
+                   SU_NLOW_OP_Q32_RAW == SU_OP_Q32_RAW && SU_NLOW_OP_Q32_TO_I64_FLOOR == SU_OP_Q32_TO_I64_FLOOR,
+               "IR 0.3 conversions");
+_Static_assert(SU_NLOW_OP_MAKE_V3 == SU_OP_MAKE_V3 && SU_NLOW_OP_V3_GET == SU_OP_V3_GET &&
+                   SU_NLOW_OP_V3_ADD == SU_OP_V3_ADD && SU_NLOW_OP_V3_SUB == SU_OP_V3_SUB &&
+                   SU_NLOW_OP_V3_SCALE == SU_OP_V3_SCALE && SU_NLOW_OP_V3_NEG == SU_OP_V3_NEG &&
+                   SU_NLOW_OP_V3_DOT == SU_OP_V3_DOT && SU_NLOW_OP_V3_CROSS == SU_OP_V3_CROSS &&
+                   SU_NLOW_OP_V3_LEN == SU_OP_V3_LEN && SU_NLOW_OP_V3_LEN_SQ == SU_OP_V3_LEN_SQ &&
+                   SU_NLOW_OP_V3_NORMALIZE == SU_OP_V3_NORMALIZE && SU_NLOW_OP_V3_CLAMP_LEN == SU_OP_V3_CLAMP_LEN &&
+                   SU_NLOW_OP_SELECT_V3 == SU_OP_SELECT_V3 && SU_NLOW_OP_MAKE_QUAT == SU_OP_MAKE_QUAT &&
+                   SU_NLOW_OP_QUAT_GET == SU_OP_QUAT_GET && SU_NLOW_OP_QUAT_MUL == SU_OP_QUAT_MUL &&
+                   SU_NLOW_OP_QUAT_CONJ == SU_OP_QUAT_CONJ && SU_NLOW_OP_QUAT_ROTATE == SU_OP_QUAT_ROTATE &&
+                   SU_NLOW_OP_QUAT_NORMALIZE == SU_OP_QUAT_NORMALIZE &&
+                   SU_NLOW_OP_QUAT_INTEGRATE == SU_OP_QUAT_INTEGRATE && SU_NLOW_OP_SELECT_QUAT == SU_OP_SELECT_QUAT,
+               "IR 0.3 vec3 and quaternion opcodes");
+
+/* Addresses of the IR 0.3 C helpers by opcode (0 = emitted inline). */
+static void fill_helpers03(uint64_t helpers[SU_NLOW_HELPER_SLOTS]) {
+    uint32_t op;
+    for (op = 0; op < SU_NLOW_HELPER_SLOTS; op++) {
+        SuNativeHelper03 h = su_native_helper03(op);
+        uintptr_t addr = 0;
+        if (h != NULL) {
+            memcpy(&addr, &h, sizeof addr < sizeof h ? sizeof addr : sizeof h); /* function pointer to address */
+        }
+        helpers[op] = (uint64_t)addr;
+    }
+}
+
 static void lowered_free(SuNativeLowered *l) {
     if (l == NULL) {
         return;
@@ -225,6 +278,14 @@ static uint32_t build_lower_input(const SuLirModule *m, SuNativeLowerInput *in, 
     in->insn_count = m->insn_count;
     in->field_access = *access;
     in->insn_words = *words;
+    in->helpers = NULL;
+    in->guard_count = 0u;
+    in->guard_insns = NULL;
+    in->guard_checks = NULL;
+    in->identity_count = 0u;
+    in->identity_lanes = NULL;
+    in->pre_count = 0u;
+    in->pre_insns = NULL;
     return SU_OK;
 }
 
@@ -270,6 +331,8 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
     uint32_t host_abi;
     uint32_t k;
     int use_avx2;
+    int is03;
+    uint64_t helpers[SU_NLOW_HELPER_SLOTS];
     char msg[160];
     void *code_ptr;
 
@@ -283,14 +346,17 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
         diag_set(diag, SU_E_INVALID_ARGUMENT, SU_NATIVE_NO_FAILED_INSN, "module is NULL");
         return SU_E_INVALID_ARGUMENT;
     }
-    /* IR 0.3 (fixed_q32_v1): no native lowering; the module runs on the reference VM tier. */
-    if (m->ir_version_minor >= 3u) {
-        diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "ir_0_3_not_lowered");
+    /* IR 0.2 (M2-00c2): entity ops run on the reference VM only (M2 contract section 3); a 0.3 module that uses
+     * them is refused for the same reason. */
+    if (m->uses_entity_ops != 0u || m->ir_version_minor == 2u) {
+        diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "ir_0_2_not_lowered");
         return SU_E_CAPABILITY_DENIED;
     }
-    /* IR 0.2 (M2-00c2): entity ops run on the reference VM only (M2 contract section 3). */
-    if (m->ir_version_minor >= 2u || m->uses_entity_ops != 0u) {
-        diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "ir_0_2_not_lowered");
+    /* IR 0.3 (fixed_q32_v1): scalar lowering only (su_native_lower03.cpp). An AVX2 request is refused; the
+     * caller compiles with SU_NCAP_X86_64_SCALAR (world.specialize "auto" does). */
+    is03 = m->ir_version_minor >= 3u;
+    if (is03 && caps != SU_NCAP_X86_64_SCALAR) {
+        diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "ir_0_3_avx2_not_lowered");
         return SU_E_CAPABILITY_DENIED;
     }
 #if !(defined(__x86_64__) || defined(_M_X64))
@@ -329,8 +395,57 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
     }
     memset(&low, 0, sizeof low);
     msg[0] = '\0';
-    st = map_lower_status(use_avx2 ? su_native_lower_avx2(&in, &low, msg, sizeof msg, &failed)
-                                   : su_native_lower_x64(&in, &low, msg, sizeof msg, &failed));
+    if (is03) {
+        SuVmPlan *plan = NULL;
+        uint32_t *gi = NULL;
+        uint8_t *gc = NULL;
+        uint32_t *pre = NULL;
+        fill_helpers03(helpers);
+        in.helpers = helpers;
+        /* The VM plan's identity-row guard, when the plan builder proves one (same analysis as the planned VM
+         * tier). Without a plan or guard the kernel runs every row. */
+        if (su_vm_plan_build(m, &plan) == SU_VM_PLAN_OK && plan->has_guard) {
+            uint32_t g;
+            gi = calloc(plan->n_guard + 1u, sizeof *gi);
+            gc = calloc(plan->n_guard + 1u, sizeof *gc);
+            if (gi != NULL && gc != NULL) {
+                for (g = 0; g < plan->n_guard; g++) {
+                    gi[g] = plan->guard[g].idx;
+                    gc[g] = (uint8_t)plan->guard[g].check;
+                }
+                in.guard_count = plan->n_guard;
+                in.guard_insns = gi;
+                in.guard_checks = gc;
+                in.identity_count = plan->n_identity;
+                in.identity_lanes = plan->identity;
+            }
+            /* The guard slice may read hoisted registers: the instructions not in the plan's body. */
+            pre = calloc(m->insn_count + 1u, sizeof *pre);
+            if (pre != NULL && gi != NULL && gc != NULL) {
+                uint32_t i, b = 0, np = 0;
+                for (i = 0; i < m->insn_count; i++) {
+                    if (b < plan->n_body && plan->body[b].idx == i) {
+                        b++;
+                    } else {
+                        pre[np++] = i;
+                    }
+                }
+                in.pre_count = np;
+                in.pre_insns = pre;
+            } else {
+                in.guard_count = 0u; /* allocation failed: no guard (every row runs the body) */
+                in.identity_count = 0u;
+            }
+        }
+        st = map_lower_status(su_native_lower_x64_03(&in, &low, msg, sizeof msg, &failed));
+        free(gi);
+        free(gc);
+        free(pre);
+        su_vm_plan_free(plan);
+    } else {
+        st = map_lower_status(use_avx2 ? su_native_lower_avx2(&in, &low, msg, sizeof msg, &failed)
+                                       : su_native_lower_x64(&in, &low, msg, sizeof msg, &failed));
+    }
     free(words);
     free(access);
     if (st != SU_OK) {

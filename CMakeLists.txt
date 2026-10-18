@@ -75,7 +75,7 @@ target_link_libraries(test_ir PRIVATE su_ir su_vm)
 sutekh_apply_warnings(test_ir)
 add_test(NAME ir COMMAND test_ir WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
-add_library(su_vm STATIC src/vm/su_vm.c)
+add_library(su_vm STATIC src/vm/su_vm.c src/vm/su_vm_plan.c)
 target_include_directories(su_vm PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 target_link_libraries(su_vm PUBLIC su_world su_ir)
 sutekh_apply_warnings(su_vm)
@@ -84,6 +84,24 @@ add_executable(test_vm tests/vm/test_vm.c)
 target_link_libraries(test_vm PRIVATE su_vm)
 sutekh_apply_warnings(test_vm)
 add_test(NAME vm COMMAND test_vm WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# VM tiers (su_vm.h): planned against reference on hand-built edge cases and the racer capsule.
+add_executable(test_vm_tiers tests/vm/test_vm_tiers.c)
+target_link_libraries(test_vm_tiers PRIVATE su_vm)
+sutekh_apply_warnings(test_vm_tiers)
+add_test(NAME vm_tiers COMMAND test_vm_tiers WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+if(UNIX)
+    target_link_libraries(su_ir PUBLIC m) # sqrt: the estimate of src/ir/su_num_fast.h (su_vm, su_space3d)
+endif()
+# su_num_fast.h (planned VM tier) against the reference su_num.c, with and without compiler intrinsics.
+add_executable(test_num_fast tests/num/test_num_fast.c)
+target_link_libraries(test_num_fast PRIVATE su_vm)
+sutekh_apply_warnings(test_num_fast)
+add_test(NAME num_fast COMMAND test_num_fast 200000 1)
+add_executable(test_num_fast_portable tests/num/test_num_fast.c)
+target_compile_definitions(test_num_fast_portable PRIVATE SU_NUM_FAST_PORTABLE)
+target_link_libraries(test_num_fast_portable PRIVATE su_vm)
+sutekh_apply_warnings(test_num_fast_portable)
+add_test(NAME num_fast_portable COMMAND test_num_fast_portable 100000 2)
 # numeric-3d stream (IR 0.3, fixed_q32_v1, space3d): every target lives in the included file.
 include(cmake/SutekhNumeric3D.cmake)
 
@@ -287,16 +305,20 @@ if(SUTEKH_NATIVE)
     list(FILTER SU_ASMJIT_SOURCES EXCLUDE REGEX "/(arm|a64|ujit)[^/]*$|_test\\.cpp$|/arm/|/ujit/")
 
     add_library(su_asmjit STATIC ${SU_ASMJIT_SOURCES})
-    target_include_directories(su_asmjit PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asmjit")
+    # SYSTEM: warnings inside the pinned AsmJit headers (e.g. an unused variable in axl/commons.h under clang on
+    # Windows) must not fail the -Werror build of our own translation units that include them.
+    target_include_directories(su_asmjit SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asmjit")
     target_compile_definitions(su_asmjit PUBLIC ASMJIT_STATIC ASMJIT_NO_AARCH64 ASMJIT_NO_UJIT)
     set_target_properties(su_asmjit PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     target_compile_options(su_asmjit PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-w>)
 
     # M1-03: AVX2 lowering (C++, same AsmJit library) and host capability detection (C).
     add_library(su_native STATIC backends/native/su_native.c backends/native/su_native_asmjit.cpp
-                backends/native/avx2/su_native_avx2.cpp backends/native/avx2/su_native_caps.c)
+                backends/native/avx2/su_native_avx2.cpp backends/native/avx2/su_native_caps.c
+                # IR 0.3 scalar lowering and its C helpers (2026-10-18).
+                backends/native/su_native_lower03.cpp backends/native/su_native_ops03.c)
     target_include_directories(su_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" src "${SUTEKH_CONTRACT_INCLUDE}")
-    target_link_libraries(su_native PUBLIC su_ir su_asmjit)
+    target_link_libraries(su_native PUBLIC su_ir su_vm su_asmjit) # su_vm: the plan builder (identity-row guard)
     target_compile_definitions(su_native PRIVATE SU_NATIVE_ASMJIT_COMMIT="${SU_ASMJIT_COMMIT}")
     set_target_properties(su_native PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     # Strict C17 set for the C files. The C++ adapter gets -Wall -Wextra -Werror only: the AsmJit

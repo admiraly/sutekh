@@ -70,6 +70,8 @@ typedef struct SuSysEntry {
     SuExecContext *ctx;      /* owned; borrows mod; NULL for a host entry */
     uint32_t kind;           /* SU_SYS_KIND_IR or SU_SYS_KIND_HOST */
     const SuHostOpDesc *host; /* host entries only (static, borrowed); NULL for IR entries */
+    uint32_t *host_bind;     /* owned; host entries bound to another schema (su_sched_add_host_bound): the world
+                              * field ID of each descriptor field, in descriptor order. NULL = the descriptor's IDs. */
     uint64_t txid;           /* registry transaction that made this module live; 0 = creation */
     uint64_t system_rev;     /* 1 at creation, +1 per installed revision */
     uint64_t installed_tick; /* effective tick of the install (0 at creation) */
@@ -130,6 +132,14 @@ uint32_t su_sched_add(SuSchedule *s, SuLirModule *mod, uint32_t schema_version, 
  * decl on SU_OK only and never creates a VM context (ctx stays NULL). */
 uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, uint32_t schema_version,
                            uint32_t gen, uint64_t txid, uint64_t system_rev, uint64_t tick);
+/* As su_sched_add_host for a declaration from su_host_load_bound. bind (d->field_count entries, the world field
+ * ID of each descriptor field) may be NULL for an unbound declaration, which is then exactly su_sched_add_host.
+ * With bind, the declaration must carry one lane per descriptor lane under bind's IDs with the descriptor's type and
+ * access (else SU_E_SCHEMA_MISMATCH); the schedule schema is the declaration's query, and run passes the operator
+ * the world's columns under the descriptor's field IDs. The entry copies bind. */
+uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, const uint32_t *bind,
+                                 uint32_t schema_version, uint32_t gen, uint64_t txid, uint64_t system_rev,
+                                 uint64_t tick);
 /* Builds the union field table from the current entries. Conflicting ID/name/type for
  * one field is SU_E_SCHEMA_MISMATCH. Call after the last su_sched_add. */
 uint32_t su_sched_finalize(SuSchedule *s);

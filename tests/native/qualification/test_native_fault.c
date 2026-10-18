@@ -17,7 +17,6 @@
  * revision) at each tick with a control session that steps one tick at a time on the VM only. */
 #define _POSIX_C_SOURCE 200809L
 
-#include <dirent.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdint.h>
@@ -26,9 +25,13 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#if !defined(_WIN32)
+#include <dirent.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
+#include "../../common/su_test_os.h"
 #include "agent/su_agent.h"
 #include "agent/su_proc.h"
 #include "agent/su_proto.h"
@@ -60,7 +63,7 @@ static int g_seq;
 static char g_ctl[CTL_TICKS + 1u][65];
 
 typedef struct Sess {
-    pid_t pid;
+    SuTestServe serve; /* supervisor under test (tests/common/su_test_os.h) */
     int wfd;
     SuLineReader rd;
 } Sess;
@@ -136,12 +139,24 @@ static int err_code_is(const Resp *r, const char *name) {
 
 /* ---------- agent sessions: one agent process per session; the env is set before it serves ---------- */
 
+/* Sets (value != NULL) or removes an environment variable before a session starts. */
+static void fault_env(const char *name, const char *value) {
+    if (value != NULL) {
+        setenv(name, value, 1);
+    } else {
+        unsetenv(name);
+    }
+}
+
+/* The seam variables are set before the supervisor starts. POSIX: the forked agent keeps its copy and passes it
+ * to every worker, including replacements. Windows: the agent is a thread of this process and spawns its workers
+ * with a copy of this environment, so the variables stay set for the whole session and are removed when the
+ * next session starts (fault_env of that session) or at exit. */
 static Sess sess_start(const char *native_tick, const char *native_backend, const char *tag) {
     Sess s;
-    int req[2];
-    int rsp[2];
-    pid_t pid;
-    char spool[1200];
+    int wfd;
+    int rfd;
+    static char spool[1200]; /* static: on Windows the supervisor thread reads cfg strings after this returns */
     SuAgentConfig cfg;
     static const char *argv[2];
 
@@ -154,49 +169,21 @@ static Sess sess_start(const char *native_tick, const char *native_backend, cons
     cfg.worker_argv = argv;
     cfg.request_timeout_ms = 60000;
     cfg.spool_dir = spool;
-    if (pipe(req) != 0 || pipe(rsp) != 0) {
-        perror("pipe");
-        exit(2);
-    }
-    pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        exit(2);
-    }
-    if (pid == 0) {
-        int rc;
-        close(req[1]);
-        close(rsp[0]);
-        unsetenv("SU_TEST_FAULT");
-        unsetenv("SU_TEST_FAULT_MS");
-        if (native_tick != NULL) {
-            setenv("SU_TEST_FAULT_NATIVE_TICK", native_tick, 1);
-        } else {
-            unsetenv("SU_TEST_FAULT_NATIVE_TICK");
-        }
-        if (native_backend != NULL) {
-            setenv("SU_TEST_FAULT_NATIVE_BACKEND", native_backend, 1);
-        } else {
-            unsetenv("SU_TEST_FAULT_NATIVE_BACKEND");
-        }
-        rc = su_agent_serve(req[0], rsp[1], &cfg);
-        _exit(rc == 0 ? 0 : 1);
-    }
-    close(req[0]);
-    close(rsp[1]);
+    fault_env("SU_TEST_FAULT", NULL);
+    fault_env("SU_TEST_FAULT_MS", NULL);
+    fault_env("SU_TEST_FAULT_NATIVE_TICK", native_tick);
+    fault_env("SU_TEST_FAULT_NATIVE_BACKEND", native_backend);
     memset(&s, 0, sizeof s);
-    s.pid = pid;
-    s.wfd = req[1];
-    su_line_reader_init(&s.rd, rsp[0], -1);
+    su_test_serve_start(&s.serve, &cfg, &wfd, &rfd);
+    s.wfd = wfd;
+    su_line_reader_init(&s.rd, rfd, -1);
     return s;
 }
 
 static void sess_stop(Sess *s) {
-    int status = 0;
     close(s->wfd);
     su_line_reader_free(&s->rd);
-    waitpid(s->pid, &status, 0);
-    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(su_test_serve_wait(&s->serve));
 }
 
 static int call(Sess *s, const char *line, Resp *r) {
@@ -261,6 +248,68 @@ static void copy_example(const char *name) {
     fclose(fo);
 }
 
+#if defined(_WIN32)
+/* Creation time of a process (100 ns units since 1601), or -1. */
+static long long proc_created(uint64_t pid) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    FILETIME created, ended, kern, user;
+    long long t = -1;
+    if (h == NULL) {
+        return -1;
+    }
+    if (GetProcessTimes(h, &created, &ended, &kern, &user)) {
+        t = (long long)(((unsigned long long)created.dwHighDateTime << 32) | created.dwLowDateTime);
+    }
+    CloseHandle(h);
+    return t;
+}
+
+/* A live child of the agent: running and its parent id is the agent's (the agent is this test process on
+ * Windows: the supervisor is a thread). */
+static int live_child_of(uint64_t pid, uint64_t agent) {
+    return pid != 0u && su_test_pid_alive(pid) && su_test_parent_pid(pid) == (long)agent;
+}
+
+/* Windows has no zombies (an ended child leaves nothing to reap). The counterpart of "no zombie child" is: no
+ * child of the agent created after it is still running except the given worker (the replaced worker is gone).
+ * Toolhelp snapshot; parent ids are not cleared when a parent exits and pids are reused, hence the creation
+ * time filter. */
+static int leftover_children(uint64_t agent, uint64_t keep) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32 pe;
+    long long born = proc_created(agent);
+    int n = 0;
+    if (snap == INVALID_HANDLE_VALUE || born < 0) {
+        if (snap != INVALID_HANDLE_VALUE) {
+            CloseHandle(snap);
+        }
+        return -1;
+    }
+    memset(&pe, 0, sizeof pe);
+    pe.dwSize = sizeof pe;
+    if (Process32First(snap, &pe)) {
+        do {
+            uint64_t id = (uint64_t)pe.th32ProcessID;
+            if ((uint64_t)pe.th32ParentProcessID == agent && id != keep && su_test_pid_alive(id) &&
+                proc_created(id) >= born) {
+                n++;
+            }
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+    return n;
+}
+
+static uint64_t agent_of(const Sess *s) {
+    (void)s;
+    return (uint64_t)GetCurrentProcessId();
+}
+
+/* Zombie children (POSIX) or leftover running children other than keep (Windows) of the session's agent. */
+static int zombies_of(const Sess *s, uint64_t keep) {
+    return leftover_children(agent_of(s), keep);
+}
+#else
 /* State letter and parent pid from /proc/<pid>/stat. 0 when the process is gone. */
 static int proc_stat(pid_t pid, char *state, int *ppid) {
     char path[64];
@@ -284,9 +333,10 @@ static int proc_stat(pid_t pid, char *state, int *ppid) {
 }
 
 /* A live child of the agent: exists, is not a zombie, and its parent is the agent. */
-static int live_child_of(pid_t pid, pid_t agent) {
+static int live_child_of(uint64_t pid64, uint64_t agent) {
     char state = '?';
     int ppid = -1;
+    pid_t pid = (pid_t)pid64;
     if (pid <= 0 || !proc_stat(pid, &state, &ppid)) {
         return 0;
     }
@@ -314,6 +364,16 @@ static int zombie_children(pid_t ppid) {
     closedir(d);
     return n;
 }
+
+static uint64_t agent_of(const Sess *s) {
+    return (uint64_t)s->serve.pid;
+}
+
+static int zombies_of(const Sess *s, uint64_t keep) {
+    (void)keep;
+    return zombie_children((pid_t)agent_of(s));
+}
+#endif
 
 /* ---------- world helpers ---------- */
 
@@ -529,8 +589,8 @@ static void scenario_avx2_crash(void) {
     CHECK(old_pid != 0u);
     CHECK(!step1(&s, wid, rev, sizeof rev, &r));
     expect_recovery(&r, old_pid, hash, &new_pid);
-    CHECK(live_child_of((pid_t)new_pid, s.pid));
-    CHECK(zombie_children(s.pid) == 0);
+    CHECK(live_child_of(new_pid, agent_of(&s)));
+    CHECK(zombies_of(&s, new_pid) == 0);
     resp_free(&r);
 
     /* VM tier after recovery; the artifact is quarantined; nothing is respecialized. */
@@ -603,7 +663,7 @@ static void scenario_double_crash(void) {
     pid1 = active_pid(&s);
     CHECK(!step1(&s, wid, rev, sizeof rev, &r));
     expect_recovery(&r, pid1, avx_hash, &pid2);
-    CHECK(live_child_of((pid_t)pid2, s.pid));
+    CHECK(live_child_of(pid2, agent_of(&s)));
     resp_free(&r);
 
     specialize(&s, wid, rev, "scalar", &r);
@@ -612,7 +672,7 @@ static void scenario_double_crash(void) {
     /* the scalar kernel now computes tick 5 and dies as well */
     CHECK(!step1(&s, wid, rev, sizeof rev, &r));
     expect_recovery(&r, pid2, sc_hash, &pid3);
-    CHECK(live_child_of((pid_t)pid3, s.pid));
+    CHECK(live_child_of(pid3, agent_of(&s)));
     CHECK(pid3 != pid1 && pid3 != pid2);
     resp_free(&r);
 
@@ -672,11 +732,11 @@ static void scenario_respecialize(void) {
 
     old_pid = active_pid(&s);
     CHECK(old_pid != 0u);
-    CHECK(kill((pid_t)old_pid, SIGKILL) == 0);
+    CHECK(su_test_kill_pid(old_pid) == 0);
     /* the first request after the death finds the dead worker: recovery, not executed */
     inspect(&s, wid, &r);
     expect_recovery(&r, old_pid, NULL, &new_pid);
-    CHECK(live_child_of((pid_t)new_pid, s.pid));
+    CHECK(live_child_of(new_pid, agent_of(&s)));
     resp_free(&r);
 
     /* A tick directly after the recovery answer runs on the VM; respecialization is not run for it. */

@@ -46,6 +46,9 @@ SMOKE_CPP = r'''
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 using namespace asmjit;
 typedef uint32_t (*AddFn)(uint32_t, uint32_t);
@@ -55,10 +58,19 @@ int main() {
     CodeHolder code;
     code.init(rt.environment(), rt.cpu_features());
     x86::Assembler a(&code);
-    // Zero-extend both arguments: the upper halves of rdi/rsi are unspecified for uint32_t.
+#if defined(_WIN32)
+    // Win64: the arguments arrive in rcx and rdx. Zero-extend both (upper halves unspecified for uint32_t).
+    a.mov(x86::ecx, x86::ecx);
+    a.mov(x86::edx, x86::edx);
+    a.lea(x86::eax, x86::ptr(x86::rcx, x86::rdx));
+    printf("ABI win64 args=rcx,rdx\n");
+#else
+    // SysV: the arguments arrive in rdi and rsi. Zero-extend both (upper halves unspecified for uint32_t).
     a.mov(x86::edi, x86::edi);
     a.mov(x86::esi, x86::esi);
     a.lea(x86::eax, x86::ptr(x86::rdi, x86::rsi));
+    printf("ABI sysv args=rdi,rsi\n");
+#endif
     a.ret();
     AddFn fn = nullptr;
     Error err = rt.add(&fn, &code);
@@ -74,8 +86,31 @@ int main() {
     printf("CALL lea32 1+2 got=%" PRIu32 " want=3 ok=%d\n", r2, ok2);
     // W^X check: report the permissions of the mapping that holds the generated code.
     uintptr_t addr = (uintptr_t)fn;
-    FILE* f = fopen("/proc/self/maps", "r");
     int found = 0;
+#if defined(_WIN32)
+    {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (VirtualQuery((const void*)addr, &mbi, sizeof mbi) == sizeof mbi && mbi.State == MEM_COMMIT) {
+            const char* perms = "---p";
+            switch (mbi.Protect & 0xFFu) {
+            case PAGE_EXECUTE_READ: perms = "r-xp"; break;
+            case PAGE_EXECUTE_READWRITE: perms = "rwxp"; break;
+            case PAGE_EXECUTE_WRITECOPY: perms = "rwxp"; break;
+            case PAGE_READWRITE: perms = "rw-p"; break;
+            case PAGE_READONLY: perms = "r--p"; break;
+            case PAGE_EXECUTE: perms = "--xp"; break;
+            default: break;
+            }
+            unsigned long long lo = (unsigned long long)(uintptr_t)mbi.BaseAddress;
+            printf("MAP perms=%s range=%llx-%llx line=[VirtualQuery protect=0x%lx type=0x%lx]\n", perms, lo,
+                   lo + (unsigned long long)mbi.RegionSize, (unsigned long)mbi.Protect, (unsigned long)mbi.Type);
+            found = 1;
+        }
+    }
+    FILE* f = nullptr;
+#else
+    FILE* f = fopen("/proc/self/maps", "r");
+#endif
     if (f) {
         char line[512];
         while (fgets(line, sizeof line, f)) {
@@ -153,7 +188,7 @@ def _write_lock(commit, info):
         "pin_note": "No upstream release tags exist; pinned by commit.",
     }
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
-    with open(LOCK, "w", encoding="utf-8") as fh:
+    with open(LOCK, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(lock, fh, indent=2, sort_keys=True)
         fh.write("\n")
     return lock
@@ -170,6 +205,10 @@ def fetch(force):
         os.makedirs(DEST)
         for argv in (
             ["init", "-q", DEST],
+            # Byte-exact checkout on every host: a global core.autocrlf=true (the Git for Windows default) would
+            # rewrite LICENSE.md and the sources with CRLF and change the pinned license hash.
+            ["-C", DEST, "config", "core.autocrlf", "false"],
+            ["-C", DEST, "config", "core.eol", "lf"],
             ["-C", DEST, "remote", "add", "origin", REPO_URL],
             ["-C", DEST, "fetch", "-q", "--depth", "1", "origin", PIN],
             ["-C", DEST, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", "FETCH_HEAD"],
@@ -268,11 +307,14 @@ def build_probe(cxx, scratch, jobs):
     if failed:
         report["error"] = "library compile failed"
         return report
-    lib = os.path.join(scratch, "libasmjit.a")
+    win = sys.platform == "win32"
+    lib = os.path.join(scratch, "asmjit.lib" if win else "libasmjit.a")
     if os.path.exists(lib):
         os.remove(lib)
+    ar = (shutil.which("llvm-ar") or "llvm-ar") if win else "ar"
+    report["archiver"] = ar
     t0 = time.monotonic()
-    rc, _, err = _run_capture(["ar", "rcs", lib, *[r["obj"] for r in results]])
+    rc, _, err = _run_capture([ar, "rcs", lib, *[r["obj"] for r in results]])
     report["archive_seconds"] = round(time.monotonic() - t0, 3)
     report["archive_rc"] = rc
     if rc != 0:
@@ -281,7 +323,7 @@ def build_probe(cxx, scratch, jobs):
     smoke_src = os.path.join(scratch, "smoke.cpp")
     with open(smoke_src, "w", encoding="utf-8") as fh:
         fh.write(SMOKE_CPP)
-    exe = os.path.join(scratch, "smoke")
+    exe = os.path.join(scratch, "smoke.exe" if win else "smoke")
     t0 = time.monotonic()
     rc, _, err = _run_capture([cxx, *PROBE_FLAGS, "-O2", "-I", inc, smoke_src, lib, "-o", exe])
     report["smoke_link_seconds"] = round(time.monotonic() - t0, 3)
@@ -299,6 +341,7 @@ def build_probe(cxx, scratch, jobs):
     report["jit_mapping"] = maps[0] if maps else None
     rwx = any("perms=rwx" in l for l in maps)
     report["wx_finding"] = "FINDING: rwx JIT mapping" if rwx else None
+    report["abi"] = next((l for l in run.stdout.splitlines() if l.startswith("ABI ")), None)
     report["ok"] = run.returncode == 0 and bool(maps) and not rwx
     return report
 

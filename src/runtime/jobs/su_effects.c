@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ir/su_ops03.h"
 #include "sutekh/ir.h"
 
 struct SuEffectGraph {
@@ -55,6 +56,29 @@ uint32_t su_effects_derive(const SuLirModule *m, uint8_t *reads, uint8_t *writes
                 return SU_E_INTERNAL;
             }
             writes[ins->a] = 1u;
+        } else {
+            /* IR 0.3 (2026-10-18): field operands from the operation table; a 64-bit field operand names lane 0
+             * and covers lanes idx and idx + 1. Opcodes of 0.1 and 0.2 are not in the table. */
+            const SuOp03 *o = su_op03_by_code(ins->op);
+            uint32_t k;
+            for (k = 0; o != NULL && k < o->n; k++) {
+                uint32_t kind = o->o[k].kind, idx, lanes, l;
+                if (kind != SU_O_FREAD && kind != SU_O_FWRITE) {
+                    continue;
+                }
+                idx = o->o[k].slot == SU_S_A ? ins->a : (o->o[k].slot == SU_S_B ? ins->b : ins->c);
+                lanes = su_type_lanes(o->o[k].type);
+                if (lanes == 0u || idx >= m->field_count || lanes > m->field_count - idx) {
+                    return SU_E_INTERNAL;
+                }
+                for (l = 0; l < lanes; l++) {
+                    if (kind == SU_O_FREAD) {
+                        reads[idx + l] = 1u;
+                    } else {
+                        writes[idx + l] = 1u;
+                    }
+                }
+            }
         }
     }
     return SU_OK;

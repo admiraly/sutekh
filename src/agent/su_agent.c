@@ -326,6 +326,7 @@ typedef struct SuAgent {
     uint64_t tick_chunk_min_rows;
     uint32_t interval;
     uint32_t retain;
+    int test_interleave_fired; /* SU_TEST_INTERLEAVE one-shot, per supervisor (test seam builds) */
     uint32_t log_cap;
     uint32_t quarantine_after;
     int install_ck;
@@ -4338,16 +4339,16 @@ static void test_interleave(SuAgent *a, const char *world_id) {
     char rev[AGENT_REV_CAP];
     uint32_t st;
 
-    static int fired; /* one-shot per process: the first specialization admitted after the arm */
-
-    if (mode == NULL || mode[0] == '\0' || fired) {
+    /* One-shot per supervisor: the first specialization admitted after the arm. (Per supervisor rather than per
+     * process, so a test that runs several supervisors as threads of one process, as on Windows, arms each.) */
+    if (mode == NULL || mode[0] == '\0' || a->test_interleave_fired) {
         return;
     }
     w = find_world(a, world_id);
     if (w == NULL) {
         return;
     }
-    fired = 1;
+    a->test_interleave_fired = 1;
     wrev(w, w->rev, rev, sizeof rev);
     su_buf_init(&params_txt);
     su_buf_str(&params_txt, "{\"world_id\":");
