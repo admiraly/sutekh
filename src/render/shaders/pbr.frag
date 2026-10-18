@@ -57,7 +57,10 @@ void main() {
         if (tl > 1e-12) {
             t *= inversesqrt(tl);
             vec3 b = cross(n, t) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
-            vec3 tn = texture(t_normal, uv_of(2u)).xyz * 2.0 - 1.0;
+            /* x and y from the map; z rebuilt (two-channel BC5 maps carry no z; for RGB maps it is the same) */
+            vec3 tn;
+            tn.xy = texture(t_normal, uv_of(2u)).xy * 2.0 - 1.0;
+            tn.z = sqrt(max(1.0 - dot(tn.xy, tn.xy), 0.0));
             tn.xy *= mat.mr.z;
             n = normalize(t * tn.x + b * tn.y + n * tn.z);
         }

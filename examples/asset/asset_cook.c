@@ -1,6 +1,6 @@
 /* Offline cook step and pack inspector (sutekh/asset.h).
  *
- *   asset_cook cook IN.gltf|IN.glb OUT.supak [--name NAME] [--max-texture N] [--no-mips]
+ *   asset_cook cook IN.gltf|IN.glb OUT.supak [--name NAME] [--max-texture N] [--no-mips] [--bc]
  *       imports the glTF file, writes the pack, prints the report and the pack's content SHA-256 (its address)
  *   asset_cook info PACK.supak
  *       validates a pack and lists its resources
@@ -56,7 +56,27 @@ static int info(const char *path) {
     char hex[65];
     uint32_t i;
     size_t len = 0;
-    uint32_t st = su_asset_pak_open_file(path, &p, msg);
+    uint32_t st;
+    FILE *fh = fopen(path, "rb");
+    uint8_t *raw = NULL;
+    long n = -1;
+    if (fh != NULL && fseek(fh, 0, SEEK_END) == 0 && (n = ftell(fh)) >= 0 && fseek(fh, 0, SEEK_SET) == 0) {
+        raw = malloc((size_t)n + 1u);
+        if (raw != NULL && fread(raw, 1, (size_t)n, fh) != (size_t)n) {
+            free(raw);
+            raw = NULL;
+        }
+    }
+    if (fh != NULL) {
+        fclose(fh);
+    }
+    if (raw == NULL) {
+        fprintf(stderr, "%s: cannot read\n", path);
+        return 1;
+    }
+    /* info also checks every payload hash */
+    st = su_asset_pak_open(raw, (size_t)n, SU_ASSET_PAK_VERIFY_ENTRIES, &p, msg);
+    free(raw);
     if (st != SU_OK) {
         fprintf(stderr, "%s: %s\n", path, msg);
         return 1;
@@ -113,6 +133,8 @@ static int cook(int argc, char **argv) {
             o.max_texture_size = (uint32_t)strtoul(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--no-mips") == 0) {
             o.flags |= SU_ASSET_COOK_NO_MIPS;
+        } else if (strcmp(argv[i], "--bc") == 0) {
+            o.flags |= SU_ASSET_COOK_BC;
         } else {
             fprintf(stderr, "unknown option %s\n", argv[i]);
             return 2;
@@ -160,7 +182,7 @@ int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "info") == 0) {
         return info(argv[2]);
     }
-    fprintf(stderr, "usage: asset_cook cook IN.gltf|IN.glb OUT.supak [--name NAME] [--max-texture N] [--no-mips]\n"
+    fprintf(stderr, "usage: asset_cook cook IN.gltf|IN.glb OUT.supak [--name NAME] [--max-texture N] [--no-mips] [--bc]\n"
                     "       asset_cook info PACK.supak\n");
     return 2;
 }

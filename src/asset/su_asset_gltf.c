@@ -244,10 +244,33 @@ static float srgb_to_linear(float s) {
     return s <= 0.04045f ? s / 12.92f : powf((s + 0.055f) / 1.055f, 2.4f);
 }
 
+/* Linear value at which the sRGB code k + 1 starts (rounding of the encoded value): code(l) is the number of these
+ * thresholds that l reaches. Equals rounding srgb(l) * 255 (ties aside) without a pow per texel. */
+static float g_srgb_up[255];
+
+static void srgb_thresholds(void) {
+    int k;
+    if (g_srgb_up[254] != 0.0f) {
+        return;
+    }
+    for (k = 0; k < 255; k++) {
+        float s = ((float)k + 0.5f) / 255.0f;
+        g_srgb_up[k] = s <= 0.04045f ? s / 12.92f : powf((s + 0.055f) / 1.055f, 2.4f);
+    }
+}
+
 static uint8_t linear_to_srgb8(float l) {
-    float s = l <= 0.0031308f ? l * 12.92f : 1.055f * powf(l, 1.0f / 2.4f) - 0.055f;
-    s = s < 0.0f ? 0.0f : s > 1.0f ? 1.0f : s;
-    return (uint8_t)(s * 255.0f + 0.5f);
+    int lo = 0;
+    int hi = 255; /* answer in [0, 255]: the count of thresholds <= l */
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (g_srgb_up[mid] <= l) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return (uint8_t)lo;
 }
 
 /* Halves an RGBA8 image (2x2 box; odd edges reuse the last texel). role 0 sRGB, 1 linear, 2 normal map. */
@@ -304,7 +327,9 @@ static uint32_t put_rgba8(Cook *c, uint64_t id, uint8_t *base, uint32_t w, uint3
     uint32_t n = 0;
     uint32_t i;
     uint32_t st;
+    uint32_t fmt = role == 0 ? SU_TEX_RGBA8_SRGB : SU_TEX_RGBA8_UNORM;
     float lut[256];
+    srgb_thresholds();
     for (i = 0; i < 256u; i++) {
         lut[i] = srgb_to_linear((float)i / 255.0f);
     }
@@ -339,10 +364,34 @@ static uint32_t put_rgba8(Cook *c, uint64_t id, uint8_t *base, uint32_t w, uint3
             lh = nh;
         }
     }
-    st = su_asset_writer_add_texture(c->w, id, w, h, role == 0 ? SU_TEX_RGBA8_SRGB : SU_TEX_RGBA8_UNORM,
-                                     role == 2 ? SU_ASSET_TEX_FLAG_NORMAL_MAP : 0u, n, (const uint8_t *const *)levels);
+    if (c->opt != NULL && (c->opt->flags & SU_ASSET_COOK_BC) != 0u) {
+        /* block-compress every level in place of the RGBA8 one */
+        int alpha = 0;
+        uint64_t k;
+        for (k = 0; k < (uint64_t)w * h && role == 0; k++) {
+            alpha |= levels[0][k * 4u + 3u] != 255u;
+        }
+        fmt = role == 2 ? SU_TEX_BC5_UNORM : role == 1 ? SU_TEX_BC1_UNORM : alpha ? SU_TEX_BC3_SRGB : SU_TEX_BC1_SRGB;
+        for (i = 0; i < n; i++) {
+            uint32_t lw = w >> i ? w >> i : 1u;
+            uint32_t lh = h >> i ? h >> i : 1u;
+            uint8_t *bc = malloc((size_t)su_asset_texture_level_size(fmt, lw, lh));
+            if (bc == NULL || su_asset_bc_encode(fmt, levels[i], lw, lh, bc) != SU_OK) {
+                uint32_t q;
+                free(bc);
+                for (q = 0; q < n; q++) {
+                    free(levels[q]);
+                }
+                return SU_E_RESOURCE_LIMIT;
+            }
+            free(levels[i]);
+            levels[i] = bc;
+        }
+    }
+    st = su_asset_writer_add_texture(c->w, id, w, h, fmt, role == 2 ? SU_ASSET_TEX_FLAG_NORMAL_MAP : 0u, n,
+                                     (const uint8_t *const *)levels);
     for (i = 0; i < n; i++) {
-        c->rep->texture_bytes += su_asset_texture_level_size(SU_TEX_RGBA8_UNORM, w >> i ? w >> i : 1u, h >> i ? h >> i : 1u);
+        c->rep->texture_bytes += su_asset_texture_level_size(fmt, w >> i ? w >> i : 1u, h >> i ? h >> i : 1u);
         free(levels[i]);
     }
     return st;

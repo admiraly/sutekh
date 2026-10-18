@@ -401,6 +401,89 @@ int main(int argc, char **argv) {
         CHECK(is(px(W / 2 - 40u, H / 2 - 40u), 200, 40, 40, 2)); /* top-left cell */
         CHECK(is(px(W / 2 + 40u, H / 2 - 40u), 40, 40, 200, 2)); /* top-right cell */
     }
+    /* a BC1 sRGB texture made by the cook-time encoder, created directly through the resource API, unlit:
+     * (206, 40, 41) is exactly representable in 5:6:5, so it samples back to the same bytes */
+    {
+        uint8_t solid[8 * 8 * 4];
+        uint8_t bc0[32];
+        uint8_t bc1[8];
+        uint8_t bc2[8];
+        const uint8_t *mips[4];
+        SuRenderTextureDesc td;
+        SuRenderMaterialDesc md;
+        SuRenderMeshDesc mdsc;
+        SuRenderModelNode mn;
+        SuAssetVertex bv[24];
+        uint32_t bi[36];
+        SuAssetSubmesh bs;
+        SuRenderHandle tex = 0;
+        SuRenderHandle mat = 0;
+        SuRenderHandle mesh = 0;
+        SuRenderHandle model = 0;
+        int k;
+        for (k = 0; k < 64; k++) {
+            solid[k * 4] = 206;
+            solid[k * 4 + 1] = 40;
+            solid[k * 4 + 2] = 41;
+            solid[k * 4 + 3] = 255;
+        }
+        CHECK(su_asset_bc_encode(SU_TEX_BC1_SRGB, solid, 8, 8, bc0) == SU_OK);
+        CHECK(su_asset_bc_encode(SU_TEX_BC1_SRGB, solid, 4, 4, bc1) == SU_OK);
+        CHECK(su_asset_bc_encode(SU_TEX_BC1_SRGB, solid, 2, 2, bc2) == SU_OK);
+        mips[0] = bc0;
+        mips[1] = bc1;
+        mips[2] = bc2;
+        mips[3] = bc2; /* 1 x 1: the same single block */
+        memset(&td, 0, sizeof td);
+        td.width = td.height = 8;
+        td.format = SU_TEX_BC1_SRGB;
+        td.mip_count = 4;
+        td.mip_data = mips;
+        td.flags = SU_RENDER_UPLOAD_COPY;
+        CHECK(su_render_texture_create(r, &td, &tex) == SU_OK);
+        memset(&md, 0, sizeof md);
+        su_asset_material_default(&md.factors);
+        md.factors.unlit = 1;
+        md.textures[SU_ASSET_SLOT_BASE_COLOR] = tex;
+        CHECK(su_render_material_create(r, &md, &mat) == SU_OK);
+        box(bv, bi, 0.5f, 0);
+        memset(&bs, 0, sizeof bs);
+        bs.index_count = 36;
+        bs.radius = 0.87f;
+        memset(&mdsc, 0, sizeof mdsc);
+        mdsc.vertices = bv;
+        mdsc.vertex_count = 24;
+        mdsc.indices = bi;
+        mdsc.index_count = 36;
+        mdsc.submeshes = &bs;
+        mdsc.submesh_count = 1;
+        mdsc.materials = &mat;
+        mdsc.radius = 0.87f;
+        mdsc.flags = SU_RENDER_UPLOAD_COPY;
+        CHECK(su_render_mesh_create(r, &mdsc, &mesh) == SU_OK);
+        memset(&mn, 0, sizeof mn);
+        mn.transform[0] = mn.transform[5] = mn.transform[10] = mn.transform[15] = 1.0f;
+        mn.lod_mesh[0] = mesh;
+        mn.lod_screen[0] = 1.0f;
+        mn.lod_count = 1;
+        CHECK(su_render_model_create(r, &mn, 1, &model) == SU_OK);
+        objs[0] = obj_at(model, 0, 0, -3, 1.0f);
+        f.light.tonemap = SU_TONEMAP_CLAMP;
+        for (k = 0; k < 2; k++) { /* the first frame uploads, the second draws with everything READY */
+            CHECK(su_render_frame_ex(r, &f) == SU_OK);
+        }
+        if (su_render_resource_state(r, tex) == SU_RENDER_STATE_READY) {
+            if (draw(r, &f)) {
+                CHECK(is(px(W / 2, H / 2), 206, 40, 41, 1));
+            }
+        } else {
+            printf("BC1 not sampleable on this device: texture state %u (%s); pixel check not run\n",
+                   (unsigned)su_render_resource_state(r, tex), su_render_last_error(r));
+            CHECK(su_render_resource_state(r, tex) == SU_RENDER_STATE_FAILED);
+        }
+        CHECK(su_render_release(r, model) == SU_OK && su_render_release(r, mesh) == SU_OK &&
+              su_render_release(r, mat) == SU_OK && su_render_release(r, tex) == SU_OK);
+    }
     /* ACES: an emission of 1.0 maps to (2.51 + 0.03) / (2.43 + 0.59 + 0.14) = 0.8038, sRGB 231 */
     objs[0] = obj_at(su_render_pak_handle(&rp, ID("model/one")), 0, 0, -3, 1.0f);
     f.light.tonemap = SU_TONEMAP_ACES;

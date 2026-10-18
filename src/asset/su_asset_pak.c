@@ -703,7 +703,7 @@ uint32_t su_asset_pak_open(const void *bytes, size_t len, uint32_t flags, SuAsse
     if (message != NULL) {
         message[0] = '\0';
     }
-    if (out == NULL || (bytes == NULL && len > 0u) || (flags & ~SU_ASSET_PAK_BORROW) != 0u) {
+    if (out == NULL || (bytes == NULL && len > 0u) || (flags & ~(SU_ASSET_PAK_BORROW | SU_ASSET_PAK_VERIFY_ENTRIES)) != 0u) {
         return SU_E_INVALID_ARGUMENT;
     }
     *out = NULL;
@@ -782,6 +782,9 @@ uint32_t su_asset_pak_open(const void *bytes, size_t len, uint32_t flags, SuAsse
             return SU_E_PARSE;
         }
         prev_end = en->offset + en->size;
+        if ((flags & SU_ASSET_PAK_VERIFY_ENTRIES) == 0u) {
+            continue;
+        }
         su_sha256_init(&s);
         su_sha256_update(&s, b + en->offset, (size_t)en->size);
         su_sha256_final(&s, d);

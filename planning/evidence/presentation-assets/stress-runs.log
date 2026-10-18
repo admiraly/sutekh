@@ -1,0 +1,61 @@
+source commit 5a0f9aaae009060fb6a53fbb33f5d704006b90e2 (uncommitted source files: 14); Release build-rel; 2026-10-18T16:56:03; Quadro P600 over RDP
+synthetic scene from tools/gen_stress_gltf.py (generated into build-rel\stress, outside the repository)
+
+$ .venv\Scripts\python.exe -I tools\gen_stress_gltf.py build-rel\stress --texture 2048 --materials 8
+wrote build-rel\stress\stress.gltf: 48 parts (LOD0 292608 triangles in all parts), 240 placed nodes (240 with LOD1 siblings), 8 materials, 32 PNG textures of 2048 px (5901159 bytes), buffer 8993280 bytes
+exit 0 (wall 39.89 s)
+
+$ build-rel\asset_cook.exe cook build-rel\stress\stress.gltf build-rel\stress\stress.supak
+cooked build-rel\stress\stress.gltf in 5801.1 ms: 96 meshes (96 submeshes, 164400 vertices, 311040 triangles), 32 textures (715827840 bytes), 8 materials, 240 model nodes (240 LOD groups), 0 warnings
+wrote build-rel\stress\stress.supak: 728825912 bytes, content sha256 efc2a6d3ab38272c7a193ccfa05389ad07413644224348b7df962d335ae7e974
+exit 0 (wall 8.77 s)
+
+$ build-rel\asset_cook.exe cook build-rel\stress\stress.gltf build-rel\stress\stress_bc.supak --bc
+cooked build-rel\stress\stress.gltf in 4868.7 ms: 96 meshes (96 submeshes, 164400 vertices, 311040 triangles), 32 textures (111848640 bytes), 8 materials, 240 model nodes (240 LOD groups), 0 warnings
+wrote build-rel\stress\stress_bc.supak: 124846520 bytes, content sha256 c373ca8a51e6db8d24c0d3ae47de2e52f0f462bd8d5ae9dd17354f3014628ef4
+exit 0 (wall 5.37 s)
+
+$ build-rel\asset_cook.exe info build-rel\stress\stress_bc.supak
+pack build-rel\stress\stress_bc.supak: 124846520 bytes, 137 resources, content sha256 c373ca8a51e6db8d24c0d3ae47de2e52f0f462bd8d5ae9dd17354f3014628ef4
+exit 0 (wall 0.84 s)
+
+$ build-rel\space_demo.exe --script --seconds 8 --no-vsync --width 1920 --height 1080 --model build-rel\stress\stress.supak --no-audio
+renderer: Quadro P600, window target 1920x1080, pipelines 7.5 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+model: build-rel\stress\stress.supak queued on the loader thread
+model: loaded and validated in 2739.3 ms on the loader thread; 137 resources
+model: every resource READY after 44 frames, 0.1 s, 728767092 bytes uploaded
+frames 8152, ticks 960, dropped ticks 0, gate events 1, mean step 0.027 ms
+digest aa3e6044244d01436a11e986481ba9da059f537309e2891f492cc5b572e23c73 fast e67ed4c292677969
+render: frames 8152, last cpu 0.112 ms (scene 0.074), last gpu 0.486 ms, draws 9, objects 3015 (culled 3013, nodes drawn 4, LOD0 4, LOD1 0), draw instances 4, fx vertices 1026, hud vertices 948, uploaded 729184500 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 1
+frames drawn 8152, paused 0, failed 0
+timings over 8122 frames after warm-up (observations): gpu median 0.697 ms p95 1.664 ms; render cpu median 0.145 ms p95 0.233 ms
+exit 0 (wall 8.41 s)
+
+$ build-rel\space_demo.exe --script --seconds 8 --no-vsync --width 1920 --height 1080 --model build-rel\stress\stress_bc.supak --no-audio
+renderer: Quadro P600, window target 1920x1080, pipelines 6.7 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+model: build-rel\stress\stress_bc.supak queued on the loader thread
+model: loaded and validated in 447.8 ms on the loader thread; 137 resources
+model: every resource READY after 8 frames, 0.0 s, 124788088 bytes uploaded
+frames 8016, ticks 960, dropped ticks 0, gate events 1, mean step 0.025 ms
+digest aa3e6044244d01436a11e986481ba9da059f537309e2891f492cc5b572e23c73 fast e67ed4c292677969
+render: frames 8016, last cpu 0.175 ms (scene 0.111), last gpu 0.475 ms, draws 9, objects 3015 (culled 3013, nodes drawn 4, LOD0 4, LOD1 0), draw instances 4, fx vertices 1014, hud vertices 948, uploaded 125205496 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 1
+frames drawn 8016, paused 0, failed 0
+timings over 7986 frames after warm-up (observations): gpu median 0.659 ms p95 1.669 ms; render cpu median 0.171 ms p95 0.250 ms
+exit 0 (wall 8.35 s)
+
+$ build-rel\space_demo.exe --offscreen build-rel\big_stress_bc.ppm --width 1920 --height 1080 --frames 600 --debris 3000 --model build-rel\stress\stress_bc.supak --no-audio
+renderer: Quadro P600, offscreen target 1920x1080, pipelines 6.8 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+model: build-rel\stress\stress_bc.supak queued on the loader thread
+model: loaded and validated in 418.4 ms on the loader thread; 137 resources
+model: every resource READY after 8 frames, 0.0 s, 124788088 bytes uploaded
+frames 600, ticks 1199, dropped ticks 0, gate events 1, mean step 0.011 ms
+digest e0c5cda9627b5cd2982c710e7adfbe02c16dcd05f72c02ae87871c4c96f15a5d fast a7fdb083b98b2068
+render: frames 600, last cpu 0.202 ms (scene 0.141), last gpu 2.784 ms, draws 82, objects 3015 (culled 1520, nodes drawn 1730, LOD0 77, LOD1 1653), draw instances 1730, fx vertices 1512, hud vertices 966, uploaded 125205496 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 4294967295
+frames drawn 600, paused 0, failed 0
+timings over 570 frames after warm-up (observations): gpu median 2.778 ms p95 2.787 ms; render cpu median 0.192 ms p95 0.258 ms
+shadow world (no renderer): 0 tick digests differed
+wrote build-rel\big_stress_bc.ppm
+exit 0 (wall 1.62 s)

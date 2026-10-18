@@ -570,6 +570,27 @@ static void test_scene_b(void) {
         CHECK(tv.mip_data[1][0] == 128u && tv.mip_data[1][1] == 128u && tv.mip_data[1][2] == 255u);
         su_asset_pak_close(p);
     }
+    /* the same file cooked with SU_ASSET_COOK_BC: the normal map becomes BC5 (2 x 2 -> one block per level) */
+    {
+        SuAssetCookOptions o;
+        uint8_t *b = NULL;
+        size_t bl = 0;
+        SuAssetPak *bp = NULL;
+        memset(&o, 0, sizeof o);
+        o.struct_size = sizeof o;
+        o.name = "b";
+        o.flags = SU_ASSET_COOK_BC;
+        CHECK(su_asset_cook_gltf(path_of("scene_b.glb"), &o, &b, &bl, &rep, msg) == SU_OK);
+        CHECK(b != NULL && su_asset_pak_open(b, bl, 0, &bp, msg) == SU_OK);
+        if (bp != NULL) {
+            CHECK(su_asset_pak_texture(bp, su_asset_id("b/tex/#0.normal"), &tv) == SU_OK);
+            CHECK(tv.header->format == SU_TEX_BC5_UNORM && tv.header->mip_count == 2u && tv.mip_size[0] == 16u &&
+                  (tv.header->flags & SU_ASSET_TEX_FLAG_NORMAL_MAP) != 0u);
+            CHECK(rep.texture_bytes == 32u);
+            su_asset_pak_close(bp);
+        }
+        free(b);
+    }
     /* truncated GLB */
     write_file("scene_b_cut.glb", glb, glb_len - 40u);
     p = cook("scene_b_cut.glb", "b", &rep, &st, msg);
@@ -846,6 +867,29 @@ int main(int argc, char **argv) {
     crc_init();
     CHECK(su_asset_import_available() == 1);
     test_scene_a();
+    {
+        /* scene A with SU_ASSET_COOK_BC: the opaque base colour becomes BC1 sRGB with the same mip count */
+        SuAssetCookOptions o;
+        SuAssetCookReport rep;
+        uint8_t *b = NULL;
+        size_t bl = 0;
+        SuAssetPak *bp = NULL;
+        SuAssetTextureView tv;
+        char msg[256];
+        memset(&o, 0, sizeof o);
+        o.struct_size = sizeof o;
+        o.name = "a";
+        o.flags = SU_ASSET_COOK_BC;
+        CHECK(su_asset_cook_gltf(path_of("scene_a.gltf"), &o, &b, &bl, &rep, msg) == SU_OK);
+        CHECK(b != NULL && su_asset_pak_open(b, bl, 0, &bp, msg) == SU_OK);
+        if (bp != NULL) {
+            CHECK(su_asset_pak_texture(bp, su_asset_id("a/tex/checker.png.srgb"), &tv) == SU_OK);
+            CHECK(tv.header->format == SU_TEX_BC1_SRGB && tv.header->mip_count == 3u && tv.mip_size[0] == 8u &&
+                  tv.mip_size[2] == 8u);
+            su_asset_pak_close(bp);
+        }
+        free(b);
+    }
     test_scene_b();
     test_scene_c();
     test_scene_d();

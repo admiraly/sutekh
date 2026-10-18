@@ -341,6 +341,26 @@ static void test_every_byte(void) {
     CHECK(accepted == 0);
     printf("single-byte corruptions: %zu tried, %ld accepted\n", len, accepted);
     {
+        /* an entry hash that disagrees with its payload, content hash recomputed: the default open trusts the content
+         * hash (the bytes are consistent); SU_ASSET_PAK_VERIFY_ENTRIES finds the stale entry hash */
+        SuAssetPak *p = NULL;
+        SuSha256 s;
+        a[64 + 32] ^= 1u;
+        su_sha256_init(&s);
+        su_sha256_update(&s, a + 64, len - 64u);
+        su_sha256_final(&s, a + 24);
+        CHECK(su_asset_pak_open(a, len, 0, &p, msg) == SU_OK);
+        su_asset_pak_close(p);
+        CHECK(su_asset_pak_open(a, len, SU_ASSET_PAK_VERIFY_ENTRIES, &p, msg) == SU_E_PARSE &&
+              strstr(msg, "payload hash") != NULL);
+        a[64 + 32] ^= 1u;
+        su_sha256_init(&s);
+        su_sha256_update(&s, a + 64, len - 64u);
+        su_sha256_final(&s, a + 24);
+        CHECK(su_asset_pak_open(a, len, SU_ASSET_PAK_VERIFY_ENTRIES, &p, msg) == SU_OK);
+        su_asset_pak_close(p);
+    }
+    {
         SuAssetPak *p = NULL;
         CHECK(su_asset_pak_open(a, len - 1u, 0, &p, msg) == SU_E_PARSE);
         CHECK(su_asset_pak_open(a, 10, 0, &p, msg) == SU_E_PARSE);

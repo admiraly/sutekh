@@ -129,6 +129,9 @@ typedef struct Demo {
     SuRenderPak user_pak;
     int user_state;           /* 0 none, 1 loading, 2 uploading, 3 ready, 4 failed */
     float user_scale;
+    uint64_t user_frames;     /* frames drawn while uploading */
+    uint64_t user_bytes0;     /* upload_bytes_total when the upload started */
+    double user_t0;
     SuTrail trail[MAX_SHIPS];
     SuTrailPoint trail_pts[MAX_SHIPS][TRAIL_POINTS];
     double time_s;            /* presentation time */
@@ -614,6 +617,19 @@ static void setup_content(void) {
 /* Background model: poll the loader, then upload; the scene shows it once its meshes are READY. */
 static void poll_user_model(void) {
     SuAssetLoadResult res;
+    if (g.user_state == 2) {
+        uint32_t st = su_render_pak_state(g.r, &g.user_pak);
+        g.user_frames++;
+        if (st != SU_RENDER_STATE_PENDING) {
+            SuRenderStats rs;
+            (void)su_render_stats(g.r, &rs);
+            printf("model: %s after %llu frames, %.1f s, %llu bytes uploaded\n",
+                   st == SU_RENDER_STATE_READY ? "every resource READY" : "an upload FAILED", (unsigned long long)g.user_frames,
+                   now_s() - g.user_t0, (unsigned long long)(rs.upload_bytes_total - g.user_bytes0));
+            g.user_state = st == SU_RENDER_STATE_READY ? 3 : 4;
+        }
+        return;
+    }
     if (g.loader == NULL || g.user_state != 1 || !su_asset_loader_poll(g.loader, &res)) {
         return;
     }
@@ -631,6 +647,12 @@ static void poll_user_model(void) {
         return;
     }
     g.user_state = 2;
+    {
+        SuRenderStats rs;
+        (void)su_render_stats(g.r, &rs);
+        g.user_bytes0 = rs.upload_bytes_total;
+        g.user_t0 = now_s();
+    }
 }
 
 static SuRenderObject object(SuRenderHandle model, SuWorldPos pos, SuQuatf rot, float scale, float r, float gg, float b) {

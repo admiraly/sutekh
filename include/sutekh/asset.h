@@ -17,10 +17,12 @@
  *                     u64 id, u32 type, u32 type_version, u64 offset, u64 size, u8 sha256[32] (of the payload)
  *   payloads at 16-byte aligned offsets, in table order, not overlapping, inside total_size.
  * The pack is addressed by content_sha256 (su_asset_pak_digest); each resource by its stable id, which comes from
- * a name (su_asset_id), not from its content, so a re-cooked source keeps its ids while their hashes change.
- * su_asset_pak_open checks everything above, every payload hash, every payload's internal layout (counts, ranges,
- * index bounds, finite positions, mip sizes) and every cross-reference (materials -> textures, meshes ->
- * materials, models -> meshes). A pack that opens is safe to hand to the renderer.
+ * a name (su_asset_id), not from its content, so a re-cooked source keeps its ids while their hashes change, and by
+ * its payload hash (content-addressed caching of single resources).
+ * su_asset_pak_open checks everything above, the content hash (which covers every payload and the table), every
+ * payload's internal layout (counts, ranges, index bounds, finite positions, mip sizes) and every cross-reference
+ * (materials -> textures, meshes -> materials, models -> meshes); with SU_ASSET_PAK_VERIFY_ENTRIES also every
+ * payload hash (a second pass over the bytes). A pack that opens is safe to hand to the renderer.
  *
  * Payload layouts (version 1 of each type) are the structs below, written as-is.
  *
@@ -130,6 +132,12 @@ typedef struct SuAssetTextureView {
     uint64_t mip_size[SU_ASSET_MAX_MIPS];
 } SuAssetTextureView;
 
+/* Block-compresses one RGBA8 image (bytes as stored: sRGB-encoded for the _SRGB formats) into SU_TEX_BC1_*,
+ * SU_TEX_BC3_* (with alpha), SU_TEX_BC4_UNORM (red) or SU_TEX_BC5_UNORM (red and green); out holds
+ * su_asset_texture_level_size(format, width, height) bytes. A simple encoder (principal-axis endpoints, one
+ * least-squares refinement for colour), not a quality-tuned one. BC7 is not encoded. */
+uint32_t su_asset_bc_encode(uint32_t format, const uint8_t *rgba, uint32_t width, uint32_t height, uint8_t *out);
+
 /* Bytes of one mip level of a format, or 0 for an unknown format. */
 uint64_t su_asset_texture_level_size(uint32_t format, uint32_t width, uint32_t height);
 const char *su_asset_texture_format_name(uint32_t format);
@@ -221,6 +229,7 @@ typedef struct SuAssetEntry {
  * aligned. Status: SU_E_PARSE (malformed, or a hash differs; message says which), SU_E_RESOURCE_LIMIT
  * (allocation), SU_E_INVALID_ARGUMENT. message (optional) is 256 bytes. */
 #define SU_ASSET_PAK_BORROW 0x1u
+#define SU_ASSET_PAK_VERIFY_ENTRIES 0x2u
 uint32_t su_asset_pak_open(const void *bytes, size_t len, uint32_t flags, SuAssetPak **out, char message[256]);
 /* Reads a whole file and opens it (owned copy). SU_E_IO when the file cannot be read. */
 uint32_t su_asset_pak_open_file(const char *path, SuAssetPak **out, char message[256]);
@@ -268,6 +277,9 @@ typedef struct SuAssetCookOptions {
     float lod_screen[SU_ASSET_MAX_LODS]; /* thresholds for name-grouped LODs; zeros = 1, 0.25, 0.08, 0.02 */
 } SuAssetCookOptions;
 #define SU_ASSET_COOK_NO_MIPS 0x1u        /* keep only level 0 of decoded images */
+#define SU_ASSET_COOK_BC 0x2u             /* block-compress decoded images: BC1 (BC3 with alpha) for colour, BC1 for
+                                           * metallic-roughness and occlusion, BC5 for normal maps (the shader
+                                           * rebuilds z); KTX2 data is kept as stored */
 
 typedef struct SuAssetCookReport {
     uint32_t meshes;           /* mesh resources written (mirrored variants included) */
