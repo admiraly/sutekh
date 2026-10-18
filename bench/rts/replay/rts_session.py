@@ -25,6 +25,9 @@ import model  # noqa: E402  (bench/rts/ref/model.py: the field table of contract
 NONE = 0xFFFFFFFF
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"  # source hash of a host entry
 REQUEST_BYTES_MAX = 1048576
+# Hard kill of a worker: SIGKILL on POSIX. Windows has no signals; os.kill there calls TerminateProcess
+# with this value as the exit code (137 = 128 + SIGKILL, as the engine's own kill seam uses).
+KILL_SIGNAL = getattr(signal, "SIGKILL", 137)
 
 IR_SYSTEMS = ("goal", "combat", "move", "damage")
 # Capsule order of contract 3.2: a string is an IR capsule, a pair is (host capsule, operator).
@@ -113,7 +116,7 @@ class Session:
 
     def kill_worker(self) -> int:
         pid = self.worker_pid()
-        os.kill(pid, signal.SIGKILL)
+        os.kill(pid, KILL_SIGNAL)
         return pid
 
     def snapshot_sha(self, wid: str, rev: str) -> str:

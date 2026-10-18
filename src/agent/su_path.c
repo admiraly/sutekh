@@ -3,15 +3,15 @@
 
 #include "agent/su_path.h"
 
+#include "platform/su_posix.h"
+
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
+#include "platform/su_platform.h"
 #include "sutekh/status.h"
 
 #ifndef PATH_MAX
@@ -20,7 +20,7 @@
 
 uint32_t su_path_canonical_root(const char *root, char *out, size_t cap) {
     char real[PATH_MAX];
-    if (root == NULL || realpath(root, real) == NULL) {
+    if (root == NULL || su_platform_realpath(root, real, sizeof real) != 0) {
         return SU_E_IO;
     }
     if (strlen(real) >= cap) {
@@ -30,10 +30,20 @@ uint32_t su_path_canonical_root(const char *root, char *out, size_t cap) {
     return SU_OK;
 }
 
+/* Next separator at or after p ('/' and, on Windows, the backslash), or NULL. */
+static const char *next_sep(const char *p) {
+    for (; *p != '\0'; p++) {
+        if (su_platform_is_sep(*p)) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
 static int has_dotdot(const char *p) {
     const char *seg = p;
     for (;;) {
-        const char *end = strchr(seg, '/');
+        const char *end = next_sep(seg);
         size_t n = end != NULL ? (size_t)(end - seg) : strlen(seg);
         if (n == 2 && seg[0] == '.' && seg[1] == '.') {
             return 1;
@@ -60,7 +70,7 @@ uint32_t su_path_resolve(const char *root_real, const char *input, char *out, si
     if (has_dotdot(input)) {
         return SU_E_CAPABILITY_DENIED;
     }
-    if (input[0] == '/') {
+    if (su_platform_path_is_absolute(input)) {
         n = snprintf(cand, sizeof cand, "%s", input);
     } else {
         n = snprintf(cand, sizeof cand, "%s/%s", root_real, input);
@@ -68,11 +78,20 @@ uint32_t su_path_resolve(const char *root_real, const char *input, char *out, si
     if (n < 0 || (size_t)n >= sizeof cand) {
         return SU_E_RESOURCE_LIMIT;
     }
-    if (realpath(cand, real) == NULL) {
-        return errno == ENAMETOOLONG ? SU_E_RESOURCE_LIMIT : SU_E_IO;
+    {
+        int rc = su_platform_realpath(cand, real, sizeof real);
+        if (rc != 0) {
+            return rc == ENAMETOOLONG ? SU_E_RESOURCE_LIMIT : SU_E_IO;
+        }
     }
     rl = strlen(root_real);
-    if (!(rl == 1u && root_real[0] == '/')) {
+    /* Canonical paths use '/' on both platforms (su_platform_realpath). A root that ends in '/' ("/", or
+     * "C:/" on Windows) is a plain prefix; any other root must be followed by '/' or the end. */
+    if (rl > 0u && root_real[rl - 1u] == '/') {
+        if (strncmp(real, root_real, rl) != 0) {
+            return SU_E_CAPABILITY_DENIED;
+        }
+    } else {
         if (strncmp(real, root_real, rl) != 0 || (real[rl] != '\0' && real[rl] != '/')) {
             return SU_E_CAPABILITY_DENIED;
         }
@@ -91,10 +110,16 @@ uint32_t su_path_sibling(const char *root_real, const char *resolved_file, const
     size_t dir_len;
     int n;
 
-    if (name == NULL || name[0] == '\0' || strchr(name, '/') != NULL ||
+    if (name == NULL || name[0] == '\0' || next_sep(name) != NULL ||
         strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
         return SU_E_CAPABILITY_DENIED;
     }
+#if defined(_WIN32)
+    /* A drive prefix or an alternate data stream ("x:stream") would leave the directory. */
+    if (strchr(name, ':') != NULL) {
+        return SU_E_CAPABILITY_DENIED;
+    }
+#endif
     slash = strrchr(resolved_file, '/');
     if (slash == NULL) {
         return SU_E_CAPABILITY_DENIED;
@@ -122,7 +147,7 @@ uint32_t su_path_read_file(const char *path, size_t max_bytes, uint8_t **data, s
     *data = NULL;
     *len = 0;
     /* O_NONBLOCK keeps open() from blocking on a FIFO before the S_ISREG check rejects it. */
-    fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+    fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_BINARY);
     if (fd < 0) {
         return SU_E_IO;
     }

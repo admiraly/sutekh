@@ -21,8 +21,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
 #ifdef SUTEKH_NATIVE_BUILD
 #define SU_MODE_NAME "dev_native"
@@ -30,6 +28,7 @@
 #define SU_MODE_NAME "dev_checked"
 #endif
 
+#include "../common/su_test_os.h"
 #include "agent/su_agent.h"
 #include "agent/su_path.h"
 #include "agent/su_proc.h"
@@ -40,6 +39,7 @@
 
 static int g_checks = 0;
 static int g_failures = 0;
+static int g_not_run = 0; /* checks this platform cannot perform; reported, never counted as passed */
 
 #if defined(__SANITIZE_ADDRESS__)
 #define TEST_UNDER_ASAN 1
@@ -84,7 +84,7 @@ static int g_failures = 0;
 /* ---------- a supervisor session in a forked child ---------- */
 
 typedef struct Session {
-    pid_t pid;
+    SuTestServe serve; /* supervisor under test (tests/common/su_test_os.h) */
     int wfd;
     SuLineReader rd;
 } Session;
@@ -128,38 +128,17 @@ static Session session_start(const SuAgentConfig *cfg) {
     Session s;
     int req[2];
     int rsp[2];
-    pid_t pid;
 
-    if (pipe(req) != 0 || pipe(rsp) != 0) {
-        perror("pipe");
-        exit(2);
-    }
-    pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        exit(2);
-    }
-    if (pid == 0) {
-        int rc;
-        close(req[1]);
-        close(rsp[0]);
-        rc = su_agent_serve(req[0], rsp[1], cfg);
-        _exit(rc == 0 ? 0 : 1);
-    }
-    close(req[0]);
-    close(rsp[1]);
-    s.pid = pid;
+    su_test_serve_start(&s.serve, cfg, &req[1], &rsp[0]);
     s.wfd = req[1];
     su_line_reader_init(&s.rd, rsp[0], -1);
     return s;
 }
 
 static void session_stop(Session *s) {
-    int status = 0;
     close(s->wfd);
     su_line_reader_free(&s->rd);
-    waitpid(s->pid, &status, 0);
-    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(su_test_serve_wait(&s->serve));
 }
 
 /* Sends raw bytes followed by a newline, then reads exactly one response line. */
@@ -298,12 +277,18 @@ static void test_protocol_errors(Session *s) {
     resp_free(&r);
 }
 
+/* An existing file outside the project root, named by an absolute path: /etc/hostname on POSIX; on Windows
+ * the fault file in the scratch directory (set in main). */
+static char g_outside[PATH_MAX_TEST + 32] = "/etc/hostname";
+
 static void test_path_policy(Session *s) {
     Resp r;
+    char line[PATH_MAX_TEST + 256];
     CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"p1\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"../../../../etc/passwd\"}}", &r) == 0);
     CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
     resp_free(&r);
-    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"p2\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"/etc/hostname\"}}", &r) == 0);
+    snprintf(line, sizeof line, "{\"protocol\":\"0.1\",\"id\":\"p2\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"%s\"}}", g_outside);
+    CHECK(call(s, line, &r) == 0);
     CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
     resp_free(&r);
     CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"p3\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"examples/../../etc/passwd\"}}", &r) == 0);
@@ -321,7 +306,18 @@ static void test_symlink_escape(const SuAgentConfig *base, const char *scratch, 
     CHECK(snprintf(link_path, sizeof link_path, "%s/escape.json", scratch) < (int)sizeof link_path);
     CHECK(snprintf(target, sizeof target, "%s/examples/movement.capsule.json", root) < (int)sizeof target);
     unlink(link_path);
-    CHECK(symlink(target, link_path) == 0);
+    {
+        const char *why = NULL;
+        if (su_test_symlink(target, link_path, &why) != 0) {
+#if defined(_WIN32)
+            fprintf(stderr, "test_control: symlink escape check NOT RUN: %s\n", why);
+            g_not_run++;
+            return;
+#else
+            CHECK(0);
+#endif
+        }
+    }
     cfg.project_root = scratch;
     s = session_start(&cfg);
     CHECK(call(&s, "{\"protocol\":\"0.1\",\"id\":\"sym1\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"escape.json\"}}", &r) == 0);
@@ -364,6 +360,7 @@ static void test_source_path(Session *s, const SuAgentConfig *base, const char *
     Session t;
     Resp r;
     SuAgentConfig cfg = *base;
+    int have_link = 1;
 
     /* Main project root: valid sibling accepted; traversal, absolute path, wrong type, extra key rejected. */
     CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"sp-bad-type\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"examples/movement.capsule.json\",\"source_path\":5}}", &r) == 0);
@@ -375,7 +372,11 @@ static void test_source_path(Session *s, const SuAgentConfig *base, const char *
     CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"sp-trav\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"examples/movement.capsule.json\",\"source_path\":\"../../../../etc/passwd\"}}", &r) == 0);
     CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
     resp_free(&r);
-    CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"sp-abs\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"examples/movement.capsule.json\",\"source_path\":\"/etc/hostname\"}}", &r) == 0);
+    {
+        char line[PATH_MAX_TEST + 256];
+        snprintf(line, sizeof line, "{\"protocol\":\"0.1\",\"id\":\"sp-abs\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"examples/movement.capsule.json\",\"source_path\":\"%s\"}}", g_outside);
+        CHECK(call(s, line, &r) == 0);
+    }
     CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
     resp_free(&r);
 
@@ -395,16 +396,29 @@ static void test_source_path(Session *s, const SuAgentConfig *base, const char *
     CHECK(snprintf(path, sizeof path, "%s/esc.lir.json", rdir) < (int)sizeof path);
     CHECK(snprintf(target, sizeof target, "%s/examples/movement.lir.json", root) < (int)sizeof target);
     unlink(path);
-    CHECK(symlink(target, path) == 0);
+    {
+        const char *why = NULL;
+        if (su_test_symlink(target, path, &why) != 0) {
+#if defined(_WIN32)
+            fprintf(stderr, "test_control: source_path symlink check NOT RUN: %s\n", why);
+            g_not_run++;
+            have_link = 0;
+#else
+            CHECK(0);
+#endif
+        }
+    }
 
     cfg.project_root = rdir;
     t = session_start(&cfg);
     CHECK(call(&t, "{\"protocol\":\"0.1\",\"id\":\"sp-alt\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"movement.capsule.json\",\"source_path\":\"alt.lir.json\"}}", &r) == 0);
     CHECK_OK(r);
     resp_free(&r);
-    CHECK(call(&t, "{\"protocol\":\"0.1\",\"id\":\"sp-esc\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"movement.capsule.json\",\"source_path\":\"esc.lir.json\"}}", &r) == 0);
-    CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
-    resp_free(&r);
+    if (have_link) {
+        CHECK(call(&t, "{\"protocol\":\"0.1\",\"id\":\"sp-esc\",\"method\":\"capsule.submit\",\"params\":{\"capsule_path\":\"movement.capsule.json\",\"source_path\":\"esc.lir.json\"}}", &r) == 0);
+        CHECK_CODE(r, SU_E_CAPABILITY_DENIED);
+        resp_free(&r);
+    }
     session_stop(&t);
     unlink(path);
     CHECK(snprintf(path, sizeof path, "%s/movement.capsule.json", rdir) < (int)sizeof path);
@@ -542,7 +556,7 @@ static void test_world_sequence(Session *s, const char *fault_file) {
     res = resp_result(&r);
     CHECK(res != NULL && su_json_get_uint(su_json_member(su_json_member(res, "active_worker"), "pid"), &pid_after));
     CHECK(pid_after != 0 && pid_after == pid_before);
-    CHECK(pid_after != 0 && kill((pid_t)pid_after, 0) == 0);
+    CHECK(pid_after != 0 && su_test_pid_alive(pid_after));
     resp_free(&r);
 
     CHECK(call(s, "{\"protocol\":\"0.1\",\"id\":\"i4\",\"method\":\"world.inspect\",\"params\":{\"world_id\":\"world-1\",\"fields\":[\"position_x\"],\"limit\":4}}", &r) == 0);
@@ -711,25 +725,9 @@ static void test_world_close_supervisor(Session *s) {
     resp_free(&r);
 }
 
-/* Reads VmRSS (KiB) of a process from /proc. -1 when unavailable. */
+/* Resident set (KiB) of a process: VmRSS from /proc on Linux, the working set on Windows. -1 when unavailable. */
 static long rss_kib_of(pid_t pid) {
-    char path[64];
-    char line[256];
-    long kib = -1;
-    FILE *f;
-    snprintf(path, sizeof path, "/proc/%ld/status", (long)pid);
-    f = fopen(path, "r");
-    if (f == NULL) {
-        return -1;
-    }
-    while (fgets(line, sizeof line, f) != NULL) {
-        if (strncmp(line, "VmRSS:", 6) == 0) {
-            kib = strtol(line + 6, NULL, 10);
-            break;
-        }
-    }
-    fclose(f);
-    return kib;
+    return su_test_rss_kib((uint64_t)pid);
 }
 
 /* Sends one line to a bare worker process and parses the reply into r. */
@@ -816,7 +814,6 @@ static void test_world_close_worker(const char *helper, const char *root) {
     Resp r;
     long rss_warm = -1;
     long rss_end = -1;
-    int status = 0;
     int i;
 
     snprintf(fx, sizeof fx, "%s/examples/world.json", root);
@@ -956,7 +953,8 @@ static void test_world_close_worker(const char *helper, const char *root) {
     CHECK(worker_stat(&p, "world_seq") == 1005u); /* 5 creations, then 1,000 cycles: ids never repeat */
     CHECK(worker_stat(&p, "world_seq") != UINT64_MAX);
     if (rss_warm < 0 || rss_end < 0) {
-        fprintf(stderr, "test_control: RSS not observable (no /proc/<pid>/status); RSS check skipped\n");
+        fprintf(stderr, "test_control: RSS not observable; RSS check NOT RUN\n");
+        g_not_run++;
     } else {
         long growth = rss_end - rss_warm;
         fprintf(stderr, "test_control: worker RSS after 100 cycles %ld KiB, after 1000 cycles %ld KiB\n",
@@ -967,13 +965,7 @@ static void test_world_close_worker(const char *helper, const char *root) {
     /* Clean shutdown: EOF on stdin; the worker must exit 0 (LeakSanitizer exits nonzero). */
     close(p.in_fd);
     p.in_fd = -1;
-    CHECK(waitpid(p.pid, &status, 0) == p.pid);
-    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
-    p.pid = 0;
-    close(p.out_fd);
-    p.out_fd = -1;
-    su_line_reader_free(&p.reader);
-    p.alive = 0;
+    CHECK(su_test_proc_clean_exit(&p));
 }
 
 /* M2-00 audit MX21: entity worlds are released by world.close. 1,000 create/spawn/close cycles of an entity
@@ -1071,13 +1063,7 @@ static void test_entity_close_cycles(const char *helper, const char *root) {
     /* Clean shutdown: EOF on stdin; the worker exits 0 (LeakSanitizer exits nonzero). */
     close(p.in_fd);
     p.in_fd = -1;
-    {
-        int status = 0;
-        CHECK(waitpid(p.pid, &status, 0) == p.pid);
-        CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
-    }
-    p.pid = 0;
-    su_proc_kill(&p); /* pid is 0: frees the line reader and the pipes only */
+    CHECK(su_test_proc_clean_exit(&p));
 }
 
 int main(int argc, char **argv) {
@@ -1117,7 +1103,7 @@ int main(int argc, char **argv) {
     tmpdir = getenv("TMPDIR");
     scratch = getenv("SU_TEST_SCRATCH");
     if (scratch == NULL) {
-        scratch = tmpdir != NULL ? tmpdir : "/tmp";
+        scratch = tmpdir != NULL ? tmpdir : su_test_scratch_base();
     }
     snprintf(scratch_dir, sizeof scratch_dir, "%s/sutekh-control-%ld", scratch, (long)getpid());
     if (mkdir(scratch_dir, 0700) != 0 && errno != EEXIST) {
@@ -1127,6 +1113,9 @@ int main(int argc, char **argv) {
     snprintf(fault_file, sizeof fault_file, "%s/fault", scratch_dir);
     write_text(fault_file, "");
     setenv("SU_TEST_FAULT_FILE", fault_file, 1);
+#if defined(_WIN32)
+    snprintf(g_outside, sizeof g_outside, "%s", fault_file);
+#endif
 
     helper_argv[0] = helper;
     helper_argv[1] = NULL;
@@ -1154,6 +1143,6 @@ int main(int argc, char **argv) {
 
     unlink(fault_file);
     rmdir(scratch_dir);
-    printf("test_control: %d checks, %d failures\n", g_checks, g_failures);
+    printf("test_control: %d checks, %d failures, %d not run\n", g_checks, g_failures, g_not_run);
     return g_failures == 0 ? 0 : 1;
 }

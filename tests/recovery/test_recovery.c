@@ -21,9 +21,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
+#include "../common/su_test_os.h"
 #include "agent/su_agent.h"
 #include "agent/su_proto.h"
 #include "ir/su_json.h"
@@ -49,7 +48,7 @@ static char g_proj[2200];
 /* ---------- sessions ---------- */
 
 typedef struct Session {
-    pid_t pid;
+    SuTestServe serve; /* supervisor under test (tests/common/su_test_os.h) */
     int wfd;
     SuLineReader rd;
 } Session;
@@ -139,8 +138,7 @@ static Session session_start(const Opts *o, const char *spool_name) {
     Session s;
     int req[2];
     int rsp[2];
-    pid_t pid;
-    char spool[2200];
+    static char spool[2200]; /* static: the supervisor may read cfg strings after this returns */
     SuAgentConfig cfg;
     static const char *argv[2];
 
@@ -159,41 +157,18 @@ static Session session_start(const Opts *o, const char *spool_name) {
     cfg.spool_bytes_max = o->spool_max;
     cfg.spool_dir = spool;
     cfg.no_install_checkpoint = o->no_install_ck;
-    if (pipe(req) != 0 || pipe(rsp) != 0) {
-        perror("pipe");
-        exit(2);
-    }
-    pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        exit(2);
-    }
-    if (pid == 0) {
-        int rc;
-        int k;
-        close(req[1]);
-        close(rsp[0]);
-        for (k = 0; k < g_hold_n; k++) {
-            close(g_hold[k]);
-        }
-        rc = su_agent_serve(req[0], rsp[1], &cfg);
-        _exit(rc == 0 ? 0 : 1);
-    }
-    close(req[0]);
-    close(rsp[1]);
+    memset(&s, 0, sizeof s);
+    su_test_serve_start_ex(&s.serve, &cfg, &req[1], &rsp[0], g_hold, g_hold_n);
     if (g_hold_n + 2 <= (int)(sizeof g_hold / sizeof g_hold[0])) {
         g_hold[g_hold_n++] = req[1];
         g_hold[g_hold_n++] = rsp[0];
     }
-    memset(&s, 0, sizeof s);
-    s.pid = pid;
     s.wfd = req[1];
     su_line_reader_init(&s.rd, rsp[0], -1);
     return s;
 }
 
 static void session_stop(Session *s) {
-    int status = 0;
     int k;
     close(s->wfd);
     for (k = 0; k < g_hold_n; k++) {
@@ -202,8 +177,7 @@ static void session_stop(Session *s) {
         }
     }
     su_line_reader_free(&s->rd);
-    waitpid(s->pid, &status, 0);
-    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(su_test_serve_wait(&s->serve));
 }
 
 static int call(Session *s, const char *line, Resp *r) {
@@ -479,7 +453,7 @@ static uint64_t pair_kill(Pair *p) {
     uint64_t pid = worker_pid_of(&p->rec);
     CHECK(pid > 0);
     if (pid > 0) {
-        kill((pid_t)pid, SIGKILL);
+        (void)su_test_kill_pid(pid);
     }
     return pid;
 }
@@ -502,26 +476,9 @@ static void expect_recovery(const Resp *r, uint64_t old_pid, int want_recovered)
     CHECK(uint_of(rec, "duration_ms") != UINT64_MAX);
     CHECK(uint_of(rec, "worker_generation") != UINT64_MAX);
     if (newpid != 0 && newpid != UINT64_MAX) {
-        char path[128];
-        char stat_line[256];
-        FILE *f;
-        CHECK(kill((pid_t)newpid, 0) == 0);
-        snprintf(path, sizeof path, "/proc/%llu/stat", (unsigned long long)newpid);
-        f = fopen(path, "r");
-        if (f != NULL) {
-            /* ppid is field 4; the replacement is a child of the supervisor process. */
-            if (fgets(stat_line, sizeof stat_line, f) != NULL) {
-                char *p = strrchr(stat_line, ')');
-                long ppid = -1;
-                if (p != NULL) {
-                    sscanf(p + 2, "%*c %ld", &ppid);
-                }
-                CHECK(ppid > 0);
-            }
-            fclose(f);
-        } else {
-            CHECK(0);
-        }
+        CHECK(su_test_pid_alive(newpid));
+        /* The replacement is a child of the supervisor process: it has a readable parent. */
+        CHECK(su_test_parent_pid(newpid) > 0);
     }
 }
 
@@ -1355,7 +1312,7 @@ static void scenario_digest_check(void) {
     pair_check(&p);
     old_pid = worker_pid_of(&p.rec);
     if (old_pid > 0) {
-        kill((pid_t)old_pid, SIGKILL);
+        (void)su_test_kill_pid(old_pid);
     }
     CHECK(step(&p.rec, p.wid, p.rrev, sizeof p.rrev, 1, &r) == 0);
     unsetenv("SUTEKH_TEST_SKEW_EXACT");
@@ -1437,7 +1394,7 @@ static void scenario_bounds(void) {
         uint64_t old_pid = worker_pid_of(&s);
         CHECK(old_pid > 0);
         if (old_pid > 0) {
-            kill((pid_t)old_pid, SIGKILL);
+            (void)su_test_kill_pid(old_pid);
         }
         CHECK(step(&s, wid, rev, sizeof rev, 1, &r) == 0);
         expect_worker_failed(&r);
@@ -1540,7 +1497,9 @@ static int file_contains(const char *path, const char *needle) {
 }
 
 int main(int argc, char **argv) {
+#if !defined(_WIN32)
     struct sigaction ign;
+#endif
     const char *files[] = {"world4.json", "sys_a.capsule.json", "sys_a.lir.json", "sys_b.capsule.json",
                            "sys_b.lir.json", "sys_a_v2.capsule.json", "sys_a_v2.lir.json",
                            "sys_a_v2.test.json", "sys_a.test.json"};
@@ -1559,10 +1518,12 @@ int main(int argc, char **argv) {
         copy_file(files[i]);
     }
 
+#if !defined(_WIN32)
     memset(&ign, 0, sizeof ign);
     ign.sa_handler = SIG_IGN;
     sigemptyset(&ign.sa_mask);
     sigaction(SIGPIPE, &ign, NULL);
+#endif
 
     copy_from("tests/fixtures/entities", "actors_3.json");
     copy_from("tests/fixtures/entities", "despawn_move.capsule.json");

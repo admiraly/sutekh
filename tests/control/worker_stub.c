@@ -3,7 +3,8 @@
  *
  * SU_TEST_FAULT_FILE (M0-05), read at the start of every internal.candidate.evaluate:
  *   hang  -> never answers (exercises the supervisor's wall-clock limit)
- *   kill  -> a helper child SIGKILLs this process 150 ms later, mid-evaluation
+ *   kill  -> a helper child SIGKILLs this process 150 ms later, mid-evaluation (Windows: a helper
+ *            thread terminates it, su_platform_kill_self, since a worker cannot create processes there)
  *
  * SU_TEST_SYSTEM_FAULT_FILE (M0-07), read before every system of every tick: the file
  * holds one decimal schedule index. A system at that index fails with
@@ -13,15 +14,24 @@
  * Requests that are not evaluations or ticks never reach the hooks. */
 #define _POSIX_C_SOURCE 200809L
 
-#include <fcntl.h>
+#include "platform/su_posix.h"
+
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
 #include <time.h>
-#include <unistd.h>
 
+#include "platform/su_platform.h"
+#include "platform/su_thread.h"
 #include "runtime/worker.h"
+
+#if defined(_WIN32)
+static void *killer_main(void *arg) {
+    (void)arg;
+    su_platform_sleep_ms(150u);
+    su_platform_kill_self();
+}
+#endif
 
 static void fault_hook(void) {
     const char *path = getenv("SU_TEST_FAULT_FILE");
@@ -44,9 +54,19 @@ static void fault_hook(void) {
     }
     if (strncmp(mode, "hang", 4) == 0) {
         for (;;) {
-            pause();
+            su_platform_sleep_ms(1000u);
         }
     }
+#if defined(_WIN32)
+    if (strncmp(mode, "kill", 4) == 0) {
+        SuThread k;
+        if (su_thread_create(&k, killer_main, NULL) == 0) {
+            for (;;) {
+                su_platform_sleep_ms(1000u);
+            }
+        }
+    }
+#else
     if (strncmp(mode, "kill", 4) == 0) {
         pid_t me = getpid();
         pid_t k = fork();
@@ -62,6 +82,7 @@ static void fault_hook(void) {
             pause();
         }
     }
+#endif
 }
 
 static int system_fault(unsigned idx) {

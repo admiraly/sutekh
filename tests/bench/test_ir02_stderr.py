@@ -33,9 +33,9 @@ class StderrDrain(unittest.TestCase):
     def test_client_survives_heavy_stderr(self):
         with tempfile.TemporaryDirectory() as tmp:
             script = Path(tmp) / "fake_serve.py"
-            script.write_text(FAKE_SERVE, encoding="utf-8")
+            script.write_text(FAKE_SERVE, encoding="utf-8", newline="\n")
             binary = Path(tmp) / "fake_serve"
-            binary.write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{script}"\n', encoding="utf-8")
+            binary.write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{script}"\n', encoding="utf-8", newline="\n")
             binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
             client = bench.Client(str(binary), dict(os.environ))
             try:

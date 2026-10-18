@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "world/migration/su_migrate.h"
+#include "platform/su_platform.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -159,11 +160,9 @@ static void put_u64le(uint8_t *p, uint64_t v) {
 }
 
 static uint64_t now_ns(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 0u;
-    }
-    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+    uint64_t ns = 0;
+    (void)su_platform_monotonic_ns(&ns); /* 0 when the clock is unreadable */
+    return ns;
 }
 
 static void set_message(SuMigratePlan *p, const char *msg) {

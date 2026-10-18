@@ -1,12 +1,21 @@
-/* Worker child processes (POSIX only: fork, execv, pipes, poll, waitpid, kill).
- * Windows is NOT implemented: this file and su_agent.c compile only where those
- * APIs exist. Workers are exec'd directly from a validated argv, never through a
- * shell. Pipes carry the JSON-lines protocol on the child's stdin and stdout. */
+/* Worker child processes. Workers are started directly from a validated argv, never through a
+ * shell. Pipes carry the JSON-lines protocol on the child's stdin and stdout.
+ *
+ * POSIX: fork, execve, pipes, poll, waitpid, kill; limits are rlimits, seccomp and Landlock applied in
+ * the child before exec (see SuProcLimits).
+ * Windows: CreateProcessW (suspended, then assigned to a job object, then resumed) with an explicit
+ * inherited-handle list; the supervisor ends of the pipes are named pipes opened for overlapped I/O, so
+ * request deadlines are enforced (su_proto.c). The job object kills the child when the supervisor closes
+ * it, limits the child to one active process (no process creation), turns unhandled exceptions into
+ * process exit without a crash dialog, and maps address_space_bytes to a per-process commit limit and
+ * cpu_seconds to a per-process user-time limit. file_bytes, nofile, deny_network and deny_fs_writes have
+ * no equivalent there and are reported as not enforced (SuProcContainment says so in plain words). */
 #ifndef SU_AGENT_PROC_H
 #define SU_AGENT_PROC_H
 
 #include <stdint.h>
-#include <sys/types.h>
+
+#include "platform/su_posix.h"
 
 #include "agent/su_proto.h"
 
@@ -41,7 +50,9 @@ enum {
 /* Filesystem write denial enforced in the child (Landlock), verified by the child before exec. */
 enum {
     SU_PROC_FS_NONE = 0,     /* not requested, or not enforced (reason says why) */
-    SU_PROC_FS_LANDLOCK = 1  /* every write-class access is handled and no rule grants it (except writable_dir) */
+    SU_PROC_FS_LANDLOCK = 1, /* every write-class access is handled and no rule grants it (except writable_dir) */
+    SU_PROC_FS_LOW_INTEGRITY = 2 /* Windows: the child runs with a low-integrity token (verified on the child),
+                                    so medium-labelled files cannot be written; writable_dir is not granted */
 };
 
 typedef struct SuProcContainment {
@@ -67,6 +78,10 @@ enum {
 
 typedef struct SuProc {
     pid_t pid;      /* 0 when no child */
+#if defined(_WIN32)
+    void *process;  /* process HANDLE, NULL when no child */
+    void *job;      /* job object HANDLE; closing it kills the child */
+#endif
     int in_fd;      /* write end to child's stdin */
     int out_fd;     /* read end of child's stdout */
     int alive;
@@ -78,7 +93,10 @@ typedef struct SuProc {
 } SuProc;
 
 /* argv must be NULL-terminated with 1..SU_PROC_MAX_ARGS entries; argv[0] must
- * contain '/' and be an executable regular file. Returns SU_OK or SU_E_WORKER_FAILED. */
+ * contain '/' (or, on Windows, '\') and be an executable regular file. Returns SU_OK or SU_E_WORKER_FAILED.
+ * On Windows a child that ends with an exception status (access violation, illegal instruction, integer
+ * divide, stack overflow, fail-fast abort) is reported as SU_PROC_END_SIGNALED with the matching POSIX
+ * signal number (SIGSEGV, SIGILL, SIGFPE, SIGSEGV, SIGABRT); any other end is SU_PROC_END_EXITED. */
 uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *limits);
 
 /* Sends one request line and reads one response line before deadline_ms (absolute,

@@ -16,6 +16,7 @@
 #include <time.h>
 
 #include "ir/su_json.h"
+#include "platform/su_platform.h"
 #include "ir/su_sha256.h"
 #include "sutekh/entities.h"
 #include "sutekh/status.h"
@@ -89,9 +90,9 @@ static void fixture(char *out, size_t cap, const char *sub, const char *name) {
 }
 
 static uint64_t now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+    uint64_t ns = 0;
+    (void)su_platform_monotonic_ns(&ns);
+    return ns;
 }
 
 static const SuJsonValue *jm(const SuJsonValue *o, const char *k) {

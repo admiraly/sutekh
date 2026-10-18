@@ -3,7 +3,7 @@
 
 #include "runtime/jobs/su_jobs.h"
 
-#include <pthread.h>
+#include "platform/su_thread.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -77,10 +77,10 @@ typedef struct PoolThreadArg {
 struct SuJobPool {
     uint32_t workers;
     uint32_t started;             /* threads created so far */
-    pthread_t *threads;
+    SuThread *threads;
     PoolThreadArg *targs;
-    pthread_mutex_t mu;
-    pthread_cond_t cv;
+    SuMutex mu;
+    SuCond cv;
     int mutex_ready;
     int shutdown;
     /* Current batch, guarded by mu. */
@@ -100,14 +100,14 @@ static void *pool_main(void *argp) {
     SuJobPool *p = ta->pool;
     uint32_t id = ta->id;
 
-    pthread_mutex_lock(&p->mu);
+    su_mutex_lock(&p->mu);
     for (;;) {
         uint32_t pos;
         uint32_t task;
         SuJobFn fn;
         void *arg;
         while (!p->shutdown && !(p->open && p->next_claim < p->tasks)) {
-            pthread_cond_wait(&p->cv, &p->mu);
+            su_cond_wait(&p->cv, &p->mu);
         }
         if (p->shutdown) {
             break;
@@ -116,17 +116,17 @@ static void *pool_main(void *argp) {
         task = p->order != NULL ? p->order[pos] : pos;
         fn = p->fn;
         arg = p->arg;
-        pthread_mutex_unlock(&p->mu);
+        su_mutex_unlock(&p->mu);
 
         fn(task, id, arg);
 
-        pthread_mutex_lock(&p->mu);
+        su_mutex_lock(&p->mu);
         if (p->order != NULL) {
             /* Gate: with an order, position pos may complete only after every earlier
              * position has. The lowest unfinished position is always running, so this
              * cannot deadlock. */
             while (p->completed != pos) {
-                pthread_cond_wait(&p->cv, &p->mu);
+                su_cond_wait(&p->cv, &p->mu);
             }
         }
         /* The log records the completion sequence as it happened. With an order it
@@ -136,9 +136,9 @@ static void *pool_main(void *argp) {
         }
         p->completed++;
         p->finished++;
-        pthread_cond_broadcast(&p->cv);
+        su_cond_broadcast(&p->cv);
     }
-    pthread_mutex_unlock(&p->mu);
+    su_mutex_unlock(&p->mu);
     return NULL;
 }
 
@@ -169,21 +169,21 @@ uint32_t su_jobs_pool_create(uint32_t workers, SuJobPool **out) {
         free(p);
         return SU_E_RESOURCE_LIMIT;
     }
-    if (pthread_mutex_init(&p->mu, NULL) != 0) {
+    if (su_mutex_init(&p->mu) != 0) {
         free(p->threads);
         free(p->targs);
         free(p);
         return SU_E_WORKER_FAILED;
     }
     p->mutex_ready = 1;
-    if (pthread_cond_init(&p->cv, NULL) != 0) {
+    if (su_cond_init(&p->cv) != 0) {
         su_jobs_pool_destroy(p);
         return SU_E_WORKER_FAILED;
     }
     for (i = 0; i < workers; i++) {
         p->targs[i].pool = p;
         p->targs[i].id = i;
-        if (pthread_create(&p->threads[i], NULL, pool_main, &p->targs[i]) != 0) {
+        if (su_thread_create(&p->threads[i], pool_main, &p->targs[i]) != 0) {
             su_jobs_pool_destroy(p);
             return SU_E_WORKER_FAILED;
         }
@@ -199,19 +199,19 @@ void su_jobs_pool_destroy(SuJobPool *p) {
         return;
     }
     if (p->mutex_ready) {
-        pthread_mutex_lock(&p->mu);
+        su_mutex_lock(&p->mu);
         p->shutdown = 1;
-        pthread_cond_broadcast(&p->cv);
-        pthread_mutex_unlock(&p->mu);
+        su_cond_broadcast(&p->cv);
+        su_mutex_unlock(&p->mu);
     }
     for (i = 0; i < p->started; i++) {
-        pthread_join(p->threads[i], NULL);
+        (void)su_thread_join(p->threads[i]);
     }
     if (p->started > 0u) {
-        pthread_cond_destroy(&p->cv);
+        su_cond_destroy(&p->cv);
     }
     if (p->mutex_ready) {
-        pthread_mutex_destroy(&p->mu);
+        su_mutex_destroy(&p->mu);
     }
     free(p->threads);
     free(p->targs);
@@ -265,9 +265,9 @@ uint32_t su_jobs_pool_run(SuJobPool *p, uint32_t tasks, SuJobFn fn, void *arg, c
         return SU_OK;
     }
 
-    pthread_mutex_lock(&p->mu);
+    su_mutex_lock(&p->mu);
     if (p->open) {
-        pthread_mutex_unlock(&p->mu);
+        su_mutex_unlock(&p->mu);
         return SU_E_INVALID_ARGUMENT;
     }
     p->tasks = tasks;
@@ -279,16 +279,16 @@ uint32_t su_jobs_pool_run(SuJobPool *p, uint32_t tasks, SuJobFn fn, void *arg, c
     p->order = order;
     p->log = log;
     p->open = 1;
-    pthread_cond_broadcast(&p->cv);
+    su_cond_broadcast(&p->cv);
     while (p->finished < p->tasks) {
-        pthread_cond_wait(&p->cv, &p->mu);
+        su_cond_wait(&p->cv, &p->mu);
     }
     p->open = 0;
     p->order = NULL;
     p->log = NULL;
     p->fn = NULL;
     p->arg = NULL;
-    pthread_mutex_unlock(&p->mu);
+    su_mutex_unlock(&p->mu);
     return SU_OK;
 }
 

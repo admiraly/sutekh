@@ -16,9 +16,8 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
-#include <unistd.h>
 #include <fcntl.h>
+#include "../common/su_test_os.h"
 #include "agent/su_agent.h"
 #include "agent/su_proto.h"
 #include "ir/su_json.h"
@@ -44,7 +43,7 @@ static char g_proj[2200];
 /* ---------- sessions ---------- */
 
 typedef struct Session {
-    pid_t pid;
+    SuTestServe serve; /* supervisor under test (tests/common/su_test_os.h) */
     int wfd;
     SuLineReader rd;
 } Session;
@@ -110,11 +109,9 @@ static Session session_start(const char *spool_name) {
     Session s;
     int req[2];
     int rsp[2];
-    pid_t pid;
-    char spool[2200];
+    static char spool[2200]; /* static: the supervisor may read cfg strings after this returns */
     SuAgentConfig cfg;
     static const char *argv[2];
-    int k;
 
     snprintf(spool, sizeof spool, "%s/%s", g_scratch, spool_name);
     mkdir(spool, 0700);
@@ -130,40 +127,18 @@ static Session session_start(const char *spool_name) {
     cfg.quarantine_after = 2;
     cfg.spool_bytes_max = UINT64_C(64) << 20;
     cfg.spool_dir = spool;
-    if (pipe(req) != 0 || pipe(rsp) != 0) {
-        perror("pipe");
-        exit(2);
-    }
-    pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        exit(2);
-    }
-    if (pid == 0) {
-        int rc;
-        close(req[1]);
-        close(rsp[0]);
-        for (k = 0; k < g_hold_n; k++) {
-            close(g_hold[k]);
-        }
-        rc = su_agent_serve(req[0], rsp[1], &cfg);
-        _exit(rc == 0 ? 0 : 1);
-    }
-    close(req[0]);
-    close(rsp[1]);
+    memset(&s, 0, sizeof s);
+    su_test_serve_start_ex(&s.serve, &cfg, &req[1], &rsp[0], g_hold, g_hold_n);
     if (g_hold_n + 2 <= (int)(sizeof g_hold / sizeof g_hold[0])) {
         g_hold[g_hold_n++] = req[1];
         g_hold[g_hold_n++] = rsp[0];
     }
-    memset(&s, 0, sizeof s);
-    s.pid = pid;
     s.wfd = req[1];
     su_line_reader_init(&s.rd, rsp[0], -1);
     return s;
 }
 
 static void session_stop(Session *s) {
-    int status = 0;
     int k;
     close(s->wfd);
     for (k = 0; k < g_hold_n; k++) {
@@ -172,8 +147,7 @@ static void session_stop(Session *s) {
         }
     }
     su_line_reader_free(&s->rd);
-    waitpid(s->pid, &status, 0);
-    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(su_test_serve_wait(&s->serve));
 }
 
 static int call(Session *s, const char *line, Resp *r) {
@@ -271,6 +245,14 @@ static void arm_stage(const char *stage) {
 static void disarm_stage(void) {
     unsetenv("SUTEKH_TEST_KILL_STAGE");
     unsetenv("SUTEKH_TEST_KILL_TOKEN");
+}
+
+/* Called right after session_start: the session keeps the armed seam, later sessions do not. On Windows the
+ * supervisor is a thread of this process, so the variables are removed when it ends (su_test_os.h); the token
+ * file still limits how often the seam fires, as on POSIX. */
+static void disarm_after_start(void) {
+    su_test_unset_after_start("SUTEKH_TEST_KILL_STAGE");
+    su_test_unset_after_start("SUTEKH_TEST_KILL_TOKEN");
 }
 
 /* ---------- request helpers ---------- */
@@ -441,7 +423,7 @@ static void run_happy(const char *tag, const char *stage, Outcome *o, int crash_
         arm_stage(stage);
     }
     s = session_start(spool);
-    disarm_stage();
+    disarm_after_start();
     if (!setup_world(&s, &st)) {
         CHECK(0);
         session_stop(&s);
@@ -528,7 +510,7 @@ static void run_rollback_crash(void) {
 
     arm_stage("migrate.rollback");
     s = session_start("spool-rollback-crash");
-    disarm_stage();
+    disarm_after_start();
     CHECK(setup_world(&s, &st));
     snprintf(rev, sizeof rev, "%s", st.rev);
     CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
@@ -680,7 +662,7 @@ static void kill_active_worker(Session *s, const char *wid, const char *rev) {
     char sha[65];
     CHECK(pid > 0);
     if (pid > 0) {
-        kill((pid_t)pid, SIGKILL);
+        (void)su_test_kill_pid(pid);
     }
     (void)digest(s, wid, rev, sha, NULL);
     CHECK(active_worker_pid(s) != pid);
@@ -747,8 +729,8 @@ static void run_undo(const char *mode, const Outcome *ctl) {
         arm_post_noroom();
     }
     s = session_start(spool);
-    disarm_stage();
-    unsetenv("SUTEKH_TEST_POST_CK_NOROOM_TOKEN");
+    disarm_after_start();
+    su_test_unset_after_start("SUTEKH_TEST_POST_CK_NOROOM_TOKEN");
     CHECK(setup_world(&s, &st));
     snprintf(rev, sizeof rev, "%s", st.rev);
     CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash, sizeof phash, &valid, &r));
@@ -1158,7 +1140,7 @@ static void run_failed_second_commit(const char *mode) {
     unlink(tok);
     setenv(env_name, tok, 1);
     s = session_start(prep ? "spool-n1-prepare" : "spool-n1-noroom");
-    unsetenv(env_name);
+    su_test_unset_after_start(env_name);
     CHECK(setup_world(&s, &st));
     snprintf(rev, sizeof rev, "%s", st.rev);
     CHECK(plan(&s, st.wid, rev, "m_add.json", pid, sizeof pid, phash1, sizeof phash1, &valid, &r));
@@ -1225,7 +1207,7 @@ static void run_alloc_faults(const Outcome *ctl) {
     unlink(tok);
     setenv("SUTEKH_TEST_MIG_ALLOC_TOKEN", tok, 1);
     s = session_start("spool-alloc");
-    unsetenv("SUTEKH_TEST_MIG_ALLOC_TOKEN");
+    su_test_unset_after_start("SUTEKH_TEST_MIG_ALLOC_TOKEN");
     CHECK(setup_world(&s, &st));
     snprintf(rev, sizeof rev, "%s", st.rev);
     CHECK(digest(&s, st.wid, rev, sha, NULL) && strcmp(sha, ctl->pre_digest) == 0);

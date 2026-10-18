@@ -59,7 +59,7 @@ def build(out):
     module=dict(ir_version="0.1",system_id="rts.move",numeric_profile="u32_mod_v1",query="rts",instructions=b.instructions)
     out.mkdir(parents=True,exist_ok=True)
     for name,obj in (("move_b3.capsule.json",capsule),("move_b3.lir.json",module)):
-        (out/name).write_text(json.dumps(obj,indent=2)+"\n")
+        (out/name).write_text(json.dumps(obj,indent=2)+"\n", newline="\n")
     print("wrote author B3 candidate",len(b.instructions),"instructions to",out)
 
 if __name__=="__main__":

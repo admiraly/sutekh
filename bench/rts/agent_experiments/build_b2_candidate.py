@@ -24,5 +24,5 @@ def build():
     cap=json.loads((HERE/'candidates/b3/move_b3.capsule.json').read_text());cap['system_rev']=3;cap['source']='move_b2.lir.json'
     cap['fields'].append(dict(id=9,name='cooldown',type='u32',read=True,write=False));cap['fields'].sort(key=lambda x:x['id'])
     out=HERE/'candidates/b2';out.mkdir(parents=True,exist_ok=True)
-    for name,value in [('move_b2.capsule.json',cap),('move_b2.lir.json',module)]: (out/name).write_text(json.dumps(value,indent=2)+'\n')
+    for name,value in [('move_b2.capsule.json',cap),('move_b2.lir.json',module)]: (out/name).write_text(json.dumps(value,indent=2)+'\n', newline="\n")
 if __name__=='__main__':build()

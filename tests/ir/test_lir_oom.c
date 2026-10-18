@@ -18,9 +18,23 @@
 static size_t g_alloc_count = 0;
 static size_t g_fail_at = 0;
 
+#ifdef SU_LIR_OOM_SEAM
+/* Windows: the IR objects are compiled with tests/ir/lir_oom_seam.h instead of linked with --wrap; this
+ * file is not, so its calls below are the real allocator. */
+static void *__real_malloc(size_t n) {
+    return malloc(n);
+}
+static void *__real_calloc(size_t n, size_t m) {
+    return calloc(n, m);
+}
+static void *__real_realloc(void *p, size_t n) {
+    return realloc(p, n);
+}
+#else
 void *__real_malloc(size_t n);
 void *__real_calloc(size_t n, size_t m);
 void *__real_realloc(void *p, size_t n);
+#endif
 
 static int should_fail(void) {
     g_alloc_count++;

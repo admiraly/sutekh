@@ -2,15 +2,15 @@
 
 #include "agent/su_spool.h"
 
+#include "platform/su_posix.h"
+
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include "ir/su_sha256.h"
+#include "platform/su_platform.h"
 
 typedef struct SpoolEntry {
     int used;
@@ -74,7 +74,7 @@ static uint32_t entry_path(const SuSpool *sp, const char *sha, const char *ext, 
 
 uint32_t su_spool_open(const char *dir, uint64_t max_bytes, SuSpool **out) {
     SuSpool *sp;
-    const char *tmp;
+    char tmp[4096];
     char tmpl[4096];
     int n;
 
@@ -94,20 +94,23 @@ uint32_t su_spool_open(const char *dir, uint64_t max_bytes, SuSpool **out) {
             return SU_E_IO;
         }
         /* The spool holds captured capsules and checkpoints: it must be ours and not group/world
-         * accessible (the private mkdtemp directory below is created 0700). */
+         * accessible (the private mkdtemp directory below is created 0700). Windows has no owner/mode
+         * bits here; access is governed by the directory ACL, which this check does not inspect. */
+#if !defined(_WIN32)
         if (st.st_uid != geteuid() || (st.st_mode & 077) != 0) {
             free(sp);
             return SU_E_CAPABILITY_DENIED;
         }
+#endif
         snprintf(sp->dir, sizeof sp->dir, "%s", dir);
         sp->owns_dir = 0;
     } else {
-        tmp = getenv("TMPDIR");
-        if (tmp == NULL || tmp[0] == '\0') {
-            tmp = "/tmp";
+        if (su_platform_temp_dir(tmp, sizeof tmp) != 0) {
+            free(sp);
+            return SU_E_IO;
         }
         n = snprintf(tmpl, sizeof tmpl, "%s/sutekh-spool-XXXXXX", tmp);
-        if (n <= 0 || (size_t)n >= sizeof tmpl || mkdtemp(tmpl) == NULL) {
+        if (n <= 0 || (size_t)n >= sizeof tmpl || su_platform_mkdtemp(tmpl) == NULL) {
             free(sp);
             return SU_E_IO;
         }
@@ -184,7 +187,7 @@ uint32_t su_spool_put(SuSpool *sp, const char *ext, const uint8_t *data, size_t 
         return SU_E_RESOURCE_LIMIT;
     }
     unlink(path);
-    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_BINARY | O_CLOEXEC, 0600);
     if (fd < 0) {
         sp->count--;
         e->used = 0;

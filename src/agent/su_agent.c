@@ -2,6 +2,8 @@
 
 #include "agent/su_agent.h"
 
+#include "platform/su_posix.h"
+
 #include <signal.h>
 #include <stdio.h>
 
@@ -16,7 +18,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 
 #ifdef SU_HAVE_NATIVE
 #include "backends/native/su_native.h"
@@ -593,7 +594,9 @@ static void put_containment(SuBuf *b, const SuProcContainment *c) {
     su_buf_str(b, ",\"no_network\":\"");
     su_buf_str(b, net_names[mode]);
     su_buf_str(b, "\",\"fs_write_denied\":\"");
-    su_buf_str(b, c->reported && c->fs_mode == SU_PROC_FS_LANDLOCK ? "landlock" : "none");
+    su_buf_str(b, !c->reported ? "none"
+                  : c->fs_mode == SU_PROC_FS_LANDLOCK ? "landlock"
+                  : c->fs_mode == SU_PROC_FS_LOW_INTEGRITY ? "low_integrity" : "none");
     su_buf_str(b, "\",\"fs_abi\":");
     su_buf_str(b, c->reported && c->fs_mode == SU_PROC_FS_LANDLOCK ? "" : "null");
     if (c->reported && c->fs_mode == SU_PROC_FS_LANDLOCK) {
@@ -5476,9 +5479,9 @@ static uint32_t migrate_prepare_request(SuAgent *a, const AgentWorld *w, const M
 }
 
 static uint64_t mono_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
+    uint64_t ns = 0;
+    (void)su_platform_monotonic_ns(&ns);
+    return ns;
 }
 
 /* world.migrate_plan {world_id, expected_world_revision, migration_path, transform_path?, lir_path?, drop_systems?}.
@@ -6281,8 +6284,10 @@ static void free_all_worlds(SuAgent *a) {
 int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
     SuAgent *a;
     SuLineReader r;
+#if !defined(_WIN32)
     struct sigaction ign;
     struct sigaction old;
+#endif
     int ret = 0;
 
     if (cfg == NULL || cfg->project_root == NULL) {
@@ -6309,10 +6314,13 @@ int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
     su_buf_init(&a->event);
     su_buf_init(&a->nat_rec);
 
+#if !defined(_WIN32)
+    /* Windows has no SIGPIPE: a write to a closed pipe fails with an error. */
     memset(&ign, 0, sizeof ign);
     ign.sa_handler = SIG_IGN;
     sigemptyset(&ign.sa_mask);
     sigaction(SIGPIPE, &ign, &old);
+#endif
 
     su_line_reader_init(&r, in_fd, -1);
     for (;;) {
@@ -6356,6 +6364,8 @@ int su_agent_serve(int in_fd, int out_fd, const SuAgentConfig *cfg) {
         }
     }
     free(a);
+#if !defined(_WIN32)
     sigaction(SIGPIPE, &old, NULL);
+#endif
     return ret;
 }

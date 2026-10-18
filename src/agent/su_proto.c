@@ -1,14 +1,20 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "agent/su_proto.h"
+#include "platform/su_platform.h"
+
+#include "platform/su_posix.h"
 
 #include <errno.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <poll.h>
+#endif
 
 #include "sutekh/ir.h"
 #include "sutekh/status.h"
@@ -102,13 +108,81 @@ void su_buf_u64(SuBuf *b, uint64_t v) {
 /* ---------- time and fd I/O ---------- */
 
 int64_t su_now_ms(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    uint64_t ns = 0;
+    if (!su_platform_monotonic_ns(&ns)) {
         return 0;
     }
-    return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+    return (int64_t)(ns / 1000000u);
 }
 
+#if defined(_WIN32)
+/* One read or write on fd. Pipes use Win32 I/O with an OVERLAPPED block and an event: on a pipe opened
+ * for overlapped I/O (the pipes su_proc_spawn creates) the wait honours deadline_ms and the operation is
+ * cancelled when it passes; on a synchronous pipe the call blocks (the deadline is not enforced). Files
+ * and consoles go through the CRT. Returns the byte count (> 0), 0 at end of input (reads only), -1 on
+ * error (a broken pipe on write included), or -2 when the deadline passed. */
+static int64_t win_io(int fd, void *buf, size_t n, int64_t deadline_ms, int is_write) {
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    DWORD len = n > (size_t)(1u << 20) ? (DWORD)(1u << 20) : (DWORD)n;
+    DWORD done = 0;
+    DWORD err = 0;
+    OVERLAPPED ov;
+    BOOL ok;
+
+    if (h == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    if (GetFileType(h) != FILE_TYPE_PIPE) {
+        int r = is_write ? _write(fd, buf, (unsigned)len) : _read(fd, buf, (unsigned)len);
+        return r < 0 ? -1 : (int64_t)r;
+    }
+    for (;;) {
+        memset(&ov, 0, sizeof ov);
+        ov.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+        if (ov.hEvent == NULL) {
+            return -1;
+        }
+        ok = is_write ? WriteFile(h, buf, len, NULL, &ov) : ReadFile(h, buf, len, NULL, &ov);
+        if (!ok) {
+            err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                DWORD wait_ms = INFINITE;
+                DWORD w;
+                if (deadline_ms >= 0) {
+                    int64_t rem = deadline_ms - su_now_ms();
+                    wait_ms = rem <= 0 ? 0u : (rem > 0x7ffffffe ? 0x7ffffffeu : (DWORD)rem);
+                }
+                w = WaitForSingleObject(ov.hEvent, wait_ms);
+                if (w != WAIT_OBJECT_0) {
+                    (void)CancelIoEx(h, &ov);
+                }
+                /* Wait for the operation (completed or cancelled) so ov and buf are no longer in use. A
+                 * completion that raced the cancel keeps its bytes. */
+                ok = GetOverlappedResult(h, &ov, &done, TRUE);
+                err = ok ? 0u : GetLastError();
+                if (!ok && err == ERROR_OPERATION_ABORTED) {
+                    CloseHandle(ov.hEvent);
+                    return -2;
+                }
+            }
+        } else {
+            ok = GetOverlappedResult(h, &ov, &done, FALSE);
+            err = ok ? 0u : GetLastError();
+        }
+        CloseHandle(ov.hEvent);
+        if (!ok) {
+            if (!is_write && (err == ERROR_BROKEN_PIPE || err == ERROR_HANDLE_EOF || err == ERROR_PIPE_NOT_CONNECTED)) {
+                return 0;
+            }
+            return -1;
+        }
+        if (done > 0u || is_write) {
+            return (int64_t)done;
+        }
+        /* A zero-byte read on a byte-mode pipe is a zero-length write by the peer, not end of input. */
+    }
+}
+#else
 /* 0 when ready, -1 on poll error, -2 when the deadline passed. */
 static int wait_fd(int fd, short events, int64_t deadline_ms) {
     for (;;) {
@@ -139,7 +213,23 @@ static int wait_fd(int fd, short events, int64_t deadline_ms) {
     }
 }
 
+#endif
+
 int su_write_all(int fd, const uint8_t *p, size_t n, int64_t deadline_ms) {
+#if defined(_WIN32)
+    while (n > 0) {
+        int64_t w = win_io(fd, (void *)p, n, deadline_ms, 1);
+        if (w < 0) {
+            return (int)w;
+        }
+        if (w == 0) {
+            return -1;
+        }
+        p += (size_t)w;
+        n -= (size_t)w;
+    }
+    return 0;
+#else
     while (n > 0) {
         ssize_t w;
         int rc = wait_fd(fd, POLLOUT, deadline_ms);
@@ -157,6 +247,7 @@ int su_write_all(int fd, const uint8_t *p, size_t n, int64_t deadline_ms) {
         n -= (size_t)w;
     }
     return 0;
+#endif
 }
 
 /* ---------- line reader ---------- */
@@ -221,6 +312,16 @@ int su_line_next(SuLineReader *r, const uint8_t **line, size_t *len, int *overfl
         size_t take;
 
         if (r->pos == r->fill) {
+#if defined(_WIN32)
+            int64_t n;
+            if (r->eof) {
+                break;
+            }
+            n = win_io(r->fd, r->chunk, sizeof r->chunk, r->deadline_ms, 0);
+            if (n < 0) {
+                return (int)n;
+            }
+#else
             ssize_t n;
             int rc;
             if (r->eof) {
@@ -237,6 +338,7 @@ int su_line_next(SuLineReader *r, const uint8_t **line, size_t *len, int *overfl
                 }
                 return -1;
             }
+#endif
             if (n == 0) {
                 r->eof = 1;
                 break;
