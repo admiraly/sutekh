@@ -1,0 +1,188 @@
+source commit 76e63ac3f077156f5eaa6a11fc9a10f5772bea1d (uncommitted source files: 0); 2026-10-18T16:42:56; Quadro P600 over RDP; Debug build-win, Release build-rel
+
+$ build-win\test_asset_pak.exe 
+single-byte corruptions: 4336 tried, 0 accepted
+fuzz: 3000 forged packs, 1397 accepted (layout-valid changes such as float values), 1603 rejected
+test_asset_pak: 103519 checks, 0 failures
+exit 0
+
+$ build-win\test_asset_gltf.exe build-win\asset_gltf_work
+test_asset_gltf: 149 checks, 0 failures
+exit 0
+
+$ build-win\asset_cook.exe cook build-win\asset_gltf_work\scene_c.gltf build-win\asset_gltf_work\c.supak
+cooked build-win\asset_gltf_work\scene_c.gltf in 0.4 ms: 4 meshes (4 submeshes, 16 vertices, 8 triangles), 0 textures (0 bytes), 0 materials, 4 model nodes (1 LOD groups), 0 warnings
+wrote build-win\asset_gltf_work\c.supak: 2360 bytes, content sha256 0d1607b67d290de89c72510b6b42ddeb2eae27d49bfb72b84681e025eda9fe41
+exit 0
+
+$ build-win\asset_cook.exe info build-win\asset_gltf_work\c.supak
+pack build-win\asset_gltf_work\c.supak: 2360 bytes, 5 resources, content sha256 0d1607b67d290de89c72510b6b42ddeb2eae27d49bfb72b84681e025eda9fe41
+  6cef72aadf1fd923 mesh            344 bytes  4 vertices, 2 triangles, 1 submeshes, radius 1.414
+  75d19fbd7960e82d mesh            344 bytes  4 vertices, 2 triangles, 1 submeshes, radius 1.414
+  a5ca0fa73b177a74 model           576 bytes  4 nodes, radius 26.819
+  d9cd781fa75a74f4 mesh            344 bytes  4 vertices, 2 triangles, 1 submeshes, radius 1.414
+  ef5dd4fa0808f9f7 mesh            344 bytes  4 vertices, 2 triangles, 1 submeshes, radius 1.414
+exit 0
+
+$ build-win\test_render_portable.exe 
+1 mm at 10000 km: camera-relative 0.0010000 m, naive float32 0.0000000 m
+test_render_portable: 84 checks, 0 failures
+exit 0
+
+$ build-win\test_render_offscreen.exe build-win\render_offscreen.ppm
+device 0: Quadro P600 (discrete, Vulkan 1.4.312, vendor 0x10de, 1966 MiB device-local, timestamps yes)
+rendering on: Quadro P600 (discrete)
+stats: frames 6, draws 5, instances 3, line vertices 2, cpu 0.067 ms, gpu 0.039 ms, validation on (0 errors, 0 warnings)
+wrote build-win\render_offscreen.ppm
+corner 89 89 108
+centre 255 0 0
+sphere 0 238 0
+ship at 201,62: 110 152 229
+line near 17,194: yellow
+test_render_offscreen: 23 checks, 0 failures
+exit 0
+
+$ build-win\test_render_assets.exe build-win\render_assets_work
+rendering on: Quadro P600
+pipelines created in 8.32 ms (cold cache)
+pack uploaded in 6 frames, 1461796 bytes (textures 1418580)
+debris: 2000 objects, 1663 culled, 337 drawn, 337 draw instances, 2 draws, scene cpu 0.156 ms
+validation not available (0 errors, 0 warnings)
+pipelines created in 0.66 ms (warm cache)
+test_render_assets: 101 checks, 0 failures
+exit 0
+
+$ build-rel\test_render_assets.exe build-rel\render_assets_work
+rendering on: Quadro P600
+pipelines created in 6.63 ms (cold cache)
+pack uploaded in 6 frames, 1461796 bytes (textures 1418580)
+debris: 2000 objects, 1663 culled, 337 drawn, 337 draw instances, 2 draws, scene cpu 0.055 ms
+validation not available (0 errors, 0 warnings)
+pipelines created in 0.77 ms (warm cache)
+test_render_assets: 101 checks, 0 failures
+exit 0
+
+$ build-win\test_audio.exe tests\fixtures\audio\tone440_stereo.ogg
+tones: 1000 Hz at unity rate exact; 24 kHz clip 1000.00 Hz; pitch 1.5 1500.00 Hz
+spatial: front 0.5000, right 0.7071, 4 m / 1 m 0.2500
+doppler: approaching 555.56 Hz (expected 555.56), receding 454.55 Hz (expected 454.55)
+ogg: tests\fixtures\audio\tone440_stereo.ogg: 22050 frames, 2 channels, 44100 Hz
+ogg: rms left 0.3561 (expected 0.3536), right 0.1779 (expected 0.1768), 176 cycles in 0.4 s
+test_audio: 220 checks, 0 failures
+exit 0
+
+$ build-win\test_audio_device.exe 
+device: Remote Audio, 48000 Hz, buffer 1124 frames, stream latency 0.00 ms
+rendered 22278 frames by the device thread (mixer total 22278), peak 0.000
+test_audio_device: ok
+exit 0
+
+$ build-win\space_demo.exe --offscreen build-win\space_demo_assets.ppm --frames 240 --rollback-check --expect-digest fa02b76e1269693a5f4daa5c7139818c0fff106bd5f57c656556e1336aa1defd
+renderer: Quadro P600, offscreen target 1280x720, pipelines 8.4 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+frames 240, ticks 479, dropped ticks 0, gate events 1, mean step 0.031 ms
+digest fa02b76e1269693a5f4daa5c7139818c0fff106bd5f57c656556e1336aa1defd fast d774a0751dd23248
+render: frames 240, last cpu 0.326 ms (scene 0.277), last gpu 0.749 ms, draws 15, objects 3014 (culled 1520, nodes drawn 1515, LOD0 56, LOD1 1459), draw instances 1515, fx vertices 1578, hud vertices 954, uploaded 417408 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 4294967295
+frames drawn 240, paused 0, failed 0
+timings over 210 frames after warm-up (observations): gpu median 0.790 ms p95 1.105 ms; render cpu median 0.333 ms p95 0.483 ms
+rollback drills: 59 (restore in place, re-push 8 records, step 8 ticks), 0 differed, 1 re-emitted events compared, mean 0.216 ms each
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 192000 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
+shadow world (no renderer): 0 tick digests differed
+wrote build-win\space_demo_assets.ppm
+exit 0
+
+$ build-win\space_demo.exe --headless --script --frames 240 --rollback-check --expect-digest fa02b76e1269693a5f4daa5c7139818c0fff106bd5f57c656556e1336aa1defd
+frames 240, ticks 479, dropped ticks 0, gate events 1, mean step 0.026 ms
+digest fa02b76e1269693a5f4daa5c7139818c0fff106bd5f57c656556e1336aa1defd fast d774a0751dd23248
+rollback drills: 59 (restore in place, re-push 8 records, step 8 ticks), 0 differed, 1 re-emitted events compared, mean 0.205 ms each
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 192000 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
+exit 0
+
+$ build-win\space_demo.exe --script --seconds 5 --model build-win\asset_gltf_work\scene_a.gltf --model-scale 3
+renderer: Quadro P600, window target 1280x720, pipelines 8.6 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+model: build-win\asset_gltf_work\scene_a.gltf queued on the loader thread
+audio: Remote Audio, 48000 Hz, buffer 1124 frames
+model: loaded and validated in 0.6 ms on the loader thread; 4 resources
+frames 168, ticks 601, dropped ticks 1, gate events 1, mean step 0.037 ms
+digest 466151e566d52220968585a393a4a2a1c1bf61239beab020eb952cedb370ebc4 fast 788b501dbda2a2c4
+render: frames 168, last cpu 0.296 ms (scene 0.191), last gpu 1.133 ms, draws 7, objects 3015 (culled 3014, nodes drawn 2, LOD0 2, LOD1 0), draw instances 2, fx vertices 1446, hud vertices 936, uploaded 417740 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 2
+frames drawn 168, paused 0, failed 0
+timings over 138 frames after warm-up (observations): gpu median 0.622 ms p95 1.769 ms; render cpu median 0.360 ms p95 0.486 ms
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 240198 frames mixed (device), voices stolen 0, refused 0, commands dropped 0
+exit 0
+
+$ build-win\space_demo.exe --script --seconds 5 --no-vsync --world-offset 1000
+renderer: Quadro P600, window target 1280x720, pipelines 8.8 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+audio: Remote Audio, 48000 Hz, buffer 1124 frames
+frames 9749, ticks 600, dropped ticks 0, gate events 1, mean step 0.049 ms
+digest b53fedc2088d2e478d79240b1f584037c3436d33c8c11352621222d15905a600 fast 2de092b81255c17b
+render: frames 9749, last cpu 0.190 ms (scene 0.159), last gpu 0.274 ms, draws 7, objects 3014 (culled 3013, nodes drawn 2, LOD0 2, LOD1 0), draw instances 2, fx vertices 1434, hud vertices 942, uploaded 417408 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 1
+frames drawn 9749, paused 0, failed 0
+timings over 9719 frames after warm-up (observations): gpu median 0.411 ms p95 0.566 ms; render cpu median 0.259 ms p95 0.382 ms
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 238278 frames mixed (device), voices stolen 0, refused 0, commands dropped 0
+exit 0
+
+$ build-win\space_demo.exe --script --frames 140 --exercise-window
+renderer: Quadro P600, window target 1280x720, pipelines 6.8 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+audio: Remote Audio, 48000 Hz, buffer 1124 frames
+frames 140, ticks 355, dropped ticks 19, gate events 1, mean step 0.037 ms
+digest 72ae51230855d00408a16324e0631ca8e771ab090a134ce7b2dcdba054f79afd fast 0619ed6c124722a0
+render: frames 110, last cpu 0.367 ms (scene 0.225), last gpu 0.320 ms, draws 9, objects 3014 (culled 2966, nodes drawn 49, LOD0 26, LOD1 23), draw instances 49, fx vertices 1338, hud vertices 942, uploaded 417408 bytes, swapchain recreations 3, validation off (0 errors, 0 warnings), present mode 2
+frames drawn 110, paused 30, failed 0
+timings over 110 frames after warm-up (observations): gpu median 0.273 ms p95 0.668 ms; render cpu median 0.392 ms p95 0.496 ms
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 148998 frames mixed (device), voices stolen 0, refused 0, commands dropped 0
+exit 0
+
+$ build-rel\space_demo.exe --offscreen build-rel\perf_3000.ppm --width 1920 --height 1080 --frames 600 --debris 3000
+renderer: Quadro P600, offscreen target 1920x1080, pipelines 7.2 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+frames 600, ticks 1199, dropped ticks 0, gate events 1, mean step 0.013 ms
+digest e0c5cda9627b5cd2982c710e7adfbe02c16dcd05f72c02ae87871c4c96f15a5d fast a7fdb083b98b2068
+render: frames 600, last cpu 0.177 ms (scene 0.120), last gpu 1.430 ms, draws 15, objects 3014 (culled 1520, nodes drawn 1515, LOD0 56, LOD1 1459), draw instances 1515, fx vertices 1512, hud vertices 960, uploaded 417408 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 4294967295
+frames drawn 600, paused 0, failed 0
+timings over 570 frames after warm-up (observations): gpu median 1.430 ms p95 1.437 ms; render cpu median 0.198 ms p95 0.266 ms
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 480000 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
+shadow world (no renderer): 0 tick digests differed
+wrote build-rel\perf_3000.ppm
+exit 0
+
+$ build-rel\space_demo.exe --offscreen build-rel\perf_10000.ppm --width 1920 --height 1080 --frames 600 --debris 10000
+renderer: Quadro P600, offscreen target 1920x1080, pipelines 6.8 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+frames 600, ticks 1199, dropped ticks 0, gate events 1, mean step 0.014 ms
+digest e0c5cda9627b5cd2982c710e7adfbe02c16dcd05f72c02ae87871c4c96f15a5d fast a7fdb083b98b2068
+render: frames 600, last cpu 0.485 ms (scene 0.434), last gpu 1.848 ms, draws 15, objects 10014 (culled 5075, nodes drawn 4960, LOD0 111, LOD1 4849), draw instances 4960, fx vertices 1512, hud vertices 972, uploaded 417408 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 4294967295
+frames drawn 600, paused 0, failed 0
+timings over 570 frames after warm-up (observations): gpu median 1.846 ms p95 1.866 ms; render cpu median 0.493 ms p95 0.659 ms
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 480000 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
+shadow world (no renderer): 0 tick digests differed
+wrote build-rel\perf_10000.ppm
+exit 0
+
+$ build-rel\space_demo.exe --offscreen build-rel\perf_20000.ppm --width 1920 --height 1080 --frames 600 --debris 20000
+renderer: Quadro P600, offscreen target 1920x1080, pipelines 8.7 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+frames 600, ticks 1199, dropped ticks 0, gate events 1, mean step 0.014 ms
+digest e0c5cda9627b5cd2982c710e7adfbe02c16dcd05f72c02ae87871c4c96f15a5d fast a7fdb083b98b2068
+render: frames 600, last cpu 1.088 ms (scene 1.006), last gpu 2.376 ms, draws 15, objects 20014 (culled 10228, nodes drawn 9807, LOD0 180, LOD1 9627), draw instances 9807, fx vertices 1512, hud vertices 978, uploaded 417408 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 4294967295
+frames drawn 600, paused 0, failed 0
+timings over 570 frames after warm-up (observations): gpu median 2.376 ms p95 2.399 ms; render cpu median 0.886 ms p95 1.116 ms
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 480000 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
+shadow world (no renderer): 0 tick digests differed
+wrote build-rel\perf_20000.ppm
+exit 0
+
+$ build-rel\space_demo.exe --script --seconds 6 --no-vsync --width 1920 --height 1080 --debris 10000
+renderer: Quadro P600, window target 1920x1080, pipelines 6.3 ms (cache 0)
+content: procedural pack 389976 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+audio: Remote Audio, 48000 Hz, buffer 1124 frames
+frames 6152, ticks 720, dropped ticks 0, gate events 1, mean step 0.026 ms
+digest 4e861fdfab0d8b2ac8a88b26919500588c937fc4623340e242d64e236b461320 fast 1aaae3bb46a4e833
+render: frames 6152, last cpu 0.315 ms (scene 0.259), last gpu 0.465 ms, draws 7, objects 10014 (culled 10013, nodes drawn 2, LOD0 2, LOD1 0), draw instances 2, fx vertices 1296, hud vertices 954, uploaded 417408 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 1
+frames drawn 6152, paused 0, failed 0
+timings over 6122 frames after warm-up (observations): gpu median 0.711 ms p95 1.266 ms; render cpu median 0.356 ms p95 0.498 ms
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 286278 frames mixed (device), voices stolen 0, refused 0, commands dropped 0
+exit 0
