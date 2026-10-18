@@ -203,6 +203,7 @@ typedef struct SuRenderStats {
     uint32_t swapchain_recreations;
     uint32_t validation_enabled;   /* 1 when VK_LAYER_KHRONOS_validation was requested and found */
     uint32_t validation_errors;    /* messages of error severity from the validation layer (0 when not enabled) */
+    uint32_t validation_warnings;  /* messages of warning severity */
     uint32_t present_mode;         /* VkPresentModeKHR in use (window), or UINT32_MAX offscreen */
     uint32_t width, height;
 } SuRenderStats;

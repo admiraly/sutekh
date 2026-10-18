@@ -266,20 +266,26 @@ static int has_instance_ext(VkFns *f, const char *name) {
 typedef struct Validation {
     uint32_t enabled;
     uint32_t errors;
+    uint32_t warnings;
     uint32_t printed;
 } Validation;
 
+/* Counts error and warning messages; the first 8 of either are printed to stderr. */
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
                                                VkDebugUtilsMessageTypeFlagsEXT type,
                                                const VkDebugUtilsMessengerCallbackDataEXT *data, void *user) {
     Validation *v = user;
+    int error = (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0;
     (void)type;
-    if ((sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
+    if (error) {
         v->errors++;
-        if (v->printed < 8u) {
-            v->printed++;
-            fprintf(stderr, "vulkan validation error: %s\n", data != NULL && data->pMessage != NULL ? data->pMessage : "");
-        }
+    } else {
+        v->warnings++;
+    }
+    if (v->printed < 8u) {
+        v->printed++;
+        fprintf(stderr, "vulkan validation %s: %s\n", error ? "error" : "warning",
+                data != NULL && data->pMessage != NULL ? data->pMessage : "");
     }
     return VK_FALSE;
 }
@@ -1458,6 +1464,7 @@ uint32_t su_render_stats(const SuRenderer *r, SuRenderStats *out) {
     *out = r->stats;
     out->validation_enabled = r->validation.enabled;
     out->validation_errors = r->validation.errors;
+    out->validation_warnings = r->validation.warnings;
     return SU_OK;
 }
 
@@ -1629,13 +1636,27 @@ uint32_t su_render_frame(SuRenderer *r, const SuRenderView *view, const SuRender
     r->f.vkCmdEndRenderPass(fr->cmd);
     if (r->offscreen) {
         VkBufferImageCopy copy;
+        VkMemoryBarrier mb;
         memset(&copy, 0, sizeof copy);
         copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         copy.imageSubresource.layerCount = 1;
         copy.imageExtent.width = r->width;
         copy.imageExtent.height = r->height;
         copy.imageExtent.depth = 1;
+        /* The readback buffer is shared by the frames in flight: the previous frame's copy into it (and any host
+         * read, which su_render_readback orders with a device wait) completes before this one writes. */
+        memset(&mb, 0, sizeof mb);
+        mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        r->f.vkCmdPipelineBarrier(fr->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0,
+                                  NULL, 0, NULL);
         r->f.vkCmdCopyImageToBuffer(fr->cmd, r->color_img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, r->readback.buf, 1, &copy);
+        /* Make the copy visible to host reads after the fence or device wait. */
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        r->f.vkCmdPipelineBarrier(fr->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, NULL,
+                                  0, NULL);
     }
     if (fr->queries != VK_NULL_HANDLE) {
         r->f.vkCmdWriteTimestamp(fr->cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, fr->queries, 1);

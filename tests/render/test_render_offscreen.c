@@ -159,12 +159,19 @@ int main(int argc, char **argv) {
     CHECK(su_render_frame(r, &view, inst, 3, lines, 2) == SU_OK);
     CHECK(su_render_readback(r, img2, W * H * 4u) == SU_OK);
     CHECK(memcmp(img, img2, W * H * 4u) == 0);
+    /* Frames back to back, both frame slots in flight, then one readback (the pattern that needs the barrier
+     * between consecutive copies into the shared readback buffer; synchronization validation checks it). */
+    for (i = 0; i < 4u; i++) {
+        CHECK(su_render_frame(r, &view, inst, 3, lines, 2) == SU_OK);
+    }
+    CHECK(su_render_readback(r, img2, W * H * 4u) == SU_OK);
+    CHECK(memcmp(img, img2, W * H * 4u) == 0);
     CHECK(su_render_stats(r, &st) == SU_OK);
     printf("stats: frames %llu, draws %u, instances %u, line vertices %u, cpu %.3f ms, gpu %.3f ms, validation %s "
-           "(%u errors)\n",
+           "(%u errors, %u warnings)\n",
            (unsigned long long)st.frame, st.draws, st.instances, st.line_vertices, st.cpu_ms, st.gpu_ms,
-           st.validation_enabled ? "on" : "not available", st.validation_errors);
-    CHECK(st.frame == 2u && st.draws == 4u && st.instances == 3u && st.line_vertices == 2u && st.dropped == 0u);
+           st.validation_enabled ? "on" : "not available", st.validation_errors, st.validation_warnings);
+    CHECK(st.frame == 6u && st.draws == 4u && st.instances == 3u && st.line_vertices == 2u && st.dropped == 0u);
     CHECK(st.validation_errors == 0u);
     CHECK(used.timestamps ? st.gpu_ms >= 0.0 : st.gpu_ms < 0.0);
     CHECK(su_render_write_ppm(out_path, img, W, H) == SU_OK);

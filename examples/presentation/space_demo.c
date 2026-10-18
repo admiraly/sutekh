@@ -784,9 +784,9 @@ int main(int argc, char **argv) {
         if (presentation) {
             (void)su_render_stats(g.r, &rs);
             printf("render: frames %llu, last cpu %.3f ms, last gpu %.3f ms, draws %u, swapchain recreations %u, "
-                   "validation %s (%u errors), present mode %u\n",
+                   "validation %s (%u errors, %u warnings), present mode %u\n",
                    (unsigned long long)rs.frame, rs.cpu_ms, rs.gpu_ms, rs.draws, rs.swapchain_recreations,
-                   rs.validation_enabled ? "on" : "off", rs.validation_errors, rs.present_mode);
+                   rs.validation_enabled ? "on" : "off", rs.validation_errors, rs.validation_warnings, rs.present_mode);
             printf("frames drawn %llu, paused %llu, failed %llu\n", (unsigned long long)g.frames_drawn,
                    (unsigned long long)g.frames_paused, (unsigned long long)g.frames_failed);
             ok = rs.validation_errors == 0u && g.frames_failed == 0u;
