@@ -19,7 +19,13 @@
 #include "ir/su_sha256.h"
 #include "runtime/entity_tick.h"
 #include "runtime/jobs/su_effects.h"
+#include "runtime/rts/host_decl.h"
 #include "runtime/schedule.h"
+#include "vm/su_vm.h"
+#ifdef SU_HAVE_NATIVE
+#include "runtime/native_versions.h"
+#include "sutekh/native/abi.h"
+#endif
 #include "sutekh/entities.h"
 #include "sutekh/ir.h"
 #include "world/entities/su_cmdq.h"
@@ -179,6 +185,7 @@ static uint32_t check_effects(const SuSchedule *s, const CapsuleFacts *facts, Su
         in[i].mod = s->sys[i].mod;
         in[i].phase = facts[i].phase;
         in[i].declared_parallel = 1u;
+        in[i].host_declared = s->sys[i].kind == SU_SYS_KIND_HOST ? 1u : 0u; /* its record's access is the effect */
         in[i].after = facts[i].after;
         in[i].after_count = facts[i].after_count;
         in[i].before = facts[i].before;
@@ -391,6 +398,42 @@ static void compute_identity(SuHostWorld *hw) {
     su_sha256_final(&c, hw->identity);
 }
 
+/* Capsule index i is a host operator record (lir_json NULL): find the built-in operator its system_id names,
+ * check the record against it (su_host_load_bound_bytes: exact or schema-relative binding) and append the
+ * host entry. */
+static uint32_t add_host_record(SuHostWorld *hw, const SuHostCapsule *c, const CapsuleFacts *f, uint32_t i,
+                                SuHostError *err) {
+    const SuJsonValue *sid = member(f->doc.root, "system_id");
+    const HostOperator *op = sid != NULL && sid->type == SU_JSON_STRING ? su_host_operator_find(sid->u.string.data)
+                                                                         : NULL;
+    SuLirModule *decl = NULL;
+    uint32_t bind[SU_LIMIT_FIELDS];
+    uint32_t sv = 0;
+    uint32_t gen = 0;
+    int bound = 0;
+    char msg[256];
+    uint32_t st;
+
+    if (op == NULL) {
+        return set_err(err, SU_E_CAPABILITY_DENIED, i, UINT64_MAX,
+                       "capsule %u: no host operator for system %s is built into this library", (unsigned)i,
+                       sid != NULL && sid->type == SU_JSON_STRING ? sid->u.string.data : "(none)");
+    }
+    msg[0] = '\0';
+    st = su_host_load_bound_bytes(c->capsule_json, c->capsule_len, NULL, op->desc, &decl, &sv, &gen, bind, &bound,
+                                  msg, sizeof msg);
+    if (st != SU_OK) {
+        return set_err(err, st, i, UINT64_MAX, "capsule %u: host record refused: %s", (unsigned)i, msg);
+    }
+    st = su_sched_add_host_bound(&hw->sched, op->desc, decl, bound ? bind : NULL, sv, gen, 0u, 1u, 0u);
+    if (st != SU_OK) {
+        su_host_decl_free(decl);
+        return set_err(err, st, i, UINT64_MAX,
+                       "capsule %u: host system cannot join the schedule (schema or duplicate system id)", (unsigned)i);
+    }
+    return SU_OK;
+}
+
 uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, SuHostError *err) {
     SuHostWorld *hw = NULL;
     CapsuleFacts facts[SU_SCHED_MAX_SYSTEMS];
@@ -428,6 +471,21 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
         const SuHostCapsule *c = &desc->capsules[i];
         SuLirModule *m;
         SuDiag diag;
+        if (c->capsule_json != NULL && c->lir_json == NULL && c->lir_len == 0u &&
+            c->capsule_len <= HOST_CAPSULE_JSON_MAX) {
+            st = capsule_facts(c, &facts[i]);
+            nfacts = i + 1u;
+            if (st != SU_OK) {
+                set_err(err, st, i, UINT64_MAX, "capsule %u: schema version, layout generation or schedule block",
+                        (unsigned)i);
+                goto fail;
+            }
+            st = add_host_record(hw, c, &facts[i], i, err);
+            if (st != SU_OK) {
+                goto fail;
+            }
+            continue;
+        }
         if (c->capsule_json == NULL || c->lir_json == NULL || c->capsule_len > HOST_CAPSULE_JSON_MAX ||
             c->lir_len > SU_LIMIT_IR_SOURCE_BYTES) {
             st = set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX, "capsule %u: missing or oversized bytes",
@@ -486,6 +544,28 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
         set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX,
                 "entity tick buffers exceed the resource budget; lower the capacity or the systems");
         goto fail;
+    }
+    /* Host operators get their own scratch, sized for this world's capacity (never allocated in a tick). */
+    for (i = 0; i < hw->sched.count; i++) {
+        const HostOperator *op;
+        void *inst = NULL;
+        if (hw->sched.sys[i].kind != SU_SYS_KIND_HOST) {
+            continue;
+        }
+        op = su_host_operator_find(hw->sched.sys[i].system_id);
+        st = op != NULL ? op->create(su_world_row_count(hw->w), &inst) : SU_E_INTERNAL;
+        if (st == SU_OK) {
+            st = su_sched_set_host_instance(&hw->sched, i, inst, op->destroy);
+            if (st != SU_OK) {
+                op->destroy(inst);
+            }
+        }
+        if (st != SU_OK) {
+            set_err(err, st, i, UINT64_MAX, "host operator %s: no scratch for %llu rows%s", hw->sched.sys[i].system_id,
+                    (unsigned long long)su_world_row_count(hw->w),
+                    st == SU_E_RESOURCE_LIMIT ? " (capacity above the operator's row limit, or out of memory)" : "");
+            goto fail;
+        }
     }
     compute_identity(hw);
     for (i = 0; i < nfacts; i++) {
@@ -1625,4 +1705,106 @@ uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint64_t entity, 
     two[1].field_id = field_id + 1u;
     two[1].value = (uint32_t)((uint64_t)value >> 32);
     return su_host_input_push(w, tick, two, 2u, err);
+}
+
+/* ---------- execution tiers (2026-10-18) ---------- */
+
+uint32_t su_host_native_available(void) {
+#ifdef SU_HAVE_NATIVE
+    return 1u;
+#else
+    return 0u;
+#endif
+}
+
+uint32_t su_host_system_tier(const SuHostWorld *w, uint32_t index, uint32_t *tier) {
+    const SuSysEntry *e;
+    if (w == NULL || tier == NULL || index >= w->sched.count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    e = &w->sched.sys[index];
+    if (e->kind == SU_SYS_KIND_HOST) {
+        *tier = SU_HOST_TIER_OPERATOR;
+        return SU_OK;
+    }
+#ifdef SU_HAVE_NATIVE
+    if (e->native_seq != 0u) {
+        *tier = SU_HOST_TIER_NATIVE;
+        return SU_OK;
+    }
+#endif
+    *tier = e->vm_tier != 0u ? e->vm_tier : su_vm_default_tier();
+    return SU_OK;
+}
+
+_Static_assert(SU_HOST_TIER_REFERENCE == SU_VM_TIER_REFERENCE, "host tier mirrors the VM tier");
+_Static_assert(SU_HOST_TIER_PLANNED == SU_VM_TIER_PLANNED, "host tier mirrors the VM tier");
+
+uint32_t su_host_system_set_tier(SuHostWorld *w, uint32_t index, uint32_t tier, SuHostError *err) {
+    SuSysEntry *e;
+    uint32_t st;
+    clear_err(err);
+    if (w == NULL || index >= w->sched.count) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, index, UINT64_MAX, "invalid world or system index");
+    }
+    e = &w->sched.sys[index];
+    if (e->kind == SU_SYS_KIND_HOST) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, index, UINT64_MAX, "system %s is a host operator", e->system_id);
+    }
+    if (tier == SU_HOST_TIER_REFERENCE || tier == SU_HOST_TIER_PLANNED) {
+        if (e->ctx != NULL) {
+            st = su_vm_context_set_tier(e->ctx, tier);
+            if (st != SU_OK) {
+                return set_err(err, st, index, UINT64_MAX, "VM tier could not be set");
+            }
+        }
+        e->vm_tier = tier; /* the entity runtime's per-call contexts follow on the next step (cache key) */
+#ifdef SU_HAVE_NATIVE
+        if (e->native_seq != 0u) {
+            su_nv_release(e->native_seq);
+            e->native_seq = 0u;
+        }
+#endif
+        return SU_OK;
+    }
+    if (tier != SU_HOST_TIER_NATIVE) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, index, UINT64_MAX, "unknown tier %u", (unsigned)tier);
+    }
+#ifdef SU_HAVE_NATIVE
+    {
+        uint64_t seq = 0;
+        uint64_t rows = 0;
+        uint64_t bad = 0;
+        uint32_t cases = 0;
+        char msg[192];
+        if (e->native_seq != 0u) {
+            return SU_OK;
+        }
+        if (e->mod->uses_entity_ops) {
+            return set_err(err, SU_E_CAPABILITY_DENIED, index, UINT64_MAX,
+                           "system %s uses entity operations; it stays on the VM", e->system_id);
+        }
+        msg[0] = '\0';
+        st = su_nv_prepare(e->mod, w->sched.layout_generation, SU_NCAP_X86_64_SCALAR, &seq, msg, sizeof msg);
+        if (st != SU_OK) {
+            return set_err(err, SU_E_CAPABILITY_DENIED, index, UINT64_MAX, "native backend refused %s: %s (%s)",
+                           e->system_id, msg, su_status_name(st));
+        }
+        st = su_nv_admit(seq, 20261018u, &cases, &rows, &bad);
+        if (st == SU_OK) {
+            st = su_nv_install(seq);
+        }
+        if (st != SU_OK) {
+            su_nv_release(seq);
+            return set_err(err, st, index, UINT64_MAX,
+                           "native kernel of %s not admitted: %llu mismatching words over %u cases", e->system_id,
+                           (unsigned long long)bad, (unsigned)cases);
+        }
+        e->native_seq = seq;
+        return SU_OK;
+    }
+#else
+    return set_err(err, SU_E_CAPABILITY_DENIED, index, UINT64_MAX,
+                   "this library was built without the native backend");
+#endif
 }

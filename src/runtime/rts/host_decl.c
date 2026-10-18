@@ -433,26 +433,9 @@ uint32_t su_host_load(const char *capsule_path, const char *expect_capsule_hash,
 uint32_t su_host_load_bound(const char *capsule_path, const char *expect_capsule_hash, const SuHostOpDesc *d,
                             SuLirModule **out, uint32_t *schema_version, uint32_t *layout_generation,
                             uint32_t bind[SU_LIMIT_FIELDS], int *bound, char *msg, size_t msg_cap) {
-    static const SuJsonLimits lim = {16u * 1024u * 1024u, 32u};
     uint8_t *bytes = NULL;
     size_t len = 0;
-    SuJsonDoc doc;
-    SuJsonError jerr;
-    SuSha256 sha;
-    uint8_t digest[32];
-    char hex[65];
-    const SuJsonValue *root;
-    const SuJsonValue *schema;
-    const SuJsonValue *sched;
-    SuLirModule *decl = NULL;
-    uint64_t sv = 0;
-    uint64_t gen = 0;
     uint32_t st;
-    uint32_t nb, k;
-    uint32_t role[SU_LIMIT_FIELDS];
-    uint32_t ids[SU_LIMIT_FIELDS];
-    const char *names[SU_LIMIT_FIELDS];
-    const char *schema_name;
 
     if (out == NULL || schema_version == NULL || layout_generation == NULL || capsule_path == NULL || bind == NULL ||
         bound == NULL) {
@@ -471,12 +454,56 @@ uint32_t su_host_load_bound(const char *capsule_path, const char *expect_capsule
         HOST_MSG_SET(msg, msg_cap, "host capsule cannot be read");
         return st;
     }
+    st = su_host_load_bound_bytes(bytes, len, expect_capsule_hash, d, out, schema_version, layout_generation, bind,
+                                  bound, msg, msg_cap);
+    free(bytes);
+    return st;
+}
+
+uint32_t su_host_load_bound_bytes(const uint8_t *bytes, size_t len, const char *expect_capsule_hash,
+                                  const SuHostOpDesc *d, SuLirModule **out, uint32_t *schema_version,
+                                  uint32_t *layout_generation, uint32_t bind[SU_LIMIT_FIELDS], int *bound, char *msg,
+                                  size_t msg_cap) {
+    static const SuJsonLimits lim = {16u * 1024u * 1024u, 32u};
+    SuJsonDoc doc;
+    SuJsonError jerr;
+    SuSha256 sha;
+    uint8_t digest[32];
+    char hex[65];
+    const SuJsonValue *root;
+    const SuJsonValue *schema;
+    const SuJsonValue *sched;
+    SuLirModule *decl = NULL;
+    uint64_t sv = 0;
+    uint64_t gen = 0;
+    uint32_t st;
+    uint32_t nb, k;
+    uint32_t role[SU_LIMIT_FIELDS];
+    uint32_t ids[SU_LIMIT_FIELDS];
+    const char *names[SU_LIMIT_FIELDS];
+    const char *schema_name;
+
+    if (out == NULL || schema_version == NULL || layout_generation == NULL || (bytes == NULL && len != 0u) ||
+        bind == NULL || bound == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *bound = 0;
+    *out = NULL;
+    *schema_version = 0u;
+    *layout_generation = 0u;
+    if (su_host_desc_validate(d) != SU_OK) {
+        HOST_MSG_SET(msg, msg_cap, "host descriptor is malformed");
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (len > HOST_CAPSULE_MAX_BYTES) {
+        HOST_MSG_SET(msg, msg_cap, "host capsule exceeds 16 MiB");
+        return SU_E_RESOURCE_LIMIT;
+    }
     su_sha256_init(&sha);
     su_sha256_update(&sha, bytes, len);
     su_sha256_final(&sha, digest);
     su_sha256_hex(digest, hex);
     if (expect_capsule_hash != NULL && strcmp(expect_capsule_hash, hex) != 0) {
-        free(bytes);
         HOST_MSG_SET(msg, msg_cap, "host capsule bytes differ from capsule_sha256");
         return SU_E_CANDIDATE_FAILED;
     }
@@ -485,7 +512,6 @@ uint32_t su_host_load_bound(const char *capsule_path, const char *expect_capsule
     if (st != SU_OK) {
         /* A duplicate-key error leaves a complete tree in doc; free it either way. */
         su_json_doc_free(&doc);
-        free(bytes);
         HOST_MSG_SET(msg, msg_cap, "host capsule is not valid strict JSON: %s", jerr.message);
         return st != SU_OK ? st : SU_E_PARSE;
     }
@@ -636,7 +662,6 @@ uint32_t su_host_load_bound(const char *capsule_path, const char *expect_capsule
 
 done:
     su_json_doc_free(&doc);
-    free(bytes);
     if (decl != NULL) {
         su_host_decl_free(decl);
     }

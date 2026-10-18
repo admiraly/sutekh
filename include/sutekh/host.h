@@ -69,7 +69,9 @@ typedef struct SuHostError {
 
 typedef struct SuHostWorld SuHostWorld;
 
-/* One capsule: the exact bytes of the capsule JSON and of its .lir.json (as for su_lir_verify). */
+/* One capsule: the exact bytes of the capsule JSON and of its .lir.json (as for su_lir_verify).
+ * Host operators (additive, see "host operators" below): lir_json NULL and lir_len 0 make capsule_json a host
+ * operator record instead, for an operator compiled into this library. */
 typedef struct SuHostCapsule {
     const uint8_t *capsule_json;
     size_t capsule_len;
@@ -292,6 +294,54 @@ SU_HOST_API uint32_t su_host_read_i64(const SuHostWorld *w, uint32_t field_id, u
  * same record). SU_E_TYPE / SU_E_SCHEMA_MISMATCH as su_host_read_i64. */
 SU_HOST_API uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint64_t entity, uint32_t field_id,
                                             int64_t value, SuHostError *err);
+
+/* ---- host operators (additive, API version 1; 2026-10-18) ----
+ *
+ * A host operator is a system compiled into the engine (for example space3d.query: swept collisions and gate
+ * crossings, docs/SPACE3D.md) that reads and writes only the fields its record declares. A world uses one by
+ * listing its host record among the capsules: SuHostCapsule.capsule_json holds the exact bytes of the record,
+ * lir_json is NULL and lir_len is 0. The record is checked as world.create checks it (su_host_load_bound):
+ * operator name, version and constants hash equal the built-in descriptor's, and its field table is either the
+ * operator's own schema exactly, or a schema-relative binding of every operator lane to a lane of the game's
+ * schema ("binds"; the game's IDs, names and schema ID; see docs/SPACE3D.md section 2). Failures:
+ * SU_E_CAPABILITY_DENIED when no operator of the record's system_id is built into this library (err->index =
+ * capsule index), else the loader's code (SU_E_SCHEMA_MISMATCH, SU_E_TYPE, SU_E_INVALID_ARGUMENT, SU_E_PARSE)
+ * with its reason in err->message. The operator then runs in schedule order like any system.
+ *
+ * State: an operator's results are ordinary columns of the world (its declared writes), stored for every row
+ * every tick, so they are in snapshots, su_host_digest, su_host_digest_fast, in-place restore and replays
+ * exactly like IR results, and re-simulation after a restore reproduces them bit for bit. Events derived from
+ * them are emitted by IR systems that read them. The record's semantic hash (covering the binding) is part of
+ * the world identity. Each world owns its operator's scratch (allocated at creation for the world's capacity,
+ * never in a tick), so distinct worlds stay independent. */
+
+/* Operators built into this library, by index (0..count-1): system id (for example "space3d.query") and
+ * operator name (for example "space3d_ops_v1"). */
+SU_HOST_API uint32_t su_host_operator_count(void);
+SU_HOST_API uint32_t su_host_operator_info(uint32_t index, const char **system_id, const char **operator_name);
+
+/* ---- execution tiers (additive, API version 1; 2026-10-18) ----
+ * Every tier gives bit-identical results (states, events, digests): the tiers are differential-tested against
+ * the reference interpreter, and a native kernel is admitted only after a seeded differential check against
+ * the VM. A tier choice is not world state: it is not in snapshots, digests or the world identity. */
+#define SU_HOST_TIER_REFERENCE 1u /* checked reference interpreter */
+#define SU_HOST_TIER_PLANNED   2u /* planned VM tier (the default unless SUTEKH_VM_TIER=reference) */
+#define SU_HOST_TIER_NATIVE    3u /* native kernel (scalar x86-64), builds with the native backend only */
+#define SU_HOST_TIER_OPERATOR  4u /* host operator (reported, never selectable) */
+
+/* 1 when this library was built with the native backend (SU_HOST_TIER_NATIVE can be requested), else 0. */
+SU_HOST_API uint32_t su_host_native_available(void);
+/* Tier system index runs on. */
+SU_HOST_API uint32_t su_host_system_tier(const SuHostWorld *w, uint32_t index, uint32_t *tier);
+/* Selects the tier of IR system index. REFERENCE and PLANNED apply to every VM context of the system.
+ * NATIVE compiles the system (scalar), admits the kernel by a seeded differential check against the VM and
+ * installs it; SU_E_CAPABILITY_DENIED without the native backend, for a system with entity operations
+ * (spawn, despawn, emit_event: those stay on the VM) or when the backend cannot lower the module (err->message
+ * says why); SU_E_CANDIDATE_FAILED when admission finds a mismatch. A host operator's tier cannot be changed
+ * (SU_E_INVALID_ARGUMENT). On failure the system keeps its tier.
+ * Native kernels live in a process-wide registry (at most 32 live kernels) that is not thread-safe: in a
+ * process where any world uses SU_HOST_TIER_NATIVE, create, step and destroy native worlds from one thread. */
+SU_HOST_API uint32_t su_host_system_set_tier(SuHostWorld *w, uint32_t index, uint32_t tier, SuHostError *err);
 
 #ifdef __cplusplus
 }

@@ -31,7 +31,24 @@ void su_sched_entry_destroy(SuSysEntry *e) {
         free(e->mod);
     }
     free(e->host_bind);
+    if (e->host_inst != NULL && e->host_inst_free != NULL) {
+        e->host_inst_free(e->host_inst);
+    }
     memset(e, 0, sizeof *e);
+}
+
+uint32_t su_sched_set_host_instance(SuSchedule *s, uint32_t idx, void *inst, void (*free_fn)(void *inst)) {
+    SuSysEntry *e;
+    if (s == NULL || idx >= s->count || inst == NULL || s->sys[idx].kind != SU_SYS_KIND_HOST) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    e = &s->sys[idx];
+    if (e->host_inst != NULL && e->host_inst != inst && e->host_inst_free != NULL) {
+        e->host_inst_free(e->host_inst);
+    }
+    e->host_inst = inst;
+    e->host_inst_free = free_fn;
+    return SU_OK;
 }
 
 void su_sched_free(SuSchedule *s) {
@@ -458,7 +475,7 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e) {
     out = full_out;
     out.bindings = wb;
     out.binding_count = nw;
-    st = d->run(w, &inv, &out, d->host_ctx);
+    st = d->run(w, &inv, &out, e->host_inst != NULL ? e->host_inst : d->host_ctx);
     if (st != SU_OK) {
         return st;
     }

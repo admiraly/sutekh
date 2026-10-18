@@ -710,4 +710,5 @@ target_include_directories(bench_host PRIVATE src)
 target_link_libraries(bench_host PRIVATE su_host)
 sutekh_apply_warnings(bench_host)
 # ---- END in-process host API ----
+include(cmake/SutekhHostOps.cmake)
 include(cmake/SutekhPresentation.cmake)

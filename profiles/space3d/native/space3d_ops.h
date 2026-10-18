@@ -12,8 +12,9 @@
  * (toi, slot), counts, truncation flags, and the gate crossing. Capsules consume them in a later system.
  *
  * Contract (same discipline as the RTS operators): integer only; no allocation in the tick (static scratch for
- * SPACE3D_MAX_ROWS rows; larger worlds are refused with SU_E_RESOURCE_LIMIT); reads only its declared read
- * views and the entity table (alive, generation); stores every declared write for every row; not reentrant. */
+ * SPACE3D_MAX_ROWS rows, or an instance's scratch allocated at world creation; larger worlds are refused with
+ * SU_E_RESOURCE_LIMIT); reads only its declared read views and the entity table (alive, generation); stores
+ * every declared write for every row; one context is not reentrant (distinct instances are independent). */
 #ifndef SU_PROFILES_SPACE3D_OPS_H
 #define SU_PROFILES_SPACE3D_OPS_H
 
@@ -84,13 +85,40 @@ typedef struct Space3dStats {
     uint64_t contacts;        /* contacts found (before the per-mover cap) */
 } Space3dStats;
 
+/* Per-row scratch of one operator instance (sized for max_rows rows). The temporal-coherence cache (prev_*) only
+ * seeds the sweep sort; the sort's result is the same permutation without it, so it is not world state. */
+typedef struct Space3dScratch {
+    uint32_t max_rows;
+    uint8_t *alive;
+    uint32_t *gen;
+    int64_t *lo[3], *hi[3];
+    uint32_t *coll, *tmp;
+    uint32_t (*cand)[SPACE3D_CAND_MAX];
+    uint8_t *ncand, *flags;
+    uint32_t *gate_slot;
+    uint32_t *prev_coll, *prev_order;
+    uint32_t prev_n, prev_axis;
+} Space3dScratch;
+
 typedef struct Space3dCtx {
     Space3dStats last;
     int brute_force;          /* test seam: nonzero skips the broadphase and tests every mover pair (O(n^2)) */
+    Space3dScratch *scratch;  /* never NULL for a usable context */
 } Space3dCtx;
 
 extern const SuHostOpDesc g_space3d_query_desc;
+/* The descriptor's static context (process-wide scratch for SPACE3D_MAX_ROWS rows; one world per worker
+ * process, not reentrant). */
 Space3dCtx *space3d_query_ctx(void);
+
+/* Instances (2026-10-18, in-process host API): a context with its own scratch for max_rows rows (1..
+ * SPACE3D_MAX_ROWS), allocated once here and never in the tick. A schedule entry that holds an instance
+ * (su_sched_set_host_instance) runs the operator on it instead of the static context, so worlds in one process
+ * are independent and may step on different threads. Results are identical to the static context's for every
+ * input (same code, same order); a world with more rows than max_rows is refused with SU_E_RESOURCE_LIMIT.
+ * Returns SU_OK, SU_E_INVALID_ARGUMENT or SU_E_RESOURCE_LIMIT. */
+uint32_t space3d_query_instance_create(uint32_t max_rows, Space3dCtx **out);
+void space3d_query_instance_destroy(void *ctx); /* NULL-safe; matches su_sched_set_host_instance's free_fn */
 /* Canonical constants text (its SHA-256 is the descriptor's constants_hash). */
 const char *space3d_constants_text(void);
 
