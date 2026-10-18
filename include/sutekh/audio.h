@@ -143,6 +143,12 @@ typedef struct SuAudioVoiceDesc {
 uint32_t su_audio_play(SuAudioMixer *m, const SuAudioVoiceDesc *d, SuAudioVoice *out);
 /* Moves a spatial voice (from an interpolated transform) and sets its gain. Stale handles: SU_E_STALE_HANDLE. */
 uint32_t su_audio_voice_update(SuAudioMixer *m, SuAudioVoice v, SuWorldPos pos, SuVec3f vel, float gain);
+/* Changes a playing voice's pitch (playback rate multiplier, 0 < pitch <= 64; applied at the next render, with the rate
+ * gliding linearly from the old pitch to the new over that block, so the read position stays continuous: no click, no
+ * phase jump). Stacks with Doppler. Stale handles: SU_E_STALE_HANDLE. */
+uint32_t su_audio_voice_set_pitch(SuAudioMixer *m, SuAudioVoice v, float pitch);
+/* Sets a voice's linear gain alone (applied at the next render, ramped across the block). Stale: SU_E_STALE_HANDLE. */
+uint32_t su_audio_voice_set_gain(SuAudioMixer *m, SuAudioVoice v, float gain);
 /* Stops a voice with a linear fade of fade_s seconds (0: at the next render, still click-free over one block). */
 uint32_t su_audio_stop(SuAudioMixer *m, SuAudioVoice v, float fade_s);
 /* Jumps a voice to an exact source frame (applied at the next render; the next output sample is that frame, no

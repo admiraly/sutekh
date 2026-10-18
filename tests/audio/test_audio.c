@@ -96,6 +96,57 @@ static SuAudioVoiceDesc voice(const SuAudioClip *c, float gain, uint32_t flags) 
     return d;
 }
 
+/* Live pitch and gain: a playing voice changes rate without a click, the position stays continuous. */
+static void test_live_pitch_gain(void) {
+    SuAudioClip *sine = NULL;
+    SuAudioMixer *m = mixer(4, 64);
+    SuAudioVoice v = 0;
+    SuAudioVoiceDesc d;
+    double pos = 0.0;
+    double r_before;
+    double r_after;
+    float worst = 0.0f;
+    uint32_t i;
+    CHECK(su_audio_clip_tone(SU_AUDIO_WAVE_SINE, 1000.0f, 1.0f, RATE, 1, &sine) == SU_OK);
+    d = voice(sine, 0.5f, 0);
+    CHECK(su_audio_play(m, &d, &v) == SU_OK);
+    render(m, 2400);
+    CHECK(fabs(freq_of(0, 100, 2400) - 1000.0) < 0.5);
+    r_before = rms(0, 1200, 2400);
+    CHECK(su_audio_voice_set_pitch(m, v, 1.5f) == SU_OK);
+    CHECK(su_audio_voice_set_gain(m, v, 0.25f) == SU_OK);
+    {
+        float keep[2400 * 2];
+        memcpy(keep, g_buf + 2398 * 2, 2 * 2 * sizeof(float)); /* last two frames before the change */
+        render(m, 4800);
+        /* no click at the change: neighbouring samples stay close (a 1000 -> 1500 Hz tone moves at most ~0.2 per sample) */
+        worst = fabsf(g_buf[0] - keep[2]);
+        for (i = 1; i < 4800u; i++) {
+            float dd = fabsf(g_buf[i * 2u] - g_buf[(i - 1u) * 2u]);
+            worst = dd > worst ? dd : worst;
+        }
+    }
+    printf("live pitch: largest step between samples across the change %.3f\n", worst);
+    CHECK(worst < 0.15f);
+    CHECK(fabs(freq_of(0, 1000, 4800) - 1500.0) < 1.5);
+    r_after = rms(0, 1000, 4800);
+    printf("live gain: rms %.4f -> %.4f\n", r_before, r_after);
+    CHECK(fabs(r_after / r_before - 0.5) < 0.02);
+    /* the read position is exactly the integral of the rate: 2400 + ramp over one block + 1.5 per frame after */
+    CHECK(su_audio_voice_position(m, v, &pos) == SU_OK);
+    printf("live pitch: position %.3f (expected 9480.250)\n", pos);
+    CHECK(fabs(pos - 9480.25) < 0.05);
+    CHECK(su_audio_voice_set_pitch(m, v, 0.0f) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_audio_voice_set_pitch(m, v, NAN) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_audio_voice_set_gain(m, v, -1.0f) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_audio_stop(m, v, 0.0f) == SU_OK);
+    render(m, BLOCK);
+    su_audio_update(m);
+    CHECK(su_audio_voice_set_pitch(m, v, 2.0f) == SU_E_STALE_HANDLE);
+    CHECK(su_audio_voice_set_gain(m, v, 1.0f) == SU_E_STALE_HANDLE);
+    su_audio_mixer_destroy(m);
+    su_audio_clip_free(sine);
+}
 static void test_tones_and_copy(void) {
     SuAudioClip *sine = NULL;
     SuAudioClip *low = NULL;
@@ -543,6 +594,7 @@ static void test_event_cursor(void) {
 
 int main(int argc, char **argv) {
     test_tones_and_copy();
+    test_live_pitch_gain();
     test_spatial();
     test_lifetimes();
     test_determinism();
