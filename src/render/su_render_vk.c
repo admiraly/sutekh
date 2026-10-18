@@ -10,6 +10,9 @@
 #include <windows.h>
 #define VK_USE_PLATFORM_WIN32_KHR 1
 #else
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L /* clock_gettime under -std=c17 */
+#endif
 #include <dlfcn.h>
 #include <time.h>
 #endif
