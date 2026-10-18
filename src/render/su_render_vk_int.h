@@ -109,6 +109,7 @@
     X(vkDestroyDescriptorPool)         \
     X(vkAllocateDescriptorSets)        \
     X(vkFreeDescriptorSets)            \
+    X(vkResetDescriptorPool)           \
     X(vkUpdateDescriptorSets)          \
     X(vkCreateSampler)                 \
     X(vkDestroySampler)                \
@@ -325,6 +326,14 @@ typedef struct PostPush {
     float p[4];
 } PostPush;
 
+/* Bloom passes and the bloom output pass (see shaders/bloom_*.frag, post_bloom.frag). */
+typedef struct BloomPush {
+    float a[4];
+    float b[4];
+} BloomPush;
+
+#define BLOOM_MAX_LEVELS 12u
+
 /* One draw item of the scene: an instance of a submesh with a material. */
 typedef struct DrawItem {
     uint64_t key;
@@ -406,6 +415,26 @@ struct SuRenderer {
     VkDeviceMemory hdr_mem;
     VkImageView hdr_view;
     VkFramebuffer hdr_fb;
+    /* bloom (half resolution): chain A = downsampled levels (alpha: log2 luma), chain B = upsampled levels */
+    VkRenderPass bloom_pass;
+    VkDescriptorSetLayout tex3_dsl;     /* three samplers: upsample and bloom output */
+    VkPipelineLayout bloom_layout;      /* tex_dsl + BloomPush */
+    VkPipelineLayout bloom3_layout;     /* tex3_dsl + BloomPush */
+    VkPipeline bloom_down_pipe;
+    VkPipeline bloom_up_pipe;
+    VkPipeline post_bloom_pipe;
+    VkDescriptorPool pool_bloom;
+    VkSampler bloom_sampler;            /* linear, clamp, no mips */
+    int bloom_ok;                       /* device supports it and the targets exist */
+    uint32_t bloom_count;               /* levels of chain A for the current size */
+    VkImage bl_img[2];
+    VkDeviceMemory bl_mem[2];
+    VkImageView bl_view[2][BLOOM_MAX_LEVELS];
+    VkFramebuffer bl_fb[2][BLOOM_MAX_LEVELS];
+    VkDescriptorSet bl_down_set[BLOOM_MAX_LEVELS];
+    VkDescriptorSet bl_up_a[BLOOM_MAX_LEVELS];  /* low = A[i + 1], hi = A[i] */
+    VkDescriptorSet bl_up_b[BLOOM_MAX_LEVELS];  /* low = B[i + 1], hi = A[i] */
+    VkDescriptorSet bl_final_set;
     VkImage depth_img;
     VkDeviceMemory depth_mem;
     VkImageView depth_view;

@@ -335,6 +335,8 @@ static int describe(VkFns *f, VkPhysicalDevice pd, VkSurfaceKHR surface, SuRende
     }
     f->vkGetPhysicalDeviceFormatProperties(pd, VK_FORMAT_R8G8B8A8_SRGB, &fp);
     f->vkGetPhysicalDeviceFormatProperties(pd, HDR_FORMAT, &hp);
+    info->bloom = (hp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0u &&
+                  (hp.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0u;
     if (p.apiVersion < VK_API_VERSION_1_2) {
         snprintf(info->why_not, sizeof info->why_not, "device supports Vulkan %u.%u; 1.2 is required",
                  VK_API_VERSION_MAJOR(p.apiVersion), VK_API_VERSION_MINOR(p.apiVersion));
@@ -636,6 +638,56 @@ static int make_post_pass(SuRenderer *r) {
     return r->f.vkCreateRenderPass(r->dev, &pi, NULL, &r->post_pass) == VK_SUCCESS;
 }
 
+/* One colour attachment of HDR_FORMAT, written once per use (contents discarded at the start) and left readable by
+ * fragment shaders: every level of both bloom chains is rendered through this pass. */
+static int make_bloom_pass(SuRenderer *r) {
+    VkAttachmentDescription at;
+    VkAttachmentReference cref;
+    VkSubpassDescription sub;
+    VkSubpassDependency dep[2];
+    VkRenderPassCreateInfo pi;
+    memset(&at, 0, sizeof at);
+    at.format = HDR_FORMAT;
+    at.samples = VK_SAMPLE_COUNT_1_BIT;
+    at.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    at.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    cref.attachment = 0;
+    cref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    memset(&sub, 0, sizeof sub);
+    sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount = 1;
+    sub.pColorAttachments = &cref;
+    memset(dep, 0, sizeof dep);
+    /* Earlier reads of the level (the previous frame's upsample or output pass) and writes finish before this
+     * frame writes it; the scene pass's own dependency makes the HDR image readable by the first downsample. */
+    dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep[0].dstSubpass = 0;
+    dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    /* The level's colour writes before any later fragment shader samples it. */
+    dep[1].srcSubpass = 0;
+    dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    memset(&pi, 0, sizeof pi);
+    pi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    pi.attachmentCount = 1;
+    pi.pAttachments = &at;
+    pi.subpassCount = 1;
+    pi.pSubpasses = &sub;
+    pi.dependencyCount = 2;
+    pi.pDependencies = dep;
+    return r->f.vkCreateRenderPass(r->dev, &pi, NULL, &r->bloom_pass) == VK_SUCCESS;
+}
+
 /* ---------- pipeline cache ---------- */
 
 #define CACHE_MAGIC "SUPCACHE"
@@ -767,6 +819,7 @@ typedef struct PipeSpec {
     int depth_write;
     int blend;
     int post;          /* output pass (no depth attachment) */
+    int bloom;         /* 1: bloom downsample, 3: bloom upsample, 2: bloom output pass (all without depth) */
 } PipeSpec;
 
 static void attr(VkVertexInputAttributeDescription *a, uint32_t *n, uint32_t loc, uint32_t binding, VkFormat fmt,
@@ -937,11 +990,18 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
     gi.pViewportState = &vp;
     gi.pRasterizationState = &rs;
     gi.pMultisampleState = &ms;
-    gi.pDepthStencilState = s->post ? NULL : &ds;
+    gi.pDepthStencilState = (s->post || s->bloom) ? NULL : &ds;
     gi.pColorBlendState = &cb;
     gi.pDynamicState = &dy;
     gi.layout = s->post ? r->post_layout : r->scene_layout;
     gi.renderPass = s->post ? r->post_pass : r->scene_pass;
+    if (s->bloom == 1 || s->bloom == 3) { /* 1: downsample (one sampler), 3: upsample (three samplers) */
+        gi.layout = s->bloom == 1 ? r->bloom_layout : r->bloom3_layout;
+        gi.renderPass = r->bloom_pass;
+    } else if (s->bloom == 2) {
+        gi.layout = r->bloom3_layout;
+        gi.renderPass = r->post_pass;
+    }
     vr = r->f.vkCreateGraphicsPipelines(r->dev, r->cache, 1, &gi, NULL, out);
     r->f.vkDestroyShaderModule(r->dev, vs, NULL);
     r->f.vkDestroyShaderModule(r->dev, fs, NULL);
@@ -1015,6 +1075,32 @@ static int make_pipelines(SuRenderer *r) {
     s.vin = VIN_NONE;
     s.post = 1;
     ok = ok && make_pipe(r, &s, &r->post_pipe);
+    /* bloom: downsample, upsample, and the output pass that adds the result (device must filter the HDR format) */
+    if (r->info.bloom) {
+        static const struct {
+            const uint32_t *fs;
+            size_t fs_bytes;
+            int kind;
+            VkPipeline *out;
+        } bl[3] = {{su_shader_bloom_down_frag, sizeof su_shader_bloom_down_frag, 1, NULL},
+                   {su_shader_bloom_up_frag, sizeof su_shader_bloom_up_frag, 3, NULL},
+                   {su_shader_post_bloom_frag, sizeof su_shader_post_bloom_frag, 2, NULL}};
+        VkPipeline *outs[3];
+        uint32_t k;
+        outs[0] = &r->bloom_down_pipe;
+        outs[1] = &r->bloom_up_pipe;
+        outs[2] = &r->post_bloom_pipe;
+        for (k = 0; k < 3u && ok; k++) {
+            memset(&s, 0, sizeof s);
+            s.vs = su_shader_fullscreen_vert;
+            s.vs_bytes = sizeof su_shader_fullscreen_vert;
+            s.fs = bl[k].fs;
+            s.fs_bytes = bl[k].fs_bytes;
+            s.vin = VIN_NONE;
+            s.bloom = bl[k].kind;
+            ok = make_pipe(r, &s, outs[k]);
+        }
+    }
     memset(&s, 0, sizeof s);
     s.vs = su_shader_hud_vert;
     s.vs_bytes = sizeof su_shader_hud_vert;
@@ -1086,6 +1172,45 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
         return 0;
     }
     /* frame sets (one per slot), the output pass input and the font */
+    /* bloom: output/upsample layout with three samplers, push constants for both bloom layouts, one pool for the
+     * per-level sets (BLOOM_MAX_LEVELS down + up_a + up_b + the output set) */
+    {
+        VkDescriptorSetLayoutBinding b3[3];
+        memset(b3, 0, sizeof b3);
+        for (i = 0; i < 3u; i++) {
+            b3[i].binding = i;
+            b3[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b3[i].descriptorCount = 1;
+            b3[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        li.bindingCount = 3;
+        li.pBindings = b3;
+        if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->tex3_dsl) != VK_SUCCESS) {
+            return 0;
+        }
+        li.bindingCount = 1;
+        li.pBindings = b;
+        pcr.size = sizeof(BloomPush);
+        pli.setLayoutCount = 1;
+        pli.pSetLayouts = &r->tex_dsl;
+        if (r->f.vkCreatePipelineLayout(r->dev, &pli, NULL, &r->bloom_layout) != VK_SUCCESS) {
+            return 0;
+        }
+        pli.pSetLayouts = &r->tex3_dsl;
+        if (r->f.vkCreatePipelineLayout(r->dev, &pli, NULL, &r->bloom3_layout) != VK_SUCCESS) {
+            return 0;
+        }
+        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ps[0].descriptorCount = BLOOM_MAX_LEVELS * 8u;
+        memset(&pi, 0, sizeof pi);
+        pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pi.maxSets = BLOOM_MAX_LEVELS * 3u + 1u;
+        pi.poolSizeCount = 1;
+        pi.pPoolSizes = ps;
+        if (r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &r->pool_bloom) != VK_SUCCESS) {
+            return 0;
+        }
+    }
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     ps[0].descriptorCount = FRAMES_IN_FLIGHT;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1135,7 +1260,12 @@ static int make_samplers(SuRenderer *r) {
     si.minFilter = VK_FILTER_NEAREST;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    return r->f.vkCreateSampler(r->dev, &si, NULL, &r->nearest) == VK_SUCCESS;
+    if (r->f.vkCreateSampler(r->dev, &si, NULL, &r->nearest) != VK_SUCCESS) {
+        return 0;
+    }
+    si.magFilter = VK_FILTER_LINEAR;
+    si.minFilter = VK_FILTER_LINEAR;
+    return r->f.vkCreateSampler(r->dev, &si, NULL, &r->bloom_sampler) == VK_SUCCESS;
 }
 
 static void write_image_set(SuRenderer *r, VkDescriptorSet set, VkImageView view, VkSampler sampler) {
@@ -1265,6 +1395,8 @@ static int make_meshes(SuRenderer *r) {
 
 /* ---------- targets ---------- */
 
+static void destroy_bloom_targets(SuRenderer *r);
+
 static void destroy_targets(SuRenderer *r) {
     uint32_t i;
     for (i = 0; i < r->image_count; i++) {
@@ -1282,6 +1414,7 @@ static void destroy_targets(SuRenderer *r) {
         r->rendered[i] = VK_NULL_HANDLE;
     }
     r->image_count = 0;
+    destroy_bloom_targets(r);
     if (r->hdr_fb != VK_NULL_HANDLE) {
         r->f.vkDestroyFramebuffer(r->dev, r->hdr_fb, NULL);
         r->hdr_fb = VK_NULL_HANDLE;
@@ -1290,6 +1423,187 @@ static void destroy_targets(SuRenderer *r) {
     free_image(r, &r->depth_img, &r->depth_mem, &r->depth_view);
     free_image(r, &r->color_img, &r->color_mem, &r->color_view);
     su_rvk_free_buffer(r, &r->readback);
+}
+
+static void destroy_bloom_targets(SuRenderer *r) {
+    uint32_t c;
+    uint32_t i;
+    r->bloom_ok = 0;
+    for (c = 0; c < 2u; c++) {
+        for (i = 0; i < BLOOM_MAX_LEVELS; i++) {
+            if (r->bl_fb[c][i] != VK_NULL_HANDLE) {
+                r->f.vkDestroyFramebuffer(r->dev, r->bl_fb[c][i], NULL);
+            }
+            if (r->bl_view[c][i] != VK_NULL_HANDLE) {
+                r->f.vkDestroyImageView(r->dev, r->bl_view[c][i], NULL);
+            }
+            r->bl_fb[c][i] = VK_NULL_HANDLE;
+            r->bl_view[c][i] = VK_NULL_HANDLE;
+        }
+        if (r->bl_img[c] != VK_NULL_HANDLE) {
+            r->f.vkDestroyImage(r->dev, r->bl_img[c], NULL);
+        }
+        if (r->bl_mem[c] != VK_NULL_HANDLE) {
+            r->f.vkFreeMemory(r->dev, r->bl_mem[c], NULL);
+        }
+        r->bl_img[c] = VK_NULL_HANDLE;
+        r->bl_mem[c] = VK_NULL_HANDLE;
+    }
+    if (r->pool_bloom != VK_NULL_HANDLE) {
+        (void)r->f.vkResetDescriptorPool(r->dev, r->pool_bloom, 0);
+    }
+    r->bloom_count = 0;
+}
+
+static void write_sets(SuRenderer *r, VkDescriptorSet set, uint32_t n, const VkImageView *views, const VkSampler *samplers) {
+    VkDescriptorImageInfo ii[3];
+    VkWriteDescriptorSet w[3];
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        ii[i].sampler = samplers[i];
+        ii[i].imageView = views[i];
+        ii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        memset(&w[i], 0, sizeof w[i]);
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = set;
+        w[i].dstBinding = i;
+        w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[i].pImageInfo = &ii[i];
+    }
+    r->f.vkUpdateDescriptorSets(r->dev, n, w, 0, NULL);
+}
+
+/* Bloom chains at half resolution. A has L levels (down to about 2 texels, for the auto exposure average), B has L - 1.
+ * Not being able to build them (small target, no memory) only turns bloom off; the frame still renders. */
+static void make_bloom_targets(SuRenderer *r) {
+    uint32_t bw = r->width / 2u;
+    uint32_t bh = r->height / 2u;
+    uint32_t s = bw < bh ? bw : bh;
+    uint32_t levels = 1;
+    uint32_t c;
+    uint32_t i;
+    VkDescriptorSetLayout dl[BLOOM_MAX_LEVELS * 3u + 1u];
+    VkDescriptorSet sets[BLOOM_MAX_LEVELS * 3u + 1u];
+    VkDescriptorSetAllocateInfo ai;
+    uint32_t nsets;
+    r->bloom_ok = 0;
+    if (!r->info.bloom || r->bloom_pass == VK_NULL_HANDLE || s < 4u) {
+        return;
+    }
+    while (s > 2u && levels < BLOOM_MAX_LEVELS) {
+        s >>= 1;
+        levels++;
+    }
+    for (c = 0; c < 2u; c++) {
+        VkImageCreateInfo ii;
+        VkMemoryRequirements req;
+        VkMemoryAllocateInfo ma;
+        uint32_t type = 0;
+        uint32_t n = c == 0u ? levels : levels - 1u;
+        memset(&ii, 0, sizeof ii);
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = HDR_FORMAT;
+        ii.extent.width = bw;
+        ii.extent.height = bh;
+        ii.extent.depth = 1;
+        ii.mipLevels = n;
+        ii.arrayLayers = 1;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (r->f.vkCreateImage(r->dev, &ii, NULL, &r->bl_img[c]) != VK_SUCCESS) {
+            goto fail;
+        }
+        r->f.vkGetImageMemoryRequirements(r->dev, r->bl_img[c], &req);
+        if (!su_rvk_find_memory(r, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &type)) {
+            goto fail;
+        }
+        memset(&ma, 0, sizeof ma);
+        ma.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ma.allocationSize = req.size;
+        ma.memoryTypeIndex = type;
+        if (r->f.vkAllocateMemory(r->dev, &ma, NULL, &r->bl_mem[c]) != VK_SUCCESS ||
+            r->f.vkBindImageMemory(r->dev, r->bl_img[c], r->bl_mem[c], 0) != VK_SUCCESS) {
+            goto fail;
+        }
+        for (i = 0; i < n; i++) {
+            VkImageViewCreateInfo vi;
+            VkFramebufferCreateInfo fi;
+            memset(&vi, 0, sizeof vi);
+            vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = r->bl_img[c];
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = HDR_FORMAT;
+            vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vi.subresourceRange.baseMipLevel = i;
+            vi.subresourceRange.levelCount = 1;
+            vi.subresourceRange.layerCount = 1;
+            if (r->f.vkCreateImageView(r->dev, &vi, NULL, &r->bl_view[c][i]) != VK_SUCCESS) {
+                goto fail;
+            }
+            memset(&fi, 0, sizeof fi);
+            fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fi.renderPass = r->bloom_pass;
+            fi.attachmentCount = 1;
+            fi.pAttachments = &r->bl_view[c][i];
+            fi.width = (bw >> i) > 0u ? (bw >> i) : 1u;
+            fi.height = (bh >> i) > 0u ? (bh >> i) : 1u;
+            fi.layers = 1;
+            if (r->f.vkCreateFramebuffer(r->dev, &fi, NULL, &r->bl_fb[c][i]) != VK_SUCCESS) {
+                goto fail;
+            }
+        }
+    }
+    /* sets: down[0..L-1] (one sampler), up_a[0..L-2], up_b[0..L-3] and the output set (three samplers) */
+    nsets = levels + (levels - 1u) + (levels - 2u) + 1u;
+    for (i = 0; i < nsets; i++) {
+        dl[i] = i < levels ? r->tex_dsl : r->tex3_dsl;
+    }
+    memset(&ai, 0, sizeof ai);
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = r->pool_bloom;
+    ai.descriptorSetCount = nsets;
+    ai.pSetLayouts = dl;
+    if (r->f.vkAllocateDescriptorSets(r->dev, &ai, sets) != VK_SUCCESS) {
+        goto fail;
+    }
+    {
+        VkSampler lin[3];
+        VkImageView v[3];
+        uint32_t k = 0;
+        lin[0] = lin[1] = lin[2] = r->bloom_sampler;
+        for (i = 0; i < levels; i++) {
+            r->bl_down_set[i] = sets[k++];
+            v[0] = i == 0u ? r->hdr_view : r->bl_view[0][i - 1u];
+            write_sets(r, r->bl_down_set[i], 1, v, lin);
+        }
+        for (i = 0; i + 1u < levels; i++) {
+            r->bl_up_a[i] = sets[k++];
+            v[0] = r->bl_view[0][i + 1u];
+            v[1] = r->bl_view[0][i];
+            write_sets(r, r->bl_up_a[i], 2, v, lin);
+        }
+        for (i = 0; i + 2u < levels; i++) {
+            r->bl_up_b[i] = sets[k++];
+            v[0] = r->bl_view[1][i + 1u];
+            v[1] = r->bl_view[0][i];
+            write_sets(r, r->bl_up_b[i], 2, v, lin);
+        }
+        r->bl_final_set = sets[k];
+        v[0] = r->hdr_view;
+        v[1] = r->bl_view[1][0];
+        v[2] = r->bl_view[0][levels - 1u];
+        lin[0] = r->nearest;
+        write_sets(r, r->bl_final_set, 3, v, lin);
+    }
+    r->bloom_count = levels;
+    r->bloom_ok = 1;
+    return;
+fail:
+    destroy_bloom_targets(r);
 }
 
 /* HDR colour, depth, the scene framebuffer, the output framebuffers; the output pass input set. */
@@ -1317,6 +1631,7 @@ static int make_framebuffers(SuRenderer *r) {
         return 0;
     }
     write_image_set(r, r->post_set, r->hdr_view, r->nearest);
+    make_bloom_targets(r);
     for (i = 0; i < r->image_count; i++) {
         VkSemaphoreCreateInfo si;
         fi.renderPass = r->post_pass;
@@ -1508,7 +1823,31 @@ void su_render_destroy(SuRenderer *r) {
             all[3] = r->fx_pipe;
             all[4] = r->post_pipe;
             all[5] = r->hud_pipe;
-            all[6] = VK_NULL_HANDLE;
+            all[6] = r->bloom_down_pipe;
+            if (r->bloom_up_pipe != VK_NULL_HANDLE) {
+                r->f.vkDestroyPipeline(r->dev, r->bloom_up_pipe, NULL);
+            }
+            if (r->post_bloom_pipe != VK_NULL_HANDLE) {
+                r->f.vkDestroyPipeline(r->dev, r->post_bloom_pipe, NULL);
+            }
+            if (r->pool_bloom != VK_NULL_HANDLE) {
+                r->f.vkDestroyDescriptorPool(r->dev, r->pool_bloom, NULL);
+            }
+            if (r->bloom3_layout != VK_NULL_HANDLE) {
+                r->f.vkDestroyPipelineLayout(r->dev, r->bloom3_layout, NULL);
+            }
+            if (r->bloom_layout != VK_NULL_HANDLE) {
+                r->f.vkDestroyPipelineLayout(r->dev, r->bloom_layout, NULL);
+            }
+            if (r->tex3_dsl != VK_NULL_HANDLE) {
+                r->f.vkDestroyDescriptorSetLayout(r->dev, r->tex3_dsl, NULL);
+            }
+            if (r->bloom_pass != VK_NULL_HANDLE) {
+                r->f.vkDestroyRenderPass(r->dev, r->bloom_pass, NULL);
+            }
+            if (r->bloom_sampler != VK_NULL_HANDLE) {
+                r->f.vkDestroySampler(r->dev, r->bloom_sampler, NULL);
+            }
             for (k = 0; k < PIPE_PBR_COUNT; k++) {
                 all[7 + k] = r->pbr_pipe[k];
             }
@@ -1804,7 +2143,7 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
         r->cache = VK_NULL_HANDLE;
     }
     if (!make_layouts(r, max_res + 64u) || !make_samplers(r) || !make_scene_pass(r) || !make_post_pass(r) ||
-        !make_pipelines(r) || !make_frame_sets(r)) {
+        !make_bloom_pass(r) || !make_pipelines(r) || !make_frame_sets(r)) {
         return create_fail(r, SU_E_UNSUPPORTED_METHOD, message, "render passes, layouts or pipelines could not be created");
     }
     if (!make_meshes(r)) {
@@ -1882,6 +2221,7 @@ typedef struct FrameIn {
     float clear[4];
     float exposure;
     uint32_t tonemap;
+    SuRenderPost post;
     const SuRenderInstance *inst;
     uint32_t inst_count;
     const SuRenderLineVertex *lines;
@@ -2095,7 +2435,80 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     }
     r->f.vkCmdEndRenderPass(cmd);
 
+    /* ---- bloom chain (half resolution), when asked for and available ---- */
+    r->stats.bloom_levels_active = 0;
+    r->stats.post_passes = 0;
+    if (r->bloom_ok && (in->post.flags & (SU_POST_BLOOM | SU_POST_AUTO_EXPOSURE)) != 0u) {
+        uint32_t want = (in->post.flags & SU_POST_BLOOM) != 0u ? (in->post.bloom_levels != 0u ? in->post.bloom_levels : 6u) : 2u;
+        uint32_t lv;
+        uint32_t k;
+        float thr = in->post.bloom_threshold > 0.0f ? in->post.bloom_threshold : 1.0f;
+        float knee = in->post.bloom_knee < 0.0f ? 0.0f : (in->post.bloom_knee > 1.0f ? 1.0f : in->post.bloom_knee);
+        float radius = in->post.bloom_radius > 0.0f ? in->post.bloom_radius : 1.0f;
+        VkClearValue none;
+        memset(&none, 0, sizeof none);
+        want = want < 2u ? 2u : (want > 8u ? 8u : want);
+        lv = want < r->bloom_count ? want : r->bloom_count;
+        r->stats.bloom_levels_active = lv;
+        for (k = 0; k < r->bloom_count + lv - 1u; k++) {
+            /* k < bloom_count: downsample level k; then upsample levels lv - 2 down to 0 */
+            int down = k < r->bloom_count;
+            uint32_t i = down ? k : lv - 2u - (k - r->bloom_count);
+            uint32_t bw = (r->width / 2u) >> i;
+            uint32_t bh = (r->height / 2u) >> i;
+            BloomPush bp;
+            VkViewport vpt;
+            VkRect2D sc;
+            VkDescriptorSet set;
+            bw = bw > 0u ? bw : 1u;
+            bh = bh > 0u ? bh : 1u;
+            memset(&bp, 0, sizeof bp);
+            bp.b[0] = 1.0f / (float)bw;
+            bp.b[1] = 1.0f / (float)bh;
+            if (down) {
+                bp.a[0] = thr;
+                bp.a[1] = thr * knee;
+                bp.a[2] = i == 0u ? 1.0f : 0.0f;
+                set = r->bl_down_set[i];
+            } else {
+                bp.a[0] = radius;
+                set = (i + 2u == lv) ? r->bl_up_a[i] : r->bl_up_b[i];
+            }
+            memset(&rp, 0, sizeof rp);
+            rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rp.renderPass = r->bloom_pass;
+            rp.framebuffer = r->bl_fb[down ? 0 : 1][i];
+            rp.renderArea.extent.width = bw;
+            rp.renderArea.extent.height = bh;
+            rp.clearValueCount = 0;
+            rp.pClearValues = &none;
+            r->f.vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+            memset(&vpt, 0, sizeof vpt);
+            vpt.width = (float)bw;
+            vpt.height = (float)bh;
+            vpt.maxDepth = 1.0f;
+            memset(&sc, 0, sizeof sc);
+            sc.extent.width = bw;
+            sc.extent.height = bh;
+            r->f.vkCmdSetViewport(cmd, 0, 1, &vpt);
+            r->f.vkCmdSetScissor(cmd, 0, 1, &sc);
+            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, down ? r->bloom_down_pipe : r->bloom_up_pipe);
+            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, down ? r->bloom_layout : r->bloom3_layout, 0, 1,
+                                         &set, 0, NULL);
+            r->f.vkCmdPushConstants(cmd, down ? r->bloom_layout : r->bloom3_layout,
+                                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof bp, &bp);
+            r->f.vkCmdDraw(cmd, 3, 1, 0, 0);
+            r->f.vkCmdEndRenderPass(cmd);
+            r->stats.draws++;
+            r->stats.post_passes++;
+        }
+    }
+
     /* ---- output pass: tonemap, then the HUD ---- */
+    memset(&rp, 0, sizeof rp);
+    rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp.renderArea.extent.width = r->width;
+    rp.renderArea.extent.height = r->height;
     rp.renderPass = r->post_pass;
     rp.framebuffer = r->fbs[r->offscreen ? 0u : image];
     rp.clearValueCount = 0;
@@ -2108,10 +2521,29 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         pp.p[1] = (float)in->tonemap;
         pp.p[2] = 1.0f / (float)r->width;
         pp.p[3] = 1.0f / (float)r->height;
-        r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->post_pipe);
-        r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->post_layout, 0, 1, &r->post_set, 0, NULL);
-        r->f.vkCmdPushConstants(cmd, r->post_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                                sizeof pp, &pp);
+        if (r->stats.bloom_levels_active != 0u) {
+            BloomPush bp;
+            memset(&bp, 0, sizeof bp);
+            bp.a[0] = in->exposure;
+            bp.a[1] = (float)in->tonemap;
+            bp.a[2] = (in->post.flags & SU_POST_BLOOM) != 0u && in->post.bloom_intensity > 0.0f
+                          ? in->post.bloom_intensity / (float)r->stats.bloom_levels_active
+                          : 0.0f;
+            bp.a[3] = (in->post.flags & SU_POST_AUTO_EXPOSURE) != 0u ? 1.0f : 0.0f;
+            bp.b[0] = in->post.auto_key > 0.0f ? in->post.auto_key : 0.18f;
+            bp.b[1] = in->post.exposure_min > 0.0f ? in->post.exposure_min : 1.0f / 32.0f;
+            bp.b[2] = in->post.exposure_max > 0.0f ? in->post.exposure_max : 32.0f;
+            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->post_bloom_pipe);
+            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->bloom3_layout, 0, 1, &r->bl_final_set, 0,
+                                         NULL);
+            r->f.vkCmdPushConstants(cmd, r->bloom3_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                    sizeof bp, &bp);
+        } else {
+            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->post_pipe);
+            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->post_layout, 0, 1, &r->post_set, 0, NULL);
+            r->f.vkCmdPushConstants(cmd, r->post_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                    sizeof pp, &pp);
+        }
         r->f.vkCmdDraw(cmd, 3, 1, 0, 0);
         r->stats.draws++;
         if (n_hud > 0u) {
@@ -2321,6 +2753,7 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
     set4(in.ubo.up, up.x, up.y, up.z, in.exposure);
     set4(in.ubo.params, (float)in.tonemap, 0.0f, 0.0f, 0.0f);
     in.sky = !l->no_sky;
+    in.post = f->post;
     memcpy(in.clear, l->clear_color, sizeof in.clear);
     /* debug items: relative to debug_origin, shifted by (origin - camera) in float */
     {

@@ -633,6 +633,34 @@ void su_fx_beam(SuFxBuffer *b, SuVec3f a, SuVec3f c, float width, const float co
     fx_quad(b, sub(a, s), add(a, s), add(c, s), sub(c, s), 0.0f, 0.0f, color, color);
 }
 
+void su_fx_glare(SuFxBuffer *b, SuVec3f pos, float size, float streak, const float color[4], SuMat4f view) {
+    SuVec3f axis[2];
+    float halo[4];
+    float sc[4];
+    float len = streak > 0.0f ? streak : size * 8.0f;
+    uint32_t a;
+    uint32_t sgn;
+    axis[0] = v3(view.m[0], view.m[4], view.m[8]);
+    axis[1] = v3(view.m[1], view.m[5], view.m[9]);
+    su_fx_billboard(b, pos, size, 0.0f, color, view);
+    halo[0] = color[0];
+    halo[1] = color[1];
+    halo[2] = color[2];
+    halo[3] = color[3] * 0.06f;
+    su_fx_billboard(b, pos, size * 5.0f, 0.0f, halo, view);
+    sc[0] = color[0];
+    sc[1] = color[1];
+    sc[2] = color[2];
+    sc[3] = color[3] * 0.3f;
+    for (a = 0; a < 2u; a++) {
+        SuVec3f side = scale(axis[1u - a], size * 0.35f);
+        for (sgn = 0; sgn < 2u; sgn++) {
+            SuVec3f end = add(pos, scale(axis[a], sgn ? len : -len));
+            fx_quad(b, sub(pos, side), add(pos, side), add(end, side), sub(end, side), 0.0f, 1.0f, sc, sc);
+        }
+    }
+}
+
 void su_trail_init(SuTrail *t, SuTrailPoint *storage, uint32_t cap, float lifetime_s, float spacing) {
     memset(t, 0, sizeof *t);
     t->p = storage;
