@@ -190,7 +190,7 @@ static void write_text(const char *path, const char *text) {
         exit(2);
     }
     if (text[0] != '\0') {
-        if (write(fd, text, strlen(text)) < 0) {
+        if (write(fd, text, SU_IO_COUNT(strlen(text))) < 0) {
             perror(path);
             exit(2);
         }

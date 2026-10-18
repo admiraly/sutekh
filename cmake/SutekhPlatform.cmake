@@ -16,11 +16,21 @@ if(WIN32)
     if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
     endif()
+    # MSVC's cl implements C11 <stdatomic.h> (used by su_cmdq, su_jobs and their tests) behind this switch
+    # (VS 2022 17.5 and later); clang and clang-cl support it as is.
+    add_compile_options($<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/experimental:c11atomics>)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     set(SUTEKH_PYTHON "${Python3_EXECUTABLE}")
 else()
     set(SUTEKH_PYTHON python3)
 endif()
+
+# Compiles every source of target with header force-included first (-include for GCC and Clang, /FI for MSVC's cl,
+# which ignores -include with only a command-line warning). Used by the allocation and accounting seams.
+function(sutekh_force_include target header)
+    target_compile_options(${target} PRIVATE "$<$<C_COMPILER_ID:MSVC>:/FI${header}>"
+                           "$<$<NOT:$<C_COMPILER_ID:MSVC>>:SHELL:-include \"${header}\">")
+endfunction()
 
 # Registers a test that cannot run on this platform. It runs, prints the reason and is reported by ctest as
 # skipped (never as passed), so the default suite keeps an explicit record of what was not exercised.

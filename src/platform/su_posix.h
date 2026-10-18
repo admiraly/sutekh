@@ -62,4 +62,14 @@ typedef int pid_t;
 #  define O_BINARY 0
 #endif
 
+/* Byte count of one read() or write() call. The UCRT's functions take an unsigned int; callers loop over partial
+ * transfers anyway, so a call moves at most SU_IO_CHUNK_MAX bytes (1 GiB) on every platform (2026-10-18, MSVC
+ * /W4 C4267). */
+#define SU_IO_CHUNK_MAX ((size_t)1 << 30)
+#if defined(_WIN32)
+#  define SU_IO_COUNT(n) ((unsigned int)((size_t)(n) < SU_IO_CHUNK_MAX ? (size_t)(n) : SU_IO_CHUNK_MAX))
+#else
+#  define SU_IO_COUNT(n) ((size_t)(n) < SU_IO_CHUNK_MAX ? (size_t)(n) : SU_IO_CHUNK_MAX)
+#endif
+
 #endif

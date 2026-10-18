@@ -538,6 +538,8 @@ static uint32_t run_bound(SuNvArtifact *a, SuWorld *w) {
     uint32_t i;
     uint32_t n_in = 0;
     uint32_t n_out = 0;
+    uint32_t cur_in = 0;
+    uint32_t cur_out = 0;
     uint32_t st;
 
     st = su_world_build_invocation(w, &wi);
@@ -551,14 +553,12 @@ static uint32_t run_bound(SuNvArtifact *a, SuWorld *w) {
     for (i = 0; i < m->field_count; i++) {
         uint32_t acc = m->fields[i].access;
         uint32_t id = m->fields[i].id;
-        uint32_t j;
         int found = 0;
         if ((acc & SU_ACCESS_READ) != 0u) {
-            for (j = 0; j < wi.binding_count && !found; j++) {
-                if (wi.bindings[j].field_id == id) {
-                    a->scr_in[n_in++] = wi.bindings[j];
-                    found = 1;
-                }
+            const SuColumnBinding *b = su_world_find_binding_from(wi.bindings, wi.binding_count, id, &cur_in);
+            if (b != NULL) {
+                a->scr_in[n_in++] = *b;
+                found = 1;
             }
             if (!found) {
                 return SU_E_SCHEMA_MISMATCH;
@@ -566,11 +566,10 @@ static uint32_t run_bound(SuNvArtifact *a, SuWorld *w) {
         }
         if ((acc & SU_ACCESS_WRITE) != 0u) {
             found = 0;
-            for (j = 0; j < wo.binding_count && !found; j++) {
-                if (wo.bindings[j].field_id == id) {
-                    a->scr_out[n_out++] = wo.bindings[j];
-                    found = 1;
-                }
+            const SuColumnBinding *b = su_world_find_binding_from(wo.bindings, wo.binding_count, id, &cur_out);
+            if (b != NULL) {
+                a->scr_out[n_out++] = *b;
+                found = 1;
             }
             if (!found) {
                 return SU_E_SCHEMA_MISMATCH;

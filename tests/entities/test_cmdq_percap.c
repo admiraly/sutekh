@@ -54,8 +54,8 @@ static void test_uniform_equals_ex(void) {
     uint32_t pe[2] = {1u, 1u};
     SuCmdQ *a = NULL;
     SuCmdQ *b = NULL;
-    SuCmdQMemory ma;
-    SuCmdQMemory mb;
+    SuCmdQMemory ma = {0};
+    SuCmdQMemory mb = {0};
 
     CHECK(su_cmdq_create(2u, 1500u, 1024u, 2u, 1u, 3000u, 3000u, &a) == SU_OK);
     CHECK(su_cmdq_create_ex(2u, 1500u, 1024u, ps, pe, 3000u, 3000u, &b) == SU_OK);

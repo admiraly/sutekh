@@ -194,7 +194,7 @@ uint32_t su_spool_put(SuSpool *sp, const char *ext, const uint8_t *data, size_t 
         return SU_E_IO;
     }
     while (off < len) {
-        ssize_t w = write(fd, data + off, len - off);
+        ssize_t w = write(fd, data + off, SU_IO_COUNT(len - off));
         if (w < 0 && errno == EINTR) {
             continue;
         }

@@ -65,9 +65,16 @@ struct SuExecContext {
 
 /* Process default tier for new contexts: 0 = not set (environment SUTEKH_VM_TIER, else planned). */
 static uint32_t g_default_tier = 0u;
+/* The environment's answer, read once (2026-10-18: su_vm_default_tier is on the per-tick path of the entity
+ * runtime, and getenv scans the environment block). 0 = not read yet. Idempotent, so a race between two first
+ * reads stores the same value. */
+static uint32_t g_env_tier = 0u;
 
 void su_vm_set_default_tier(uint32_t tier) {
     g_default_tier = (tier == SU_VM_TIER_REFERENCE || tier == SU_VM_TIER_PLANNED) ? tier : 0u;
+    if (g_default_tier == 0u) {
+        g_env_tier = 0u; /* restoring the rule re-reads the environment */
+    }
 }
 
 uint32_t su_vm_default_tier(void) {
@@ -75,11 +82,11 @@ uint32_t su_vm_default_tier(void) {
     if (g_default_tier != 0u) {
         return g_default_tier;
     }
-    e = getenv("SUTEKH_VM_TIER");
-    if (e != NULL && strcmp(e, "reference") == 0) {
-        return SU_VM_TIER_REFERENCE;
+    if (g_env_tier == 0u) {
+        e = getenv("SUTEKH_VM_TIER");
+        g_env_tier = (e != NULL && strcmp(e, "reference") == 0) ? SU_VM_TIER_REFERENCE : SU_VM_TIER_PLANNED;
     }
-    return SU_VM_TIER_PLANNED;
+    return g_env_tier;
 }
 
 /* ---- helpers ---------------------------------------------------------- */
@@ -1259,6 +1266,8 @@ uint32_t su_vm_run_system(SuWorld *w, SuExecContext *ctx) {
     uint32_t i;
     uint32_t n_in = 0;
     uint32_t n_out = 0;
+    uint32_t cur_in = 0;
+    uint32_t cur_out = 0;
     uint32_t st;
 
     if (w == NULL || ctx == NULL) {
@@ -1279,14 +1288,12 @@ uint32_t su_vm_run_system(SuWorld *w, SuExecContext *ctx) {
     for (i = 0; i < m->field_count; i++) {
         uint32_t acc = m->fields[i].access;
         uint32_t id = m->fields[i].id;
-        uint32_t j;
         int found = 0;
         if ((acc & SU_ACCESS_READ) != 0u) {
-            for (j = 0; j < wi.binding_count && !found; j++) {
-                if (wi.bindings[j].field_id == id) {
-                    ctx->scr_in[n_in++] = wi.bindings[j];
-                    found = 1;
-                }
+            const SuColumnBinding *b = su_world_find_binding_from(wi.bindings, wi.binding_count, id, &cur_in);
+            if (b != NULL) {
+                ctx->scr_in[n_in++] = *b;
+                found = 1;
             }
             if (!found) {
                 return SU_E_SCHEMA_MISMATCH;
@@ -1294,11 +1301,10 @@ uint32_t su_vm_run_system(SuWorld *w, SuExecContext *ctx) {
         }
         if ((acc & SU_ACCESS_WRITE) != 0u) {
             found = 0;
-            for (j = 0; j < wo.binding_count && !found; j++) {
-                if (wo.bindings[j].field_id == id) {
-                    ctx->scr_out[n_out++] = wo.bindings[j];
-                    found = 1;
-                }
+            const SuColumnBinding *b = su_world_find_binding_from(wo.bindings, wo.binding_count, id, &cur_out);
+            if (b != NULL) {
+                ctx->scr_out[n_out++] = *b;
+                found = 1;
             }
             if (!found) {
                 return SU_E_SCHEMA_MISMATCH;

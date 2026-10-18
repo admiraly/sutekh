@@ -4,6 +4,7 @@
  * space3d.query host operator (space3d_ops_v1). See space3d_ops.h and docs/SPACE3D.md. */
 #include "space3d_ops.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "ir/su_num.h"
@@ -65,7 +66,8 @@ static const SuHostField k_fields[] = {
 
 #define S3_NFIELDS (sizeof k_fields / sizeof k_fields[0])
 
-static Space3dCtx g_ctx;
+static Space3dScratch g_scratch;
+static Space3dCtx g_ctx = {{0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, &g_scratch};
 
 static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 
@@ -104,7 +106,9 @@ const char *space3d_constants_text(void) {
            "none=4294967295\n";
 }
 
-/* ---------- scratch (static: no allocation in the tick) ---------- */
+/* ---------- scratch (no allocation in the tick) ----------
+ * The static context's scratch lives in these arrays (wired up on first use); an instance allocates the same
+ * arrays for its own row capacity at creation. */
 
 static uint8_t g_alive[SPACE3D_MAX_ROWS];
 static uint32_t g_gen[SPACE3D_MAX_ROWS];
@@ -120,8 +124,103 @@ static uint32_t g_gate_slot[SPACE3D_MAX_ROWS];
  * from the previous call. When the next call has the same set and axis, its sort starts from that order. */
 static uint32_t g_prev_coll[SPACE3D_MAX_ROWS];
 static uint32_t g_prev_order[SPACE3D_MAX_ROWS];
-static uint32_t g_prev_n = 0;
-static uint32_t g_prev_axis = 3u;
+
+static Space3dScratch *static_scratch(void) {
+    Space3dScratch *s = &g_scratch;
+    if (s->max_rows == 0u) {
+        uint32_t a;
+        s->max_rows = SPACE3D_MAX_ROWS;
+        s->alive = g_alive;
+        s->gen = g_gen;
+        for (a = 0; a < 3u; a++) {
+            s->lo[a] = g_lo[a];
+            s->hi[a] = g_hi[a];
+        }
+        s->coll = g_coll;
+        s->tmp = g_tmp;
+        s->cand = g_cand;
+        s->ncand = g_ncand;
+        s->flags = g_flags;
+        s->gate_slot = g_gate_slot;
+        s->prev_coll = g_prev_coll;
+        s->prev_order = g_prev_order;
+        s->prev_n = 0u;
+        s->prev_axis = 3u;
+    }
+    return s;
+}
+
+/* One allocation per instance: the context, its scratch header and every array, each array 8-byte aligned. */
+uint32_t space3d_query_instance_create(uint32_t max_rows, Space3dCtx **out) {
+    size_t n, off, total;
+    uint8_t *base;
+    Space3dCtx *ctx;
+    Space3dScratch *s;
+    uint32_t a;
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    if (max_rows == 0u || max_rows > SPACE3D_MAX_ROWS) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    n = max_rows;
+#define S3_ALIGN8(x) (((x) + 7u) & ~(size_t)7u)
+    off = S3_ALIGN8(sizeof(Space3dCtx)) + S3_ALIGN8(sizeof(Space3dScratch));
+    total = off + S3_ALIGN8(n)                     /* alive */
+            + S3_ALIGN8(n * 4u)                    /* gen */
+            + 6u * n * 8u                          /* lo, hi */
+            + 2u * S3_ALIGN8(n * 4u)               /* coll, tmp */
+            + n * 4u * SPACE3D_CAND_MAX            /* cand */
+            + 2u * S3_ALIGN8(n)                    /* ncand, flags */
+            + 3u * S3_ALIGN8(n * 4u);              /* gate_slot, prev_coll, prev_order */
+    base = calloc(1u, total);
+    if (base == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    ctx = (Space3dCtx *)(void *)base;
+    s = (Space3dScratch *)(void *)(base + S3_ALIGN8(sizeof(Space3dCtx)));
+    ctx->scratch = s;
+    s->max_rows = max_rows;
+    s->prev_axis = 3u;
+    s->alive = base + off;
+    off += S3_ALIGN8(n);
+    s->gen = (uint32_t *)(void *)(base + off);
+    off += S3_ALIGN8(n * 4u);
+    for (a = 0; a < 3u; a++) {
+        s->lo[a] = (int64_t *)(void *)(base + off);
+        off += n * 8u;
+        s->hi[a] = (int64_t *)(void *)(base + off);
+        off += n * 8u;
+    }
+    s->coll = (uint32_t *)(void *)(base + off);
+    off += S3_ALIGN8(n * 4u);
+    s->tmp = (uint32_t *)(void *)(base + off);
+    off += S3_ALIGN8(n * 4u);
+    s->cand = (uint32_t(*)[SPACE3D_CAND_MAX])(void *)(base + off);
+    off += n * 4u * SPACE3D_CAND_MAX;
+    s->ncand = base + off;
+    off += S3_ALIGN8(n);
+    s->flags = base + off;
+    off += S3_ALIGN8(n);
+    s->gate_slot = (uint32_t *)(void *)(base + off);
+    off += S3_ALIGN8(n * 4u);
+    s->prev_coll = (uint32_t *)(void *)(base + off);
+    off += S3_ALIGN8(n * 4u);
+    s->prev_order = (uint32_t *)(void *)(base + off);
+    off += S3_ALIGN8(n * 4u);
+#undef S3_ALIGN8
+    if (off != total) {
+        free(base);
+        return SU_E_INTERNAL;
+    }
+    *out = ctx;
+    return SU_OK;
+}
+
+void space3d_query_instance_destroy(void *ctx) {
+    free(ctx);
+}
 
 /* ---------- column access ---------- */
 
@@ -244,7 +343,7 @@ static void bounds_union(SuV3 *lo, SuV3 *hi, SuV3 lo2, SuV3 hi2) {
     hi->z = hi2.z > hi->z ? hi2.z : hi->z;
 }
 
-static void row_bounds(const Cols *c, uint32_t r, uint32_t kind) {
+static void row_bounds(Space3dScratch *s, const Cols *c, uint32_t r, uint32_t kind) {
     SuV3 lo, hi, lo2, hi2;
     int64_t rad = rdq(c, F_RADIUS, r);
     if (kind == SPACE3D_KIND_MOVER) {
@@ -262,24 +361,25 @@ static void row_bounds(const Cols *c, uint32_t r, uint32_t kind) {
         s3_bounds_sphere(b, rad, &lo2, &hi2);
         bounds_union(&lo, &hi, lo2, hi2);
     }
-    g_lo[0][r] = su_q32_subf(lo.x, S3_BOUNDS_SLACK);
-    g_lo[1][r] = su_q32_subf(lo.y, S3_BOUNDS_SLACK);
-    g_lo[2][r] = su_q32_subf(lo.z, S3_BOUNDS_SLACK);
-    g_hi[0][r] = su_q32_addf(hi.x, S3_BOUNDS_SLACK);
-    g_hi[1][r] = su_q32_addf(hi.y, S3_BOUNDS_SLACK);
-    g_hi[2][r] = su_q32_addf(hi.z, S3_BOUNDS_SLACK);
+    s->lo[0][r] = su_q32_subf(lo.x, S3_BOUNDS_SLACK);
+    s->lo[1][r] = su_q32_subf(lo.y, S3_BOUNDS_SLACK);
+    s->lo[2][r] = su_q32_subf(lo.z, S3_BOUNDS_SLACK);
+    s->hi[0][r] = su_q32_addf(hi.x, S3_BOUNDS_SLACK);
+    s->hi[1][r] = su_q32_addf(hi.y, S3_BOUNDS_SLACK);
+    s->hi[2][r] = su_q32_addf(hi.z, S3_BOUNDS_SLACK);
 }
 
-/* Stable bottom-up merge sort of idx[0..n) by (g_lo[axis][slot], slot). */
-static void sort_by_min(uint32_t *idx, uint32_t n, uint32_t axis) {
+/* Stable bottom-up merge sort of idx[0..n) by (lo[axis][slot], slot). */
+static void sort_by_min(Space3dScratch *s, uint32_t *idx, uint32_t n, uint32_t axis) {
     uint32_t width, i;
-    uint32_t *src = idx, *dst = g_tmp;
+    uint32_t *src = idx, *dst = s->tmp;
+    const int64_t *key = s->lo[axis];
     for (width = 1; width < n; width *= 2u) {
         for (i = 0; i < n; i += 2u * width) {
             uint32_t lo = i, mid = i + width < n ? i + width : n, hi = i + 2u * width < n ? i + 2u * width : n;
             uint32_t a = lo, b = mid, k = lo;
             while (a < mid && b < hi) {
-                int64_t ka = g_lo[axis][src[a]], kb = g_lo[axis][src[b]];
+                int64_t ka = key[src[a]], kb = key[src[b]];
                 if (ka < kb || (ka == kb && src[a] < src[b])) {
                     dst[k++] = src[a++];
                 } else {
@@ -304,52 +404,54 @@ static void sort_by_min(uint32_t *idx, uint32_t n, uint32_t axis) {
     }
 }
 
-/* (g_lo[axis][a], a) < (g_lo[axis][b], b): the strict total order of the sweep. */
-static int sweep_less(uint32_t a, uint32_t b, uint32_t axis) {
-    int64_t ka = g_lo[axis][a], kb = g_lo[axis][b];
+/* (lo[axis][a], a) < (lo[axis][b], b): the strict total order of the sweep. */
+static int sweep_less(const int64_t *key, uint32_t a, uint32_t b) {
+    int64_t ka = key[a], kb = key[b];
     return ka < kb || (ka == kb && a < b);
 }
 
-/* Sorts g_coll[0..n) by the sweep order. The order is a strict total order, so every correct sort gives the same
+/* Sorts coll[0..n) by the sweep order. The order is a strict total order, so every correct sort gives the same
  * permutation: when the set of collidables and the axis equal the previous call's, insertion sort starts from the
  * previous order (bounded work; past 8n moves it falls back); otherwise, and on fallback, the merge sort runs on
  * the ascending-slot list. */
-static void sort_sweep(uint32_t n, uint32_t axis) {
+static void sort_sweep(Space3dScratch *s, uint32_t n, uint32_t axis) {
     uint32_t i;
     int done = 0;
-    if (n == g_prev_n && axis == g_prev_axis && n > 0u && memcmp(g_coll, g_prev_coll, (size_t)n * sizeof *g_coll) == 0) {
+    const int64_t *key = s->lo[axis];
+    if (n == s->prev_n && axis == s->prev_axis && n > 0u &&
+        memcmp(s->coll, s->prev_coll, (size_t)n * sizeof *s->coll) == 0) {
         uint64_t moves = 0, cap = 8u * (uint64_t)n;
-        memcpy(g_tmp, g_prev_order, (size_t)n * sizeof *g_tmp);
+        memcpy(s->tmp, s->prev_order, (size_t)n * sizeof *s->tmp);
         done = 1;
         for (i = 1; i < n && done; i++) {
-            uint32_t key = g_tmp[i], j = i;
-            while (j > 0 && sweep_less(key, g_tmp[j - 1u], axis)) {
-                g_tmp[j] = g_tmp[j - 1u];
+            uint32_t k = s->tmp[i], j = i;
+            while (j > 0 && sweep_less(key, k, s->tmp[j - 1u])) {
+                s->tmp[j] = s->tmp[j - 1u];
                 j--;
                 if (++moves > cap) {
                     done = 0;
                     break;
                 }
             }
-            g_tmp[j] = key;
+            s->tmp[j] = k;
         }
     }
-    memcpy(g_prev_coll, g_coll, (size_t)n * sizeof *g_coll);
+    memcpy(s->prev_coll, s->coll, (size_t)n * sizeof *s->coll);
     if (done) {
-        memcpy(g_coll, g_tmp, (size_t)n * sizeof *g_coll);
+        memcpy(s->coll, s->tmp, (size_t)n * sizeof *s->coll);
     } else {
-        sort_by_min(g_coll, n, axis);
+        sort_by_min(s, s->coll, n, axis);
     }
-    memcpy(g_prev_order, g_coll, (size_t)n * sizeof *g_coll);
-    g_prev_n = n;
-    g_prev_axis = axis;
+    memcpy(s->prev_order, s->coll, (size_t)n * sizeof *s->coll);
+    s->prev_n = n;
+    s->prev_axis = axis;
 }
 
-static void add_cand(uint32_t m, uint32_t o) {
-    if (g_ncand[m] < SPACE3D_CAND_MAX) {
-        g_cand[m][g_ncand[m]++] = o;
+static void add_cand(Space3dScratch *s, uint32_t m, uint32_t o) {
+    if (s->ncand[m] < SPACE3D_CAND_MAX) {
+        s->cand[m][s->ncand[m]++] = o;
     } else {
-        g_flags[m] |= SPACE3D_FLAG_CAND_TRUNCATED;
+        s->flags[m] |= SPACE3D_FLAG_CAND_TRUNCATED;
     }
 }
 
@@ -382,37 +484,38 @@ static S3Hit narrow(const Cols *c, uint32_t m, uint32_t o) {
     }
 }
 
-/* Index of the first gate (lowest slot) whose gate_index equals key, in g_gate_slot[0..ng) sorted by
+/* Index of the first gate (lowest slot) whose gate_index equals key, in gate_slot[0..ng) sorted by
  * (gate_index, slot); S3_NONE when none. */
-static uint32_t find_gate(const Cols *c, uint32_t ng, uint32_t key) {
+static uint32_t find_gate(const uint32_t *gate_slot, const Cols *c, uint32_t ng, uint32_t key) {
     uint32_t lo = 0, hi = ng;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2u;
-        if (c->gate_index[g_gate_slot[mid]] < key) {
+        if (c->gate_index[gate_slot[mid]] < key) {
             lo = mid + 1u;
         } else {
             hi = mid;
         }
     }
-    return lo < ng && c->gate_index[g_gate_slot[lo]] == key ? g_gate_slot[lo] : S3_NONE;
+    return lo < ng && c->gate_index[gate_slot[lo]] == key ? gate_slot[lo] : S3_NONE;
 }
 
-static void sort_gates(const Cols *c, uint32_t ng) {
+static void sort_gates(uint32_t *gate_slot, const Cols *c, uint32_t ng) {
     /* Insertion sort by (gate_index, slot): gates are few; the input is in ascending slot order. */
     uint32_t i, j;
     for (i = 1; i < ng; i++) {
-        uint32_t key = g_gate_slot[i];
+        uint32_t key = gate_slot[i];
         j = i;
-        while (j > 0 && c->gate_index[g_gate_slot[j - 1u]] > c->gate_index[key]) {
-            g_gate_slot[j] = g_gate_slot[j - 1u];
+        while (j > 0 && c->gate_index[gate_slot[j - 1u]] > c->gate_index[key]) {
+            gate_slot[j] = gate_slot[j - 1u];
             j--;
         }
-        g_gate_slot[j] = key;
+        gate_slot[j] = key;
     }
 }
 
 static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    Space3dCtx *ctx = (Space3dCtx *)host_ctx;
+    Space3dCtx *ctx = host_ctx != NULL ? (Space3dCtx *)host_ctx : &g_ctx;
+    Space3dScratch *s = ctx->scratch == &g_scratch ? static_scratch() : ctx->scratch;
     Cols c;
     uint64_t rows64 = in->row_count;
     uint32_t rows, r, ncoll = 0, ngate = 0, axis = 0, i;
@@ -420,7 +523,7 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
     int budget_hit = 0;
     Space3dStats st;
 
-    if (rows64 > SPACE3D_MAX_ROWS) {
+    if (rows64 > s->max_rows) {
         return SU_E_RESOURCE_LIMIT;
     }
     rows = (uint32_t)rows64;
@@ -429,33 +532,33 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
     }
     memset(&st, 0, sizeof st);
     st.rows = rows;
-    if (rows > 0u && (su_world_alive_view(w, 0, rows, g_alive) != SU_OK ||
-                      su_world_generation_view(w, 0, rows, g_gen) != SU_OK)) {
+    if (rows > 0u && (su_world_alive_view(w, 0, rows, s->alive) != SU_OK ||
+                      su_world_generation_view(w, 0, rows, s->gen) != SU_OK)) {
         return SU_E_INTERNAL;
     }
 
     /* Gather collidables (ascending slot) and gates; compute bounds. */
     for (r = 0; r < rows; r++) {
         uint32_t k = c.kind[r];
-        g_ncand[r] = 0;
-        g_flags[r] = 0;
-        if (!g_alive[r]) {
+        s->ncand[r] = 0;
+        s->flags[r] = 0;
+        if (!s->alive[r]) {
             continue;
         }
         if (is_collidable(k)) {
-            row_bounds(&c, r, k);
-            g_coll[ncoll++] = r;
+            row_bounds(s, &c, r, k);
+            s->coll[ncoll++] = r;
             st.movers += k == SPACE3D_KIND_MOVER;
         } else if (k >= SPACE3D_KIND_GATE_RECT && k <= SPACE3D_KIND_GATE_ELLIPSE) {
-            g_gate_slot[ngate++] = r;
+            s->gate_slot[ngate++] = r;
         }
     }
     st.collidables = ncoll;
     st.gates = ngate;
-    sort_gates(&c, ngate);
+    sort_gates(s->gate_slot, &c, ngate);
 
     if (ctx != NULL && ctx->brute_force) {
-        /* Test seam: no broadphase; the narrow phase below takes every other collidable (g_coll stays in
+        /* Test seam: no broadphase; the narrow phase below takes every other collidable (s->coll stays in
          * ascending slot order) with no candidate cap and no budget. */
     } else if (ncoll > 1u) {
         /* Sweep axis: largest spread of bound centres (lo + hi, saturating), ties to the lower axis. */
@@ -464,7 +567,7 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
         for (a = 0; a < 3u; a++) {
             int64_t mn = INT64_MAX, mx = INT64_MIN, spread;
             for (i = 0; i < ncoll; i++) {
-                int64_t cen = su_q32_addf(g_lo[a][g_coll[i]], g_hi[a][g_coll[i]]);
+                int64_t cen = su_q32_addf(s->lo[a][s->coll[i]], s->hi[a][s->coll[i]]);
                 mn = cen < mn ? cen : mn;
                 mx = cen > mx ? cen : mx;
             }
@@ -474,14 +577,14 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
                 axis = a;
             }
         }
-        sort_sweep(ncoll, axis);
+        sort_sweep(s, ncoll, axis);
         for (i = 0; i < ncoll && !budget_hit; i++) {
-            uint32_t p = g_coll[i], j;
+            uint32_t p = s->coll[i], j;
             for (j = i + 1u; j < ncoll; j++) {
-                uint32_t q = g_coll[j];
+                uint32_t q = s->coll[j];
                 uint32_t a1 = (axis + 1u) % 3u, a2 = (axis + 2u) % 3u;
                 int pm, qm;
-                if (g_lo[axis][q] > g_hi[axis][p]) {
+                if (s->lo[axis][q] > s->hi[axis][p]) {
                     break;
                 }
                 if (++pairs > SPACE3D_SWEEP_BUDGET) {
@@ -493,15 +596,15 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
                 if (!pm && !qm) {
                     continue;
                 }
-                if (g_lo[a1][p] > g_hi[a1][q] || g_lo[a1][q] > g_hi[a1][p] || g_lo[a2][p] > g_hi[a2][q] ||
-                    g_lo[a2][q] > g_hi[a2][p]) {
+                if (s->lo[a1][p] > s->hi[a1][q] || s->lo[a1][q] > s->hi[a1][p] || s->lo[a2][p] > s->hi[a2][q] ||
+                    s->lo[a2][q] > s->hi[a2][p]) {
                     continue;
                 }
                 if (pm) {
-                    add_cand(p, q);
+                    add_cand(s, p, q);
                 }
                 if (qm) {
-                    add_cand(q, p);
+                    add_cand(s, q, p);
                 }
             }
         }
@@ -516,29 +619,29 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
     for (r = 0; r < rows; r++) {
         Contact best[SPACE3D_CONTACTS];
         uint32_t nbest = 0, found = 0, k, j;
-        uint32_t flags = g_flags[r];
+        uint32_t flags = s->flags[r];
         uint32_t gdir = SPACE3D_GATE_NONE, gslot = S3_NONE;
         int64_t gtoi = 0;
-        int mover = g_alive[r] && c.kind[r] == SPACE3D_KIND_MOVER;
+        int mover = s->alive[r] && c.kind[r] == SPACE3D_KIND_MOVER;
         int brute = ctx != NULL && ctx->brute_force;
         if (mover) {
-            uint32_t n = brute ? ncoll : g_ncand[r];
+            uint32_t n = brute ? ncoll : s->ncand[r];
             if (budget_hit) {
                 flags |= SPACE3D_FLAG_SWEEP_BUDGET;
             }
             /* Candidates in ascending slot order (insertion sort, n <= SPACE3D_CAND_MAX). */
             for (k = 1; k < n && !brute; k++) {
-                uint32_t key = g_cand[r][k];
+                uint32_t key = s->cand[r][k];
                 j = k;
-                while (j > 0 && g_cand[r][j - 1u] > key) {
-                    g_cand[r][j] = g_cand[r][j - 1u];
+                while (j > 0 && s->cand[r][j - 1u] > key) {
+                    s->cand[r][j] = s->cand[r][j - 1u];
                     j--;
                 }
-                g_cand[r][j] = key;
+                s->cand[r][j] = key;
             }
             st.candidates += n;
             for (k = 0; k < n; k++) {
-                uint32_t o = brute ? g_coll[k] : g_cand[r][k];
+                uint32_t o = brute ? s->coll[k] : s->cand[r][k];
                 S3Hit h;
                 if (o == r) {
                     continue;
@@ -570,7 +673,7 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
             }
             /* Gate crossing of the centre segment against the next gate. */
             {
-                uint32_t g = find_gate(&c, ngate, c.next_gate[r]);
+                uint32_t g = find_gate(s->gate_slot, &c, ngate, c.next_gate[r]);
                 if (g != S3_NONE) {
                     S3GateHit gh;
                     int shape = c.kind[g] == SPACE3D_KIND_GATE_DISC      ? S3_GATE_DISC
@@ -591,7 +694,7 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
         for (k = 0; k < SPACE3D_CONTACTS; k++) {
             int have = k < nbest;
             c.c_slot[k][r] = have ? best[k].slot : S3_NONE;
-            c.c_gen[k][r] = have ? g_gen[best[k].slot] : 0u;
+            c.c_gen[k][r] = have ? s->gen[best[k].slot] : 0u;
             wrq(c.c_q[k][0], r, have ? best[k].toi : 0);
             wrq(c.c_q[k][1], r, have ? best[k].n.x : 0);
             wrq(c.c_q[k][2], r, have ? best[k].n.y : 0);

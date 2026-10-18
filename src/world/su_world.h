@@ -171,6 +171,15 @@ uint32_t su_world_abort(SuWorld *w);
  * (ascending field ID). SuOutputs.failed_insn is set to UINT32_MAX. */
 uint32_t su_world_build_invocation(SuWorld *w, SuInvocation *out);
 uint32_t su_world_build_outputs(SuWorld *w, SuOutputs *out);
+/* The binding of field id among n bindings without repeated IDs, or NULL. Binary search over the ascending field
+ * IDs the two builders produce, then a linear scan when that misses (so an unsorted array gives the same answer
+ * as a linear search).
+ * 2026-10-18: replaces per-field linear scans (O(fields^2) per system call) in the VM, native and host paths. */
+const SuColumnBinding *su_world_find_binding(const SuColumnBinding *b, uint32_t n, uint32_t id);
+/* As su_world_find_binding for callers that look up IDs in ascending order: *cursor (0 at the start) is where
+ * the walk continues; a lookup out of order falls back to su_world_find_binding. Same answers. */
+const SuColumnBinding *su_world_find_binding_from(const SuColumnBinding *b, uint32_t n, uint32_t id,
+                                                  uint32_t *cursor);
 
 /* Alive and generation views for slots [base, base+n). In a tick they read the working table, otherwise
  * the committed table. alive receives 0 or 1 per slot; generation receives the stored generation

@@ -31,7 +31,24 @@ void su_sched_entry_destroy(SuSysEntry *e) {
         free(e->mod);
     }
     free(e->host_bind);
+    if (e->host_inst != NULL && e->host_inst_free != NULL) {
+        e->host_inst_free(e->host_inst);
+    }
     memset(e, 0, sizeof *e);
+}
+
+uint32_t su_sched_set_host_instance(SuSchedule *s, uint32_t idx, void *inst, void (*free_fn)(void *inst)) {
+    SuSysEntry *e;
+    if (s == NULL || idx >= s->count || inst == NULL || s->sys[idx].kind != SU_SYS_KIND_HOST) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    e = &s->sys[idx];
+    if (e->host_inst != NULL && e->host_inst != inst && e->host_inst_free != NULL) {
+        e->host_inst_free(e->host_inst);
+    }
+    e->host_inst = inst;
+    e->host_inst_free = free_fn;
+    return SU_OK;
 }
 
 void su_sched_free(SuSchedule *s) {
@@ -401,10 +418,11 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e) {
     uint32_t nr = 0;
     uint32_t nw = 0;
     uint32_t i;
-    uint32_t j;
     uint32_t st;
     SuInvocation full_inv;
     SuOutputs full_out;
+    uint32_t cur_in = 0;
+    uint32_t cur_out = 0;
 
     st = su_world_build_invocation(w, &full_inv);
     if (st != SU_OK) {
@@ -419,36 +437,23 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e) {
         /* Schema-relative binding: the world column of descriptor field i is e->host_bind[i]; the operator sees it
          * under the descriptor's ID f->id (it looks columns up by its own IDs). */
         const uint32_t world_id = e->host_bind != NULL ? e->host_bind[i] : f->id;
-        if ((f->access & SU_ACCESS_READ) != 0u) {
-            for (j = 0; j < full_inv.binding_count; j++) {
-                if (full_inv.bindings[j].field_id == world_id) {
-                    rb[nr] = full_inv.bindings[j];
-                    rb[nr++].field_id = f->id;
-                    break;
-                }
-            }
+        const SuColumnBinding *rbind = su_world_find_binding_from(full_inv.bindings, full_inv.binding_count, world_id, &cur_in);
+        if ((f->access & SU_ACCESS_READ) != 0u && rbind != NULL) {
+            rb[nr] = *rbind;
+            rb[nr++].field_id = f->id;
         }
         if ((f->access & SU_ACCESS_WRITE) != 0u) {
-            for (j = 0; j < full_out.binding_count; j++) {
-                if (full_out.bindings[j].field_id == world_id) {
-                    /* r4 (A4): staging is committed whole, so every row starts from its working value. Done
-                     * when the working column is visible (declared read); a write-only field has no working
-                     * view, so its operator stores every row itself (M3-04a deviation, see the handoff). */
-                    if ((f->access & SU_ACCESS_READ) != 0u) {
-                        uint32_t k;
-                        for (k = 0; k < full_inv.binding_count; k++) {
-                            if (full_inv.bindings[k].field_id == world_id) {
-                                memcpy(full_out.bindings[j].data, full_inv.bindings[k].data,
-                                       (size_t)full_inv.row_count * sizeof(uint32_t));
-                                break;
-                            }
-                        }
-                    }
-                    wb[nw] = full_out.bindings[j];
-                    wb[nw].field_id = f->id;
-                    wid[nw++] = world_id;
-                    break;
+            const SuColumnBinding *wbind = su_world_find_binding_from(full_out.bindings, full_out.binding_count, world_id, &cur_out);
+            if (wbind != NULL) {
+                /* r4 (A4): staging is committed whole, so every row starts from its working value. Done
+                 * when the working column is visible (declared read); a write-only field has no working
+                 * view, so its operator stores every row itself (M3-04a deviation, see the handoff). */
+                if ((f->access & SU_ACCESS_READ) != 0u && rbind != NULL) {
+                    memcpy(wbind->data, rbind->data, (size_t)full_inv.row_count * sizeof(uint32_t));
                 }
+                wb[nw] = *wbind;
+                wb[nw].field_id = f->id;
+                wid[nw++] = world_id;
             }
         }
     }
@@ -458,7 +463,7 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e) {
     out = full_out;
     out.bindings = wb;
     out.binding_count = nw;
-    st = d->run(w, &inv, &out, d->host_ctx);
+    st = d->run(w, &inv, &out, e->host_inst != NULL ? e->host_inst : d->host_ctx);
     if (st != SU_OK) {
         return st;
     }

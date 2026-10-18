@@ -1658,8 +1658,6 @@ static int replay_log(SuAgent *a, AgentWorld *w, RecStats *s, const Ckpt *base) 
     }
     s->worlds++;
     return 0;
-    s->worlds++;
-    return 0;
 }
 
 /* Recovery of a migrated world (M2-01b): the newest checkpoint is taken after a migration or rollback, and

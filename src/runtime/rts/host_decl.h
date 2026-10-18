@@ -84,6 +84,14 @@ uint32_t su_host_load_bound(const char *capsule_path, const char *expect_capsule
                             SuLirModule **out, uint32_t *schema_version, uint32_t *layout_generation,
                             uint32_t bind[SU_LIMIT_FIELDS], int *bound, char *msg, size_t msg_cap);
 
+/* su_host_load_bound over record bytes held in memory (2026-10-18, in-process host API): the same checks in the
+ * same order, without the file read; len above 16 MiB is SU_E_RESOURCE_LIMIT. The bytes are borrowed. The
+ * declaration's capsule hash is the SHA-256 of exactly these bytes. */
+uint32_t su_host_load_bound_bytes(const uint8_t *bytes, size_t len, const char *expect_capsule_hash,
+                                  const SuHostOpDesc *d, SuLirModule **out, uint32_t *schema_version,
+                                  uint32_t *layout_generation, uint32_t bind[SU_LIMIT_FIELDS], int *bound, char *msg,
+                                  size_t msg_cap);
+
 /* 1 when the file at path is strict JSON with a host object (a host capsule record), else 0. Used to refuse
  * a candidate or an admission that names a host system before any reload (contract 3.1, r4). */
 int su_host_capsule_is_host(const char *path);

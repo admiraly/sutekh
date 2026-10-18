@@ -19,6 +19,17 @@ typedef struct HostRecord {
     SuHostInput *writes;
 } HostRecord;
 
+/* A host operator the in-process API can run (su_host_operators.c): its static descriptor, the record's operator
+ * name, and the per-world scratch constructor and destructor (rows = the world's capacity). */
+typedef struct HostOperator {
+    const SuHostOpDesc *desc;
+    const char *operator_name;
+    uint32_t (*create)(uint64_t rows, void **inst);
+    void (*destroy)(void *inst);
+} HostOperator;
+
+const HostOperator *su_host_operator_find(const char *system_id);
+
 struct SuHostWorld {
     SuSchedule sched;              /* owns the modules, VM contexts and the entity runtime */
     SuWorld *w;

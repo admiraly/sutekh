@@ -553,7 +553,6 @@ uint32_t su_world_begin_tick(SuWorld *w) {
 
 uint32_t su_world_commit_staging(SuWorld *w, const uint32_t *field_ids, uint32_t count) {
     uint32_t k;
-    uint32_t m;
     size_t bytes = 0;
     long idx;
     if (w == NULL || w->phase != SU_WORLD_PHASE_TICK) {
@@ -565,28 +564,34 @@ uint32_t su_world_commit_staging(SuWorld *w, const uint32_t *field_ids, uint32_t
     if (field_ids == NULL || count > w->field_count) {
         return SU_E_INVALID_ARGUMENT;
     }
-    /* Validate the whole list before copying anything. */
-    for (k = 0; k < count; k++) {
-        idx = su_find_id(w, field_ids[k]);
-        if (idx < 0) {
-            return SU_E_SCHEMA_MISMATCH;
+    /* Validate the whole list before copying anything. Field IDs are unique per index, so an ID repeated in the
+     * list is an index seen before (the same check, in the same order, as comparing with every earlier ID). */
+    {
+        uint8_t seen[SU_LIMIT_FIELDS];
+        uint32_t at[SU_LIMIT_FIELDS];
+        if (w->field_count > SU_LIMIT_FIELDS) {
+            return SU_E_INTERNAL;
         }
-        if ((w->fields[idx].access & SU_ACCESS_WRITE) == 0u) {
-            return SU_E_UNDECLARED_WRITE;
-        }
-        for (m = 0; m < k; m++) {
-            if (field_ids[m] == field_ids[k]) {
+        memset(seen, 0, w->field_count);
+        for (k = 0; k < count; k++) {
+            idx = su_find_id(w, field_ids[k]);
+            if (idx < 0) {
+                return SU_E_SCHEMA_MISMATCH;
+            }
+            if ((w->fields[idx].access & SU_ACCESS_WRITE) == 0u) {
+                return SU_E_UNDECLARED_WRITE;
+            }
+            if (seen[idx]) {
                 return SU_E_INVALID_ARGUMENT;
             }
+            seen[idx] = 1u;
+            at[k] = (uint32_t)idx;
         }
-    }
-    if (su_mul_size((size_t)w->row_count, SU_WORLD_ELEM_BYTES, &bytes) != SU_OK) {
-        return SU_E_INTERNAL;
-    }
-    for (k = 0; k < count; k++) {
-        idx = su_find_id(w, field_ids[k]);
-        if (bytes > 0) {
-            memcpy(w->working[idx], w->staging[idx], bytes);
+        if (su_mul_size((size_t)w->row_count, SU_WORLD_ELEM_BYTES, &bytes) != SU_OK) {
+            return SU_E_INTERNAL;
+        }
+        for (k = 0; k < count && bytes > 0; k++) {
+            memcpy(w->working[at[k]], w->staging[at[k]], bytes);
         }
     }
     return SU_OK;
@@ -665,6 +670,50 @@ uint32_t su_world_build_invocation(SuWorld *w, SuInvocation *out) {
     out->row_count = w->row_count;
     out->bindings = w->inv_bindings;
     return SU_OK;
+}
+
+const SuColumnBinding *su_world_find_binding(const SuColumnBinding *b, uint32_t n, uint32_t id) {
+    uint32_t lo = 0;
+    uint32_t hi = n;
+    uint32_t j;
+    if (b == NULL) {
+        return NULL;
+    }
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2u;
+        if (b[mid].field_id < id) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    if (lo < n && b[lo].field_id == id) {
+        return &b[lo];
+    }
+    for (j = 0; j < n; j++) { /* not sorted: the linear answer */
+        if (b[j].field_id == id) {
+            return &b[j];
+        }
+    }
+    return NULL;
+}
+
+const SuColumnBinding *su_world_find_binding_from(const SuColumnBinding *b, uint32_t n, uint32_t id,
+                                                  uint32_t *cursor) {
+    uint32_t c = *cursor;
+    const SuColumnBinding *r;
+    while (c < n && b[c].field_id < id) {
+        c++;
+    }
+    if (c < n && b[c].field_id == id) {
+        *cursor = c + 1u;
+        return &b[c];
+    }
+    r = su_world_find_binding(b, n, id);
+    if (r != NULL) {
+        *cursor = (uint32_t)(r - b) + 1u;
+    }
+    return r;
 }
 
 uint32_t su_world_build_outputs(SuWorld *w, SuOutputs *out) {

@@ -72,7 +72,12 @@ typedef struct SuSysEntry {
     const SuHostOpDesc *host; /* host entries only (static, borrowed); NULL for IR entries */
     uint32_t *host_bind;     /* owned; host entries bound to another schema (su_sched_add_host_bound): the world
                               * field ID of each descriptor field, in descriptor order. NULL = the descriptor's IDs. */
-    uint64_t txid;           /* registry transaction that made this module live; 0 = creation */
+    void *host_inst;         /* owned; host entries only: per-entry operator scratch passed to run instead of the
+                              * descriptor's static host_ctx (su_sched_set_host_instance). NULL = d->host_ctx. */
+    void (*host_inst_free)(void *inst); /* releases host_inst when the entry is destroyed */
+    uint32_t vm_tier;        /* IR entries: SU_VM_TIER_* of every VM context the entry runs on (its own ctx, and the
+                              * entity runtime's per-call contexts); 0 = the process default (su_vm_default_tier) */
+    uint64_t txid;          /* registry transaction that made this module live; 0 = creation */
     uint64_t system_rev;     /* 1 at creation, +1 per installed revision */
     uint64_t installed_tick; /* effective tick of the install (0 at creation) */
     char source_hash[65];
@@ -140,6 +145,11 @@ uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *de
 uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, const uint32_t *bind,
                                  uint32_t schema_version, uint32_t gen, uint64_t txid, uint64_t system_rev,
                                  uint64_t tick);
+/* Gives host entry idx its own operator scratch (2026-10-18, in-process host API): run receives inst instead of
+ * the descriptor's static host_ctx, so worlds in one process do not share operator state. The entry owns inst
+ * and releases it with free_fn (may be NULL) when it is destroyed or replaced by another instance.
+ * SU_E_INVALID_ARGUMENT when idx is not a host entry or inst is NULL. */
+uint32_t su_sched_set_host_instance(SuSchedule *s, uint32_t idx, void *inst, void (*free_fn)(void *inst));
 /* Builds the union field table from the current entries. Conflicting ID/name/type for
  * one field is SU_E_SCHEMA_MISMATCH. Call after the last su_sched_add. */
 uint32_t su_sched_finalize(SuSchedule *s);

@@ -142,6 +142,69 @@ void su_native_exec_release(uint8_t *code, size_t map_size) {
     }
 }
 
+uint32_t su_native_exec_publish_unwind(const uint8_t *src, size_t size, const uint8_t *unwind, uint32_t unwind_size,
+                                       uint32_t func_end, uint8_t **code, size_t *map_size, void **table) {
+    SYSTEM_INFO si;
+    size_t page;
+    size_t map;
+    size_t uw_off = 0;
+    size_t rf_off = 0;
+    size_t total = size;
+    DWORD old = 0;
+    uint8_t *p;
+    RUNTIME_FUNCTION *rf = NULL;
+    const char *seam = getenv("SUTEKH_NATIVE_NO_UNWIND");
+    int reg = unwind != NULL && unwind_size > 0u && func_end > 0u && (size_t)func_end <= size &&
+              !(seam != NULL && strcmp(seam, "1") == 0);
+    *table = NULL;
+    if (reg) {
+        uw_off = (size + 3u) & ~(size_t)3u;
+        rf_off = (uw_off + unwind_size + 3u) & ~(size_t)3u;
+        total = rf_off + sizeof(RUNTIME_FUNCTION);
+        if (total > (size_t)UINT32_MAX) {
+            reg = 0;
+            total = size;
+        }
+    }
+    GetSystemInfo(&si);
+    page = si.dwPageSize;
+    map = (total + page - 1u) / page * page;
+    if ((g_inject_mask & SU_NATIVE_FAIL_MMAP) != 0u) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    p = VirtualAlloc(NULL, map, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (p == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memcpy(p, src, size);
+    if (reg) {
+        memcpy(p + uw_off, unwind, unwind_size);
+        rf = (RUNTIME_FUNCTION *)(void *)(p + rf_off);
+        rf->BeginAddress = 0u;
+        rf->EndAddress = func_end;
+        rf->UnwindData = (DWORD)uw_off;
+    }
+    if ((g_inject_mask & SU_NATIVE_FAIL_MPROTECT) != 0u || !VirtualProtect(p, map, PAGE_EXECUTE_READ, &old)) {
+        VirtualFree(p, 0, MEM_RELEASE);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    FlushInstructionCache(GetCurrentProcess(), p, size);
+    if (reg && !RtlAddFunctionTable(rf, 1u, (DWORD64)(uintptr_t)p)) {
+        VirtualFree(p, 0, MEM_RELEASE);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    *code = p;
+    *map_size = map;
+    *table = rf;
+    return SU_OK;
+}
+
+void su_native_exec_unregister(void *table) {
+    if (table != NULL) {
+        (void)RtlDeleteFunctionTable((RUNTIME_FUNCTION *)table);
+    }
+}
+
 #else
 
 uint32_t su_native_exec_publish(const uint8_t *src, size_t size, uint8_t **code, size_t *map_size) {
@@ -172,6 +235,20 @@ void su_native_exec_release(uint8_t *code, size_t map_size) {
     if (code != NULL) {
         munmap(code, map_size);
     }
+}
+
+/* SysV: no unwind registration here (the Windows x64 format only); gdb and libgcc unwind kernels heuristically. */
+uint32_t su_native_exec_publish_unwind(const uint8_t *src, size_t size, const uint8_t *unwind, uint32_t unwind_size,
+                                       uint32_t func_end, uint8_t **code, size_t *map_size, void **table) {
+    (void)unwind;
+    (void)unwind_size;
+    (void)func_end;
+    *table = NULL;
+    return su_native_exec_publish(src, size, code, map_size);
+}
+
+void su_native_exec_unregister(void *table) {
+    (void)table;
 }
 
 #endif
@@ -236,6 +313,7 @@ static void lowered_free(SuNativeLowered *l) {
     free(l->bytes);
     free(l->insn_ranges);
     free(l->disasm);
+    free(l->unwind);
     memset(l, 0, sizeof *l);
 }
 
@@ -295,6 +373,7 @@ void su_native_artifact_free(SuNativeArtifact *a) {
     if (a == NULL) {
         return;
     }
+    su_native_exec_unregister(a->unwind_table);
     su_native_exec_release(a->code, a->map_size);
     free(a->ranges);
     free(a->disasm);
@@ -476,7 +555,8 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
         diag_set(diag, SU_E_RESOURCE_LIMIT, SU_NATIVE_NO_FAILED_INSN, "allocation failed");
         return SU_E_RESOURCE_LIMIT;
     }
-    st = su_native_exec_publish(low.bytes, low.size, &a->code, &a->map_size);
+    st = su_native_exec_publish_unwind(low.bytes, low.size, low.unwind, low.unwind_size, low.func_end, &a->code,
+                                       &a->map_size, &a->unwind_table);
     if (st != SU_OK) {
         free(ranges);
         free(a);
@@ -572,6 +652,21 @@ uint32_t su_native_set_row_limit(SuNativeArtifact *a, uint64_t limit) {
 
 static long find_field(const SuLirModule *m, uint32_t id, uint32_t access) {
     uint32_t i;
+    uint32_t lo = 0;
+    uint32_t hi = m->field_count;
+    /* Verified tables have unique IDs in ascending order: binary search, then the linear scan as before when it
+     * misses (an unsorted table gives the linear answer). 2026-10-18. */
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2u;
+        if (m->fields[mid].id < id) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    if (lo < m->field_count && m->fields[lo].id == id && (m->fields[lo].access & access) != 0u) {
+        return (long)lo;
+    }
     for (i = 0; i < m->field_count; i++) {
         if (m->fields[i].id == id && (m->fields[i].access & access) != 0u) {
             return (long)i;
@@ -597,15 +692,26 @@ static uint32_t check_shape(const SuColumnBinding *b, uint32_t access) {
 }
 
 static uint32_t check_schema(const SuNativeArtifact *a, const SuColumnBinding *b, uint64_t rows,
-                             uint32_t access, uint8_t *bound, uint32_t **cols) {
-    long idx;
+                             uint32_t access, uint8_t *bound, uint32_t **cols, uint32_t *cursor) {
+    long idx = -1;
+    const SuLirModule *m = a->module;
+    uint32_t c = *cursor;
     if (b->layout_generation != a->info.layout_generation) {
         return SU_E_SCHEMA_MISMATCH;
     }
     if (b->row_count != rows) {
         return SU_E_SCHEMA_MISMATCH;
     }
-    idx = find_field(a->module, b->field_id, access);
+    /* Bindings usually arrive in table order: walk on from the previous match, else search (same answer). */
+    while (c < m->field_count && m->fields[c].id < b->field_id) {
+        c++;
+    }
+    if (c < m->field_count && m->fields[c].id == b->field_id && (m->fields[c].access & access) != 0u) {
+        idx = (long)c;
+        *cursor = c + 1u;
+    } else {
+        idx = find_field(m, b->field_id, access);
+    }
     if (idx < 0 || bound[idx] != 0u) {
         return SU_E_SCHEMA_MISMATCH;
     }
@@ -624,8 +730,9 @@ static uint32_t check_set(const SuNativeArtifact *a, const SuColumnBinding *b, u
             return st;
         }
     }
+    uint32_t cursor = 0;
     for (i = 0; i < n; i++) {
-        st = check_schema(a, &b[i], rows, access, bound, cols);
+        st = check_schema(a, &b[i], rows, access, bound, cols, &cursor);
         if (st != SU_OK) {
             return st;
         }
@@ -637,16 +744,84 @@ static int ranges_overlap(uintptr_t a0, uintptr_t a1, uintptr_t b0, uintptr_t b1
     return a0 < b1 && b0 < a1;
 }
 
+/* The same decision as the pairwise check below (an output range overlapping any other output or any input is
+ * SU_E_INVALID_ARGUMENT; inputs may overlap each other; with at least one output, any range that would wrap is
+ * SU_E_INVALID_ARGUMENT), in expected O(n): every range has the same length L, so two ranges overlap only when
+ * their starts lie in the same or adjacent buckets floor(start / L). Each range is tested against the ranges
+ * already placed in its three buckets (hash chains; a hash collision only adds tests), and refused when an
+ * overlapping pair contains an output. 2026-10-18 (it was O(n^2) per kernel call). */
+#define ALIAS_SLOTS 1024u
+static uint32_t check_alias_buckets(const SuColumnBinding *in, uint32_t nin, const SuColumnBinding *out,
+                                    uint32_t nout, uintptr_t bytes, int *done) {
+    uintptr_t start[2u * SU_LIMIT_FIELDS];
+    uint8_t is_out[2u * SU_LIMIT_FIELDS];
+    int16_t next[2u * SU_LIMIT_FIELDS];
+    int16_t head[ALIAS_SLOTS];
+    uint32_t i;
+    uint32_t n = 0;
+    *done = 0;
+    if ((uint64_t)nin + nout > 2u * SU_LIMIT_FIELDS) {
+        return SU_OK; /* not handled here: the caller runs the pairwise check */
+    }
+    for (i = 0; i < nout; i++) {
+        start[n] = (uintptr_t)out[i].data;
+        is_out[n++] = 1u;
+    }
+    for (i = 0; i < nin; i++) {
+        start[n] = (uintptr_t)in[i].data;
+        is_out[n++] = 0u;
+    }
+    *done = 1;
+    for (i = 0; i < n; i++) {
+        if (start[i] > UINTPTR_MAX - bytes) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    memset(head, 0xFF, sizeof head); /* -1: empty */
+    for (i = 0; i < n; i++) {
+        uintptr_t b = start[i] / bytes;
+        int d;
+        for (d = -1; d <= 1; d++) {
+            uintptr_t nb = b + (uintptr_t)(intptr_t)d;
+            int16_t e;
+            if ((d < 0 && b == 0u) || (d > 0 && nb == 0u)) {
+                continue;
+            }
+            for (e = head[(uint32_t)((nb * (uintptr_t)0x9E3779B97F4A7C15ull) >> 54) & (ALIAS_SLOTS - 1u)]; e >= 0;
+                 e = next[e]) {
+                if ((is_out[i] || is_out[e]) && ranges_overlap(start[i], start[i] + bytes, start[e], start[e] + bytes)) {
+                    return SU_E_INVALID_ARGUMENT;
+                }
+            }
+        }
+        {
+            uint32_t h = (uint32_t)((b * (uintptr_t)0x9E3779B97F4A7C15ull) >> 54) & (ALIAS_SLOTS - 1u);
+            next[i] = head[h];
+            head[h] = (int16_t)i;
+        }
+    }
+    return SU_OK;
+}
+
 static uint32_t check_alias(const SuColumnBinding *in, uint32_t nin, const SuColumnBinding *out,
                             uint32_t nout, uint64_t rows) {
     uintptr_t bytes;
     uint32_t i;
     uint32_t j;
     uint32_t k;
+    uint32_t st;
+    int done = 0;
     if (rows == 0u) {
         return SU_OK;
     }
     bytes = (uintptr_t)rows * 4u;
+    if (nout == 0u) {
+        return SU_OK;
+    }
+    st = check_alias_buckets(in, nin, out, nout, bytes, &done);
+    if (done) {
+        return st;
+    }
     for (j = 0; j < nout; j++) {
         uintptr_t os = (uintptr_t)out[j].data;
         uintptr_t oe;

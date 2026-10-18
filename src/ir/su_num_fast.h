@@ -32,6 +32,8 @@
 
 #if defined(__SIZEOF_INT128__) && !defined(SU_NUM_FAST_PORTABLE)
 __extension__ typedef unsigned __int128 su_numf_u128;
+__extension__ typedef __int128 su_numf_s128;
+#define SU_NUMF_S128 1
 #endif
 
 static inline void su_numf_mul_u64(uint64_t a, uint64_t b, uint64_t *hi, uint64_t *lo) {
@@ -79,6 +81,26 @@ static inline int su_numf_small(int64_t a) {
     return (uint64_t)a + ((uint64_t)1 << 62) < ((uint64_t)1 << 63);
 }
 
+#ifdef SU_NUMF_S128
+/* RNE(v / 2^32) of a signed 128-bit value, saturating. Floor shift, then round half to even on the discarded 32
+ * bits: RNE is symmetric (RNE(-x) = -RNE(x)), so this equals the reference's sign-magnitude rounding, and the
+ * saturation bounds agree (a rounded magnitude of exactly 2^63 is INT64_MIN when negative in both). Branchless in
+ * the rounding (the fraction is close to random; a branch on it mispredicts half the time). 2026-10-18. */
+static inline int64_t su_numf_round_s128(su_numf_s128 v) {
+    su_numf_s128 q = v >> 32;
+    uint32_t frac = (uint32_t)v;
+    uint32_t inc = (uint32_t)(frac > 0x80000000u) | ((uint32_t)(frac == 0x80000000u) & (uint32_t)((uint64_t)q & 1u));
+    q += inc;
+    if (q > (su_numf_s128)INT64_MAX) {
+        return INT64_MAX;
+    }
+    if (q < (su_numf_s128)INT64_MIN) {
+        return INT64_MIN;
+    }
+    return (int64_t)q;
+}
+#endif
+
 /* RNE(m / 2^32) of a 128-bit magnitude with sign, saturating (the reference acc_round32). */
 static inline int64_t su_numf_round32(int neg, uint64_t hi, uint64_t lo) {
     uint64_t q = (hi << 32) | (lo >> 32);
@@ -97,10 +119,34 @@ static inline int64_t su_numf_round32(int neg, uint64_t hi, uint64_t lo) {
 }
 
 /* Signed 128-bit accumulator (two's complement). Valid while every term's magnitude is below 2^124 and at
- * most four terms are added. */
+ * most four terms are added. With a native 128-bit type the products are signed (one imul) and the sum and
+ * rounding have no data-dependent branch. */
+#ifdef SU_NUMF_S128
+typedef struct SuNumfAcc {
+    su_numf_s128 v;
+} SuNumfAcc;
+
+static inline void su_numf_acc_init(SuNumfAcc *acc) {
+    acc->v = 0;
+}
+
+static inline void su_numf_acc_add(SuNumfAcc *acc, int64_t x, int64_t y, int negate) {
+    su_numf_s128 p = (su_numf_s128)x * (su_numf_s128)y;
+    acc->v += negate ? -p : p;
+}
+
+static inline int64_t su_numf_acc_round(const SuNumfAcc *acc) {
+    return su_numf_round_s128(acc->v);
+}
+#else
 typedef struct SuNumfAcc {
     uint64_t hi, lo;
 } SuNumfAcc;
+
+static inline void su_numf_acc_init(SuNumfAcc *acc) {
+    acc->hi = 0;
+    acc->lo = 0;
+}
 
 static inline void su_numf_acc_add(SuNumfAcc *acc, int64_t x, int64_t y, int negate) {
     uint64_t hi, lo;
@@ -122,6 +168,7 @@ static inline int64_t su_numf_acc_round(const SuNumfAcc *acc) {
     }
     return su_numf_round32(neg, hi, lo);
 }
+#endif
 
 /* ---- square root ---- */
 
@@ -207,9 +254,13 @@ static inline int64_t su_q32_subf(int64_t a, int64_t b) {
 }
 
 static inline int64_t su_q32_mulf(int64_t a, int64_t b) {
+#ifdef SU_NUMF_S128
+    return su_numf_round_s128((su_numf_s128)a * (su_numf_s128)b);
+#else
     uint64_t hi, lo;
     su_numf_mul_u64(su_numf_mag(a), su_numf_mag(b), &hi, &lo);
     return su_numf_round32((a < 0) != (b < 0), hi, lo);
+#endif
 }
 
 /* RNE((hi:lo) / d) with sign, saturating; the reference div_rne_u128 + sat_from_mag128. */
@@ -219,9 +270,11 @@ static inline int64_t su_numf_div_rne(int neg, uint64_t hi, uint64_t lo, uint64_
         return neg ? INT64_MIN : INT64_MAX; /* quotient >= 2^64 */
     }
     q = su_numf_div_u128(hi, lo, d, &rem);
-    if (rem > d - rem || (rem == d - rem && (q & 1u) != 0u)) {
-        q++;
-        if (q == 0u) {
+    /* Round half to even without a data-dependent branch (the remainder is close to random). */
+    {
+        uint64_t inc = (uint64_t)(rem > d - rem) | ((uint64_t)(rem == d - rem) & (q & 1u));
+        q += inc;
+        if (inc != 0u && q == 0u) {
             return neg ? INT64_MIN : INT64_MAX;
         }
     }
@@ -285,7 +338,8 @@ static inline int su_numf_small3(SuV3 a) {
 }
 
 static inline int64_t su_v3_dotf(SuV3 a, SuV3 b) {
-    SuNumfAcc acc = {0, 0};
+    SuNumfAcc acc;
+    su_numf_acc_init(&acc);
     if (!su_numf_small3(a) || !su_numf_small3(b)) {
         return su_v3_dot(a, b);
     }
@@ -301,15 +355,15 @@ static inline SuV3 su_v3_crossf(SuV3 a, SuV3 b) {
     if (!su_numf_small3(a) || !su_numf_small3(b)) {
         return su_v3_cross(a, b);
     }
-    acc.hi = acc.lo = 0;
+    su_numf_acc_init(&acc);
     su_numf_acc_add(&acc, a.y, b.z, 0);
     su_numf_acc_add(&acc, a.z, b.y, 1);
     r.x = su_numf_acc_round(&acc);
-    acc.hi = acc.lo = 0;
+    su_numf_acc_init(&acc);
     su_numf_acc_add(&acc, a.z, b.x, 0);
     su_numf_acc_add(&acc, a.x, b.z, 1);
     r.y = su_numf_acc_round(&acc);
-    acc.hi = acc.lo = 0;
+    su_numf_acc_init(&acc);
     su_numf_acc_add(&acc, a.x, b.y, 0);
     su_numf_acc_add(&acc, a.y, b.x, 1);
     r.z = su_numf_acc_round(&acc);
@@ -394,25 +448,25 @@ static inline SuQuat su_quat_mulf(SuQuat a, SuQuat b) {
     if (!su_numf_smallq(a) || !su_numf_smallq(b)) {
         return su_quat_mul(a, b);
     }
-    acc.hi = acc.lo = 0;
+    su_numf_acc_init(&acc);
     su_numf_acc_add(&acc, a.w, b.w, 0);
     su_numf_acc_add(&acc, a.x, b.x, 1);
     su_numf_acc_add(&acc, a.y, b.y, 1);
     su_numf_acc_add(&acc, a.z, b.z, 1);
     r.w = su_numf_acc_round(&acc);
-    acc.hi = acc.lo = 0;
+    su_numf_acc_init(&acc);
     su_numf_acc_add(&acc, a.w, b.x, 0);
     su_numf_acc_add(&acc, a.x, b.w, 0);
     su_numf_acc_add(&acc, a.y, b.z, 0);
     su_numf_acc_add(&acc, a.z, b.y, 1);
     r.x = su_numf_acc_round(&acc);
-    acc.hi = acc.lo = 0;
+    su_numf_acc_init(&acc);
     su_numf_acc_add(&acc, a.w, b.y, 0);
     su_numf_acc_add(&acc, a.x, b.z, 1);
     su_numf_acc_add(&acc, a.y, b.w, 0);
     su_numf_acc_add(&acc, a.z, b.x, 0);
     r.y = su_numf_acc_round(&acc);
-    acc.hi = acc.lo = 0;
+    su_numf_acc_init(&acc);
     su_numf_acc_add(&acc, a.w, b.z, 0);
     su_numf_acc_add(&acc, a.x, b.y, 0);
     su_numf_acc_add(&acc, a.y, b.x, 1);

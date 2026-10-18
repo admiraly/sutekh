@@ -1,0 +1,146 @@
+{
+ "ir_version": "0.3",
+ "system_id": "arena.score",
+ "numeric_profile": "fixed_q32_v1",
+ "query": "arena",
+ "instructions": [
+  {
+   "op": "const_u32",
+   "dst": "one",
+   "value": 1
+  },
+  {
+   "op": "const_u32",
+   "dst": "zero",
+   "value": 0
+  },
+  {
+   "op": "const_u32",
+   "dst": "ngates",
+   "value": 3
+  },
+  {
+   "op": "load_u32",
+   "dst": "gd",
+   "field": "a_gate_dir"
+  },
+  {
+   "op": "eq_u32",
+   "dst": "fwd",
+   "a": "gd",
+   "b": "one"
+  },
+  {
+   "op": "load_u32",
+   "dst": "ng",
+   "field": "a_next_gate"
+  },
+  {
+   "op": "add_u32",
+   "dst": "ng1",
+   "a": "ng",
+   "b": "one"
+  },
+  {
+   "op": "eq_u32",
+   "dst": "wrap",
+   "a": "ng1",
+   "b": "ngates"
+  },
+  {
+   "op": "select_u32",
+   "dst": "ng2",
+   "cond": "wrap",
+   "on_true": "zero",
+   "on_false": "ng1"
+  },
+  {
+   "op": "select_u32",
+   "dst": "ngn",
+   "cond": "fwd",
+   "on_true": "ng2",
+   "on_false": "ng"
+  },
+  {
+   "op": "load_u32",
+   "dst": "sc",
+   "field": "score"
+  },
+  {
+   "op": "add_u32",
+   "dst": "sc1",
+   "a": "sc",
+   "b": "one"
+  },
+  {
+   "op": "select_u32",
+   "dst": "scn",
+   "cond": "fwd",
+   "on_true": "sc1",
+   "on_false": "sc"
+  },
+  {
+   "op": "load_u32",
+   "dst": "hc",
+   "field": "a_hit_count"
+  },
+  {
+   "op": "lt_u32",
+   "dst": "hit",
+   "a": "zero",
+   "b": "hc"
+  },
+  {
+   "op": "load_u32",
+   "dst": "bp",
+   "field": "bumps"
+  },
+  {
+   "op": "add_u32",
+   "dst": "bp1",
+   "a": "bp",
+   "b": "one"
+  },
+  {
+   "op": "select_u32",
+   "dst": "bpn",
+   "cond": "hit",
+   "on_true": "bp1",
+   "on_false": "bp"
+  },
+  {
+   "op": "load_u32",
+   "dst": "other",
+   "field": "a_c0_slot"
+  },
+  {
+   "op": "emit_event",
+   "cond": "fwd",
+   "kind": 1,
+   "a": "ng",
+   "b": "scn"
+  },
+  {
+   "op": "emit_event",
+   "cond": "hit",
+   "kind": 2,
+   "a": "other",
+   "b": "hc"
+  },
+  {
+   "op": "store_u32",
+   "field": "a_next_gate",
+   "src": "ngn"
+  },
+  {
+   "op": "store_u32",
+   "field": "score",
+   "src": "scn"
+  },
+  {
+   "op": "store_u32",
+   "field": "bumps",
+   "src": "bpn"
+  }
+ ]
+}
