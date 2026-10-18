@@ -14,7 +14,8 @@
         Records the --check digests in bench/space3d/expected.json (only after a reviewed semantic change).
     run_bench.py --driver <racer_microcosm> --rollback-evidence <dir> [--repeat 3] [--iters 200]
         Rollback resimulation (racer_microcosm --rollback 1,6,12) at N = 8, 32, 256 on both VM tiers
-        (reference and planned), repeats interleaved in separate processes. Writes <dir>/rollback-bench.json and
+        (reference and planned; --tiers adds native with a SUTEKH_NATIVE=ON driver: racer.move as an IR 0.3
+        kernel), repeats interleaved in separate processes. Writes <dir>/rollback-bench.json and
         prints a table. Exit 0 only when every resimulated digest matched its reference digest and both tiers
         produced the same digests. Observations on this machine, not qualification.
 """
@@ -111,9 +112,10 @@ def rollback_evidence(args):
     records = []
     for rep_i in range(args.repeat):
         for n in (8, 32, 256):
-            for tier in ("reference", "planned"):
+            for tier in args.tiers.split(","):
                 extra = ["--n", str(n), "--warmup", "120", "--rollback", ",".join(str(k) for k in ROLLBACK_K),
-                         "--rollback-iters", str(args.iters), "--vm-tier", tier]
+                         "--rollback-iters", str(args.iters)]
+                extra += ["--native"] if tier == "native" else ["--vm-tier", tier]
                 rec = run(args.driver, extra)
                 rec["args"] = extra
                 rec["repeat"] = rep_i
@@ -149,7 +151,7 @@ def rollback_evidence(args):
           "total p50 / 8.33 ms | total p99 / 8.33 ms | save p50 us |" % args.repeat)
     print("|---|---|---|---|---|---|---|---|---|")
     for n in (8, 32, 256):
-        for tier in ("reference", "planned"):
+        for tier in args.tiers.split(","):
             rs = [r for r in records if r["n"] == n and r["vm"] == tier]
             for ki, k in enumerate(ROLLBACK_K):
                 ks = [r["k"][ki] for r in rs]
@@ -176,6 +178,8 @@ def main():
     ap.add_argument("--repeat", type=int, default=3)
     ap.add_argument("--rollback-evidence")
     ap.add_argument("--iters", type=int, default=200)
+    ap.add_argument("--tiers", default="reference,planned",
+                    help="rollback tiers: reference, planned, native (native needs a SUTEKH_NATIVE=ON driver)")
     args = ap.parse_args()
     if args.rollback_evidence:
         return rollback_evidence(args)
