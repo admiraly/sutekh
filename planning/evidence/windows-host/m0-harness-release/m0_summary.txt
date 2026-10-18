@@ -1,0 +1,45 @@
+M0 harness 9161b55c6db0 against build-platform\win64-native\sutekh.exe (sha256 30faf926d78a16fb4d85ef4bd79a1be0d8995cd0aa7ce24e6b34985466aa1314)
+probe: present
+
+T00  passed       Clean bootstrap  (checks 9, failed 0, dropped from detail 0)
+T01  passed       Reference movement  (checks 6, failed 0, dropped from detail 0)
+T02  passed       Empty and awkward counts  (checks 36, failed 0, dropped from detail 0)
+T03  passed       Numeric edges  (checks 18, failed 0, dropped from detail 0)
+T04  passed       Invalid input matrix  (checks 37, failed 0, dropped from detail 0)
+T05  passed       Successful code-only swap  (checks 23, failed 0, dropped from detail 0)
+T06  passed       Failed swap  (checks 7, failed 0, dropped from detail 0)
+T07  passed       Stale candidate  (checks 7, failed 0, dropped from detail 0)
+T08  passed       Snapshot round trip  (checks 10, failed 0, dropped from detail 0)
+T09  passed       Working-root failure  (checks 11, failed 0, dropped from detail 0)
+T10  not_run      Candidate isolation  (checks 12, failed 0, dropped from detail 0)
+       in 12 attempts no kill landed while candidate.evaluate was in flight (each attempt either saw no child or killed the worker after its reply); no isolation result is claimed
+T11  passed       Repeated reload  (checks 6350, failed 0, dropped from detail 0)
+T12  not_run      No native gameplay build  (checks 0, failed 0, dropped from detail 0)
+       inconclusive: strace is not installed, so the primary no-build evidence was not collected
+T13  passed       Latency decomposition  (checks 192, failed 0, dropped from detail 0)
+T14  passed       Deterministic fixture repeat  (checks 8, failed 0, dropped from detail 0)
+T15  passed       Structured protocol  (checks 15, failed 0, dropped from detail 0)
+TX1  passed       World close beyond the 4-world cap (extra)  (checks 34, failed 0, dropped from detail 0)
+TX2  passed       Worker crash recovery (extra)  (checks 24, failed 0, dropped from detail 0)
+TX3  unavailable  Native specialization (extra)  (checks 0, failed 0, dropped from detail 0)
+       engine does not advertise: world.specialize
+TX4  unavailable  Native specialization spawns no build tool (extra)  (checks 0, failed 0, dropped from detail 0)
+       engine does not advertise: world.specialize
+TX5  passed       Chunked tick workers (extra)  (checks 75, failed 0, dropped from detail 0)
+TX6  not_run      Large world within default limits and containment (extra)  (checks 6, failed 0, dropped from detail 0)
+       active worker /proc limits are not readable on this platform
+TX7  passed       Entities: spawn/despawn/stale handles/events (real binary vs Python model, extra)  (checks 60, failed 0, dropped from detail 0)
+TX8  passed       IR 0.2 programs and tick-worker equality (N=1,2,4,8, extra)  (checks 50, failed 0, dropped from detail 0)
+TX9  passed       Entity admission budget through world.create: refused over 4,194,304 entries (extra, audit MX19)  (checks 13, failed 0, dropped from detail 0)
+TX10 unavailable  Entities: dead rows canonically zero after a native kernel stages nonzero values (native build, extra)  (checks 0, failed 0, dropped from detail 0)
+       engine does not advertise: world.specialize
+TX11 passed       Schema migration runtime: plan, commit through a gen-2 candidate, default fill, rollback, refusals (extra, M2-01b)  (checks 27, failed 0, dropped from detail 0)
+
+timing targets (docs/PERFORMANCE.md section 2; provisional, shared VM, C10):
+  ir_prepare                 met             p95 8.789 ms (target <= 20.0 ms)
+  preview_response           not_comparable  p95 6.126 ms (target <= 100.0 ms)
+  install_critical_section   met             p95 0.001 ms (target <= 1.0 ms)
+  warm_edit_to_first_effect  met             p95 7.021 ms (target <= 100.0 ms)
+  native_incremental_check   not_comparable  p95 713.864 ms (target <= 2000.0 ms)
+
+totals: passed=21, failed=0, not_run=3, unavailable=3

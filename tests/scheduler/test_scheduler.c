@@ -28,9 +28,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
+#include "platform/su_posix.h"
 
 #include "ir/su_json.h"
+#include "platform/su_platform.h"
 #include "ir/su_lir.h"
 #include "runtime/jobs/su_effects.h"
 #include "runtime/jobs/su_jobs.h"
@@ -1283,9 +1284,9 @@ static void test_effects(void) {
 /* ---------- speedup observation (not a gate) ---------- */
 
 static double now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+    uint64_t ns = 0;
+    (void)su_platform_monotonic_ns(&ns);
+    return (double)ns / 1e6;
 }
 
 static int cmp_double(const void *a, const void *b) {
@@ -1314,8 +1315,8 @@ static void run_bench(void) {
         fprintf(stderr, "bench world failed\n");
         return;
     }
-    printf("bench rows=%llu reps=%d online_cpus=%ld (shared host; observation only)\n",
-           (unsigned long long)rows, REPS, sysconf(_SC_NPROCESSORS_ONLN));
+    printf("bench rows=%llu reps=%d online_cpus=%lu (shared host; observation only)\n",
+           (unsigned long long)rows, REPS, (unsigned long)su_platform_cpu_count());
     for (wi = 0; wi < sizeof workers / sizeof workers[0] + 1u; wi++) {
         double t[REPS];
         int r;

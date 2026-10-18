@@ -55,5 +55,5 @@ def build():
             else:cap['fields'].append(dict(id=fid,name=name,type='u32',read=True,write=False))
         cap['fields'].sort(key=lambda x:x['id']);cap['system_rev']=4 if system=='move' else 2;cap['source']=system+'_b1.lir.json'
         if system in ['goal','move']:cap['schedule']['before']=sorted(set(cap['schedule']['before']+['rts.damage']))
-        for name,value in [(system+'_b1.capsule.json',cap),(system+'_b1.lir.json',module)]: (out/name).write_text(json.dumps(value,indent=2)+'\n')
+        for name,value in [(system+'_b1.capsule.json',cap),(system+'_b1.lir.json',module)]: (out/name).write_text(json.dumps(value,indent=2)+'\n', newline="\n")
 if __name__=='__main__':build()

@@ -31,7 +31,7 @@ def main():
     output = Path(args.out)
     def save():
         record["elapsed_seconds"] = time.monotonic()-started
-        output.write_text(json.dumps(record,indent=2)+"\n")
+        output.write_text(json.dumps(record,indent=2)+"\n", newline="\n")
     with tempfile.TemporaryDirectory(prefix="sutekh-scale-spool-") as spool:
         s = rs.Session(str(Path(args.binary).resolve()), env={"TMPDIR":spool})
         try:

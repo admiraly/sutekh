@@ -19,7 +19,6 @@
  *                    removed at the end. */
 #define _POSIX_C_SOURCE 200809L
 
-#include <dirent.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -27,9 +26,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
+#include "../common/su_test_os.h"
 #include "agent/su_agent.h"
 #include "agent/su_proto.h"
 #include "ir/su_json.h"
@@ -87,7 +85,7 @@ static char g_root[4096];  /* scratch project root (absolute) */
 /* ---------- session: supervisor in a forked child, as in test_control ---------- */
 
 typedef struct Session {
-    pid_t pid;
+    SuTestServe serve; /* supervisor under test (tests/common/su_test_os.h) */
     int wfd;
     SuLineReader rd;
 } Session;
@@ -148,38 +146,17 @@ static Session session_start(const SuAgentConfig *cfg) {
     Session s;
     int req[2];
     int rsp[2];
-    pid_t pid;
 
-    if (pipe(req) != 0 || pipe(rsp) != 0) {
-        perror("pipe");
-        exit(2);
-    }
-    pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        exit(2);
-    }
-    if (pid == 0) {
-        int rc;
-        close(req[1]);
-        close(rsp[0]);
-        rc = su_agent_serve(req[0], rsp[1], cfg);
-        _exit(rc == 0 ? 0 : 1);
-    }
-    close(req[0]);
-    close(rsp[1]);
-    s.pid = pid;
+    su_test_serve_start(&s.serve, cfg, &req[1], &rsp[0]);
     s.wfd = req[1];
     su_line_reader_init(&s.rd, rsp[0], -1);
     return s;
 }
 
 static void session_stop(Session *s) {
-    int status = 0;
     close(s->wfd);
     su_line_reader_free(&s->rd);
-    waitpid(s->pid, &status, 0);
-    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(su_test_serve_wait(&s->serve));
 }
 
 /* Sends one request line and reads exactly one response line. Returns 0 on success. */
@@ -335,29 +312,28 @@ static void stage_fixtures(const char *repo) {
     char dir[4096];
     char src[8192];
     char dst[8192];
-    DIR *d;
-    struct dirent *de;
+    SuTestDir d;
+    const char *de_name;
 
     snprintf(dir, sizeof dir, "%s/tests/reload", repo);
-    d = opendir(dir);
-    if (d == NULL) {
+    if (su_test_dir_open(&d, dir) != 0) {
         perror(dir);
         exit(2);
     }
-    while ((de = readdir(d)) != NULL) {
-        size_t n = strlen(de->d_name);
+    while ((de_name = su_test_dir_next(&d)) != NULL) {
+        size_t n = strlen(de_name);
         size_t len = 0;
         uint8_t *data;
-        if (n < 6 || strcmp(de->d_name + n - 5, ".json") != 0) {
+        if (n < 6 || strcmp(de_name + n - 5, ".json") != 0) {
             continue;
         }
-        snprintf(src, sizeof src, "%s/%s", dir, de->d_name);
-        root_path(dst, sizeof dst, de->d_name);
+        snprintf(src, sizeof src, "%s/%s", dir, de_name);
+        root_path(dst, sizeof dst, de_name);
         data = read_whole(src, &len);
         write_bytes(dst, (const char *)data, len);
         free(data);
     }
-    closedir(d);
+    su_test_dir_close(&d);
     snprintf(src, sizeof src, "%s/tests/fixtures/t02/world_1024.json", repo);
     root_path(dst, sizeof dst, "world_1024.json");
     {
@@ -1389,20 +1365,20 @@ static void test_repeated_reload(Session *s, Ids *id) {
 /* ---------- main ---------- */
 
 static void remove_root(void) {
-    DIR *d = opendir(g_root);
-    struct dirent *de;
-    if (d == NULL) {
+    SuTestDir d;
+    const char *de_name;
+    if (su_test_dir_open(&d, g_root) != 0) {
         return;
     }
-    while ((de = readdir(d)) != NULL) {
+    while ((de_name = su_test_dir_next(&d)) != NULL) {
         char p[8192];
-        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) {
+        if (strcmp(de_name, ".") == 0 || strcmp(de_name, "..") == 0) {
             continue;
         }
-        root_path(p, sizeof p, de->d_name);
+        root_path(p, sizeof p, de_name);
         unlink(p);
     }
-    closedir(d);
+    su_test_dir_close(&d);
     rmdir(g_root);
 }
 
@@ -1441,15 +1417,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <worker_helper_path> <repo_root>\n", argv[0]);
         return 2;
     }
-    tmp = getenv("SU_TEST_SCRATCH");
-    if (tmp == NULL || tmp[0] == '\0') {
-        tmp = getenv("TMPDIR");
-    }
-    if (tmp == NULL || tmp[0] == '\0') {
-        tmp = "/tmp";
-    }
+    tmp = su_test_scratch_base(); /* SU_TEST_SCRATCH, then TMPDIR, then the platform temporary directory */
     snprintf(base, sizeof base, "%s/su_reload_XXXXXX", tmp);
-    if (mkdtemp(base) == NULL) {
+    if (su_platform_mkdtemp(base) == NULL) {
         perror("mkdtemp");
         return 2;
     }

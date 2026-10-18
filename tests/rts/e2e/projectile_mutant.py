@@ -23,7 +23,7 @@ class MutantSession(OriginalSession):
         arrival = next(i for i in doc["instructions"] if i.get("dst") == "s40")
         assert arrival["on_true"] == "k1" and arrival["on_false"] == "v39"
         arrival["on_true"] = "v39"
-        path.write_text(json.dumps(doc, indent=2)+"\n")
+        path.write_text(json.dumps(doc, indent=2)+"\n", newline="\n")
         print("M3-M27 scratch IR sha256:"+hashlib.sha256(path.read_bytes()).hexdigest())
 
 

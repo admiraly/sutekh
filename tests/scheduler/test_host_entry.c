@@ -9,12 +9,13 @@
  */
 #define _POSIX_C_SOURCE 200809L
 
+#include "platform/su_posix.h"
+
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 
 #include "ir/su_lir.h"
 #include "ir/su_sha256.h"

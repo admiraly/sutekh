@@ -3,14 +3,15 @@
 
 #include "runtime/worker.h"
 
+#include "platform/su_posix.h"
+
 #include <errno.h>
-#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <unistd.h>
+
+#include "platform/su_platform.h"
 
 #include "agent/su_path.h"
 #include "agent/su_proto.h"
@@ -496,10 +497,7 @@ static void mig_stage(const char *name) {
     if (mode != NULL && strcmp(mode, "abort") == 0) {
         abort();
     }
-    kill(getpid(), SIGKILL);
-    for (;;) {
-        pause();
-    }
+    su_platform_kill_self();
 }
 #define MIG_STAGE(name) mig_stage(name)
 #else
@@ -2208,10 +2206,7 @@ static void test_kill_check(WorkerState *s, unsigned idx) {
     if (s->test_kill_abort) {
         abort();
     }
-    kill(getpid(), SIGKILL);
-    for (;;) {
-        pause();
-    }
+    su_platform_kill_self();
 }
 #endif
 
@@ -3200,7 +3195,7 @@ static uint32_t h_world_restore(WorkerState *s, const SuJsonValue *params, SuBuf
 /* Writes data to a new file (O_EXCL, mode 0600). */
 static uint32_t write_new_file(const char *path, const uint8_t *data, size_t len, WorkerFail *f) {
     size_t off = 0;
-    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_BINARY | O_CLOEXEC, 0600);
     if (fd < 0) {
         fail(f, SU_E_IO, "spool file could not be created");
         return SU_E_IO;
@@ -3559,7 +3554,9 @@ static uint32_t h_world_close(WorkerState *s, const SuJsonValue *params, SuBuf *
 /* internal.stats {}: counts this worker holds, read from the structures themselves. The
  * supervisor never forwards it (it is not advertised); the control tests use it to check
  * that world.close releases worlds, checkpoints and registry records. */
-#ifdef SU_TEST_FAULT_HOOKS
+/* The containment and sandbox probes below are Linux-specific (io_uring, seccomp, /proc); Windows test
+ * workers do not have them and answer SU_E_UNSUPPORTED_METHOD. */
+#if defined(SU_TEST_FAULT_HOOKS) && defined(__linux__)
 #include <linux/io_uring.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -3752,7 +3749,7 @@ static uint32_t h_internal_test_x32_socket(SuBuf *res) {
 }
 #endif
 
-#ifdef SU_TEST_FAULT_HOOKS
+#if defined(SU_TEST_FAULT_HOOKS) && defined(__linux__)
 #include <sys/socket.h>
 /* Test-only containment probe (C07), compiled only into test workers. It runs inside whatever child
  * the test spawned, so it reports what that child actually enforces: socket(2) errno, bytes written
@@ -6048,7 +6045,7 @@ static void handle_line(WorkerState *s, const uint8_t *line, size_t len, int ove
     } else if (strcmp(req.method, "internal.specialize.install") == 0) {
         st = h_internal_specialize_install(s, req.params, &res, &f);
 #endif
-#ifdef SU_TEST_FAULT_HOOKS
+#if defined(SU_TEST_FAULT_HOOKS) && defined(__linux__)
     } else if (strcmp(req.method, "internal.test.containment") == 0) {
         st = h_internal_test_containment(&res);
         if (st != SU_OK) {
@@ -6116,10 +6113,13 @@ static void free_worlds(WorkerState *s) {
 int su_worker_main_with_hooks(int in_fd, int out_fd, const SuWorkerHooks *hooks) {
     WorkerState *s;
     SuLineReader r;
+#if !defined(_WIN32)
     struct sigaction ign;
     struct sigaction old;
+#endif
     int ret = 0;
 
+    su_platform_process_init();
     s = calloc(1, sizeof *s);
     if (s == NULL) {
         return 1;
@@ -6140,10 +6140,12 @@ int su_worker_main_with_hooks(int in_fd, int out_fd, const SuWorkerHooks *hooks)
     test_native_crash_configure();
 #endif
 #endif
+#if !defined(_WIN32)
     memset(&ign, 0, sizeof ign);
     ign.sa_handler = SIG_IGN;
     sigemptyset(&ign.sa_mask);
     sigaction(SIGPIPE, &ign, &old);
+#endif
 
     su_line_reader_init(&r, in_fd, -1);
     for (;;) {
@@ -6173,7 +6175,9 @@ int su_worker_main_with_hooks(int in_fd, int out_fd, const SuWorkerHooks *hooks)
     free_worlds(s);
     su_checkpoint_store_destroy(s->store);
     free(s);
+#if !defined(_WIN32)
     sigaction(SIGPIPE, &old, NULL);
+#endif
     return ret;
 }
 
