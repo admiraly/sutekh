@@ -17,7 +17,9 @@
  *   6. two worlds stepped concurrently on two threads, and two worlds interleaved on one thread at different
  *      ticks: both reach the pinned digest (per-world operator scratch);
  *   7. tiers: reference for both IR systems, and native for racer.move when the library has the backend
- *      (racer.race uses emit_event and is refused): the pinned digest every time. */
+ *      (racer.race uses emit_event and is refused): the pinned digest every time.
+ *   8. capsule movers (space3d.query_shape): with z lanes zero every lane equals the space3d.query world's; with
+ *      z0/z1 = -20/+20 pushed as tick-0 inputs, rollback (in place and allocating) and replay are bit-identical. */
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -82,6 +84,8 @@ typedef struct Bytes {
 } Bytes;
 
 static Bytes g_race_cap, g_race_lir, g_move_cap, g_move_lir, g_query, g_fixture;
+static Bytes g_fixture_shape;               /* g_fixture plus zero columns for the query_shape-only lanes */
+static const Bytes *g_fix_cur = &g_fixture; /* fixture used by make_world */
 static char g_pin_state[65], g_pin_events[65];
 static uint64_t g_pin_event_count;
 
@@ -103,8 +107,8 @@ static void desc_init(SuHostWorldDesc *d, SuHostCapsule caps[3], const Bytes *re
     d->struct_size = sizeof *d;
     d->capsule_count = 3;
     d->capsules = caps;
-    d->fixture_json = g_fixture.p;
-    d->fixture_len = g_fixture.n;
+    d->fixture_json = g_fix_cur->p;
+    d->fixture_len = g_fix_cur->n;
     d->tick_rate_hz = 120;
     /* The entity caps of racer_microcosm, so that the event log section is the same bytes. */
     d->max_struct_per_tick = 1;
@@ -693,6 +697,195 @@ static int load(Bytes *b, const char *path) {
     return 1;
 }
 
+/* ---------- 8. capsule movers: space3d.query_shape (2026-10-18) ---------- */
+
+static Bytes g_shape;
+
+/* Queues z0 = -zh, z1 = +zh for every mover (kind 1) at the world's current tick. */
+static void push_capsules(SuHostWorld *w, int64_t zh) {
+    uint32_t kind_id = 0, z0 = 0, z1 = 0, slot;
+    uint64_t rows = su_host_capacity(w);
+    SuHostError err;
+    check(su_host_field_id(w, "kind", &kind_id) == SU_OK && su_host_field_id(w, "z0.lo", &z0) == SU_OK &&
+              su_host_field_id(w, "z1.lo", &z1) == SU_OK,
+          "capsule lanes present");
+    for (slot = 0; slot < rows; slot++) {
+        uint64_t e = 0;
+        uint32_t k = 0;
+        uint8_t alive = 0;
+        if (su_host_alive(w, slot, 1, &alive) != SU_OK || !alive || su_host_read(w, kind_id, slot, 1, &k) != SU_OK ||
+            k != 1u || su_host_entity_at(w, slot, &e) != SU_OK) {
+            continue;
+        }
+        check(su_host_input_push_i64(w, su_host_tick(w), e, z0, -zh, &err) == SU_OK &&
+                  su_host_input_push_i64(w, su_host_tick(w), e, z1, zh, &err) == SU_OK,
+              "push capsule lanes: %s", err.message);
+    }
+}
+
+/* g_fixture with zero columns appended for the lanes only space3d.query_shape declares. */
+static int make_shape_fixture(void) {
+    static const char *const extra[] = {"prox_margin.lo", "prox_margin.hi", "prox_slot", "prox_gen", "prox_dist.lo",
+                                        "prox_dist.hi",   "z0.lo",          "z0.hi",     "z1.lo",    "z1.hi"};
+    const char *ids = strstr((const char *)g_fixture.p, "\"entity_ids\":[");
+    size_t rows = 1, i, k, n = g_fixture.n, cap;
+    char *out;
+    while (n > 0u && (g_fixture.p[n - 1u] == 0 || g_fixture.p[n - 1u] == 10 || g_fixture.p[n - 1u] == 13 ||
+                      g_fixture.p[n - 1u] == 32)) {
+        n--;
+    }
+    if (ids == NULL || n < 2u || g_fixture.p[n - 1u] != '}' || g_fixture.p[n - 2u] != '}') {
+        return 0;
+    }
+    for (ids += 14; *ids != ']'; ids++) {
+        rows += *ids == ',';
+    }
+    cap = n + 10u * (rows * 2u + 32u) + 16u;
+    out = malloc(cap);
+    if (out == NULL) {
+        return 0;
+    }
+    memcpy(out, g_fixture.p, n - 2u);
+    k = n - 2u;
+    for (i = 0; i < 10u; i++) {
+        size_t r;
+        k += (size_t)sprintf(out + k, ",\"%s\":[", extra[i]);
+        for (r = 0; r < rows; r++) {
+            out[k++] = '0';
+            out[k++] = r + 1u < rows ? ',' : ']';
+        }
+    }
+    out[k++] = '}';
+    out[k++] = '}';
+    g_fixture_shape.p = (uint8_t *)out;
+    g_fixture_shape.n = k;
+    return 1;
+}
+
+static void test_capsule_movers(void) {
+    SuHostWorld *w, *q, *v = NULL;
+    uint32_t i, n, contacts_sphere = 0, contacts_capsule = 0, hc = 0, it;
+    uint64_t done = 0, rows;
+    uint8_t *snap = NULL, *bytes = NULL;
+    size_t snap_len = 0, got = 0, len = 0;
+    uint8_t d_end[32], d2[32];
+    SuReplayWriter *rw = NULL;
+    SuReplayOptions o;
+    SuReplay *r = NULL;
+    SuHostError err;
+    /* (a) z lanes zero: every lane of the space3d.query world equals the same lane of the query_shape world. */
+    if (!make_shape_fixture()) {
+        check(0, "shape fixture");
+        return;
+    }
+    q = make_world(&g_query);
+    g_fix_cur = &g_fixture_shape;
+    w = make_world(&g_shape);
+    if (q == NULL || w == NULL) {
+        su_host_world_destroy(q);
+        su_host_world_destroy(w);
+        return;
+    }
+    step_n(q, 720);
+    step_n(w, 720);
+    n = su_host_field_count(q);
+    rows = su_host_capacity(q);
+    for (i = 0; i < n; i++) {
+        SuHostFieldInfo fi;
+        uint32_t id2 = 0, s1, s2;
+        const uint32_t *c1 = NULL, *c2 = NULL;
+        uint64_t r1 = 0, r2 = 0;
+        su_host_field_info(q, i, &fi);
+        s1 = su_host_column(q, fi.id, &c1, &r1);
+        s2 = su_host_field_id(w, fi.name, &id2) == SU_OK ? su_host_column(w, id2, &c2, &r2) : SU_E_SCHEMA_MISMATCH;
+        check(s1 == SU_OK && s2 == SU_OK && r1 == rows && r2 == rows &&
+                  memcmp(c1, c2, (size_t)rows * sizeof(uint32_t)) == 0,
+              "z lanes zero: lane %s equals space3d.query's", fi.name);
+    }
+    {
+        uint32_t hid = 0;
+        su_host_field_id(q, "collisions", &hid);
+        for (i = 0; i < (uint32_t)rows; i++) {
+            uint32_t a = 0;
+            su_host_read(q, hid, i, 1, &a);
+            contacts_sphere += a;
+        }
+    }
+    su_host_world_destroy(q);
+    su_host_world_destroy(w);
+
+    /* (b) capsule movers (z in [-20, 20]): rollback from tick 600 over 120 ticks, in place and allocating. */
+    w = make_world(&g_shape);
+    if (w == NULL) {
+        return;
+    }
+    push_capsules(w, (int64_t)20 << 32);
+    step_n(w, 600);
+    su_host_snapshot_size(w, &snap_len);
+    snap = malloc(snap_len);
+    check(snap != NULL && su_host_snapshot_write(w, snap, snap_len, &got) == SU_OK && got == snap_len,
+          "capsule anchor snapshot");
+    step_n(w, 120);
+    su_host_digest(w, d_end);
+    {
+        uint32_t hid = 0;
+        su_host_field_id(w, "collisions", &hid);
+        for (i = 0; i < (uint32_t)su_host_capacity(w); i++) {
+            su_host_read(w, hid, i, 1, &hc);
+            contacts_capsule += hc;
+        }
+    }
+    for (it = 0; it < 6u && snap != NULL; it++) {
+        uint32_t st = it % 2u ? su_host_snapshot_restore(w, snap, snap_len, &err)
+                              : su_host_snapshot_restore_inplace(w, snap, snap_len, &err);
+        check(st == SU_OK && su_host_tick(w) == 600u, "capsule restore %u", (unsigned)it);
+        step_n(w, it % 3u == 0u ? 120u : 1u);
+        if (it % 3u != 0u) {
+            step_n(w, 119);
+        }
+        su_host_digest(w, d2);
+        check(memcmp(d_end, d2, 32) == 0, "capsule rollback %u re-simulates bit-identically", (unsigned)it);
+    }
+    check(contacts_capsule > 0u, "capsule movers collide (the shape is in effect)");
+    free(snap);
+    su_host_world_destroy(w);
+    printf("host_ops capsule movers: collisions counted by racer.race: spheres %u by tick 720, capsules %u by tick 720\n", contacts_sphere,
+           contacts_capsule);
+
+    /* (c) replay: the capsule lanes are inputs of tick 0, recorded and replayed. */
+    w = make_world(&g_shape);
+    if (w == NULL) {
+        return;
+    }
+    memset(&o, 0, sizeof o);
+    o.struct_size = sizeof o;
+    o.keyframe_interval = 120;
+    o.digest_interval = 30;
+    check(su_replay_writer_begin(w, &o, &rw, &err) == SU_OK, "capsule replay begin: %s", err.message);
+    if (rw != NULL) {
+        push_capsules(w, (int64_t)20 << 32);
+        check(su_replay_writer_step(rw, w, 360, &done, &err) == SU_OK && done == 360u, "capsule replay step");
+        check(su_replay_writer_finish(rw, w, &bytes, &len) == SU_OK, "capsule replay finish");
+        su_replay_writer_destroy(rw);
+    }
+    su_host_digest(w, d_end);
+    if (bytes != NULL && su_replay_open(bytes, len, &r, &err) == SU_OK) {
+        v = make_world(&g_shape);
+        if (v != NULL) {
+            check(su_replay_seek(r, v, 250, &err) == SU_OK && su_replay_play(r, v, 110, &done, &err) == SU_OK &&
+                      done == 110u,
+                  "capsule replay seek + play: %s", err.message);
+            su_host_digest(v, d2);
+            check(memcmp(d_end, d2, 32) == 0, "capsule replay equals the recorded world");
+        }
+        su_host_world_destroy(v);
+        su_replay_close(r);
+    }
+    su_replay_free(bytes);
+    su_host_world_destroy(w);
+    g_fix_cur = &g_fixture;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: test_host_ops <racer fixture json>  (run from the repository root)\n");
@@ -702,7 +895,8 @@ int main(int argc, char **argv) {
         !load(&g_race_lir, "capsules/space3d_racer/race.lir.json") ||
         !load(&g_move_cap, "capsules/space3d_racer/move.capsule.json") ||
         !load(&g_move_lir, "capsules/space3d_racer/move.lir.json") ||
-        !load(&g_query, "profiles/space3d/space3d_query.capsule.json") || !load(&g_fixture, argv[1]) ||
+        !load(&g_query, "profiles/space3d/space3d_query.capsule.json") || 
+        !load(&g_shape, "profiles/space3d/space3d_query_shape.capsule.json") || !load(&g_fixture, argv[1]) ||
         !read_pins()) {
         return 2;
     }
@@ -713,12 +907,15 @@ int main(int argc, char **argv) {
     test_identity_bound();
     test_independence();
     test_tiers();
+    test_capsule_movers();
     printf("host_ops: %u checks, %u failures\n", g_checks, g_failures);
     free(g_race_cap.p);
     free(g_race_lir.p);
     free(g_move_cap.p);
     free(g_move_lir.p);
     free(g_query.p);
+    free(g_shape.p);
+    free(g_fixture_shape.p);
     free(g_fixture.p);
     return g_failures == 0u ? 0 : 1;
 }

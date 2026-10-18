@@ -20,6 +20,9 @@ racer.move, and space3d.query as a host operator, in the driver's schedule order
      ordered after the host operator space3d.query_prox in the same tick). arena_host dumps its initial world and
      its committed state after T ticks through the in-process host API; the same capsules through `sutekh serve`
      reproduce every lane, also after a snapshot at T/2 and a restore.
+  7. capsule movers: the same world with the space3d.query_shape record. With the z0/z1 lanes zero, every lane at T
+     equals the space3d.query run; with z0 = -20, z1 = +20 m on every mover, a snapshot at T/2, restore and re-step to
+     T reproduce the straight run on every lane, and the run differs from the sphere run.
 Exit 0 only when every check ran and passed (the native part is reported, not required, on VM-only builds).
 
     test_space3d_serve.py --binary <sutekh> --driver <racer_microcosm> --work <dir> [--n 8] [--ticks 720]
@@ -142,6 +145,59 @@ def remap_project(src, dst, fixture_path):
     fx["columns"] = {"g_" + k: v for k, v in fx["columns"].items()}
     with open(os.path.join(dst, "racer.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(fx, fh, separators=(",", ":"))
+
+
+def run_capsules(args, proj, fixture, names, rows, half, want_full, create):
+    """Check 7: capsule movers (space3d.query_shape) through `sutekh serve`."""
+    shutil.copy(os.path.join(ROOT, "profiles", "space3d", "space3d_query_shape.capsule.json"), proj)
+    fx = json.load(open(fixture, encoding="utf-8"))
+    extra = ["prox_margin.lo", "prox_margin.hi", "prox_slot", "prox_gen", "prox_dist.lo", "prox_dist.hi",
+             "z0.lo", "z0.hi", "z1.lo", "z1.hi"]
+    zero = dict(fx, columns=dict(fx["columns"], **{k: [0] * rows for k in extra}))
+    caps = dict(zero, columns=dict(zero["columns"]))
+    zh = 20 << 32
+    for lane, val in (("z0", -zh), ("z1", zh)):
+        bits = val & 0xFFFFFFFFFFFFFFFF
+        caps["columns"][lane + ".lo"] = [bits & 0xFFFFFFFF if k == 1 else 0 for k in fx["columns"]["kind"]]
+        caps["columns"][lane + ".hi"] = [bits >> 32 if k == 1 else 0 for k in fx["columns"]["kind"]]
+    for name, obj in (("racer_zero.json", zero), ("racer_caps.json", caps)):
+        with open(os.path.join(proj, name), "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(obj, fh, separators=(",", ":"))
+    shape = dict(create, capsule_paths=create["capsule_paths"][:2] + [
+        {"capsule_path": "space3d_query_shape.capsule.json", "host_operator": "space3d.query_shape"}])
+    s = Serve(args.binary, proj)
+    result = "FAILED"
+    try:
+        created = s.call("world.create", dict(shape, fixture_path="racer_zero.json"))
+        wid, rev = created["world_id"], created["world_revision"]
+        rev = s.call("world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": args.ticks})["world_revision"]
+        cols, _ = read_all(s, wid, rows, names)
+        ok0 = compare(cols, want_full, "query_shape with z lanes zero, stepped to T")
+        s.call("world.close", {"world_id": wid, "expected_world_revision": rev})
+        created = s.call("world.create", dict(shape, fixture_path="racer_caps.json"))
+        wid, rev = created["world_id"], created["world_revision"]
+        rev = s.call("world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": half})["world_revision"]
+        snap = s.call("world.snapshot", {"world_id": wid, "expected_world_revision": rev})
+        rev = s.call("world.step", {"world_id": wid, "expected_world_revision": rev,
+                                    "ticks": args.ticks - half})["world_revision"]
+        straight, _ = read_all(s, wid, rows, names + ["z0.hi"])
+        rev = s.call("world.restore", {"world_id": wid, "snapshot_id": snap["snapshot_id"],
+                                       "expected_world_revision": rev})["world_revision"]
+        rev = s.call("world.step", {"world_id": wid, "expected_world_revision": rev,
+                                    "ticks": args.ticks - half})["world_revision"]
+        again, _ = read_all(s, wid, rows, names + ["z0.hi"])
+        ok1 = straight == again
+        check(ok1, "capsule movers: restore at T/2 and re-step to T differs from the straight run")
+        differs = [n for n in names if straight[n] != want_full["columns"][n]]
+        check(len(differs) > 0, "capsule movers: no lane differs from the sphere run (shape not in effect)")
+        check(straight["z0.hi"][0] == ((-zh) & 0xFFFFFFFFFFFFFFFF) >> 32, "capsule movers: z0 lane kept")
+        s.call("world.close", {"world_id": wid, "expected_world_revision": rev})
+        result = "%s (z lanes zero equal space3d.query: %s; capsules z +/-20: restore re-step %s, %d lanes differ " \
+                 "from spheres)" % ("ok" if ok0 and ok1 and differs else "FAILED", ok0, "equal" if ok1 else "DIFFERS",
+                                    len(differs))
+    finally:
+        s.close()
+    return result
 
 
 def run_post_query(args, half):
@@ -318,11 +374,13 @@ def main():
         finally:
             s.close()
 
+    capsules = run_capsules(args, proj, fixture, names, rows, half, want_full, create)
     post_query = "not run (no --arena)"
     if args.arena:
         post_query = run_post_query(args, half)
 
     print("space3d serve: post-query ordering: %s" % post_query)
+    print("space3d serve: capsule movers: %s" % capsules)
     print("space3d serve: game schema %s (IDs + %d, names g_*): %s" % (REMAP_SCHEMA, REMAP_ID, ", ".join(remap_runs)))
     print("space3d serve: N=%d, %d rows, %d lanes, T=%d (snapshot at %d), %d events; native: %s"
           % (args.n, rows, len(names), args.ticks, half, rec["events"], native))

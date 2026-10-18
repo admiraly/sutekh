@@ -16,7 +16,7 @@ A world that uses the operator has schema ID `space3d` and reserves these field 
 
 | ID | Field | Type | Operator access | Meaning |
 |---|---|---|---|---|
-| 1 | `kind` | u32 | read | 0 none, 1 mover (swept sphere), 2 sphere, 3 oriented box, 4 capsule, 5 rectangular gate, 6 disc gate, 7 elliptical gate |
+| 1 | `kind` | u32 | read | 0 none, 1 mover (swept sphere; a capsule under `space3d.query_shape`), 2 sphere, 3 oriented box, 4 capsule, 5 rectangular gate, 6 disc gate, 7 elliptical gate |
 | 2 | `next_gate` | u32 | read | mover: `gate_index` of the gate it must cross next |
 | 3 | `gate_index` | u32 | read | gate: its index in the course |
 | 10, 12, 14 | `pos_x/y/z` | q32 | read | position at the end of the tick (movers), centre (others) |
@@ -110,6 +110,69 @@ margin <= 0 the base lanes equal `space3d.query`'s bit for bit. Constants hash `
 `space3d_prox_constants_text()`). Evidence: `space3d_ops` (known answers for sphere, capsule and box distances, ties
 and margins; 30 random scenes: margin 0 equals the base operator on every base lane, random margins equal brute force
 on every lane when nothing is truncated; a tie-break mutant fails).
+
+**Capsule movers: `space3d.query_shape` (2026-10-18).** A sphere fits long or flat craft poorly (one measured hull:
+bounding sphere 40.9 m about the origin for half extents 18.3 x 13.7 x 32.8 m, so a side contact fires up to 22.6 m
+from the hull; a capsule along local z fits it at r 24.3 m). A third operator, record
+`profiles/space3d/space3d_query_shape.capsule.json`, has every lane and result of `space3d.query_prox` plus:
+
+| ID | Field | Type | Access | Meaning |
+|---|---|---|---|---|
+| 72 | `z0` | q32 | read | mover: start of the core segment on its local +z axis |
+| 74 | `z1` | q32 | read | mover: end of the core segment on its local +z axis |
+
+A mover with `z0 = z1 = 0` is a sphere and takes exactly the sphere code path, so its lanes equal
+`space3d.query_prox`'s bit for bit; worlds that use `space3d.query` or `space3d.query_prox` are untouched (their
+records, constants hashes and digests are unchanged). Otherwise the mover is the capsule of radius `radius` about the
+segment from `rot * (0, 0, z0)` to `rot * (0, 0, z1)` relative to its position (`z0 > z1` is allowed; `z0 = z1 != 0` is
+an offset sphere).
+
+*Rotation during the tick.* The schema has one orientation per row, so the segment offsets are computed once from the
+mover's `rot` lanes, which hold its orientation **at the end of the tick**, and held for the whole tick: the sweep is
+pure translation from `prev` to `pos`. This is an approximation, not a bound: a mover turning by an angle a during
+the tick has a segment end at distance |z| from the reference point displaced by up to 2 |z| sin(a / 2) from where
+the true motion has it at the start of the tick (about 0.35 m for |z| = 20 m and 1 degree per tick), with the error
+shrinking to zero at the end of the tick. Contacts can therefore be early, late or missed by that much at the ends of
+the segment. A game that needs a conservative result can add that amount to `radius` (or to the obstacle) for fast
+turners; a game that needs the start orientation can store it in the `rot` lanes before the query.
+
+*Narrow phase* (`s3_sweep_capsule_*`, `space3d_geom.h`). The mover's reference point c sweeps against the Minkowski
+sum of the obstacle core and the reversed mover segment: for a segment core a-b (capsule, sphere with a = b, another
+mover's segment at its start position with the relative displacement, as for spheres) that sum is the parallelogram
+`{a - e0 + alpha (b - a) + beta (e0 - e1)}` rounded by the radius sum. Its earliest contact is the smallest s among the
+face slab (entry through the plane at distance R, with the hit point's parallelogram coordinates, computed with
+cross products against the unit normal, in [0, 1]) and the four edge capsules (`ray_capsule`, the existing
+sphere-against-capsule root); equal s keeps the earlier feature (face, then edges in fixed order). Start contact gives
+toi 0. The normal is taken from the closest point of the parallelogram to the contact centre (face first, then the
+edges, smallest squared distance, ties to the earlier), i.e. from the closest pair of core points, pointing from the
+obstacle to the mover. Against an oriented box: a core segment that crosses the box at the start (slab clip) reports
+toi 0 with the box normal at the middle of the crossing chord; otherwise the earliest of the two end-sphere sweeps
+(`s3_sweep_sphere_obb`) and the twelve box-edge segment sweeps (radius r), ties to the earlier in that order. This is
+exact: the first touch of a segment and a box is at an end point of the segment or between the segment and a box
+edge. A sphere mover against a capsule mover uses `s3_sweep_sphere_capsule` against the other's segment.
+Same toi/normal contract and accuracy domain as the sphere sweeps.
+
+*Broadphase and proximity.* A capsule mover's bounds are the union of its two end spheres at `prev` and at `pos` (the
+swept shape is their convex hull), plus the margin and slack as before. `prox_dist` uses core segment distances:
+segment to point or segment (closest point of the same parallelogram), segment to box (0 when the segment crosses it,
+else the minimum over the end points and the twelve edges). Gate crossings stay on the reference point's segment
+`prev -> pos`. Constants hash `fb8287e3...` (SHA-256 of `space3d_shape_constants_text()`).
+
+Evidence: `test_space3d_geom` (hand-worked cases: end-sphere contact at toi (10 - sqrt 3) / 20, crossed capsules
+(face) and parallel capsules (edges) at 0.3, box edge at (4 - sqrt 0.75) / 10 with normal (-sqrt 0.75, 0, 0.5), box
+face via an end sphere, start crossing, segment distances; 6,000 random sweeps each against sphere, capsule and box
+checked against a double-precision reference that minimises the convex core distance by nested ternary search and
+bisects the first root: 0 mismatches, worst toi error 7.3e-7 m, worst normal error 3.4e-7; a mutant without the
+face slab fails 762 cases). `test_space3d_ops` (descriptor, hash and record; a long mover hits a sphere a sphere
+mover misses; the axis follows `rot`; two capsule movers report each other at one toi with opposite normals; a
+two-sphere tie at one toi orders by slot and proximity ties go to the lower slot, with slots swapped; 30 random
+scenes with z lanes zero equal `space3d.query_prox` on every lane; the same scenes with random capsule movers: broadphase
+equals brute force on every lane in the 22 untruncated scenes, repeat bit-identical; a mutant with sphere bounds for
+capsule movers fails). `host_ops` check 8 (host API: z lanes zero give every lane of the `space3d.query` world; capsule
+movers of +/-20 m: rollback over 120 ticks in place and allocating, and replay seek + play, bit-identical).
+`space3d_serve` check 7 (`sutekh serve`: z lanes zero equal the `space3d.query` run on every lane; capsule movers:
+snapshot at T/2, restore and re-step to T equal the straight run on every lane). Native tier: the operator is compiled
+C run identically under every tier (it is not lowered), so there is no separate native path to compare.
 
 ## 3. Semantics
 
