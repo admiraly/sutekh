@@ -180,6 +180,77 @@ typedef struct SuAssetMaterial {
 /* Default factors: white, no emission, metallic 1, roughness 1 (the glTF defaults), opaque. */
 void su_asset_material_default(SuAssetMaterial *m);
 
+/* ---- layered paint material (optional second material model) ----
+ *
+ * A material entry of type_version 2 is a SuAssetMaterial followed by a SuAssetPaint. The first 128 bytes keep
+ * their glTF meaning where the paint model uses them (see render.h for the exact shading and blend):
+ *   base_color     multiplies the albedo map (rgb) and its alpha
+ *   metallic       multiplies the metalness read from the material map (map absent or channel NONE: the value)
+ *   roughness      multiplies the roughness read from the roughness map (same rule)
+ *   normal_scale   scales the tangent-space x/y of the normal map
+ *   occlusion_strength  blend of the AO map into ambient light: ao = mix(1, map, strength)
+ *   emissive, emissive_strength   the base glow colour (linear RGB) and intensity: glow = glow map x colour x intensity
+ *   alpha_*, double_sided   as for PBR (unlit is ignored)
+ * Its texture[] / tex_info[] are unused (zero); the paint model has its own eight slots below.
+ * A version 1 material is plain PBR-lite, exactly as before; a pack of only version 1 materials is unchanged. */
+
+/* Paint texture slots. Colour space is part of the slot and is checked: SRGB slots take *_SRGB texture formats,
+ * LINEAR slots take UNORM formats (BC4 / BC5 included). A texture of the wrong kind makes the material (and a pack
+ * containing it) invalid. */
+#define SU_PAINT_SLOT_ALBEDO 0u     /* sRGB   rgb albedo, a coverage */
+#define SU_PAINT_SLOT_NORMAL 1u     /* linear two-channel tangent-space normal (BC5 style: r = x, g = y, z rebuilt) */
+#define SU_PAINT_SLOT_ROUGHNESS 2u  /* linear one channel, selected by channel[SU_PAINT_CH_ROUGHNESS] */
+#define SU_PAINT_SLOT_MATERIAL 3u   /* linear, channels meant by channel[SU_PAINT_CH_METAL] and [SU_PAINT_CH_SPECULAR] */
+#define SU_PAINT_SLOT_MASK 4u       /* linear, r g b a = weight of layer 0 1 2 3 */
+#define SU_PAINT_SLOT_GLOW 5u       /* sRGB   rgb glow map */
+#define SU_PAINT_SLOT_DIRT 6u       /* linear one channel, selected by channel[SU_PAINT_CH_DIRT] */
+#define SU_PAINT_SLOT_AO 7u         /* linear one channel, selected by channel[SU_PAINT_CH_AO] */
+#define SU_PAINT_SLOT_COUNT 8u
+
+/* Which texel channel a one-channel input reads: 0 r, 1 g, 2 b, 3 a; SU_PAINT_CH_NONE: do not read the map. */
+#define SU_PAINT_CH_ROUGHNESS 0u
+#define SU_PAINT_CH_METAL 1u
+#define SU_PAINT_CH_SPECULAR 2u
+#define SU_PAINT_CH_DIRT 3u
+#define SU_PAINT_CH_AO 4u
+#define SU_PAINT_CH_COUNT 5u
+#define SU_PAINT_CH_NONE 4u
+
+#define SU_PAINT_MAX_LAYERS 4u
+#define SU_PAINT_LAYER_MULTIPLY 0x1u     /* blend: multiply instead of lerp (see render.h) */
+#define SU_PAINT_LAYER_GLOW_TINT 0x2u    /* the layer recolours the glow it covers with glow_color x glow_strength */
+
+/* 48 bytes. Layer k is driven by channel k of the mask map. */
+typedef struct SuAssetPaintLayer {
+    float color[3];            /* linear RGB */
+    float roughness;           /* 0..1 */
+    float metallic;            /* 0..1 */
+    float opacity;             /* scales the mask weight, 0..1 */
+    float glow_color[3];       /* linear RGB, used with SU_PAINT_LAYER_GLOW_TINT */
+    float glow_strength;       /* >= 0 */
+    uint32_t flags;            /* SU_PAINT_LAYER_* */
+    uint32_t reserved;
+} SuAssetPaintLayer;
+
+/* 336 bytes. */
+typedef struct SuAssetPaint {
+    uint64_t texture[SU_PAINT_SLOT_COUNT];   /* texture ids, 0 = none (a neutral default is used, see render.h) */
+    uint32_t tex_info[SU_PAINT_SLOT_COUNT];  /* SU_ASSET_TEX_INFO */
+    uint32_t layer_count;      /* 0..4; layers 0..layer_count-1 exist */
+    uint8_t layer_order[4];    /* application order: entry i is the layer applied i-th; a permutation of 0..layer_count-1 */
+    uint8_t channel[8];        /* SU_PAINT_CH_* index -> 0..3 or SU_PAINT_CH_NONE */
+    float specular;            /* dielectric specular scale: F0 = 0.08 * specular * map (0.5 = the usual 0.04) */
+    float dirt_amount;         /* 0..1, scales the dirt map (no map: uniform dirt) */
+    float dirt_darken;         /* 0..1, albedo *= 1 - dirt * darken */
+    float dirt_roughen;        /* 0..1, roughness = mix(roughness, 1, dirt * roughen) */
+    uint32_t reserved[4];
+    SuAssetPaintLayer layer[SU_PAINT_MAX_LAYERS];
+} SuAssetPaint;
+
+/* Zero layers, identity order, channels: roughness r, metal r, specular none (constant), dirt r, ao r; specular 0.5,
+ * dirt amount 0 (darken 0.6, roughen 0.5). Layer defaults: white, roughness 1, metallic 0, opacity 1, lerp. */
+void su_asset_paint_default(SuAssetPaint *p);
+
 #define SU_ASSET_MAX_LODS 4u
 
 /* 128 bytes: a placed mesh. lod_mesh[0] is the full-detail mesh; lod_mesh[i] is used while the object's projected
@@ -246,6 +317,9 @@ const uint8_t *su_asset_pak_bytes(const SuAssetPak *pak, size_t *len);
 uint32_t su_asset_pak_mesh(const SuAssetPak *pak, uint64_t id, SuAssetMeshView *out);
 uint32_t su_asset_pak_texture(const SuAssetPak *pak, uint64_t id, SuAssetTextureView *out);
 uint32_t su_asset_pak_material(const SuAssetPak *pak, uint64_t id, SuAssetMaterial *out);
+/* The paint part of a material entry of type_version 2 (SU_E_INVALID_ARGUMENT for a plain PBR material or unknown id).
+ * su_asset_pak_material still returns the first 128 bytes of either version. */
+uint32_t su_asset_pak_paint(const SuAssetPak *pak, uint64_t id, SuAssetPaint *out);
 uint32_t su_asset_pak_model(const SuAssetPak *pak, uint64_t id, SuAssetModelView *out);
 
 /* ---- writing packs (the importer uses this; hosts can cook procedural content with it too) ---- */
@@ -262,6 +336,9 @@ uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVe
 uint32_t su_asset_writer_add_texture(SuAssetWriter *w, uint64_t id, uint32_t width, uint32_t height, uint32_t format,
                                      uint32_t flags, uint32_t mip_count, const uint8_t *const *mip_data);
 uint32_t su_asset_writer_add_material(SuAssetWriter *w, uint64_t id, const SuAssetMaterial *m);
+/* A paint material (type_version 2): m and p are validated as the reader would (finite values, layer order a
+ * permutation, channels, texture colour spaces are checked when the pack is opened). */
+uint32_t su_asset_writer_add_paint_material(SuAssetWriter *w, uint64_t id, const SuAssetMaterial *m, const SuAssetPaint *p);
 uint32_t su_asset_writer_add_model(SuAssetWriter *w, uint64_t id, const SuAssetModelNode *nodes, uint32_t node_count);
 /* Builds the pack (entries sorted by id) into a malloc'd buffer the caller frees with free(). The writer is left
  * empty and reusable. */

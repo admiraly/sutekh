@@ -382,6 +382,72 @@ typedef struct SuRenderMaterialDesc {
     SuRenderHandle textures[SU_ASSET_SLOT_COUNT]; /* 0 = none */
 } SuRenderMaterialDesc;
 
+/* ---- layered paint material ----
+ *
+ * A second material model beside PBR-lite, for craft painted through a mask. A paint material is created with
+ * su_render_paint_material_create (or comes from a pack, material entries of type_version 2, see sutekh/asset.h);
+ * meshes reference it like any other material, and PBR-lite materials, goldens and every existing path are untouched.
+ *
+ * Texture slots (SU_PAINT_SLOT_*, colour space per slot, enforced at creation: SRGB slots refuse non-sRGB formats and
+ * LINEAR slots refuse sRGB ones, SU_E_INVALID_ARGUMENT):
+ *   albedo sRGB | normal linear (BC5 or RG; z rebuilt) | roughness linear | material linear | mask linear |
+ *   glow sRGB | dirt linear | ao linear.
+ * A slot without a texture (or whose texture is still uploading) reads: albedo, roughness, material, glow, dirt, ao
+ * white (so the factor alone decides), normal flat, mask all zero (no layer shows).
+ *
+ * The surface, exactly (all values linear; mix(x, y, w) = x + (y - x) * w; clamp to 0..1 where written):
+ *   A = albedo.rgb * base_color.rgb            alpha = albedo.a * base_color.a * instance tint.a
+ *   R = roughness_factor * (roughness map channel, or 1)        M = metallic_factor * (material map channel, or 1)
+ *   S = specular * (material map specular channel, or 1)        T = glow colour (emissive), I = glow intensity
+ *       (emissive_strength)
+ *   for i = 0 .. layer_count - 1, k = layer_order[i]:           (later layers sit on top of earlier ones)
+ *       w = clamp(mask[k]) * clamp(layer[k].opacity)            mask[k] is channel k (r g b a) of the mask map
+ *       lerp:      A = mix(A, C_k, w)    R = mix(R, r_k, w)    M = mix(M, m_k, w)
+ *       multiply:  A = mix(A, A * C_k, w) R = mix(R, R * r_k, w) M = mix(M, M * m_k, w)
+ *       glow tint (flag): T = mix(T, G_k, w)   I = mix(I, s_k, w)     (G_k glow_color, s_k glow_strength)
+ *   dirt:  d = clamp(dirt_amount * (dirt map channel, or 1))
+ *          A = A * (1 - d * dirt_darken)       R = mix(R, 1, d * dirt_roughen)      (metalness and glow unchanged)
+ *   R = clamp(R, 0.04, 1)   M = clamp(M)
+ *   F0 = mix(0.08 * S, A, M)  (S = 0.5 gives the PBR-lite value 0.04)
+ *   ao = mix(1, ao map channel, occlusion_strength)  (1 without a map)
+ *   direct light: the same GGX / Smith / Schlick / Lambert terms as PBR-lite, with A, R, M, F0 above
+ *   ambient = (diffuse_env(n) * A * (1 - M) + specular_env(reflect) * (F0 * ab.x + ab.y)) * light.ambient * ao
+ *   glow    = glow map.rgb * T * I * object.emissive      (HDR, so bloom picks it up; AO, dirt and light do not touch it)
+ * With layer_count 0 and dirt_amount 0 the result is the PBR-lite result for the same A, R, M (zero layers = base).
+ * (ab.x, ab.y) is the split-sum environment BRDF scale and bias, Karis' analytic fit (the same as PBR-lite).
+ *
+ * Image-based ambient: with SuRenderFrameDesc.env set, diffuse_env is the cube's roughest mip (a GGX alpha = 1
+ * prefilter, close to a cosine-weighted irradiance; the cheap documented alternative to spherical harmonics) and
+ * specular_env is the cube sampled at lod = roughness * (mips - 1) from the prefiltered chain (each mip filtered with
+ * GGX importance sampling at roughness = mip / (mips - 1)). Without it both come from the procedural sky exactly as
+ * PBR-lite does. Both are multiplied by env_intensity (0 = 1).
+ *
+ * object.emissive multiplies the glow (a per-instance glow multiplier: pulse lights and engines with it); 0 = no glow. */
+typedef struct SuRenderPaintDesc {
+    SuAssetMaterial factors;           /* base_color, metallic, roughness, normal_scale, occlusion_strength, emissive,
+                                        * emissive_strength, alpha_mode, alpha_cutoff, double_sided; texture ids unused */
+    SuAssetPaint paint;                /* texture ids unused; tex_info selects UV set and wrap modes */
+    SuRenderHandle textures[SU_PAINT_SLOT_COUNT]; /* 0 = none */
+} SuRenderPaintDesc;
+
+/* ---- image-based lighting: a cubemap with prefiltered specular mips ----
+ *
+ * Faces are +X -X +Y -Y +Z -Z in world axes (the Vulkan / OpenGL cube convention: the texel at (x, y) of a face
+ * is seen along the direction the cube-map sampling rules give). Texel data is linear HDR, 4 floats per texel
+ * (alpha ignored), faces contiguous: 6 * size * size * 4 floats. size is a power of two, 8..1024. The renderer builds
+ * the chain on the CPU (su_env_prefilter, deterministic) and uploads it as RGBA16F with the other resources: down
+ * to 4 x 4 texels, so mips = log2(size) (size 8 gives 2 mips). A host cubemap from a nebula texture is baked to faces
+ * by the host and passed here; su_render_env_from_sky bakes the procedural sky (gradient and sun glow, no stars and no
+ * disc) instead. */
+SU_RENDER_API uint32_t su_env_mip_count(uint32_t size);
+/* Floats of the half-float chain (RGBA16F, as uint16_t) are 4 per texel: elements of out for su_env_prefilter. */
+SU_RENDER_API uint64_t su_env_half_count(uint32_t size);
+/* Prefilters faces (see above) into out: mip-major, then face, 4 half floats per texel. 0 on bad arguments. */
+SU_RENDER_API uint32_t su_env_prefilter(uint32_t size, const float *faces, uint16_t *out);
+/* Direction of the centre of texel (x, y) on a face, and the inverse: face and texel of a direction. */
+SU_RENDER_API SuVec3f su_env_texel_dir(uint32_t face, uint32_t size, uint32_t x, uint32_t y);
+SU_RENDER_API void su_env_dir_texel(SuVec3f dir, uint32_t size, uint32_t *face, uint32_t *x, uint32_t *y);
+
 typedef struct SuRenderModelNode {
     float transform[16];               /* model space from mesh space, column-major (any affine, mirrored too) */
     SuRenderHandle lod_mesh[SU_ASSET_MAX_LODS];
@@ -392,6 +458,12 @@ typedef struct SuRenderModelNode {
 SU_RENDER_API uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_texture_create(SuRenderer *r, const SuRenderTextureDesc *d, SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d, SuRenderHandle *out);
+/* A layered paint material (see above). SU_E_INVALID_ARGUMENT for an unknown texture handle, a texture of the wrong
+ * colour space for its slot, or invalid paint parameters (layer count, order, channels, non-finite values). */
+SU_RENDER_API uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc *d, SuRenderHandle *out);
+/* An environment cubemap with prefiltered mips (see "image-based lighting"); READY when uploaded. Release with
+ * su_render_release. SU_E_UNSUPPORTED_METHOD when the device cannot filter RGBA16F cube images. */
+SU_RENDER_API uint32_t su_render_env_create(SuRenderer *r, uint32_t size, const float *faces, SuRenderHandle *out);
 /* A model references meshes by handle (they must exist; the nodes are copied). READY when every LOD 0 mesh is. */
 SU_RENDER_API uint32_t su_render_model_create(SuRenderer *r, const SuRenderModelNode *nodes, uint32_t count,
                                               SuRenderHandle *out);
@@ -444,6 +516,13 @@ typedef struct SuRenderLighting {
     uint32_t no_sky;                   /* 1: clear to clear_color instead of drawing the sky */
     float clear_color[4];              /* linear */
 } SuRenderLighting;
+
+/* The procedural sky of a lighting block (gradient along up, sun glow; ambient and exposure not applied) as cube faces
+ * for su_env_prefilter (see "image-based lighting"). */
+SU_RENDER_API void su_env_sky_faces(uint32_t size, const SuRenderLighting *light, float *faces);
+/* su_render_env_create of su_env_sky_faces(size, light): the procedural sky as the environment. */
+SU_RENDER_API uint32_t su_render_env_from_sky(SuRenderer *r, uint32_t size, const SuRenderLighting *light,
+                                              SuRenderHandle *out);
 
 typedef struct SuRenderObject {
     SuWorldPos pos;                    /* Q32.32 */
@@ -498,6 +577,9 @@ typedef struct SuRenderFrameDesc {
     const SuHudVertex *hud;            /* screen-space triangles (su_hud_*) */
     uint32_t hud_vertex_count;
     SuRenderPost post;                 /* all zero: no bloom, no auto exposure (the plain tonemap of before) */
+    SuRenderHandle env;                /* 0: paint materials take ambient from the procedural sky. Else an env cubemap
+                                        * (su_render_env_create); a handle that is not READY counts as 0 */
+    float env_intensity;               /* multiplies the env's light; 0 = 1 */
 } SuRenderFrameDesc;
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object

@@ -202,6 +202,9 @@ typedef struct Frame {
 #define RES_MATERIAL 3u
 #define RES_MODEL 4u
 
+/* Internal texture format of environment cubes: RGBA16F, 8 bytes per texel, six array layers. */
+#define TEXFMT_ENV 0x100u
+
 typedef struct SubGpu {
     uint32_t first_index;
     uint32_t index_count;
@@ -234,14 +237,32 @@ typedef struct TexRes {
     uint32_t width, height, mips;
     const uint8_t *src[SU_ASSET_MAX_MIPS];
     uint8_t *owned;
+    uint32_t layers;          /* array layers: 1, or 6 for an environment cube */
+    uint32_t layer;           /* next layer of the current mip */
+    uint32_t cube_mips;       /* environment: mips of the chain (for the sampling lod) */
+    VkDescriptorSet env_set;  /* environment: set 2 of the paint layout */
     uint32_t mip;             /* next mip to upload */
     uint32_t row;             /* next block row of that mip */
     int transitioned;         /* UNDEFINED -> TRANSFER_DST recorded */
 } TexRes;
 
+/* The per-material uniform block of a paint material (std140; paint.frag, block Paint). */
+typedef struct PaintUbo {
+    float a[4];               /* specular, dirt amount, dirt darken, dirt roughen */
+    uint32_t b[4];            /* layer count, order bytes, channels (rough | metal << 8 | specular << 16 | dirt << 24), ao */
+    struct {
+        float color_rough[4];
+        float mop[4];         /* metallic, opacity, flags, glow strength */
+        float glow[4];
+    } layer[4];
+} PaintUbo;
+
 typedef struct MatRes {
     SuAssetMaterial f;
-    SuRenderHandle tex[SU_ASSET_SLOT_COUNT];
+    uint32_t kind;            /* 0: PBR-lite, 1: layered paint */
+    SuAssetPaint paint;       /* kind 1 */
+    Buffer ubo;               /* kind 1: PaintUbo, host visible, written once */
+    SuRenderHandle tex[SU_PAINT_SLOT_COUNT];
     VkDescriptorSet set;
     uint32_t bound_ready;     /* slots whose real texture is in the current set */
     uint32_t pipeline;        /* PIPE_* of its draws */
@@ -341,6 +362,7 @@ typedef struct DrawItem {
     uint32_t sub;
     uint32_t mat;             /* resource index, or UINT32_MAX for the default material */
     uint32_t pipe;
+    uint32_t kind;            /* 0: PBR-lite, 1: layered paint (its own pipelines and layout) */
     float dist2;              /* blend sorting */
     uint32_t forced;          /* 1: opaque or masked material drawn in the blend pass because the instance tint is translucent */
     DrawInstance inst;
@@ -378,6 +400,13 @@ struct SuRenderer {
     VkPipeline sky_pipe;
     VkPipeline fx_pipe;
     VkPipeline pbr_pipe[PIPE_PBR_COUNT];
+    VkPipeline paint_pipe[PIPE_PBR_COUNT];
+    VkDescriptorSetLayout paint_dsl;    /* eight samplers and the PaintUbo */
+    VkDescriptorSetLayout env_dsl;      /* one cube sampler */
+    VkPipelineLayout paint_layout;      /* frame, paint material, environment */
+    VkDescriptorSet frame_env_set;      /* the environment bound for this frame (built-in black cube when none) */
+    SuRenderHandle black_tex;
+    SuRenderHandle default_env;
     VkPipeline post_pipe;
     VkPipeline hud_pipe;
     VkSampler samplers[9];              /* linear, mipmapped, by wrap S * 3 + wrap T */
@@ -489,6 +518,9 @@ void su_rvk_collect_retired(SuRenderer *r);
 void su_rvk_refresh_materials(SuRenderer *r);
 Res *su_rvk_get(const SuRenderer *r, SuRenderHandle h, uint32_t type, uint32_t *index);
 VkDescriptorSet su_rvk_material_set(SuRenderer *r, uint32_t mat_index);
+/* The environment cube set for a frame: the READY env handle (intensity_out = intensity, 1 when 0), else the built-in
+ * black cube with intensity_out 0. lod_out = the last mip of the chain. */
+VkDescriptorSet su_rvk_env_set(SuRenderer *r, SuRenderHandle env, float intensity, float *lod_out, float *intensity_out);
 uint32_t su_rvk_internal_textures(SuRenderer *r);
 
 /* su_render_scene.c */

@@ -886,3 +886,347 @@ void su_hud_measure(const char *text, float scale, float *w, float *hgt) {
         *hgt = ((float)(lines - 1u) * LINE_ADVANCE + 7.0f) * scale;
     }
 }
+
+/* ---------- image-based lighting: cube faces, prefiltered specular chain ---------- */
+
+#include <stdlib.h>
+
+#define ENV_MIN 8u
+#define ENV_MAX 1024u
+#define ENV_PI 3.14159265358979f
+
+static int env_size_ok(uint32_t size) {
+    return size >= ENV_MIN && size <= ENV_MAX && (size & (size - 1u)) == 0u;
+}
+
+uint32_t su_env_mip_count(uint32_t size) {
+    uint32_t n = 0;
+    if (!env_size_ok(size)) {
+        return 0;
+    }
+    while (size > 4u) {
+        size >>= 1;
+        n++;
+    }
+    return n + 1u;
+}
+
+uint64_t su_env_half_count(uint32_t size) {
+    uint64_t total = 0;
+    uint32_t m;
+    uint32_t n = su_env_mip_count(size);
+    for (m = 0; m < n; m++) {
+        uint64_t s = size >> m;
+        total += 6u * s * s * 4u;
+    }
+    return total;
+}
+
+SuVec3f su_env_texel_dir(uint32_t face, uint32_t size, uint32_t x, uint32_t y) {
+    float sc = 2.0f * ((float)x + 0.5f) / (float)size - 1.0f;
+    float tc = 2.0f * ((float)y + 0.5f) / (float)size - 1.0f;
+    switch (face) {
+    case 0: return norm(v3(1.0f, -tc, -sc));
+    case 1: return norm(v3(-1.0f, -tc, sc));
+    case 2: return norm(v3(sc, 1.0f, tc));
+    case 3: return norm(v3(sc, -1.0f, -tc));
+    case 4: return norm(v3(sc, -tc, 1.0f));
+    default: return norm(v3(-sc, -tc, -1.0f));
+    }
+}
+
+/* Face and continuous texel coordinates (0..size) of a direction, by the cube-map selection rules. */
+static void env_dir_st(SuVec3f d, uint32_t *face, float *fx, float *fy, uint32_t size) {
+    float ax = fabsf(d.x);
+    float ay = fabsf(d.y);
+    float az = fabsf(d.z);
+    float sc;
+    float tc;
+    float ma;
+    if (ax >= ay && ax >= az) {
+        ma = ax;
+        if (d.x > 0.0f) {
+            *face = 0;
+            sc = -d.z;
+            tc = -d.y;
+        } else {
+            *face = 1;
+            sc = d.z;
+            tc = -d.y;
+        }
+    } else if (ay >= az) {
+        ma = ay;
+        if (d.y > 0.0f) {
+            *face = 2;
+            sc = d.x;
+            tc = d.z;
+        } else {
+            *face = 3;
+            sc = d.x;
+            tc = -d.z;
+        }
+    } else {
+        ma = az;
+        if (d.z > 0.0f) {
+            *face = 4;
+            sc = d.x;
+            tc = -d.y;
+        } else {
+            *face = 5;
+            sc = -d.x;
+            tc = -d.y;
+        }
+    }
+    if (ma <= 0.0f) {
+        ma = 1.0f;
+    }
+    *fx = 0.5f * (sc / ma + 1.0f) * (float)size;
+    *fy = 0.5f * (tc / ma + 1.0f) * (float)size;
+}
+
+void su_env_dir_texel(SuVec3f dir, uint32_t size, uint32_t *face, uint32_t *x, uint32_t *y) {
+    float fx;
+    float fy;
+    uint32_t f = 0;
+    env_dir_st(dir, &f, &fx, &fy, size);
+    *face = f;
+    *x = fx < 0.0f ? 0u : fx >= (float)size ? size - 1u : (uint32_t)fx;
+    *y = fy < 0.0f ? 0u : fy >= (float)size ? size - 1u : (uint32_t)fy;
+}
+
+static uint16_t env_half(float f) {
+    union {
+        float f;
+        uint32_t u;
+    } v;
+    uint32_t sign;
+    int32_t e;
+    uint32_t m;
+    v.f = f;
+    sign = (v.u >> 16) & 0x8000u;
+    e = (int32_t)((v.u >> 23) & 0xFFu) - 127 + 15;
+    m = v.u & 0x7FFFFFu;
+    if (((v.u >> 23) & 0xFFu) == 0xFFu) {
+        return (uint16_t)(sign | 0x7C00u | (m != 0u ? 0x200u : 0u));
+    }
+    if (e >= 31) {
+        return (uint16_t)(sign | 0x7BFFu); /* clamp to the largest finite half */
+    }
+    if (e <= 0) {
+        if (e < -10) {
+            return (uint16_t)sign;
+        }
+        m |= 0x800000u;
+        {
+            uint32_t sh = (uint32_t)(14 - e);
+            uint32_t h = m >> sh;
+            uint32_t rem = m & ((1u << sh) - 1u);
+            uint32_t half = 1u << (sh - 1u);
+            if (rem > half || (rem == half && (h & 1u) != 0u)) {
+                h++;
+            }
+            return (uint16_t)(sign | h);
+        }
+    }
+    {
+        uint32_t h = ((uint32_t)e << 10) | (m >> 13);
+        uint32_t rem = m & 0x1FFFu;
+        if (rem > 0x1000u || (rem == 0x1000u && (h & 1u) != 0u)) {
+            h++; /* may carry into the exponent, which is the correct rounding */
+        }
+        return (uint16_t)(sign | h);
+    }
+}
+
+typedef struct EnvLevel {
+    uint32_t size;
+    float *px; /* 6 faces, size * size * 3 floats */
+} EnvLevel;
+
+static float env_radical_inverse(uint32_t bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return (float)bits * 2.3283064365386963e-10f;
+}
+
+/* Bilinear lookup inside one face (clamped at its edges). */
+static void env_sample(const EnvLevel *lv, SuVec3f d, float out[3]) {
+    uint32_t face = 0;
+    float fx;
+    float fy;
+    int x0;
+    int y0;
+    float tx;
+    float ty;
+    int k;
+    env_dir_st(d, &face, &fx, &fy, lv->size);
+    fx -= 0.5f;
+    fy -= 0.5f;
+    x0 = (int)floorf(fx);
+    y0 = (int)floorf(fy);
+    tx = fx - (float)x0;
+    ty = fy - (float)y0;
+    for (k = 0; k < 3; k++) {
+        float c[4];
+        int q;
+        for (q = 0; q < 4; q++) {
+            int xx = x0 + (q & 1);
+            int yy = y0 + (q >> 1);
+            xx = xx < 0 ? 0 : xx >= (int)lv->size ? (int)lv->size - 1 : xx;
+            yy = yy < 0 ? 0 : yy >= (int)lv->size ? (int)lv->size - 1 : yy;
+            c[q] = lv->px[(((size_t)face * lv->size + (size_t)yy) * lv->size + (size_t)xx) * 3u + (size_t)k];
+        }
+        out[k] = (c[0] * (1.0f - tx) + c[1] * tx) * (1.0f - ty) + (c[2] * (1.0f - tx) + c[3] * tx) * ty;
+    }
+}
+
+uint32_t su_env_prefilter(uint32_t size, const float *faces, uint16_t *out) {
+    uint32_t mips = su_env_mip_count(size);
+    EnvLevel *lv;
+    uint32_t m;
+    uint32_t f;
+    uint32_t x;
+    uint32_t y;
+    size_t at = 0;
+    uint32_t ok = 1;
+    enum { SAMPLES = 96 };
+    if (mips == 0u || faces == NULL || out == NULL) {
+        return 0;
+    }
+    lv = (EnvLevel *)calloc(mips, sizeof *lv);
+    if (lv == NULL) {
+        return 0;
+    }
+    /* source chain: RGB floats, box filtered (used to pick a level by the sample's solid angle) */
+    for (m = 0; m < mips && ok; m++) {
+        size_t n = (size_t)6u * (size >> m) * (size >> m);
+        lv[m].size = size >> m;
+        lv[m].px = (float *)malloc(n * 3u * sizeof(float));
+        ok = lv[m].px != NULL;
+        if (!ok) {
+            break;
+        }
+        for (f = 0; f < 6u; f++) {
+            for (y = 0; y < lv[m].size; y++) {
+                for (x = 0; x < lv[m].size; x++) {
+                    size_t o = (((size_t)f * lv[m].size + y) * lv[m].size + x) * 3u;
+                    int k;
+                    for (k = 0; k < 3; k++) {
+                        if (m == 0u) {
+                            float v = faces[(((size_t)f * size + y) * size + x) * 4u + (size_t)k];
+                            lv[m].px[o + (size_t)k] = v == v && v < 65000.0f ? (v > 0.0f ? v : 0.0f) : 0.0f;
+                        } else {
+                            const EnvLevel *p = &lv[m - 1u];
+                            size_t b = (((size_t)f * p->size + 2u * y) * p->size + 2u * x) * 3u + (size_t)k;
+                            lv[m].px[o + (size_t)k] = 0.25f * (p->px[b] + p->px[b + 3u] + p->px[b + (size_t)p->size * 3u] +
+                                                               p->px[b + (size_t)p->size * 3u + 3u]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (m = 0; m < mips && ok; m++) {
+        uint32_t s = size >> m;
+        float rough = mips > 1u ? (float)m / (float)(mips - 1u) : 0.0f;
+        float a = rough * rough;
+        float a2 = a * a;
+        float texel_sa = 4.0f * ENV_PI / (6.0f * (float)size * (float)size);
+        for (f = 0; f < 6u; f++) {
+            for (y = 0; y < s; y++) {
+                for (x = 0; x < s; x++) {
+                    float acc[3] = {0.0f, 0.0f, 0.0f};
+                    float wsum = 0.0f;
+                    if (m == 0u) {
+                        const float *src = &lv[0].px[(((size_t)f * s + y) * s + x) * 3u];
+                        acc[0] = src[0];
+                        acc[1] = src[1];
+                        acc[2] = src[2];
+                        wsum = 1.0f;
+                    } else {
+                        SuVec3f n = su_env_texel_dir(f, s, x, y);
+                        SuVec3f up = fabsf(n.y) < 0.999f ? v3(0, 1, 0) : v3(1, 0, 0);
+                        SuVec3f tx = norm(cross(up, n));
+                        SuVec3f ty = cross(n, tx);
+                        int i;
+                        for (i = 0; i < SAMPLES; i++) {
+                            float u1 = ((float)i + 0.5f) / (float)SAMPLES;
+                            float u2 = env_radical_inverse((uint32_t)i);
+                            float phi = 2.0f * ENV_PI * u2;
+                            float cos_t = sqrtf((1.0f - u1) / (1.0f + (a2 - 1.0f) * u1));
+                            float sin_t = sqrtf(fmaxf(1.0f - cos_t * cos_t, 0.0f));
+                            SuVec3f h = add(add(scale(tx, sin_t * cosf(phi)), scale(ty, sin_t * sinf(phi))), scale(n, cos_t));
+                            float vh = dot(n, h);
+                            SuVec3f l = sub(scale(h, 2.0f * vh), n);
+                            float nl = dot(n, l);
+                            if (nl > 0.0f) {
+                                float dd = cos_t * cos_t * (a2 - 1.0f) + 1.0f;
+                                float pdf = a2 / (ENV_PI * dd * dd) * 0.25f; /* D * NdotH / (4 VdotH), N = V */
+                                float sa = 1.0f / ((float)SAMPLES * pdf + 1e-4f);
+                                float lod = 0.5f * log2f(sa / texel_sa) + 1.0f;
+                                uint32_t li;
+                                float c[3];
+                                lod = lod < 0.0f ? 0.0f : lod;
+                                li = (uint32_t)(lod + 0.5f);
+                                li = li >= mips ? mips - 1u : li;
+                                env_sample(&lv[li], l, c);
+                                acc[0] += c[0] * nl;
+                                acc[1] += c[1] * nl;
+                                acc[2] += c[2] * nl;
+                                wsum += nl;
+                            }
+                        }
+                    }
+                    if (wsum <= 0.0f) {
+                        wsum = 1.0f;
+                    }
+                    {
+                        uint16_t *o = out + at;
+                        o[0] = env_half(acc[0] / wsum);
+                        o[1] = env_half(acc[1] / wsum);
+                        o[2] = env_half(acc[2] / wsum);
+                        o[3] = env_half(1.0f);
+                        at += 4u;
+                    }
+                }
+            }
+        }
+    }
+    for (m = 0; m < mips; m++) {
+        free(lv[m].px);
+    }
+    free(lv);
+    return ok;
+}
+
+void su_env_sky_faces(uint32_t size, const SuRenderLighting *l, float *faces) {
+    SuVec3f up = l->up;
+    SuVec3f sd = l->sun_dir;
+    float ul = sqrtf(dot(up, up));
+    float sl = sqrtf(dot(sd, sd));
+    uint32_t f;
+    uint32_t x;
+    uint32_t y;
+    up = ul > 0.0f ? scale(up, 1.0f / ul) : v3(0, 1, 0);
+    sd = sl > 0.0f ? scale(sd, 1.0f / sl) : v3(0, -1, 0);
+    for (f = 0; f < 6u; f++) {
+        for (y = 0; y < size; y++) {
+            for (x = 0; x < size; x++) {
+                SuVec3f d = su_env_texel_dir(f, size, x, y);
+                float h = dot(d, up);
+                float s = fmaxf(-dot(d, sd), 0.0f);
+                float glow = 0.02f * powf(s, 8.0f) + 0.25f * powf(s, 256.0f);
+                float t = sqrtf(h >= 0.0f ? h : -h);
+                const SuVec3f *far_c = h >= 0.0f ? &l->sky_zenith : &l->sky_nadir;
+                float *o = &faces[(((size_t)f * size + y) * size + x) * 4u];
+                o[0] = l->sky_horizon.x + (far_c->x - l->sky_horizon.x) * t + l->sun_color.x * l->sun_intensity * glow;
+                o[1] = l->sky_horizon.y + (far_c->y - l->sky_horizon.y) * t + l->sun_color.y * l->sun_intensity * glow;
+                o[2] = l->sky_horizon.z + (far_c->z - l->sky_horizon.z) * t + l->sun_color.z * l->sun_intensity * glow;
+                o[3] = 1.0f;
+            }
+        }
+    }
+}
