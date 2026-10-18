@@ -3,12 +3,15 @@
 
 #include <string.h>
 
-/* Production descriptors of the RTS profile (M3-04, profiles/rts/native/rts_ops.h). Nothing else is registered. */
+/* Production descriptors of the RTS profile (M3-04, profiles/rts/native/rts_ops.h) and of the space3d profile
+ * (docs/SPACE3D.md, profiles/space3d/native/space3d_ops.h). Nothing else is registered. */
 extern const SuHostOpDesc g_rts_spatial_desc;
 extern const SuHostOpDesc g_rts_scatter_desc;
+extern const SuHostOpDesc g_space3d_query_desc;
 
-/* Production table: exactly the two RTS host operators. */
-static const SuHostOpDesc *const k_host_table[] = {&g_rts_spatial_desc, &g_rts_scatter_desc, NULL};
+/* Production table: the two RTS host operators and space3d.query. */
+static const SuHostOpDesc *const k_host_table[] = {&g_rts_spatial_desc, &g_rts_scatter_desc, &g_space3d_query_desc,
+                                                   NULL};
 
 #ifdef SU_TEST_HOST_REGISTRY
 static const SuHostOpDesc *const *g_test_table = NULL;

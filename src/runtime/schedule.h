@@ -32,7 +32,7 @@
 
 typedef struct SuHostField {
     uint32_t id;
-    uint32_t type;        /* SU_TYPE_U32 */
+    uint32_t type;        /* SU_TYPE_U32, or an IR 0.3 value type of a u32 storage lane (host_decl.h) */
     uint32_t access;      /* SU_ACCESS_READ and/or SU_ACCESS_WRITE; never 0 */
     const char *name;
 } SuHostField;
@@ -60,6 +60,8 @@ typedef struct SuSchedField {
     uint32_t type;
     uint32_t access;
     char name[SU_WORLD_NAME_MAX + 1u];
+    uint32_t value_type;  /* IR 0.3 numeric interpretation of the lane (SU_LIR_VALUE_TYPE); every system that binds
+                           * the field must agree on it, like on type and name */
 } SuSchedField;
 
 typedef struct SuSysEntry {

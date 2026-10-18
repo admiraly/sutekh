@@ -84,6 +84,8 @@ add_executable(test_vm tests/vm/test_vm.c)
 target_link_libraries(test_vm PRIVATE su_vm)
 sutekh_apply_warnings(test_vm)
 add_test(NAME vm COMMAND test_vm WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# numeric-3d stream (IR 0.3, fixed_q32_v1, space3d): every target lives in the included file.
+include(cmake/SutekhNumeric3D.cmake)
 
 file(GLOB SU_AGENT_SOURCES CONFIGURE_DEPENDS src/agent/*.c)
 list(APPEND SU_AGENT_SOURCES src/runtime/worker.c src/runtime/registry.c src/runtime/schedule.c src/runtime/reload.c)

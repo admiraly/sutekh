@@ -4,13 +4,19 @@
  * (SU_TYPE_U32 or SU_TYPE_BOOL, 0 = never written); every operand read checks
  * the tag, so a module that bypassed the verifier fails with SU_E_INTERNAL
  * instead of computing on the wrong type. Rows run in ascending order; within
- * a row, instructions run in ascending index order. */
+ * a row, instructions run in ascending index order.
+ *
+ * IR 0.3 (numeric profile fixed_q32_v1): i32, i64, q32, v3 and quat registers live in reg_w (four 64-bit
+ * words per register, allocated only for 0.3 modules) with the same tag discipline; u32 and bool stay in
+ * reg_val. The arithmetic is src/ir/su_num.c. A 64-bit field is two u32 lanes (low word first). */
 #include "vm/su_vm.h"
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "ir/su_num.h"
+#include "ir/su_ops03.h"
 #include "sutekh/entities.h"
 
 #define SU_VM_ACCESS_MASK (SU_ACCESS_READ | SU_ACCESS_WRITE)
@@ -35,6 +41,7 @@ struct SuExecContext {
     /* Register file, sized from module->register_count. */
     uint32_t *reg_val;
     uint8_t *reg_tag;
+    uint64_t *reg_w;               /* IR 0.3 only: 4 words per register (i32/i64/q32 in word 0, v3 x,y,z, quat w,x,y,z) */
     /* Per verified-table index, filled per invocation. */
     uint32_t **in_cols;            /* NULL when not bound */
     uint32_t **out_cols;           /* NULL when not staged */
@@ -70,6 +77,8 @@ static int su_reg_ok(uint32_t reg, uint32_t count) {
     return reg < count;
 }
 
+static int su_insn03_shape_ok(const SuInsn *ins, const SuLirModule *m);
+
 /* IR 0.2 opcodes are known only in 0.2 modules (minor >= 2); hand-built modules that leave
  * ir_version_minor at 0 are treated as 0.1. */
 static int su_insn_known(uint32_t op, uint32_t minor) {
@@ -91,7 +100,7 @@ static int su_insn_known(uint32_t op, uint32_t minor) {
     case SU_OP_EMIT_EVENT:
         return minor >= 2u;
     default:
-        return 0;
+        return minor >= 3u && su_op03_by_code(op) != NULL;
     }
 }
 
@@ -101,6 +110,9 @@ static int su_insn_shape_ok(const SuInsn *ins, const SuLirModule *m) {
     uint32_t fc = m->field_count;
     if (!su_insn_known(ins->op, m->ir_version_minor)) {
         return 0;
+    }
+    if (su_op03_by_code(ins->op) != NULL) {
+        return su_insn03_shape_ok(ins, m);
     }
     switch (ins->op) {
     case SU_OP_SLOT_U32:
@@ -156,6 +168,499 @@ static void su_write_reg(SuExecContext *c, uint32_t reg, uint32_t type, uint32_t
     c->reg_tag[reg] = (uint8_t)type;
 }
 
+/* ---- IR 0.3 (numeric profile fixed_q32_v1) ----------------------------- */
+
+/* A field operand of a 0.3 op: lane-0 index with the value type and access the op needs; a 64-bit type also
+ * needs the adjacent lane-1 entry (id + 1, same value type and access). */
+static int su_field03_ok(const SuLirModule *m, uint32_t idx, uint32_t vtype, uint32_t access) {
+    const SuLirField *f;
+    if (idx >= m->field_count) {
+        return 0;
+    }
+    f = &m->fields[idx];
+    if ((f->access & access) == 0u || SU_LIR_VALUE_TYPE(f) != vtype || f->lane != 0u) {
+        return 0;
+    }
+    if (su_type_lanes(vtype) == 2u) {
+        const SuLirField *h;
+        if (idx + 1u >= m->field_count) {
+            return 0;
+        }
+        h = &m->fields[idx + 1u];
+        if (h->id != f->id + 1u || SU_LIR_VALUE_TYPE(h) != vtype || h->lane != 1u || h->access != f->access) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int su_insn03_shape_ok(const SuInsn *ins, const SuLirModule *m) {
+    const SuOp03 *op = su_op03_by_code(ins->op);
+    uint32_t slot[4];
+    uint32_t k;
+    if (op == NULL) {
+        return 0;
+    }
+    slot[SU_S_DST] = ins->dst;
+    slot[SU_S_A] = ins->a;
+    slot[SU_S_B] = ins->b;
+    slot[SU_S_C] = ins->c;
+    if (op->dst_type != 0u && !su_reg_ok(ins->dst, m->register_count)) {
+        return 0;
+    }
+    for (k = 0; k < op->n; k++) {
+        const SuOp03Operand *o = &op->o[k];
+        switch (o->kind) {
+        case SU_O_REG:
+            if (!su_reg_ok(slot[o->slot], m->register_count)) {
+                return 0;
+            }
+            break;
+        case SU_O_FREAD:
+            if (!su_field03_ok(m, slot[o->slot], o->type, SU_ACCESS_READ)) {
+                return 0;
+            }
+            break;
+        case SU_O_FWRITE:
+            if (!su_field03_ok(m, slot[o->slot], o->type, SU_ACCESS_WRITE)) {
+                return 0;
+            }
+            break;
+        case SU_O_AXIS:
+            if (slot[o->slot] >= o->type) {
+                return 0;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return 1;
+}
+
+static int su_rd_w(const SuExecContext *c, uint32_t reg, uint32_t type, int64_t *v) {
+    if (c->reg_tag[reg] != type) {
+        return 0;
+    }
+    *v = su_i64_from_bits(c->reg_w[(size_t)reg * 4u]);
+    return 1;
+}
+
+static int su_rd_v3(const SuExecContext *c, uint32_t reg, SuV3 *v) {
+    const uint64_t *w = &c->reg_w[(size_t)reg * 4u];
+    if (c->reg_tag[reg] != SU_TYPE_V3) {
+        return 0;
+    }
+    v->x = su_i64_from_bits(w[0]);
+    v->y = su_i64_from_bits(w[1]);
+    v->z = su_i64_from_bits(w[2]);
+    return 1;
+}
+
+static int su_rd_quat(const SuExecContext *c, uint32_t reg, SuQuat *q) {
+    const uint64_t *w = &c->reg_w[(size_t)reg * 4u];
+    if (c->reg_tag[reg] != SU_TYPE_QUAT) {
+        return 0;
+    }
+    q->w = su_i64_from_bits(w[0]);
+    q->x = su_i64_from_bits(w[1]);
+    q->y = su_i64_from_bits(w[2]);
+    q->z = su_i64_from_bits(w[3]);
+    return 1;
+}
+
+static void su_wr_w(SuExecContext *c, uint32_t reg, uint32_t type, int64_t v) {
+    c->reg_w[(size_t)reg * 4u] = (uint64_t)v;
+    c->reg_tag[reg] = (uint8_t)type;
+}
+
+static void su_wr_v3(SuExecContext *c, uint32_t reg, SuV3 v) {
+    uint64_t *w = &c->reg_w[(size_t)reg * 4u];
+    w[0] = (uint64_t)v.x;
+    w[1] = (uint64_t)v.y;
+    w[2] = (uint64_t)v.z;
+    c->reg_tag[reg] = (uint8_t)SU_TYPE_V3;
+}
+
+static void su_wr_quat(SuExecContext *c, uint32_t reg, SuQuat q) {
+    uint64_t *w = &c->reg_w[(size_t)reg * 4u];
+    w[0] = (uint64_t)q.w;
+    w[1] = (uint64_t)q.x;
+    w[2] = (uint64_t)q.y;
+    w[3] = (uint64_t)q.z;
+    c->reg_tag[reg] = (uint8_t)SU_TYPE_QUAT;
+}
+
+/* 64-bit value of a two-lane field at row r (lane 0 low word). */
+static int64_t su_col64(uint32_t *const *cols, uint32_t idx, size_t r) {
+    return su_i64_from_bits(((uint64_t)cols[idx + 1u][r] << 32) | (uint64_t)cols[idx][r]);
+}
+
+/* Stages a 64-bit store into the two lanes; SU_E_INTERNAL when unbound or already stored this row. */
+static uint32_t su_store64(SuExecContext *ctx, uint32_t idx, size_t r, int64_t v) {
+    uint32_t *lo = ctx->out_cols[idx];
+    uint32_t *hi = ctx->out_cols[idx + 1u];
+    if (lo == NULL || hi == NULL || ctx->stored[idx] != 0u || ctx->stored[idx + 1u] != 0u) {
+        return SU_E_INTERNAL;
+    }
+    lo[r] = (uint32_t)((uint64_t)v & 0xFFFFFFFFu);
+    hi[r] = (uint32_t)((uint64_t)v >> 32);
+    ctx->stored[idx] = 1u;
+    ctx->stored[idx + 1u] = 1u;
+    return SU_OK;
+}
+
+/* One scalar-family op (i32, i64 or q32). x, y, z are the operands already read with the family type. */
+static int64_t su_family(uint32_t type, uint32_t off, int64_t x, int64_t y, int64_t z) {
+    if (type == SU_TYPE_I32) {
+        int32_t a = (int32_t)x, b = (int32_t)y;
+        switch (off) {
+        case SU_OPX_ADD: return su_i32_add(a, b);
+        case SU_OPX_SUB: return su_i32_sub(a, b);
+        case SU_OPX_MUL: return su_i32_mul(a, b);
+        case SU_OPX_DIV: return su_i32_div(a, b);
+        case SU_OPX_NEG: return su_i32_neg(a);
+        case SU_OPX_ABS: return su_i32_abs(a);
+        default: break;
+        }
+    } else if (type == SU_TYPE_I64) {
+        switch (off) {
+        case SU_OPX_ADD: return su_i64_add(x, y);
+        case SU_OPX_SUB: return su_i64_sub(x, y);
+        case SU_OPX_MUL: return su_i64_mul(x, y);
+        case SU_OPX_DIV: return su_i64_div(x, y);
+        case SU_OPX_NEG: return su_i64_neg(x);
+        case SU_OPX_ABS: return su_i64_abs(x);
+        default: break;
+        }
+    } else {
+        switch (off) {
+        case SU_OPX_ADD: return su_q32_add(x, y);
+        case SU_OPX_SUB: return su_q32_sub(x, y);
+        case SU_OPX_MUL: return su_q32_mul(x, y);
+        case SU_OPX_DIV: return su_q32_div(x, y);
+        case SU_OPX_NEG: return su_q32_neg(x);
+        case SU_OPX_ABS: return su_q32_abs(x);
+        default: break;
+        }
+    }
+    switch (off) {
+    case SU_OPX_MIN: return x < y ? x : y;
+    case SU_OPX_MAX: return x > y ? x : y;
+    case SU_OPX_CLAMP: {
+        int64_t t = x > y ? x : y; /* max(x, lo) */
+        return t < z ? t : z;      /* min(., hi) */
+    }
+    default: return 0;
+    }
+}
+
+/* Shift of a family value by a u32 count. */
+static int64_t su_family_shift(uint32_t type, int left, int64_t x, uint32_t n) {
+    if (type == SU_TYPE_I32) {
+        return left ? su_i32_shl((int32_t)x, n) : su_i32_shr((int32_t)x, n);
+    }
+    if (type == SU_TYPE_I64) {
+        return left ? su_i64_shl(x, n) : su_i64_shr(x, n);
+    }
+    return left ? su_q32_shl(x, n) : su_q32_shr(x, n);
+}
+
+/* Executes one 0.3 instruction for row r. Operand types were checked by the verifier; every read checks the
+ * register tag again (SU_E_INTERNAL on a module that bypassed the verifier). */
+static uint32_t su_exec_insn03(SuExecContext *ctx, const SuInsn *ins, size_t r) {
+    int64_t x = 0, y = 0, z = 0;
+    uint32_t u = 0, bb = 0;
+    SuV3 va, vb;
+    SuQuat qa, qb;
+    uint32_t op = ins->op;
+
+    if (op >= SU_OP_I32_BASE && op < SU_OP_Q32_BASE + SU_OPX_COUNT &&
+        (op - SU_OP_I32_BASE) % 32u < SU_OPX_COUNT) {
+        uint32_t base = op >= SU_OP_Q32_BASE ? SU_OP_Q32_BASE : (op >= SU_OP_I64_BASE ? SU_OP_I64_BASE : SU_OP_I32_BASE);
+        uint32_t type = base == SU_OP_Q32_BASE ? SU_TYPE_Q32 : (base == SU_OP_I64_BASE ? SU_TYPE_I64 : SU_TYPE_I32);
+        uint32_t off = op - base;
+        switch (off) {
+        case SU_OPX_NEG:
+        case SU_OPX_ABS:
+            if (!su_rd_w(ctx, ins->a, type, &x)) {
+                return SU_E_INTERNAL;
+            }
+            su_wr_w(ctx, ins->dst, type, su_family(type, off, x, 0, 0));
+            return SU_OK;
+        case SU_OPX_CLAMP:
+            if (!su_rd_w(ctx, ins->a, type, &x) || !su_rd_w(ctx, ins->b, type, &y) ||
+                !su_rd_w(ctx, ins->c, type, &z)) {
+                return SU_E_INTERNAL;
+            }
+            su_wr_w(ctx, ins->dst, type, su_family(type, off, x, y, z));
+            return SU_OK;
+        case SU_OPX_EQ:
+        case SU_OPX_LT:
+        case SU_OPX_LE:
+            if (!su_rd_w(ctx, ins->a, type, &x) || !su_rd_w(ctx, ins->b, type, &y)) {
+                return SU_E_INTERNAL;
+            }
+            su_write_reg(ctx, ins->dst, SU_TYPE_BOOL,
+                         off == SU_OPX_EQ ? (x == y) : (off == SU_OPX_LT ? (x < y) : (x <= y)));
+            return SU_OK;
+        case SU_OPX_SELECT:
+            if (!su_read_bool(ctx, ins->a, &bb) || !su_rd_w(ctx, ins->b, type, &x) ||
+                !su_rd_w(ctx, ins->c, type, &y)) {
+                return SU_E_INTERNAL;
+            }
+            su_wr_w(ctx, ins->dst, type, bb != 0u ? x : y);
+            return SU_OK;
+        case SU_OPX_SHL:
+        case SU_OPX_SHR:
+            if (!su_rd_w(ctx, ins->a, type, &x) || !su_read_u32(ctx, ins->b, &u)) {
+                return SU_E_INTERNAL;
+            }
+            su_wr_w(ctx, ins->dst, type, su_family_shift(type, off == SU_OPX_SHL, x, u));
+            return SU_OK;
+        default:
+            if (!su_rd_w(ctx, ins->a, type, &x) || !su_rd_w(ctx, ins->b, type, &y)) {
+                return SU_E_INTERNAL;
+            }
+            su_wr_w(ctx, ins->dst, type, su_family(type, off, x, y, 0));
+            return SU_OK;
+        }
+    }
+
+    switch (op) {
+    case SU_OP_CONST_I32:
+        su_wr_w(ctx, ins->dst, SU_TYPE_I32, su_i32_from_bits(ins->a));
+        return SU_OK;
+    case SU_OP_CONST_I64:
+    case SU_OP_CONST_Q32:
+        su_wr_w(ctx, ins->dst, op == SU_OP_CONST_I64 ? SU_TYPE_I64 : SU_TYPE_Q32,
+                su_i64_from_bits(((uint64_t)ins->b << 32) | (uint64_t)ins->a));
+        return SU_OK;
+    case SU_OP_LOAD_I32:
+        if (ctx->in_cols[ins->a] == NULL) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_I32, su_i32_from_bits(ctx->in_cols[ins->a][r]));
+        return SU_OK;
+    case SU_OP_LOAD_I64:
+    case SU_OP_LOAD_Q32:
+        if (ctx->in_cols[ins->a] == NULL || ctx->in_cols[ins->a + 1u] == NULL) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, op == SU_OP_LOAD_I64 ? SU_TYPE_I64 : SU_TYPE_Q32, su_col64(ctx->in_cols, ins->a, r));
+        return SU_OK;
+    case SU_OP_LOAD_V3:
+        if (ctx->in_cols[ins->a] == NULL || ctx->in_cols[ins->a + 1u] == NULL || ctx->in_cols[ins->b] == NULL ||
+            ctx->in_cols[ins->b + 1u] == NULL || ctx->in_cols[ins->c] == NULL || ctx->in_cols[ins->c + 1u] == NULL) {
+            return SU_E_INTERNAL;
+        }
+        va.x = su_col64(ctx->in_cols, ins->a, r);
+        va.y = su_col64(ctx->in_cols, ins->b, r);
+        va.z = su_col64(ctx->in_cols, ins->c, r);
+        su_wr_v3(ctx, ins->dst, va);
+        return SU_OK;
+    case SU_OP_STORE_I32: {
+        uint32_t *col = ctx->out_cols[ins->a];
+        if (col == NULL || ctx->stored[ins->a] != 0u || !su_rd_w(ctx, ins->b, SU_TYPE_I32, &x)) {
+            return SU_E_INTERNAL;
+        }
+        col[r] = (uint32_t)((uint64_t)x & 0xFFFFFFFFu);
+        ctx->stored[ins->a] = 1u;
+        return SU_OK;
+    }
+    case SU_OP_STORE_I64:
+    case SU_OP_STORE_Q32:
+        if (!su_rd_w(ctx, ins->b, op == SU_OP_STORE_I64 ? SU_TYPE_I64 : SU_TYPE_Q32, &x)) {
+            return SU_E_INTERNAL;
+        }
+        return su_store64(ctx, ins->a, r, x);
+    case SU_OP_STORE_V3: {
+        uint32_t st;
+        if (!su_rd_v3(ctx, ins->dst, &va)) {
+            return SU_E_INTERNAL;
+        }
+        st = su_store64(ctx, ins->a, r, va.x);
+        if (st == SU_OK) {
+            st = su_store64(ctx, ins->b, r, va.y);
+        }
+        if (st == SU_OK) {
+            st = su_store64(ctx, ins->c, r, va.z);
+        }
+        return st;
+    }
+    case SU_OP_AND_BOOL:
+    case SU_OP_OR_BOOL:
+        if (!su_read_bool(ctx, ins->a, &u) || !su_read_bool(ctx, ins->b, &bb)) {
+            return SU_E_INTERNAL;
+        }
+        su_write_reg(ctx, ins->dst, SU_TYPE_BOOL, op == SU_OP_AND_BOOL ? (u != 0u && bb != 0u) : (u != 0u || bb != 0u));
+        return SU_OK;
+    case SU_OP_NOT_BOOL:
+        if (!su_read_bool(ctx, ins->a, &u)) {
+            return SU_E_INTERNAL;
+        }
+        su_write_reg(ctx, ins->dst, SU_TYPE_BOOL, u == 0u);
+        return SU_OK;
+    case SU_OP_SQRT_Q32:
+    case SU_OP_RSQRT_Q32:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_Q32, &x)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_Q32, op == SU_OP_SQRT_Q32 ? su_q32_sqrt(x) : su_q32_rsqrt(x));
+        return SU_OK;
+    case SU_OP_I32_FROM_U32:
+        if (!su_read_u32(ctx, ins->a, &u)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_I32, su_i32_from_bits(u));
+        return SU_OK;
+    case SU_OP_U32_FROM_I32:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_I32, &x)) {
+            return SU_E_INTERNAL;
+        }
+        su_write_reg(ctx, ins->dst, SU_TYPE_U32, (uint32_t)((uint64_t)x & 0xFFFFFFFFu));
+        return SU_OK;
+    case SU_OP_I64_FROM_I32:
+    case SU_OP_Q32_FROM_I32:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_I32, &x)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, op == SU_OP_I64_FROM_I32 ? SU_TYPE_I64 : SU_TYPE_Q32,
+                op == SU_OP_I64_FROM_I32 ? x : su_q32_from_i32((int32_t)x));
+        return SU_OK;
+    case SU_OP_I32_FROM_I64:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_I64, &x)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_I32, su_i32_from_bits((uint32_t)((uint64_t)x & 0xFFFFFFFFu)));
+        return SU_OK;
+    case SU_OP_Q32_FROM_I64:
+    case SU_OP_Q32_FROM_RAW:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_I64, &x)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_Q32, op == SU_OP_Q32_FROM_I64 ? su_q32_from_i64(x) : x);
+        return SU_OK;
+    case SU_OP_Q32_TO_I32_FLOOR:
+    case SU_OP_Q32_TO_I32_ROUND:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_Q32, &x)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_I32, op == SU_OP_Q32_TO_I32_FLOOR ? su_q32_to_i32_floor(x) : su_q32_to_i32_round(x));
+        return SU_OK;
+    case SU_OP_Q32_RAW:
+    case SU_OP_Q32_TO_I64_FLOOR:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_Q32, &x)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_I64, op == SU_OP_Q32_RAW ? x : su_q32_to_i64_floor(x));
+        return SU_OK;
+    case SU_OP_MAKE_V3:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_Q32, &va.x) || !su_rd_w(ctx, ins->b, SU_TYPE_Q32, &va.y) ||
+            !su_rd_w(ctx, ins->c, SU_TYPE_Q32, &va.z)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_v3(ctx, ins->dst, va);
+        return SU_OK;
+    case SU_OP_V3_GET:
+        if (!su_rd_v3(ctx, ins->a, &va) || ins->b > 2u) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_Q32, ins->b == 0u ? va.x : (ins->b == 1u ? va.y : va.z));
+        return SU_OK;
+    case SU_OP_V3_ADD:
+    case SU_OP_V3_SUB:
+    case SU_OP_V3_CROSS:
+        if (!su_rd_v3(ctx, ins->a, &va) || !su_rd_v3(ctx, ins->b, &vb)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_v3(ctx, ins->dst, op == SU_OP_V3_ADD ? su_v3_add(va, vb)
+                                : (op == SU_OP_V3_SUB ? su_v3_sub(va, vb) : su_v3_cross(va, vb)));
+        return SU_OK;
+    case SU_OP_V3_DOT:
+        if (!su_rd_v3(ctx, ins->a, &va) || !su_rd_v3(ctx, ins->b, &vb)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_Q32, su_v3_dot(va, vb));
+        return SU_OK;
+    case SU_OP_V3_SCALE:
+    case SU_OP_V3_CLAMP_LEN:
+        if (!su_rd_v3(ctx, ins->a, &va) || !su_rd_w(ctx, ins->b, SU_TYPE_Q32, &x)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_v3(ctx, ins->dst, op == SU_OP_V3_SCALE ? su_v3_scale(va, x) : su_v3_clamp_len(va, x));
+        return SU_OK;
+    case SU_OP_V3_NEG:
+    case SU_OP_V3_NORMALIZE:
+        if (!su_rd_v3(ctx, ins->a, &va)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_v3(ctx, ins->dst, op == SU_OP_V3_NEG ? su_v3_neg(va) : su_v3_normalize(va));
+        return SU_OK;
+    case SU_OP_V3_LEN:
+    case SU_OP_V3_LEN_SQ:
+        if (!su_rd_v3(ctx, ins->a, &va)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_Q32, op == SU_OP_V3_LEN ? su_v3_len(va) : su_v3_len_sq(va));
+        return SU_OK;
+    case SU_OP_SELECT_V3:
+        if (!su_read_bool(ctx, ins->a, &bb) || !su_rd_v3(ctx, ins->b, &va) || !su_rd_v3(ctx, ins->c, &vb)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_v3(ctx, ins->dst, bb != 0u ? va : vb);
+        return SU_OK;
+    case SU_OP_MAKE_QUAT:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_Q32, &qa.w) || !su_rd_v3(ctx, ins->b, &va)) {
+            return SU_E_INTERNAL;
+        }
+        qa.x = va.x;
+        qa.y = va.y;
+        qa.z = va.z;
+        su_wr_quat(ctx, ins->dst, qa);
+        return SU_OK;
+    case SU_OP_QUAT_GET:
+        if (!su_rd_quat(ctx, ins->a, &qa) || ins->b > 3u) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_Q32, ins->b == 0u ? qa.w : (ins->b == 1u ? qa.x : (ins->b == 2u ? qa.y : qa.z)));
+        return SU_OK;
+    case SU_OP_QUAT_MUL:
+        if (!su_rd_quat(ctx, ins->a, &qa) || !su_rd_quat(ctx, ins->b, &qb)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_quat(ctx, ins->dst, su_quat_mul(qa, qb));
+        return SU_OK;
+    case SU_OP_QUAT_CONJ:
+    case SU_OP_QUAT_NORMALIZE:
+        if (!su_rd_quat(ctx, ins->a, &qa)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_quat(ctx, ins->dst, op == SU_OP_QUAT_CONJ ? su_quat_conj(qa) : su_quat_normalize(qa));
+        return SU_OK;
+    case SU_OP_QUAT_ROTATE:
+        if (!su_rd_quat(ctx, ins->a, &qa) || !su_rd_v3(ctx, ins->b, &va)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_v3(ctx, ins->dst, su_quat_rotate(qa, va));
+        return SU_OK;
+    case SU_OP_QUAT_INTEGRATE:
+        if (!su_rd_quat(ctx, ins->a, &qa) || !su_rd_v3(ctx, ins->b, &va) || !su_rd_w(ctx, ins->c, SU_TYPE_Q32, &x)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_quat(ctx, ins->dst, su_quat_integrate(qa, va, x));
+        return SU_OK;
+    case SU_OP_SELECT_QUAT:
+        if (!su_read_bool(ctx, ins->a, &bb) || !su_rd_quat(ctx, ins->b, &qa) || !su_rd_quat(ctx, ins->c, &qb)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_quat(ctx, ins->dst, bb != 0u ? qa : qb);
+        return SU_OK;
+    default:
+        return SU_E_INTERNAL;
+    }
+}
+
 /* ---- lifetime --------------------------------------------------------- */
 
 void su_vm_context_destroy(SuExecContext *ctx) {
@@ -164,6 +669,7 @@ void su_vm_context_destroy(SuExecContext *ctx) {
     }
     free(ctx->reg_val);
     free(ctx->reg_tag);
+    free(ctx->reg_w);
     free(ctx->in_cols);
     free(ctx->out_cols);
     free(ctx->bound);
@@ -235,8 +741,12 @@ uint32_t su_vm_context_create(const SuLirModule *m, uint32_t layout_generation,
     c->stored = su_vm_calloc(m->field_count, sizeof *c->stored);
     c->write_fields = su_vm_calloc(nw, sizeof *c->write_fields);
     c->write_ids = su_vm_calloc(nw, sizeof *c->write_ids);
+    if (m->ir_version_minor >= 3u) {
+        c->reg_w = su_vm_calloc((size_t)m->register_count * 4u, sizeof *c->reg_w);
+    }
     if (c->reg_val == NULL || c->reg_tag == NULL || c->in_cols == NULL || c->out_cols == NULL ||
-        c->bound == NULL || c->stored == NULL || c->write_fields == NULL || c->write_ids == NULL) {
+        c->bound == NULL || c->stored == NULL || c->write_fields == NULL || c->write_ids == NULL ||
+        (m->ir_version_minor >= 3u && c->reg_w == NULL)) {
         su_vm_context_destroy(c);
         return SU_E_RESOURCE_LIMIT;
     }
@@ -527,7 +1037,7 @@ static uint32_t su_exec_insn(SuExecContext *ctx, const SuInsn *ins, size_t r) {
         return SU_OK;
     }
     default:
-        return SU_E_INTERNAL;
+        return ctx->reg_w != NULL ? su_exec_insn03(ctx, ins, r) : SU_E_INTERNAL;
     }
 }
 

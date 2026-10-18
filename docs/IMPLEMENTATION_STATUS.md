@@ -426,3 +426,7 @@ Precise statement, detail in `docs/AGENT_RPC.md` section 14.
 Test-only seams (`internal.test.*` probes, `SU_TEST_*` variables) exist only in `SU_TEST_FAULT_HOOKS` builds; the
 release binary is checked for them (`check_release_seams.py`, a `release_seams` test in native builds).
 
+
+## Numeric profile fixed_q32_v1, IR 0.3, space3d (18 October 2026)
+
+Owner-authorized downstream work outside the milestone order (`planning/amendments/2026-10-18-numeric-3d.md`; M3 gates unchanged). Implemented and tested: numeric profile `fixed_q32_v1` (`docs/NUMERIC_FIXED_Q32.md`), IR 0.3 in the verifier and reference VM (`LIVE_IR_SPEC.md`; native backend refuses 0.3), the `space3d.query` host operator (`docs/SPACE3D.md`), the synthetic `6dof_racer_microcosm` scene and typed host-API helpers. Windows clang ctest 73/73; Linux GCC CI 72/72; MSVC scratch build bit-identical on every numeric, IR and space3d suite and the racer digests. Timing observations: `planning/evidence/numeric-3d/`. Handoff with unrun items: `planning/handoffs/2026-10-18-numeric-3d.md`.

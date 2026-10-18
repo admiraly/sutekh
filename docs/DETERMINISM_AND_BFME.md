@@ -12,6 +12,7 @@ These claims require different evidence. A million identical self-replays do not
 |---|---|---|
 | `u32_mod_v1` | M0 | Fully specified modular integer operations in SU-LIR 0.1 |
 | `fixed_authoritative_v1` | Later, only after written specification | Explicit scale, width, rounding, saturation/overflow, and conversions |
+| `fixed_q32_v1` | IR 0.3 (2026-10-18 amendment) | Wrapping i32/i64, saturating Q32.32 with round-half-even, exact vec3/quaternion sums, correctly rounded sqrt; see [NUMERIC_FIXED_Q32.md](NUMERIC_FIXED_Q32.md) |
 | `fp32_strict_v1` | Later, not yet defined | Exact op semantics, contraction, subnormal/NaN/zero behavior, conversions, reductions |
 | `visual_relaxed_v1` | Rendering/cosmetics later | Documented acceptable numeric error; never silently authoritative |
 | `bfme_compat_<variant>` | Profile work | Original behavior/rounding/order backed by evidence; not guessed from engine branding |

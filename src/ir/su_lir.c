@@ -8,6 +8,8 @@
 
 #include "sutekh/entities.h"
 #include "su_json.h"
+#include "su_num.h"
+#include "su_ops03.h"
 #include "su_sha256.h"
 
 #define SU_NUMERIC_PROFILE "u32_mod_v1"
@@ -31,7 +33,10 @@ enum {
     K_UINT,     /* non-negative integer fitting uint64 */
     K_BOOL,
     K_ARRAY,
-    K_OBJECT
+    K_OBJECT,
+    K_I32,      /* integer -2^31..2^31-1 (IR 0.3) */
+    K_I64,      /* integer -2^63..2^63-1 (IR 0.3) */
+    K_UINT_POS  /* integer 1..2^64-1 (IR 0.3) */
 };
 
 typedef struct KeySpec {
@@ -132,7 +137,9 @@ typedef struct IrInfo {
 typedef struct CapField {
     uint32_t id;
     uint32_t access;
-    Str name;
+    Str name;          /* logical (declared) name; both lanes of a 64-bit field carry it */
+    uint32_t vtype;    /* value type (SU_TYPE_U32 for 0.1/0.2) */
+    uint32_t lane;     /* 0, or 1 for the high word of an i64/q32 field */
 } CapField;
 
 typedef struct RegDef {
@@ -270,8 +277,26 @@ static int kind_ok(const SuJsonValue *v, int kind) {
     case K_BOOL: return v->type == SU_JSON_BOOL;
     case K_ARRAY: return v->type == SU_JSON_ARRAY;
     case K_OBJECT: return v->type == SU_JSON_OBJECT;
+    case K_I32:
+    case K_I64: {
+        uint64_t lim = kind == K_I32 ? UINT64_C(0x80000000) : UINT64_C(0x8000000000000000);
+        if (v->type != SU_JSON_NUMBER || !v->u.number.is_integer || v->u.number.overflow) {
+            return 0;
+        }
+        return v->u.number.negative ? v->u.number.magnitude <= lim : v->u.number.magnitude < lim;
+    }
+    case K_UINT_POS: return su_json_get_uint(v, &u) && u >= 1u;
     default: return 0;
     }
+}
+
+/* Value of a JSON integer already checked by K_I32 or K_I64. */
+static int64_t i64_of(const SuJsonValue *v) {
+    uint64_t m = v->u.number.magnitude;
+    if (!v->u.number.negative) {
+        return (int64_t)m;
+    }
+    return m == UINT64_C(0x8000000000000000) ? INT64_MIN : -(int64_t)m;
 }
 
 static uint32_t u32_of(const SuJsonValue *v) {
@@ -364,6 +389,24 @@ static uint32_t stage1_limits(SuDiag *d, const SuJsonValue *cap_root, const SuJs
 
 /* ---------- stage 4: top-level and nested shape ---------- */
 
+/* Value type of a capsule field entry from its "type" string (IR 0.3 names), 0 when unknown. */
+static uint32_t field_vtype_of(const SuJsonValue *fv) {
+    Str t = jstr(su_json_member(fv, "type"));
+    if (str_is(t, "u32")) {
+        return SU_TYPE_U32;
+    }
+    if (str_is(t, "i32")) {
+        return SU_TYPE_I32;
+    }
+    if (str_is(t, "i64")) {
+        return SU_TYPE_I64;
+    }
+    if (str_is(t, "q32")) {
+        return SU_TYPE_Q32;
+    }
+    return 0u;
+}
+
 static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
     /* Required keys first (nine), then the optional keys: IR 0.2 "ir_version", and the M3-03a
      * "capabilities" and "system_rev" (audit item 4). */
@@ -397,6 +440,8 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
             ci->ir_version_minor = 1u;
         } else if (str_is(jstr(v), SU_IR_VERSION_STRING_0_2)) {
             ci->ir_version_minor = 2u;
+        } else if (str_is(jstr(v), SU_IR_VERSION_STRING_0_3)) {
+            ci->ir_version_minor = 3u;
         } else {
             return set_diag(d, SU_E_TYPE, "/ir_version", "unsupported capsule ir_version");
         }
@@ -441,8 +486,10 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
         return set_diag(d, SU_E_TYPE, "/capsule_format", "unsupported capsule_format");
     }
     v = su_json_member(root, "numeric_profile");
-    if (!str_is(jstr(v), SU_NUMERIC_PROFILE)) {
-        return set_diag(d, SU_E_TYPE, "/numeric_profile", "unsupported numeric_profile");
+    if (!str_is(jstr(v), ci->ir_version_minor >= 3u ? SU_NUMERIC_PROFILE_FIXED_Q32_V1 : SU_NUMERIC_PROFILE)) {
+        return set_diag_ev(d, SU_E_TYPE, "/numeric_profile",
+                           ci->ir_version_minor >= 3u ? SU_NUMERIC_PROFILE_FIXED_Q32_V1 : SU_NUMERIC_PROFILE,
+                           "other", "unsupported numeric_profile for this ir_version");
     }
     ci->profile = jstr(v);
     ci->system = jstr(su_json_member(root, "system_id"));
@@ -469,7 +516,11 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
         if (!ident_ok(jstr(su_json_member(fv, "name")))) {
             return set_diag(d, SU_E_TYPE, base, "field name must match [A-Za-z_][A-Za-z0-9_]*");
         }
-        if (!str_is(jstr(su_json_member(fv, "type")), "u32")) {
+        if (ci->ir_version_minor >= 3u) {
+            if (field_vtype_of(fv) == 0u) {
+                return set_diag(d, SU_E_TYPE, base, "IR 0.3 fields must have type \"u32\", \"i32\", \"i64\" or \"q32\"");
+            }
+        } else if (!str_is(jstr(su_json_member(fv, "type")), "u32")) {
             return set_diag(d, SU_E_TYPE, base, "M0 fields must have type \"u32\"");
         }
     }
@@ -561,11 +612,17 @@ static uint32_t check_ir(SuDiag *d, const SuJsonValue *root, IrInfo *ii) {
         ii->ir_minor = 1u;
     } else if (str_is(jstr(su_json_member(root, "ir_version")), SU_IR_VERSION_STRING_0_2)) {
         ii->ir_minor = 2u;
+    } else if (str_is(jstr(su_json_member(root, "ir_version")), SU_IR_VERSION_STRING_0_3)) {
+        ii->ir_minor = 3u;
     } else {
         return set_diag(d, SU_E_TYPE, "/ir_version", "unsupported ir_version");
     }
-    if (!str_is(jstr(su_json_member(root, "numeric_profile")), SU_NUMERIC_PROFILE)) {
-        return set_diag(d, SU_E_TYPE, "/numeric_profile", "unsupported numeric_profile");
+    /* IR 0.3 is defined under numeric profile fixed_q32_v1; 0.1 and 0.2 under u32_mod_v1. */
+    if (!str_is(jstr(su_json_member(root, "numeric_profile")),
+                ii->ir_minor >= 3u ? SU_NUMERIC_PROFILE_FIXED_Q32_V1 : SU_NUMERIC_PROFILE)) {
+        return set_diag_ev(d, SU_E_TYPE, "/numeric_profile",
+                           ii->ir_minor >= 3u ? SU_NUMERIC_PROFILE_FIXED_Q32_V1 : SU_NUMERIC_PROFILE, "other",
+                           "unsupported numeric_profile for this ir_version");
     }
     ii->system = jstr(su_json_member(root, "system_id"));
     ii->query = jstr(su_json_member(root, "query"));
@@ -618,6 +675,36 @@ static uint32_t check_schema_semantics(SuDiag *d, const CapInfo *ci, const IrInf
         return set_diag(d, SU_E_SCHEMA_MISMATCH, "/ir_version",
                         "IR ir_version differs from capsule ir_version");
     }
+    /* IR 0.3: an i64/q32 field with id I also occupies id I+1 (its high lane). The lane IDs of all fields
+     * must be distinct, and the lane count is bounded like the field count. */
+    if (ci->ir_version_minor >= 3u) {
+        uint32_t lanes = 0;
+        for (i = 0; i < nf; i++) {
+            const SuJsonValue *a = ci->fields->u.array.items[i];
+            char ptr[64];
+            lanes += su_type_lanes(field_vtype_of(a));
+            if (su_type_lanes(field_vtype_of(a)) != 2u) {
+                continue;
+            }
+            snprintf(ptr, sizeof ptr, "/fields/%zu/id", i);
+            if (field_id_of(a) == UINT32_MAX) {
+                return set_diag(d, SU_E_SCHEMA_MISMATCH, ptr, "a 64-bit field needs id+1 for its high lane");
+            }
+            for (j = 0; j < nf; j++) {
+                if (field_id_of(ci->fields->u.array.items[j]) == field_id_of(a) + 1u) {
+                    return set_diag(d, SU_E_SCHEMA_MISMATCH, ptr,
+                                    "high lane id %u of 64-bit field '%.*s' is the id of field '%.*s'",
+                                    (unsigned)(field_id_of(a) + 1u), clampi(field_name_of(a).n), field_name_of(a).p,
+                                    clampi(field_name_of(ci->fields->u.array.items[j]).n),
+                                    field_name_of(ci->fields->u.array.items[j]).p);
+                }
+            }
+        }
+        if (lanes > SU_LIMIT_FIELDS) {
+            return set_diag(d, SU_E_RESOURCE_LIMIT, "/fields", "fields occupy %u storage lanes; the limit is %u",
+                            (unsigned)lanes, (unsigned)SU_LIMIT_FIELDS);
+        }
+    }
     return SU_OK;
 }
 
@@ -648,7 +735,7 @@ static int cmp_field(const void *a, const void *b) {
 static int find_field(const CapField *tab, uint32_t nf, Str name, uint32_t *idx) {
     uint32_t i;
     for (i = 0; i < nf; i++) {
-        if (str_eq(tab[i].name, name)) {
+        if (tab[i].lane == 0u && str_eq(tab[i].name, name)) {
             *idx = i;
             return 1;
         }
@@ -703,6 +790,188 @@ typedef struct Body {
     uint32_t uses_ops;   /* any 0.2 op seen */
 } Body;
 
+/* One IR 0.3 instruction (table-driven, su_ops03.h). Check order within the instruction matches 0.1: keys and
+ * JSON types, constant ranges, undefined registers, duplicate dst, operand register types, then each field
+ * operand in key order (declared, permission, one store per row, value type). On success *out holds the
+ * encoded instruction and the dst register is defined. */
+static uint32_t check_insn03(SuDiag *d, const SuJsonValue *ins, const char *base, const SuOp03 *op, Body *b,
+                             SuInsn *out) {
+    KeySpec keys[2u + SU_OP03_MAX_OPERANDS];
+    uint32_t idx[SU_OP03_MAX_OPERANDS];
+    uint32_t slot_val[5];
+    size_t nk = 0;
+    uint32_t k, rc;
+    char ptr[160];
+    int64_t qraw = 0;
+
+    keys[nk].name = "op";
+    keys[nk++].kind = K_NAME;
+    if (op->dst_type != 0u) {
+        keys[nk].name = "dst";
+        keys[nk++].kind = K_NAME;
+    }
+    for (k = 0; k < op->n; k++) {
+        const SuOp03Operand *o = &op->o[k];
+        keys[nk].name = o->key;
+        switch (o->kind) {
+        case SU_O_CI32: keys[nk].kind = K_I32; break;
+        case SU_O_CI64: case SU_O_CQNUM: keys[nk].kind = K_I64; break;
+        case SU_O_CQDEN: keys[nk].kind = K_UINT_POS; break;
+        case SU_O_AXIS: keys[nk].kind = K_U32; break;
+        default: keys[nk].kind = K_NAME; break;
+        }
+        nk++;
+    }
+    rc = check_keys(d, ins, base, keys, nk);
+    if (rc != SU_OK) {
+        return rc;
+    }
+
+    /* Constant ranges. */
+    for (k = 0; k < op->n; k++) {
+        const SuOp03Operand *o = &op->o[k];
+        if (o->kind == SU_O_AXIS && u32_of(su_json_member(ins, o->key)) >= o->type) {
+            ptr_child(ptr, sizeof ptr, base, o->key, strlen(o->key));
+            return set_diag(d, SU_E_TYPE, ptr, "axis must be 0..%u", (unsigned)(o->type - 1u));
+        }
+    }
+    if (op->code == SU_OP_CONST_Q32) {
+        uint64_t dv = 0;
+        su_json_get_uint(su_json_member(ins, "den"), &dv);
+        if (!su_q32_from_ratio(i64_of(su_json_member(ins, "num")), dv, &qraw)) {
+            ptr_child(ptr, sizeof ptr, base, "num", 3);
+            return set_diag(d, SU_E_TYPE, ptr, "num/den rounds to a value outside the q32 range");
+        }
+    }
+
+    /* Undefined registers. */
+    for (k = 0; k < op->n; k++) {
+        const SuOp03Operand *o = &op->o[k];
+        idx[k] = SU_OPERAND_NONE;
+        if (o->kind == SU_O_REG) {
+            const SuJsonValue *rv = su_json_member(ins, o->key);
+            if (!find_reg(b->regs, b->nregs, jstr(rv), &idx[k])) {
+                ptr_child(ptr, sizeof ptr, base, o->key, strlen(o->key));
+                return set_diag(d, SU_E_UNDEFINED_REGISTER, ptr, "register '%.*s' is not defined before use",
+                                clampi(jstr(rv).n), jstr(rv).p);
+            }
+        }
+    }
+    /* Duplicate destination. */
+    if (op->dst_type != 0u) {
+        Str dn = jstr(su_json_member(ins, "dst"));
+        uint32_t dummy;
+        if (find_reg(b->regs, b->nregs, dn, &dummy)) {
+            ptr_child(ptr, sizeof ptr, base, "dst", 3);
+            return set_diag(d, SU_E_DUPLICATE_REGISTER, ptr, "register '%.*s' is defined twice", clampi(dn.n), dn.p);
+        }
+    }
+    /* Operand register types. */
+    for (k = 0; k < op->n; k++) {
+        const SuOp03Operand *o = &op->o[k];
+        if (o->kind == SU_O_REG && b->regs[idx[k]].type != o->type) {
+            ptr_child(ptr, sizeof ptr, base, o->key, strlen(o->key));
+            return set_diag_ev(d, SU_E_TYPE, ptr, su_type_name(o->type), su_type_name(b->regs[idx[k]].type),
+                               "operand '%s' has type %s, expected %s", o->key, su_type_name(b->regs[idx[k]].type),
+                               su_type_name(o->type));
+        }
+    }
+    /* Field operands. */
+    for (k = 0; k < op->n; k++) {
+        const SuOp03Operand *o = &op->o[k];
+        Str fname;
+        uint32_t fi = SU_OPERAND_NONE;
+        if (o->kind != SU_O_FREAD && o->kind != SU_O_FWRITE) {
+            continue;
+        }
+        fname = jstr(su_json_member(ins, o->key));
+        ptr_child(ptr, sizeof ptr, base, o->key, strlen(o->key));
+        if (!find_field(b->table, b->nf, fname, &fi)) {
+            return set_diag_ev(d, o->kind == SU_O_FREAD ? SU_E_UNDECLARED_READ : SU_E_UNDECLARED_WRITE, ptr,
+                               "declared field", "not declared", "field '%.*s' is not declared in the capsule",
+                               clampi(fname.n), fname.p);
+        }
+        if (o->kind == SU_O_FREAD && !(b->table[fi].access & SU_ACCESS_READ)) {
+            return set_diag_ev(d, SU_E_UNDECLARED_READ, ptr, "read:true", "read:false",
+                               "field '%.*s' is not readable", clampi(fname.n), fname.p);
+        }
+        if (o->kind == SU_O_FWRITE) {
+            if (!(b->table[fi].access & SU_ACCESS_WRITE)) {
+                return set_diag_ev(d, SU_E_UNDECLARED_WRITE, ptr, "write:true", "write:false",
+                                   "field '%.*s' is not writable", clampi(fname.n), fname.p);
+            }
+            if (b->store_count[fi] != 0) {
+                return set_diag_ev(d, SU_E_UNDECLARED_WRITE, ptr, "one store per row", "stored again",
+                                   "field '%.*s' is stored more than once per row", clampi(fname.n), fname.p);
+            }
+        }
+        if (b->table[fi].vtype != o->type) {
+            return set_diag_ev(d, SU_E_TYPE, ptr, su_type_name(o->type), su_type_name(b->table[fi].vtype),
+                               "field '%.*s' has type %s; %s needs %s", clampi(fname.n), fname.p,
+                               su_type_name(b->table[fi].vtype), op->name, su_type_name(o->type));
+        }
+        if (o->kind == SU_O_FWRITE) {
+            b->store_count[fi]++;
+            if (su_type_lanes(o->type) == 2u) {
+                b->store_count[fi + 1u]++;
+            }
+        }
+        idx[k] = fi;
+    }
+
+    /* Commit: dst definition and instruction words. */
+    slot_val[SU_S_DST] = SU_OPERAND_NONE;
+    slot_val[SU_S_A] = SU_OPERAND_NONE;
+    slot_val[SU_S_B] = SU_OPERAND_NONE;
+    slot_val[SU_S_C] = SU_OPERAND_NONE;
+    slot_val[SU_S_CONST] = SU_OPERAND_NONE;
+    if (op->dst_type != 0u) {
+        if (b->nregs >= SU_LIMIT_REGISTERS) {
+            return set_diag(d, SU_E_RESOURCE_LIMIT, base, "more than %u registers", (unsigned)SU_LIMIT_REGISTERS);
+        }
+        slot_val[SU_S_DST] = b->nregs;
+        b->regs[b->nregs].name = jstr(su_json_member(ins, "dst"));
+        b->regs[b->nregs].type = op->dst_type;
+        b->nregs++;
+    }
+    for (k = 0; k < op->n; k++) {
+        const SuOp03Operand *o = &op->o[k];
+        const SuJsonValue *cv = su_json_member(ins, o->key);
+        switch (o->kind) {
+        case SU_O_REG:
+        case SU_O_FREAD:
+        case SU_O_FWRITE:
+            slot_val[o->slot] = idx[k];
+            break;
+        case SU_O_CI32:
+            slot_val[o->slot] = (uint32_t)((uint64_t)i64_of(cv) & 0xFFFFFFFFu);
+            break;
+        case SU_O_CI64: {
+            uint64_t bits = (uint64_t)i64_of(cv);
+            slot_val[SU_S_A] = (uint32_t)(bits & 0xFFFFFFFFu);
+            slot_val[SU_S_B] = (uint32_t)(bits >> 32);
+            break;
+        }
+        case SU_O_CQNUM:
+        case SU_O_CQDEN:
+            slot_val[SU_S_A] = (uint32_t)((uint64_t)qraw & 0xFFFFFFFFu);
+            slot_val[SU_S_B] = (uint32_t)((uint64_t)qraw >> 32);
+            break;
+        case SU_O_AXIS:
+            slot_val[o->slot] = u32_of(cv);
+            break;
+        default:
+            break;
+        }
+    }
+    out->op = op->code;
+    out->dst = slot_val[SU_S_DST];
+    out->a = slot_val[SU_S_A];
+    out->b = slot_val[SU_S_B];
+    out->c = slot_val[SU_S_C];
+    return SU_OK;
+}
+
 static uint32_t check_instructions(SuDiag *d, const IrInfo *ii, Body *b) {
     size_t i, ninsn = ii->insns->u.array.count;
 
@@ -730,6 +999,16 @@ static uint32_t check_instructions(SuDiag *d, const IrInfo *ii, Body *b) {
         }
         spec = find_op(jstr(opv), b->ir_minor);
         ptr_child(ptr, sizeof ptr, base, "op", 2);
+        if (spec == NULL && b->ir_minor >= 3u) {
+            const SuOp03 *op3 = su_op03_by_name(jstr(opv).p, jstr(opv).n);
+            if (op3 != NULL) {
+                rc = check_insn03(d, ins, base, op3, b, &b->out[i]);
+                if (rc != SU_OK) {
+                    return rc;
+                }
+                continue;
+            }
+        }
         if (spec == NULL) {
             return set_diag(d, SU_E_UNKNOWN_OPCODE, ptr, "unknown opcode '%.*s'",
                             clampi(jstr(opv).n), jstr(opv).p);
@@ -745,7 +1024,7 @@ static uint32_t check_instructions(SuDiag *d, const IrInfo *ii, Body *b) {
             return set_diag(d, SU_E_TYPE, ptr, "emit_event kind must be below 0x%08X (reserved range)",
                             (unsigned)SU_EVENT_KIND_RESERVED_MIN);
         }
-        if (spec->code >= SU_OP_SLOT_U32) {
+        if (spec->code >= SU_OP_SLOT_U32 && spec->code <= SU_OP_EMIT_EVENT) {
             b->uses_ops = 1u;
         }
 
@@ -806,6 +1085,11 @@ static uint32_t check_instructions(SuDiag *d, const IrInfo *ii, Body *b) {
                     return set_diag_ev(d, SU_E_UNDECLARED_WRITE, ptr, "one store per row", "stored again",
                                        "field '%.*s' is stored more than once per row", clampi(fname.n), fname.p);
                 }
+            }
+            if (b->table[fi].vtype != SU_TYPE_U32) {
+                return set_diag_ev(d, SU_E_TYPE, ptr, "u32", su_type_name(b->table[fi].vtype),
+                                   "field '%.*s' has type %s; %s needs a u32 field", clampi(fname.n), fname.p,
+                                   su_type_name(b->table[fi].vtype), spec->name);
             }
         }
 
@@ -903,12 +1187,18 @@ static void compute_semantic(SuLirModule *m, Str profile, Str system, Str query)
         hash_u32(&c, m->fields[i].id);
         hash_u32(&c, m->fields[i].type);
         hash_u32(&c, m->fields[i].access);
+        if (m->ir_version_minor >= 3u) {
+            /* 0.3 only (format 3): the value type and lane of each storage lane. */
+            hash_u32(&c, m->fields[i].value_type);
+            hash_u32(&c, m->fields[i].lane);
+        }
     }
     if (m->ir_version_minor >= 2u) {
-        /* 0.2 only: ir_version string, then the per-row caps. 0.1 hashes do not include these. */
+        /* 0.2 and later: ir_version string, then the per-row caps. 0.1 hashes do not include these. */
         static const char ver02[] = SU_IR_VERSION_STRING_0_2;
+        static const char ver03[] = SU_IR_VERSION_STRING_0_3;
         Str sv;
-        sv.p = ver02;
+        sv.p = m->ir_version_minor >= 3u ? ver03 : ver02;
         sv.n = sizeof ver02 - 1u;
         hash_str(&c, sv);
         hash_u32(&c, m->max_struct_per_row);
@@ -917,15 +1207,29 @@ static void compute_semantic(SuLirModule *m, Str profile, Str system, Str query)
     hash_u32(&c, m->insn_count);
     for (i = 0; i < m->insn_count; i++) {
         const SuInsn *in = &m->insns[i];
-        uint32_t a = in->a;
+        uint32_t w[5];
+        w[0] = in->op;
+        w[1] = in->dst;
+        w[2] = in->a;
+        w[3] = in->b;
+        w[4] = in->c;
         if (in->op == SU_OP_LOAD_U32 || in->op == SU_OP_STORE_U32) {
-            a = m->fields[in->a].id;
+            w[2] = m->fields[in->a].id;
+        } else if (m->ir_version_minor >= 3u) {
+            /* Field operands of 0.3 ops are table indices: hash the (lane-0) field ID instead. */
+            const SuOp03 *op = su_op03_by_code(in->op);
+            uint32_t k;
+            for (k = 0; op != NULL && k < op->n; k++) {
+                if (op->o[k].kind == SU_O_FREAD || op->o[k].kind == SU_O_FWRITE) {
+                    w[1u + op->o[k].slot] = m->fields[w[1u + op->o[k].slot]].id;
+                }
+            }
         }
-        hash_u32(&c, in->op);
-        hash_u32(&c, in->dst);
-        hash_u32(&c, a);
-        hash_u32(&c, in->b);
-        hash_u32(&c, in->c);
+        hash_u32(&c, w[0]);
+        hash_u32(&c, w[1]);
+        hash_u32(&c, w[2]);
+        hash_u32(&c, w[3]);
+        hash_u32(&c, w[4]);
     }
     su_sha256_final(&c, m->semantic_hash);
     su_sha256_hex(m->semantic_hash, m->semantic_hash_hex);
@@ -936,6 +1240,16 @@ static char *dup_str(Str s) {
     if (r != NULL) {
         memcpy(r, s.p, s.n);
         r[s.n] = '\0';
+    }
+    return r;
+}
+
+/* "<name>.lo" or "<name>.hi": storage name of a lane of a 64-bit field. */
+static char *dup_lane_name(Str s, uint32_t lane) {
+    char *r = malloc(s.n + 4u);
+    if (r != NULL) {
+        memcpy(r, s.p, s.n);
+        memcpy(r + s.n, lane == 0u ? ".lo" : ".hi", 4u);
     }
     return r;
 }
@@ -1122,8 +1436,12 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
         }
     }
 
-    /* Verified field table: capsule fields sorted ascending by id. */
-    nf = ci.fields->u.array.count;
+    /* Verified field table: capsule fields sorted ascending by id. In IR 0.3 an i64/q32 field is two lane
+     * entries (id, id+1); stage 5 proved the lane IDs distinct and their count within SU_LIMIT_FIELDS. */
+    nf = 0;
+    for (i = 0; i < ci.fields->u.array.count; i++) {
+        nf += ii.ir_minor >= 3u ? su_type_lanes(field_vtype_of(ci.fields->u.array.items[i])) : 1u;
+    }
     b.table = calloc(nf, sizeof *b.table);
     b.store_count = calloc(nf, sizeof *b.store_count);
     b.regs = calloc(ninsn + 1u, sizeof *b.regs);
@@ -1134,13 +1452,23 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     }
     b.nf = nf;
     b.ir_minor = ii.ir_minor;
-    for (i = 0; i < nf; i++) {
-        const SuJsonValue *fv = ci.fields->u.array.items[i];
-        const SuJsonValue *rv = su_json_member(fv, "read");
-        const SuJsonValue *wv = su_json_member(fv, "write");
-        b.table[i].id = field_id_of(fv);
-        b.table[i].name = field_name_of(fv);
-        b.table[i].access = (rv->u.boolean ? SU_ACCESS_READ : 0u) | (wv->u.boolean ? SU_ACCESS_WRITE : 0u);
+    {
+        uint32_t t = 0;
+        for (i = 0; i < ci.fields->u.array.count; i++) {
+            const SuJsonValue *fv = ci.fields->u.array.items[i];
+            const SuJsonValue *rv = su_json_member(fv, "read");
+            const SuJsonValue *wv = su_json_member(fv, "write");
+            uint32_t vt = ii.ir_minor >= 3u ? field_vtype_of(fv) : SU_TYPE_U32;
+            uint32_t lane;
+            for (lane = 0; lane < su_type_lanes(vt); lane++) {
+                b.table[t].id = field_id_of(fv) + lane;
+                b.table[t].name = field_name_of(fv);
+                b.table[t].access = (rv->u.boolean ? SU_ACCESS_READ : 0u) | (wv->u.boolean ? SU_ACCESS_WRITE : 0u);
+                b.table[t].vtype = vt;
+                b.table[t].lane = lane;
+                t++;
+            }
+        }
     }
     qsort(b.table, nf, sizeof *b.table, cmp_field);
 
@@ -1162,7 +1490,9 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
 
     /* Build the module. */
     memset(&m, 0, sizeof m);
-    m.artifact_format = ii.ir_minor >= 2u ? SU_ARTIFACT_FORMAT_VERSION_0_2 : SU_ARTIFACT_FORMAT_VERSION;
+    m.artifact_format = ii.ir_minor >= 3u   ? SU_ARTIFACT_FORMAT_VERSION_0_3
+                        : ii.ir_minor >= 2u ? SU_ARTIFACT_FORMAT_VERSION_0_2
+                                            : SU_ARTIFACT_FORMAT_VERSION;
     m.ir_version_minor = ii.ir_minor;
     m.max_struct_per_row = ci.max_struct_per_row;
     m.has_system_rev = (uint32_t)ci.has_system_rev;
@@ -1190,7 +1520,10 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
         m.fields[i].id = b.table[i].id;
         m.fields[i].type = SU_TYPE_U32;
         m.fields[i].access = b.table[i].access;
-        m.fields[i].name = dup_str(b.table[i].name);
+        m.fields[i].value_type = b.table[i].vtype;
+        m.fields[i].lane = b.table[i].lane;
+        m.fields[i].name = su_type_lanes(b.table[i].vtype) == 2u ? dup_lane_name(b.table[i].name, b.table[i].lane)
+                                                                 : dup_str(b.table[i].name);
         if (m.fields[i].name == NULL) {
             su_lir_module_free(&m);
             rc = set_diag(d, SU_E_INTERNAL, "", "out of memory");

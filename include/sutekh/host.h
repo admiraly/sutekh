@@ -209,6 +209,24 @@ SU_HOST_API uint32_t su_host_digest(const SuHostWorld *w, uint8_t out[32]);
 /* Lowercase hex helper (out holds 65 bytes). */
 SU_HOST_API void su_host_hex(const uint8_t digest[32], char out[65]);
 
+/* ---- IR 0.3 typed lanes (numeric profile fixed_q32_v1; LIVE_IR_SPEC "IR 0.3") ----
+ * Every column is a 32-bit cell. An i64 or q32 field declared with id I occupies the lanes I ("<name>.lo",
+ * bits 0..31) and I + 1 ("<name>.hi", bits 32..63); su_host_field_info reports both with type SU_TYPE_U32
+ * (storage). These helpers read and write such a field as one 64-bit value (q32: raw Q32.32, value * 2^32). */
+
+/* *value_type: SU_TYPE_U32, SU_TYPE_I32, SU_TYPE_I64 or SU_TYPE_Q32; *lane: 0, or 1 for the high lane of a
+ * 64-bit field. SU_E_SCHEMA_MISMATCH for an unknown field. */
+SU_HOST_API uint32_t su_host_field_value_type(const SuHostWorld *w, uint32_t field_id, uint32_t *value_type,
+                                              uint32_t *lane);
+/* As su_host_read for a 64-bit field named by its low lane id. SU_E_TYPE when field_id is not the low lane of an
+ * i64 or q32 field, SU_E_SCHEMA_MISMATCH when it is unknown. */
+SU_HOST_API uint32_t su_host_read_i64(const SuHostWorld *w, uint32_t field_id, uint64_t first, uint64_t count,
+                                      int64_t *out);
+/* Queues both lanes of a 64-bit field for tick, as one su_host_input_push of two cell writes (same checks,
+ * same record). SU_E_TYPE / SU_E_SCHEMA_MISMATCH as su_host_read_i64. */
+SU_HOST_API uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint64_t entity, uint32_t field_id,
+                                            int64_t value, SuHostError *err);
+
 #ifdef __cplusplus
 }
 #endif

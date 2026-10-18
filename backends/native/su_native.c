@@ -283,6 +283,11 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
         diag_set(diag, SU_E_INVALID_ARGUMENT, SU_NATIVE_NO_FAILED_INSN, "module is NULL");
         return SU_E_INVALID_ARGUMENT;
     }
+    /* IR 0.3 (fixed_q32_v1): no native lowering; the module runs on the reference VM tier. */
+    if (m->ir_version_minor >= 3u) {
+        diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "ir_0_3_not_lowered");
+        return SU_E_CAPABILITY_DENIED;
+    }
     /* IR 0.2 (M2-00c2): entity ops run on the reference VM only (M2 contract section 3). */
     if (m->ir_version_minor >= 2u || m->uses_entity_ops != 0u) {
         diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "ir_0_2_not_lowered");
