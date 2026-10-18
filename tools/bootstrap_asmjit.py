@@ -153,7 +153,7 @@ def _write_lock(commit, info):
         "pin_note": "No upstream release tags exist; pinned by commit.",
     }
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
-    with open(LOCK, "w", encoding="utf-8") as fh:
+    with open(LOCK, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(lock, fh, indent=2, sort_keys=True)
         fh.write("\n")
     return lock
@@ -170,6 +170,10 @@ def fetch(force):
         os.makedirs(DEST)
         for argv in (
             ["init", "-q", DEST],
+            # Byte-exact checkout on every host: a global core.autocrlf=true (the Git for Windows default) would
+            # rewrite LICENSE.md and the sources with CRLF and change the pinned license hash.
+            ["-C", DEST, "config", "core.autocrlf", "false"],
+            ["-C", DEST, "config", "core.eol", "lf"],
             ["-C", DEST, "remote", "add", "origin", REPO_URL],
             ["-C", DEST, "fetch", "-q", "--depth", "1", "origin", PIN],
             ["-C", DEST, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", "FETCH_HEAD"],
