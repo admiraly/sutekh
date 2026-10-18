@@ -19,10 +19,13 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#if !defined(_WIN32)
 #include <sys/wait.h>
 #include <unistd.h>
 #include <dirent.h>
+#endif
 
+#include "../../common/su_test_os.h"
 #include "agent/su_agent.h"
 #include "agent/su_proc.h"
 #include "agent/su_proto.h"
@@ -49,7 +52,7 @@ static char g_proj[1100];
 static int g_seq;
 
 typedef struct Sess {
-    pid_t pid;
+    SuTestServe serve; /* supervisor under test (tests/common/su_test_os.h) */
     int wfd;
     SuLineReader rd;
 } Sess;
@@ -116,12 +119,23 @@ static int err_code_is(const Resp *r, const char *name) {
 
 /* ---------- agent sessions: one agent process per scenario ---------- */
 
+/* Sets (value != NULL) or removes an environment variable before a session starts. */
+static void fault_env(const char *name, const char *value) {
+    if (value != NULL) {
+        setenv(name, value, 1);
+    } else {
+        unsetenv(name);
+    }
+}
+
+/* The fault environment is set before the supervisor starts and removed from the test process once it
+ * started: on POSIX the forked agent keeps its copy (and passes it to its workers); on Windows the agent is
+ * a thread of this process, so the variables stay set until the session ends (su_test_unset_after_start). */
 static Sess sess_start(const char *fault, const char *fault_ms, uint64_t timeout_ms, const char *tag) {
     Sess s;
-    int req[2];
-    int rsp[2];
-    pid_t pid;
-    char spool[1200];
+    int wfd;
+    int rfd;
+    static char spool[1200]; /* static: on Windows the supervisor thread reads cfg strings after this returns */
     SuAgentConfig cfg;
     static const char *argv[2];
 
@@ -134,47 +148,25 @@ static Sess sess_start(const char *fault, const char *fault_ms, uint64_t timeout
     cfg.worker_argv = argv;
     cfg.request_timeout_ms = timeout_ms;
     cfg.spool_dir = spool;
-    if (pipe(req) != 0 || pipe(rsp) != 0) {
-        perror("pipe");
-        exit(2);
-    }
-    pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        exit(2);
-    }
-    if (pid == 0) {
-        int rc;
-        close(req[1]);
-        close(rsp[0]);
-        if (fault != NULL) {
-            setenv("SU_TEST_FAULT", fault, 1);
-        } else {
-            unsetenv("SU_TEST_FAULT");
-        }
-        if (fault_ms != NULL) {
-            setenv("SU_TEST_FAULT_MS", fault_ms, 1);
-        } else {
-            unsetenv("SU_TEST_FAULT_MS");
-        }
-        rc = su_agent_serve(req[0], rsp[1], &cfg);
-        _exit(rc == 0 ? 0 : 1);
-    }
-    close(req[0]);
-    close(rsp[1]);
+    fault_env("SU_TEST_FAULT", fault);
+    fault_env("SU_TEST_FAULT_MS", fault_ms);
     memset(&s, 0, sizeof s);
-    s.pid = pid;
-    s.wfd = req[1];
-    su_line_reader_init(&s.rd, rsp[0], -1);
+    su_test_serve_start(&s.serve, &cfg, &wfd, &rfd);
+    if (fault != NULL) {
+        su_test_unset_after_start("SU_TEST_FAULT");
+    }
+    if (fault_ms != NULL) {
+        su_test_unset_after_start("SU_TEST_FAULT_MS");
+    }
+    s.wfd = wfd;
+    su_line_reader_init(&s.rd, rfd, -1);
     return s;
 }
 
 static void sess_stop(Sess *s) {
-    int status = 0;
     close(s->wfd);
     su_line_reader_free(&s->rd);
-    waitpid(s->pid, &status, 0);
-    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(su_test_serve_wait(&s->serve));
 }
 
 static int call(Sess *s, const char *line, Resp *r, int64_t wait_ms) {
@@ -239,6 +231,67 @@ static void copy_example(const char *name) {
     fclose(fo);
 }
 
+#if defined(_WIN32)
+/* Creation time of a process (GetProcessTimes, 100 ns units since 1601), or -1. The Windows counterpart of
+ * the /proc start time: like it, it identifies the process instance, so a replaced worker that reuses the
+ * pid has a different value. Unlike /proc, it cannot be read once the process object is gone. */
+static long long proc_starttime(pid_t pid) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    FILETIME created;
+    FILETIME ended;
+    FILETIME kern;
+    FILETIME user;
+    long long st = -1;
+
+    if (h == NULL) {
+        return -1;
+    }
+    if (GetProcessTimes(h, &created, &ended, &kern, &user)) {
+        st = (long long)(((unsigned long long)created.dwHighDateTime << 32) | created.dwLowDateTime);
+    }
+    CloseHandle(h);
+    return st;
+}
+
+/* Windows has no zombies (an ended child leaves no entry to reap), so "no zombie child" becomes: no child
+ * of the agent is still running except the active worker `keep`, i.e. the disposable admission child is
+ * gone. The agent is this test process (the supervisor is a thread of it). A child is a process whose
+ * parent id is the agent's and that was created after the agent (parent ids are not cleared when the
+ * parent exits, and pids are reused). Read from a Toolhelp snapshot. */
+static int leftover_children(uint64_t agent, uint64_t keep) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32 pe;
+    long long born = proc_starttime((pid_t)agent);
+    int n = 0;
+
+    if (snap == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    if (born < 0) {
+        CloseHandle(snap);
+        return -1;
+    }
+    memset(&pe, 0, sizeof pe);
+    pe.dwSize = sizeof pe;
+    if (Process32First(snap, &pe)) {
+        do {
+            uint64_t id = (uint64_t)pe.th32ProcessID;
+            if ((uint64_t)pe.th32ParentProcessID == agent && id != keep && su_test_pid_alive(id) &&
+                proc_starttime((pid_t)id) >= born) {
+                n++;
+            }
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+    return n;
+}
+
+/* Zombie children of the session's agent (POSIX), or its leftover running children (Windows, see above). */
+static int zombies_of(const Sess *s, uint64_t active) {
+    (void)s;
+    return leftover_children((uint64_t)GetCurrentProcessId(), active);
+}
+#else
 /* Start time (clock ticks since boot) of a process, or -1. */
 static long long proc_starttime(pid_t pid) {
     char path[64];
@@ -311,6 +364,13 @@ static int zombie_children(pid_t ppid) {
     return n;
 }
 
+/* Zombie children of the session's agent (POSIX), or its leftover running children (Windows, see above). */
+static int zombies_of(const Sess *s, uint64_t active) {
+    (void)active;
+    return zombie_children(s->serve.pid);
+}
+#endif
+
 /* ---------- world helpers ---------- */
 
 static int create_movement(Sess *s, char *wid, size_t wcap, char *rev, size_t rcap) {
@@ -375,7 +435,7 @@ static void check_unchanged(Sess *s, uint64_t active, long long start, const cha
     CHECK(st_now != -1 && st_now == start);
     CHECK(active_pid(s) == active);
     CHECK(world_rev(s, wid, now, sizeof now) && strcmp(now, rev) == 0);
-    CHECK(zombie_children(s->pid) == 0);
+    CHECK(zombies_of(s, active) == 0);
     if (label != NULL && (st_now == -1 || st_now != start)) {
         fprintf(stderr, "%s: active worker changed\n", label);
     }

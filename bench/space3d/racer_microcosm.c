@@ -12,10 +12,26 @@
  * along a generated 41 km course (bench/space3d/course.json), seeded; no external assets.
  *
  *   racer_microcosm --root <repo> --n 32 [--ticks 1200] [--warmup 120] [--obstacles 48] [--seed 1]
- *                   [--no-query] [--replay] [--digest-every 120]
+ *                   [--no-query] [--replay] [--digest-every 120] [--vm-tier reference|planned] [--native]
+ *                   [--dump-fixture <path>] [--dump-final <path>]
+ *   racer_microcosm --root <repo> --n 32 --rollback 1,6,12 [--rollback-iters 200] [--warmup 120]
  * Prints one JSON object: identities, per-tick wall time distribution, digests, event counts, race totals.
  * --replay additionally runs the scene again from scratch and from a mid-run canonical checkpoint and reports
- * whether every digest matched. Timing is an observation on the machine that ran it, not a qualification. */
+ * whether every digest matched. Timing is an observation on the machine that ran it, not a qualification.
+ *
+ * --rollback measures client-side rollback resimulation: after the warm-up the world is saved (canonical bytes),
+ * restored and stepped K ticks once to obtain the reference digest, then restored and re-stepped K ticks (one
+ * su_sched_run_ticks call) --rollback-iters times per K. Every iteration's digest must equal the reference
+ * digest, or the driver exits 1. Save, restore and resimulation are timed separately.
+ *
+ * --native (builds with SUTEKH_NATIVE=ON): every IR system without entity operations (racer.move) is compiled by
+ * the native backend (scalar; IR 0.3 lowering), admitted by the registry's differential check against the VM
+ * (su_nv_admit) and installed in the schedule entry; the schedule then runs it as a native kernel.
+ *
+ * --dump-fixture writes the initial world as a world.create fixture (fixture_format 0.1, schema space3d, one
+ * column per storage lane by lane name); --dump-final writes {"tick", "columns"} of the committed state after the
+ * run (warm-up + timed ticks). tests/space3d/test_space3d_serve.py builds the same world through `sutekh serve`
+ * and compares every lane. */
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,19 +47,64 @@
 #include "runtime/schedule.h"
 #include "space3d_ops.h"
 #include "sutekh/status.h"
+#include "vm/su_vm.h"
 #include "world/su_world.h"
+#ifdef SU_HAVE_NATIVE
+#include "runtime/native_versions.h"
+#include "sutekh/native/abi.h"
+#endif
 
 #define ONE SU_Q32_ONE
 #define GATES 16u
 #define MAX_TICKS 200000u
+#define VM_TIER_NAME (g_native ? "native" : (su_vm_default_tier() == SU_VM_TIER_REFERENCE ? "reference" : "planned"))
+static int g_native = 0; /* --native: the reported tier of the IR systems that have a kernel */
 
 typedef struct Args {
     const char *root;
+    const char *dump_fixture, *dump_final;
     uint32_t n, ticks, warmup, obstacles, digest_every;
     uint64_t seed;
-    int no_query, replay, dump_racers;
+    int no_query, replay, dump_racers, native;
+    uint32_t rollback_k[8], rollback_nk, rollback_iters;
     int trace; /* racer index to trace per tick on stderr, -1 none */
 } Args;
+
+/* ---------- dumps ---------- */
+
+/* {"fixture_format":"0.1",...} of the world's committed state (fixture != 0) or {"tick":T,"columns":{...}}. */
+static int dump_world(const char *path, const SuWorld *w, const SuSchedule *s, int fixture) {
+    FILE *f = fopen(path, "wb");
+    uint32_t i, r;
+    uint64_t rows = 0;
+    if (f == NULL) {
+        return 0;
+    }
+    if (fixture) {
+        const uint32_t *col;
+        su_world_read_committed(w, s->fields[0].id, &col, &rows);
+        fprintf(f, "{\"fixture_format\":\"0.1\",\"schema_id\":\"%s\",\"schema_version\":%u,\"tick\":0,"
+                   "\"entity_ids\":[", s->schema_id, (unsigned)s->schema_version);
+        for (r = 0; r < rows; r++) {
+            fprintf(f, "%s%u", r ? "," : "", (unsigned)(r + 1u));
+        }
+        fprintf(f, "],");
+    } else {
+        fprintf(f, "{\"tick\":%llu,", (unsigned long long)su_world_tick(w));
+    }
+    fprintf(f, "\"columns\":{");
+    for (i = 0; i < s->field_count; i++) {
+        const uint32_t *col;
+        su_world_read_committed(w, s->fields[i].id, &col, &rows);
+        fprintf(f, "%s\"%s\":[", i ? "," : "", s->fields[i].name);
+        for (r = 0; r < rows; r++) {
+            fprintf(f, "%s%u", r ? "," : "", (unsigned)col[r]);
+        }
+        fprintf(f, "]");
+    }
+    fprintf(f, "}}\n");
+    return fclose(f) == 0;
+}
 
 /* ---------- course ---------- */
 
@@ -336,6 +397,31 @@ static void sim_schedule(Sim *sim, const Args *a) {
         fprintf(stderr, "schedule: %s\n", su_status_name(st));
         exit(2);
     }
+    if (a->native) {
+#ifdef SU_HAVE_NATIVE
+        uint32_t i;
+        for (i = 0; i < sim->s.count; i++) {
+            SuSysEntry *e = &sim->s.sys[i];
+            uint64_t seq = 0, rows = 0, bad = 0;
+            uint32_t cases = 0;
+            if (e->kind != SU_SYS_KIND_IR || e->mod->uses_entity_ops) {
+                continue;
+            }
+            st = su_nv_prepare(e->mod, sim->s.layout_generation, SU_NCAP_X86_64_SCALAR, &seq, msg, sizeof msg);
+            if (st == SU_OK) st = su_nv_admit(seq, 20261018u, &cases, &rows, &bad);
+            if (st == SU_OK) st = su_nv_install(seq);
+            if (st != SU_OK) {
+                fprintf(stderr, "native %s: %s %s (admission mismatches %llu)\n", e->system_id, su_status_name(st),
+                        msg, (unsigned long long)bad);
+                exit(2);
+            }
+            e->native_seq = seq;
+        }
+#else
+        fprintf(stderr, "--native needs a build with SUTEKH_NATIVE=ON\n");
+        exit(2);
+#endif
+    }
 }
 
 static void sim_desc(Sim *sim) {
@@ -503,6 +589,133 @@ static uint32_t sum_col(const SuWorld *w, uint32_t id, uint32_t n) {
     return s;
 }
 
+static void ns_stats(const char *name, uint64_t *v, uint32_t n, int comma) {
+    qsort(v, n, sizeof *v, cmp_u64);
+    printf("\"%s\":{\"min\":%" PRIu64 ",\"p50\":%" PRIu64 ",\"p95\":%" PRIu64 ",\"p99\":%" PRIu64
+           ",\"max\":%" PRIu64 "}%s",
+           name, v[0], pct(v, n, 50), pct(v, n, 95), pct(v, n, 99), v[n - 1u], comma ? "," : "");
+}
+
+/* Rollback resimulation (see the header). Returns 0 when every resimulated digest matched. */
+static int run_rollback(const Args *a, const Course *course) {
+    Sim sim;
+    uint8_t *snap, *scratch;
+    size_t snap_len = 0, got = 0;
+    uint64_t *t_save, *t_restore, *t_resim, *t_total;
+    uint64_t snap_tick;
+    uint32_t it, k;
+    int ok = 1;
+    sim_create(&sim, a, course);
+    if (step(&sim, a->warmup) != SU_OK) {
+        return 1;
+    }
+    snap_tick = su_world_tick(sim.w);
+    su_world_canonical_size(sim.w, &snap_len);
+    snap = malloc(snap_len);
+    scratch = malloc(snap_len);
+    t_save = calloc(a->rollback_iters, sizeof *t_save);
+    t_restore = calloc(a->rollback_iters, sizeof *t_restore);
+    t_resim = calloc(a->rollback_iters, sizeof *t_resim);
+    t_total = calloc(a->rollback_iters, sizeof *t_total);
+    if (snap == NULL || scratch == NULL || t_save == NULL || t_restore == NULL || t_resim == NULL || t_total == NULL ||
+        su_world_canonical_write(sim.w, snap, snap_len, &got) != SU_OK || got != snap_len) {
+        fprintf(stderr, "rollback: cannot save the anchor state\n");
+        return 1;
+    }
+    /* Save cost: canonical write of the live state into a preallocated buffer (one history entry per tick). */
+    for (it = 0; it < a->rollback_iters; it++) {
+        uint64_t t0 = 0, t1 = 0;
+        su_platform_monotonic_ns(&t0);
+        su_world_canonical_write(sim.w, scratch, snap_len, &got);
+        su_platform_monotonic_ns(&t1);
+        t_save[it] = t1 - t0;
+    }
+    printf("{\"workload\":\"6dof_racer_rollback\",\"n\":%u,\"gates\":%u,\"obstacles\":%u,\"rows\":%u,"
+           "\"seed\":%" PRIu64 ",\"tick_hz\":120,\"query\":%s,\"warmup_ticks\":%u,\"anchor_tick\":%" PRIu64
+           ",\"iterations\":%u,\"snapshot_bytes\":%zu,\"vm\":\"%s\",",
+           a->n, GATES, a->obstacles, sim.rows, a->seed, a->no_query ? "false" : "true", a->warmup, snap_tick,
+           a->rollback_iters, snap_len, VM_TIER_NAME);
+    printf("\"systems\":[");
+    for (k = 0; k < sim.s.count; k++) {
+        printf("%s{\"system_id\":\"%s\",\"semantic_hash\":\"%s\"}", k ? "," : "", sim.s.sys[k].system_id,
+               sim.s.sys[k].mod->semantic_hash_hex);
+    }
+    printf("],");
+    ns_stats("save_ns", t_save, a->rollback_iters, 1);
+    printf("\"k\":[");
+    for (k = 0; k < a->rollback_nk; k++) {
+        uint32_t kt = a->rollback_k[k], mismatches = 0;
+        char ref[65];
+        SuWorld *rw = NULL;
+        /* Reference: restore once and step K ticks. */
+        if (su_world_restore_canonical(&sim.desc, snap, snap_len, &rw) != SU_OK) {
+            fprintf(stderr, "rollback: restore failed\n");
+            return 1;
+        }
+        su_world_destroy(sim.w);
+        sim.w = rw;
+        if (step(&sim, kt) != SU_OK) {
+            return 1;
+        }
+        state_digest(sim.w, ref, NULL, NULL);
+        for (it = 0; it < a->rollback_iters; it++) {
+            uint64_t t0 = 0, t1 = 0, t2 = 0;
+            char d[65];
+            su_platform_monotonic_ns(&t0);
+            if (su_world_restore_canonical(&sim.desc, snap, snap_len, &rw) != SU_OK) {
+                fprintf(stderr, "rollback: restore failed\n");
+                return 1;
+            }
+            su_world_destroy(sim.w);
+            sim.w = rw;
+            su_platform_monotonic_ns(&t1);
+            if (step(&sim, kt) != SU_OK) {
+                return 1;
+            }
+            su_platform_monotonic_ns(&t2);
+            t_restore[it] = t1 - t0;
+            t_resim[it] = t2 - t1;
+            t_total[it] = t2 - t0;
+            state_digest(sim.w, d, NULL, NULL);
+            if (strcmp(d, ref) != 0 || su_world_tick(sim.w) != snap_tick + kt) {
+                mismatches++;
+            }
+        }
+        if (mismatches != 0u) {
+            ok = 0;
+        }
+        printf("%s{\"k\":%u,\"final_state_sha256\":\"%s\",\"mismatches\":%u,", k ? "," : "", kt, ref, mismatches);
+        ns_stats("restore_ns", t_restore, a->rollback_iters, 1);
+        ns_stats("resim_ns", t_resim, a->rollback_iters, 1);
+        ns_stats("total_ns", t_total, a->rollback_iters, 1);
+        printf("\"resim_per_tick_p50_ns\":%" PRIu64 ",\"total_p50_fraction_of_budget\":%.4f,"
+               "\"total_p99_fraction_of_budget\":%.4f}",
+               pct(t_resim, a->rollback_iters, 50) / kt, (double)pct(t_total, a->rollback_iters, 50) / 8333333.0,
+               (double)pct(t_total, a->rollback_iters, 99) / 8333333.0);
+    }
+    printf("],\"budget_ns_120hz\":8333333,\"digests_identical\":%s,", ok ? "true" : "false");
+#if defined(__clang__)
+    printf("\"compiler\":\"clang %s\",", __clang_version__);
+#elif defined(__GNUC__)
+    printf("\"compiler\":\"gcc %d.%d.%d\",", __GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__);
+#elif defined(_MSC_VER)
+    printf("\"compiler\":\"msvc %d\",", _MSC_VER);
+#endif
+#ifdef NDEBUG
+    printf("\"build\":\"optimized (NDEBUG)\"}\n");
+#else
+    printf("\"build\":\"debug\"}\n");
+#endif
+    free(snap);
+    free(scratch);
+    free(t_save);
+    free(t_restore);
+    free(t_resim);
+    free(t_total);
+    sim_free(&sim);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     Args a;
     Course course;
@@ -526,6 +739,7 @@ int main(int argc, char **argv) {
     a.seed = 1;
     a.digest_every = 120;
     a.trace = -1;
+    a.rollback_iters = 200;
     for (i = 1; i < (uint32_t)argc; i++) {
         const char *k = argv[i];
         const char *v = i + 1u < (uint32_t)argc ? argv[i + 1u] : "";
@@ -539,9 +753,34 @@ int main(int argc, char **argv) {
         else if (strcmp(k, "--no-query") == 0) { a.no_query = 1; }
         else if (strcmp(k, "--replay") == 0) { a.replay = 1; }
         else if (strcmp(k, "--dump-racers") == 0) { a.dump_racers = 1; }
+        else if (strcmp(k, "--native") == 0) { a.native = 1; }
+        else if (strcmp(k, "--dump-fixture") == 0) { a.dump_fixture = v; i++; }
+        else if (strcmp(k, "--dump-final") == 0) { a.dump_final = v; i++; }
         else if (strcmp(k, "--trace") == 0) { a.trace = (int)strtol(v, NULL, 10); i++; }
+        else if (strcmp(k, "--rollback") == 0) {
+            const char *p = v;
+            char *e = NULL;
+            a.rollback_nk = 0;
+            while (*p != '\0' && a.rollback_nk < 8u) {
+                a.rollback_k[a.rollback_nk++] = (uint32_t)strtoul(p, &e, 10);
+                if (e == p || (*e != ',' && *e != '\0')) {
+                    a.rollback_k[0] = 0; /* rejected below */
+                    break;
+                }
+                p = *e == ',' ? e + 1 : e;
+            }
+            i++;
+        }
+        else if (strcmp(k, "--vm-tier") == 0) {
+            if (strcmp(v, "reference") == 0) su_vm_set_default_tier(SU_VM_TIER_REFERENCE);
+            else if (strcmp(v, "planned") == 0) su_vm_set_default_tier(SU_VM_TIER_PLANNED);
+            else { fprintf(stderr, "bad --vm-tier\n"); return 2; }
+            i++;
+        }
+        else if (strcmp(k, "--rollback-iters") == 0) { a.rollback_iters = (uint32_t)strtoul(v, NULL, 10); i++; }
         else { fprintf(stderr, "unknown argument %s\n", k); return 2; }
     }
+    g_native = a.native;
     if (a.n == 0 || a.ticks == 0 || a.ticks + a.warmup > MAX_TICKS || a.digest_every == 0 ||
         a.n + GATES + a.obstacles > SPACE3D_MAX_ROWS) {
         fprintf(stderr, "bad arguments\n");
@@ -552,8 +791,26 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    if (a.rollback_nk > 0u) {
+        for (i = 0; i < a.rollback_nk; i++) {
+            if (a.rollback_k[i] == 0u || a.rollback_k[i] > 1024u) {
+                fprintf(stderr, "bad --rollback\n");
+                return 2;
+            }
+        }
+        if (a.rollback_iters == 0u) {
+            fprintf(stderr, "bad --rollback-iters\n");
+            return 2;
+        }
+        return run_rollback(&a, &course);
+    }
+
     /* Run A: warm-up, then timed single ticks; digests every digest_every ticks; checkpoint at the midpoint. */
     sim_create(&sim, &a, &course);
+    if (a.dump_fixture != NULL && !dump_world(a.dump_fixture, sim.w, &sim.s, 1)) {
+        fprintf(stderr, "cannot write %s\n", a.dump_fixture);
+        return 2;
+    }
     if (step(&sim, a.warmup) != SU_OK) {
         return 1;
     }
@@ -580,6 +837,10 @@ int main(int argc, char **argv) {
     }
     state_digest(sim.w, final_state, NULL, NULL);
     event_digest(&sim.s, final_events, &events);
+    if (a.dump_final != NULL && !dump_world(a.dump_final, sim.w, &sim.s, 0)) {
+        fprintf(stderr, "cannot write %s\n", a.dump_final);
+        return 2;
+    }
     if (a.dump_racers) {
         /* Diagnostic (stderr): per racer position, speed, course parameter, next gate and its distance. */
         for (i = 0; i < a.n; i++) {
@@ -701,6 +962,7 @@ int main(int argc, char **argv) {
                ",\"candidates\":%" PRIu64 ",\"narrow_tests\":%" PRIu64 ",\"contacts\":%" PRIu64 "},",
                qs->movers, qs->collidables, qs->sweep_axis, qs->sweep_pairs, qs->candidates, qs->narrow_tests,
                qs->contacts);
+        printf("\"vm\":\"%s\",", VM_TIER_NAME);
         printf("\"replay_from_start_identical\":%s,\"replay_from_checkpoint_identical\":%s,\"checkpoint_tick\":%u,",
                replay_ok < 0 ? "null" : (replay_ok ? "true" : "false"), ckpt_ok < 0 ? "null" : (ckpt_ok ? "true" : "false"),
                a.replay ? ckpt_tick : 0u);

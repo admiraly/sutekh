@@ -63,6 +63,8 @@ Use held-out seeds/workload shapes to detect benchmark overfitting. The candidat
 
 Native CPU variants may dispatch by detected capability and a measured workload class. Keep a scalar baseline and account for tails and transition cost. Do not assume wider vectors always win. Runtime GPU selection considers transfer/synchronization, queue occupancy, semantic eligibility, and state residency. Start with static authored placement; automatic crossover tables are later work.
 
+Implemented tiers (2026-10-18) for one system, slowest to fastest, all bit-identical: the reference VM interpreter (`SUTEKH_VM_TIER=reference`), the planned VM tier (default; static proof of the per-row checks, pre-decoded dispatch, hoisted invariants, proven identity rows skipped; `LIVE_IR_SPEC.md` "VM tiers"), and native kernels via `world.specialize` (IR 0.1 scalar or AVX2; IR 0.3 scalar). Selection is explicit (default tier, or a specialize request); there is no automatic crossover. Observations for the 6DOF racer workload: `planning/evidence/sim-runtime/`.
+
 Release tuning is performed on representative hardware. Do not run an expensive autotuning tournament every player launch without explicit product policy. Store bounded tuning caches with device/driver/backend identities and a known-good fallback.
 
 ## 9. Agent-throughput metrics

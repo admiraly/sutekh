@@ -56,12 +56,33 @@ void su_host_decl_free(SuLirModule *m);
  * schedule block with a phase (SU_E_SCHEMA_MISMATCH when missing), and the host object: operator
  * rts_ops_v<operator_version>, operator_version and constants_hash equal to the descriptor's, and fields equal to
  * the descriptor's table exactly (count, ID, name, type u32, access). Any of those is SU_E_SCHEMA_MISMATCH.
+ * A record with "binds" entries (schema-relative binding, su_host_load_bound) is refused here with
+ * SU_E_SCHEMA_MISMATCH: a caller that accepts it must also run the operator through the binding.
  * On SU_OK *out is a heap declaration module (free with su_host_decl_free unless it is passed to
  * su_sched_add_host), and schema_version and layout_generation are the record's schema values.
  * msg receives the reason on failure. */
 uint32_t su_host_load(const char *capsule_path, const char *expect_capsule_hash, const SuHostOpDesc *d,
                       SuLirModule **out, uint32_t *schema_version, uint32_t *layout_generation, char *msg,
                       size_t msg_cap);
+
+/* Schema-relative binding (2026-10-18). A host record may bind the operator to the game's own schema: every entry
+ * of host.fields then carries "binds": "<operator lane name>" (the descriptor field name it stands for) and its own
+ * id, name, type and access, and schema.id may be any world schema ID. su_host_load_bound checks, as the verifier
+ * of that contract (each refusal SU_E_SCHEMA_MISMATCH with the reason in msg):
+ *   - either every entry has "binds" or none does (a record without binds is checked exactly as by su_host_load);
+ *   - each "binds" names a descriptor lane, and every descriptor lane is bound exactly once;
+ *   - an entry's type and access equal those of the lane it binds;
+ *   - entry IDs are strictly ascending, nonzero and below SU_OPERAND_NONE; names are 1..SU_WORLD_NAME_MAX bytes
+ *     and unique;
+ *   - the two lanes of a 64-bit descriptor field (lane 0 at I, lane 1 at I + 1) are bound by entries with IDs J
+ *     and J + 1, in that order (the storage-lane rule of IR 0.3).
+ * The declaration module then carries the record's IDs and names and the record's schema ID as its query, so the
+ * schedule unions the operator with IR systems of the game schema, and its semantic hash covers the binding.
+ * bind[k] (k < d->field_count) receives the world field ID that stands for descriptor field k. For a record
+ * without binds, bind[k] = d->fields[k].id and *bound = 0. Other checks and outputs are those of su_host_load. */
+uint32_t su_host_load_bound(const char *capsule_path, const char *expect_capsule_hash, const SuHostOpDesc *d,
+                            SuLirModule **out, uint32_t *schema_version, uint32_t *layout_generation,
+                            uint32_t bind[SU_LIMIT_FIELDS], int *bound, char *msg, size_t msg_cap);
 
 /* 1 when the file at path is strict JSON with a host object (a host capsule record), else 0. Used to refuse
  * a candidate or an admission that names a host system before any reload (contract 3.1, r4). */

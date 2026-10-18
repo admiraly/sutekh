@@ -30,6 +30,7 @@ void su_sched_entry_destroy(SuSysEntry *e) {
         su_lir_module_free(e->mod);
         free(e->mod);
     }
+    free(e->host_bind);
     memset(e, 0, sizeof *e);
 }
 
@@ -138,6 +139,86 @@ static int decl_matches_host(const SuLirModule *decl, const SuHostOpDesc *d) {
         }
     }
     return 1;
+}
+
+/* decl carries, for every descriptor field j, one lane with ID bind[j] and the descriptor's type and access. */
+static int decl_matches_bound(const SuLirModule *decl, const SuHostOpDesc *d, const uint32_t *bind) {
+    uint32_t i, j;
+    if (decl->insn_count != 0u || decl->uses_entity_ops != 0u || decl->field_count != d->field_count ||
+        strcmp(decl->system_id, d->system_id) != 0) {
+        return 0;
+    }
+    for (j = 0; j < d->field_count; j++) {
+        const SuLirField *f = NULL;
+        for (i = 0; i < decl->field_count; i++) {
+            if (decl->fields[i].id == bind[j]) {
+                f = &decl->fields[i];
+                break;
+            }
+        }
+        if (f == NULL || f->type != SU_TYPE_U32 || SU_LIR_VALUE_TYPE(f) != d->fields[j].type ||
+            f->access != d->fields[j].access) {
+            return 0;
+        }
+        for (i = 0; i < j; i++) {
+            if (bind[i] == bind[j]) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, const uint32_t *bind,
+                                 uint32_t schema_version, uint32_t gen, uint64_t txid, uint64_t system_rev,
+                                 uint64_t tick) {
+    SuSysEntry *e;
+    uint32_t *copy;
+    if (bind == NULL) {
+        return su_sched_add_host(s, d, decl, schema_version, gen, txid, system_rev, tick);
+    }
+    if (s == NULL || decl == NULL || su_host_desc_validate(d) != SU_OK) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (decl->insn_count != 0u || decl->fields == NULL || decl->system_id == NULL || decl->query == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (!decl_matches_bound(decl, d, bind)) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    if (s->count >= SU_SCHED_MAX_SYSTEMS) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    if (s->count == 0) {
+        snprintf(s->schema_id, sizeof s->schema_id, "%s", decl->query);
+        s->schema_version = schema_version;
+        s->layout_generation = gen;
+    } else if (strcmp(s->schema_id, decl->query) != 0 || s->schema_version != schema_version ||
+               s->layout_generation != gen) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    if (su_sched_find(s, d->system_id) >= 0) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    copy = malloc((size_t)d->field_count * sizeof *copy);
+    if (copy == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memcpy(copy, bind, (size_t)d->field_count * sizeof *copy);
+    e = &s->sys[s->count];
+    memset(e, 0, sizeof *e);
+    snprintf(e->system_id, sizeof e->system_id, "%s", d->system_id);
+    snprintf(e->source_hash, sizeof e->source_hash, "%s", decl->source_hash_hex);
+    snprintf(e->capsule_hash, sizeof e->capsule_hash, "%s", decl->capsule_hash_hex);
+    snprintf(e->semantic_hash, sizeof e->semantic_hash, "%s", decl->semantic_hash_hex);
+    e->kind = SU_SYS_KIND_HOST;
+    e->host = d;
+    e->host_bind = copy;
+    e->mod = decl;
+    e->ctx = NULL;
+    fill_entry_ids(e, txid, system_rev, tick);
+    s->count++;
+    return SU_OK;
 }
 
 uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, uint32_t schema_version,
@@ -335,24 +416,28 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e) {
     }
     for (i = 0; i < d->field_count; i++) {
         const SuHostField *f = &d->fields[i];
+        /* Schema-relative binding: the world column of descriptor field i is e->host_bind[i]; the operator sees it
+         * under the descriptor's ID f->id (it looks columns up by its own IDs). */
+        const uint32_t world_id = e->host_bind != NULL ? e->host_bind[i] : f->id;
         if ((f->access & SU_ACCESS_READ) != 0u) {
             for (j = 0; j < full_inv.binding_count; j++) {
-                if (full_inv.bindings[j].field_id == f->id) {
-                    rb[nr++] = full_inv.bindings[j];
+                if (full_inv.bindings[j].field_id == world_id) {
+                    rb[nr] = full_inv.bindings[j];
+                    rb[nr++].field_id = f->id;
                     break;
                 }
             }
         }
         if ((f->access & SU_ACCESS_WRITE) != 0u) {
             for (j = 0; j < full_out.binding_count; j++) {
-                if (full_out.bindings[j].field_id == f->id) {
+                if (full_out.bindings[j].field_id == world_id) {
                     /* r4 (A4): staging is committed whole, so every row starts from its working value. Done
                      * when the working column is visible (declared read); a write-only field has no working
                      * view, so its operator stores every row itself (M3-04a deviation, see the handoff). */
                     if ((f->access & SU_ACCESS_READ) != 0u) {
                         uint32_t k;
                         for (k = 0; k < full_inv.binding_count; k++) {
-                            if (full_inv.bindings[k].field_id == f->id) {
+                            if (full_inv.bindings[k].field_id == world_id) {
                                 memcpy(full_out.bindings[j].data, full_inv.bindings[k].data,
                                        (size_t)full_inv.row_count * sizeof(uint32_t));
                                 break;
@@ -360,7 +445,8 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e) {
                         }
                     }
                     wb[nw] = full_out.bindings[j];
-                    wid[nw++] = f->id;
+                    wb[nw].field_id = f->id;
+                    wid[nw++] = world_id;
                     break;
                 }
             }

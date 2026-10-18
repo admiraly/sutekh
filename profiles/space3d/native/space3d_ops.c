@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "ir/su_num.h"
+#include "ir/su_num_fast.h" /* exact inline equivalents (tests/num/test_num_fast.c) */
 #include "space3d_geom.h"
 #include "sutekh/abi.h"
 #include "sutekh/status.h"
@@ -115,6 +116,12 @@ static uint32_t g_cand[SPACE3D_MAX_ROWS][SPACE3D_CAND_MAX];
 static uint8_t g_ncand[SPACE3D_MAX_ROWS];
 static uint8_t g_flags[SPACE3D_MAX_ROWS];
 static uint32_t g_gate_slot[SPACE3D_MAX_ROWS];
+/* Temporal coherence of the sweep order (2026-10-18): the collidable set (ascending slots) and its sorted order
+ * from the previous call. When the next call has the same set and axis, its sort starts from that order. */
+static uint32_t g_prev_coll[SPACE3D_MAX_ROWS];
+static uint32_t g_prev_order[SPACE3D_MAX_ROWS];
+static uint32_t g_prev_n = 0;
+static uint32_t g_prev_axis = 3u;
 
 /* ---------- column access ---------- */
 
@@ -223,9 +230,9 @@ static void capsule_ends(const Cols *c, uint32_t r, SuV3 *a, SuV3 *b) {
     SuV3 axis = {0, 0, 0};
     SuV3 p = rd3(c, F_POSX, r);
     axis.z = rdq(c, F_HALFZ, r);
-    axis = su_quat_rotate(rdrot(c, r), axis);
-    *a = su_v3_sub(p, axis);
-    *b = su_v3_add(p, axis);
+    axis = su_quat_rotatef(rdrot(c, r), axis);
+    *a = su_v3_subf(p, axis);
+    *b = su_v3_addf(p, axis);
 }
 
 static void bounds_union(SuV3 *lo, SuV3 *hi, SuV3 lo2, SuV3 hi2) {
@@ -255,12 +262,12 @@ static void row_bounds(const Cols *c, uint32_t r, uint32_t kind) {
         s3_bounds_sphere(b, rad, &lo2, &hi2);
         bounds_union(&lo, &hi, lo2, hi2);
     }
-    g_lo[0][r] = su_q32_sub(lo.x, S3_BOUNDS_SLACK);
-    g_lo[1][r] = su_q32_sub(lo.y, S3_BOUNDS_SLACK);
-    g_lo[2][r] = su_q32_sub(lo.z, S3_BOUNDS_SLACK);
-    g_hi[0][r] = su_q32_add(hi.x, S3_BOUNDS_SLACK);
-    g_hi[1][r] = su_q32_add(hi.y, S3_BOUNDS_SLACK);
-    g_hi[2][r] = su_q32_add(hi.z, S3_BOUNDS_SLACK);
+    g_lo[0][r] = su_q32_subf(lo.x, S3_BOUNDS_SLACK);
+    g_lo[1][r] = su_q32_subf(lo.y, S3_BOUNDS_SLACK);
+    g_lo[2][r] = su_q32_subf(lo.z, S3_BOUNDS_SLACK);
+    g_hi[0][r] = su_q32_addf(hi.x, S3_BOUNDS_SLACK);
+    g_hi[1][r] = su_q32_addf(hi.y, S3_BOUNDS_SLACK);
+    g_hi[2][r] = su_q32_addf(hi.z, S3_BOUNDS_SLACK);
 }
 
 /* Stable bottom-up merge sort of idx[0..n) by (g_lo[axis][slot], slot). */
@@ -297,6 +304,47 @@ static void sort_by_min(uint32_t *idx, uint32_t n, uint32_t axis) {
     }
 }
 
+/* (g_lo[axis][a], a) < (g_lo[axis][b], b): the strict total order of the sweep. */
+static int sweep_less(uint32_t a, uint32_t b, uint32_t axis) {
+    int64_t ka = g_lo[axis][a], kb = g_lo[axis][b];
+    return ka < kb || (ka == kb && a < b);
+}
+
+/* Sorts g_coll[0..n) by the sweep order. The order is a strict total order, so every correct sort gives the same
+ * permutation: when the set of collidables and the axis equal the previous call's, insertion sort starts from the
+ * previous order (bounded work; past 8n moves it falls back); otherwise, and on fallback, the merge sort runs on
+ * the ascending-slot list. */
+static void sort_sweep(uint32_t n, uint32_t axis) {
+    uint32_t i;
+    int done = 0;
+    if (n == g_prev_n && axis == g_prev_axis && n > 0u && memcmp(g_coll, g_prev_coll, (size_t)n * sizeof *g_coll) == 0) {
+        uint64_t moves = 0, cap = 8u * (uint64_t)n;
+        memcpy(g_tmp, g_prev_order, (size_t)n * sizeof *g_tmp);
+        done = 1;
+        for (i = 1; i < n && done; i++) {
+            uint32_t key = g_tmp[i], j = i;
+            while (j > 0 && sweep_less(key, g_tmp[j - 1u], axis)) {
+                g_tmp[j] = g_tmp[j - 1u];
+                j--;
+                if (++moves > cap) {
+                    done = 0;
+                    break;
+                }
+            }
+            g_tmp[j] = key;
+        }
+    }
+    memcpy(g_prev_coll, g_coll, (size_t)n * sizeof *g_coll);
+    if (done) {
+        memcpy(g_coll, g_tmp, (size_t)n * sizeof *g_coll);
+    } else {
+        sort_by_min(g_coll, n, axis);
+    }
+    memcpy(g_prev_order, g_coll, (size_t)n * sizeof *g_coll);
+    g_prev_n = n;
+    g_prev_axis = axis;
+}
+
 static void add_cand(uint32_t m, uint32_t o) {
     if (g_ncand[m] < SPACE3D_CAND_MAX) {
         g_cand[m][g_ncand[m]++] = o;
@@ -314,13 +362,13 @@ typedef struct Contact {
 /* Narrow phase of mover m against candidate o. */
 static S3Hit narrow(const Cols *c, uint32_t m, uint32_t o) {
     SuV3 c0 = rd3(c, F_PREVX, m);
-    SuV3 v = su_v3_sub(rd3(c, F_POSX, m), c0);
+    SuV3 v = su_v3_subf(rd3(c, F_POSX, m), c0);
     int64_t r = rdq(c, F_RADIUS, m);
     uint32_t ko = c->kind[o];
     if (ko == SPACE3D_KIND_MOVER) {
         SuV3 o0 = rd3(c, F_PREVX, o);
-        SuV3 vo = su_v3_sub(rd3(c, F_POSX, o), o0);
-        return s3_sweep_sphere_sphere(c0, su_v3_sub(v, vo), r, o0, rdq(c, F_RADIUS, o));
+        SuV3 vo = su_v3_subf(rd3(c, F_POSX, o), o0);
+        return s3_sweep_sphere_sphere(c0, su_v3_subf(v, vo), r, o0, rdq(c, F_RADIUS, o));
     }
     if (ko == SPACE3D_KIND_SPHERE) {
         return s3_sweep_sphere_sphere(c0, v, r, rd3(c, F_POSX, o), rdq(c, F_RADIUS, o));
@@ -416,17 +464,17 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
         for (a = 0; a < 3u; a++) {
             int64_t mn = INT64_MAX, mx = INT64_MIN, spread;
             for (i = 0; i < ncoll; i++) {
-                int64_t cen = su_q32_add(g_lo[a][g_coll[i]], g_hi[a][g_coll[i]]);
+                int64_t cen = su_q32_addf(g_lo[a][g_coll[i]], g_hi[a][g_coll[i]]);
                 mn = cen < mn ? cen : mn;
                 mx = cen > mx ? cen : mx;
             }
-            spread = su_q32_sub(mx, mn);
+            spread = su_q32_subf(mx, mn);
             if (spread > best) {
                 best = spread;
                 axis = a;
             }
         }
-        sort_by_min(g_coll, ncoll, axis);
+        sort_sweep(ncoll, axis);
         for (i = 0; i < ncoll && !budget_hit; i++) {
             uint32_t p = g_coll[i], j;
             for (j = i + 1u; j < ncoll; j++) {

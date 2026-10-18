@@ -15,6 +15,8 @@
 #include "runtime/native_versions.h"
 #include "sutekh/status.h"
 
+#include "tests/native/native_test_mem.h"
+
 static int g_checks = 0;
 static int g_failures = 0;
 
@@ -61,29 +63,9 @@ static int read_file(const char *path, Buf *b) {
     return 1;
 }
 
-/* Executable mappings of this process: count of lines with an x permission, and rwx lines. */
+/* Executable mappings of this process and writable-and-executable ones (tests/native/native_test_mem.h). */
 static void maps_scan(size_t *exec_lines, size_t *rwx_lines) {
-    FILE *f = fopen("/proc/self/maps", "r");
-    char line[512];
-    *exec_lines = 0;
-    *rwx_lines = 0;
-    if (f == NULL) {
-        return;
-    }
-    while (fgets(line, sizeof line, f) != NULL) {
-        /* perms field: after the first space-separated address range */
-        char *sp = strchr(line, ' ');
-        if (sp != NULL && sp[1] != '\0') {
-            char *perm = sp + 1;
-            if (perm[0] == 'r' && perm[1] == 'w' && perm[2] == 'x') {
-                (*rwx_lines)++;
-            }
-            if (perm[2] == 'x') {
-                (*exec_lines)++;
-            }
-        }
-    }
-    fclose(f);
+    su_nt_exec_counts(exec_lines, rwx_lines);
 }
 
 static int load_movement(const char *root, SuLirModule *m) {

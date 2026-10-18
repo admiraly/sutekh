@@ -256,12 +256,10 @@ static uint32_t read_capsule_bytes(const char *path, uint8_t **buf, size_t *len)
     return SU_OK;
 }
 
-/* Checks the host object against the descriptor. Returns SU_OK or the refusal code with msg set. */
-static uint32_t check_host_object(const SuJsonValue *host, const SuHostOpDesc *d, char *msg, size_t cap) {
-    const SuJsonValue *fields = jmember(host, "fields");
+/* Checks the operator identity of the host object (operator name, version, constants hash). */
+static uint32_t check_host_identity(const SuJsonValue *host, const SuHostOpDesc *d, char *msg, size_t cap) {
     uint64_t ver = 0;
     char hex[65];
-    uint32_t i;
 
     if (host == NULL || host->type != SU_JSON_OBJECT) {
         HOST_MSG_SET(msg, cap, "host capsule has no host object");
@@ -285,6 +283,113 @@ static uint32_t check_host_object(const SuJsonValue *host, const SuHostOpDesc *d
     if (jstr(jmember(host, "constants_hash")) == NULL || strcmp(jstr(jmember(host, "constants_hash")), hex) != 0) {
         HOST_MSG_SET(msg, cap, "host.constants_hash differs from the descriptor");
         return SU_E_SCHEMA_MISMATCH;
+    }
+    return SU_OK;
+}
+
+/* Number of host.fields entries with a "binds" member (0 when fields is not an array). */
+static uint32_t count_binds(const SuJsonValue *host) {
+    const SuJsonValue *fields = jmember(host, "fields");
+    uint32_t i, n = 0;
+    if (fields == NULL || fields->type != SU_JSON_ARRAY) {
+        return 0u;
+    }
+    for (i = 0; i < fields->u.array.count; i++) {
+        if (fields->u.array.items[i] != NULL && jmember(fields->u.array.items[i], "binds") != NULL) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* Index of the descriptor field named name, or -1. */
+static long desc_index(const SuHostOpDesc *d, const char *name) {
+    uint32_t k;
+    for (k = 0; name != NULL && k < d->field_count; k++) {
+        if (strcmp(d->fields[k].name, name) == 0) {
+            return (long)k;
+        }
+    }
+    return -1;
+}
+
+/* Checks a bound host.fields table (see su_host_load_bound) and fills role[i] (descriptor index of entry i),
+ * ids[i] and names[i] (borrowed from the document). */
+static uint32_t check_bound_fields(const SuJsonValue *fields, const SuHostOpDesc *d, uint32_t *role, uint32_t *ids,
+                                   const char **names, char *msg, size_t cap) {
+    uint8_t seen[SU_LIMIT_FIELDS];
+    uint32_t i, k;
+    memset(seen, 0, sizeof seen);
+    for (i = 0; i < d->field_count; i++) {
+        const SuJsonValue *f = fields->u.array.items[i];
+        const char *name = jstr(jmember(f, "name"));
+        const char *acc = jstr(jmember(f, "access"));
+        const char *ty = jstr(jmember(f, "type"));
+        uint64_t id = 0;
+        long j = desc_index(d, jstr(jmember(f, "binds")));
+        if (f == NULL || f->type != SU_JSON_OBJECT || j < 0) {
+            HOST_MSG_SET(msg, cap, "host.fields[%u].binds does not name a lane of the operator", (unsigned)i);
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        if (seen[j]) {
+            HOST_MSG_SET(msg, cap, "host.fields[%u] binds operator lane %s a second time", (unsigned)i,
+                         d->fields[j].name);
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        seen[j] = 1u;
+        if (!juint(jmember(f, "id"), &id) || id == 0u || id >= SU_OPERAND_NONE || (i > 0u && id <= ids[i - 1u])) {
+            HOST_MSG_SET(msg, cap, "host.fields[%u].id must be nonzero and strictly ascending", (unsigned)i);
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        if (name == NULL || strlen(name) == 0u || strlen(name) > SU_WORLD_NAME_MAX) {
+            HOST_MSG_SET(msg, cap, "host.fields[%u].name must be 1..%u bytes", (unsigned)i, (unsigned)SU_WORLD_NAME_MAX);
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        for (k = 0; k < i; k++) {
+            if (strcmp(names[k], name) == 0) {
+                HOST_MSG_SET(msg, cap, "host.fields[%u].name %s is not unique", (unsigned)i, name);
+                return SU_E_SCHEMA_MISMATCH;
+            }
+        }
+        if (ty == NULL || strcmp(ty, su_type_name(d->fields[j].type)) != 0 || acc == NULL ||
+            access_of_name(acc) != d->fields[j].access) {
+            HOST_MSG_SET(msg, cap, "host.fields[%u] (%s) differs from operator lane %s in type or access", (unsigned)i,
+                         name, d->fields[j].name);
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        role[i] = (uint32_t)j;
+        ids[i] = (uint32_t)id;
+        names[i] = name;
+    }
+    /* 64-bit roles: descriptor lanes k (lane 0) and k + 1 (lane 1) must be bound by entries with IDs J, J + 1. */
+    for (k = 0; k + 1u < d->field_count; k++) {
+        if (su_type_lanes(d->fields[k].type) == 2u && host_lane(d, k) == 0u) {
+            uint32_t lo = UINT32_MAX, hi = UINT32_MAX;
+            for (i = 0; i < d->field_count; i++) {
+                if (role[i] == k) {
+                    lo = i;
+                }
+                if (role[i] == k + 1u) {
+                    hi = i;
+                }
+            }
+            if (lo == UINT32_MAX || hi == UINT32_MAX || hi != lo + 1u || ids[hi] != ids[lo] + 1u) {
+                HOST_MSG_SET(msg, cap, "the lanes of operator field %s must be bound by adjacent IDs J, J + 1 in order",
+                             d->fields[k].name);
+                return SU_E_SCHEMA_MISMATCH;
+            }
+        }
+    }
+    return SU_OK;
+}
+
+/* Checks the host object against the descriptor. Returns SU_OK or the refusal code with msg set. */
+static uint32_t check_host_object(const SuJsonValue *host, const SuHostOpDesc *d, char *msg, size_t cap) {
+    const SuJsonValue *fields = jmember(host, "fields");
+    uint32_t i;
+    uint32_t st = check_host_identity(host, d, msg, cap);
+    if (st != SU_OK) {
+        return st;
     }
     if (fields == NULL || fields->type != SU_JSON_ARRAY || fields->u.array.count != d->field_count) {
         HOST_MSG_SET(msg, cap, "host.fields differs from the descriptor field table (count)");
@@ -310,6 +415,24 @@ static uint32_t check_host_object(const SuJsonValue *host, const SuHostOpDesc *d
 uint32_t su_host_load(const char *capsule_path, const char *expect_capsule_hash, const SuHostOpDesc *d,
                       SuLirModule **out, uint32_t *schema_version, uint32_t *layout_generation, char *msg,
                       size_t msg_cap) {
+    int bound = 0;
+    uint32_t bind[SU_LIMIT_FIELDS];
+    uint32_t st = su_host_load_bound(capsule_path, expect_capsule_hash, d, out, schema_version, layout_generation,
+                                     bind, &bound, msg, msg_cap);
+    if (st == SU_OK && bound) {
+        su_host_decl_free(*out);
+        *out = NULL;
+        *schema_version = 0u;
+        *layout_generation = 0u;
+        HOST_MSG_SET(msg, msg_cap, "host capsule binds the operator to another schema (use su_host_load_bound)");
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    return st;
+}
+
+uint32_t su_host_load_bound(const char *capsule_path, const char *expect_capsule_hash, const SuHostOpDesc *d,
+                            SuLirModule **out, uint32_t *schema_version, uint32_t *layout_generation,
+                            uint32_t bind[SU_LIMIT_FIELDS], int *bound, char *msg, size_t msg_cap) {
     static const SuJsonLimits lim = {16u * 1024u * 1024u, 32u};
     uint8_t *bytes = NULL;
     size_t len = 0;
@@ -325,10 +448,17 @@ uint32_t su_host_load(const char *capsule_path, const char *expect_capsule_hash,
     uint64_t sv = 0;
     uint64_t gen = 0;
     uint32_t st;
+    uint32_t nb, k;
+    uint32_t role[SU_LIMIT_FIELDS];
+    uint32_t ids[SU_LIMIT_FIELDS];
+    const char *names[SU_LIMIT_FIELDS];
+    const char *schema_name;
 
-    if (out == NULL || schema_version == NULL || layout_generation == NULL || capsule_path == NULL) {
+    if (out == NULL || schema_version == NULL || layout_generation == NULL || capsule_path == NULL || bind == NULL ||
+        bound == NULL) {
         return SU_E_INVALID_ARGUMENT;
     }
+    *bound = 0;
     *out = NULL;
     *schema_version = 0u;
     *layout_generation = 0u;
@@ -381,8 +511,15 @@ uint32_t su_host_load(const char *capsule_path, const char *expect_capsule_hash,
         goto done;
     }
     schema = jmember(root, "schema");
-    if (schema == NULL || schema->type != SU_JSON_OBJECT || jstr(jmember(schema, "id")) == NULL ||
-        strcmp(jstr(jmember(schema, "id")), d->schema_id) != 0 || !juint(jmember(schema, "version"), &sv) ||
+    nb = count_binds(jmember(root, "host"));
+    schema_name = schema != NULL ? jstr(jmember(schema, "id")) : NULL;
+    if (schema_name != NULL && nb == 0u && strcmp(schema_name, d->schema_id) != 0) {
+        schema_name = NULL; /* an unbound record must name the operator's own schema */
+    }
+    if (schema_name != NULL && (strlen(schema_name) == 0u || strlen(schema_name) > SU_WORLD_NAME_MAX)) {
+        schema_name = NULL;
+    }
+    if (schema == NULL || schema->type != SU_JSON_OBJECT || schema_name == NULL || !juint(jmember(schema, "version"), &sv) ||
         !juint(jmember(schema, "layout_generation"), &gen) || sv == 0u || gen == 0u || sv > UINT32_MAX ||
         gen > UINT32_MAX) {
         st = SU_E_SCHEMA_MISMATCH;
@@ -401,7 +538,24 @@ uint32_t su_host_load(const char *capsule_path, const char *expect_capsule_hash,
         HOST_MSG_SET(msg, msg_cap, "host capsule has no schedule block with a phase");
         goto done;
     }
-    st = check_host_object(jmember(root, "host"), d, msg, msg_cap);
+    if (nb == 0u) {
+        st = check_host_object(jmember(root, "host"), d, msg, msg_cap);
+    } else {
+        const SuJsonValue *host = jmember(root, "host");
+        const SuJsonValue *fields = jmember(host, "fields");
+        /* Operator identity as for an unbound record, then the bound table. */
+        if (fields == NULL || fields->type != SU_JSON_ARRAY || nb != fields->u.array.count ||
+            fields->u.array.count != d->field_count) {
+            st = SU_E_SCHEMA_MISMATCH;
+            HOST_MSG_SET(msg, msg_cap, "a bound host.fields table needs binds on every entry and one entry per "
+                                       "operator lane (%u)", (unsigned)d->field_count);
+            goto done;
+        }
+        st = check_host_identity(host, d, msg, msg_cap);
+        if (st == SU_OK) {
+            st = check_bound_fields(fields, d, role, ids, names, msg, msg_cap);
+        }
+    }
     if (st != SU_OK) {
         goto done;
     }
@@ -417,6 +571,60 @@ uint32_t su_host_load(const char *capsule_path, const char *expect_capsule_hash,
         decl = NULL;
         HOST_MSG_SET(msg, msg_cap, "host declaration could not be built");
         goto done;
+    }
+    for (k = 0; k < d->field_count; k++) {
+        bind[k] = d->fields[k].id;
+    }
+    if (nb != 0u) {
+        /* The declaration carries the game's lanes: entry k (ascending ID) stands for descriptor lane role[k]. */
+        char *q = dup_cstr(schema_name);
+        SuSha256 h;
+        if (q == NULL) {
+            st = SU_E_RESOURCE_LIMIT;
+            HOST_MSG_SET(msg, msg_cap, "out of memory for the host declaration");
+            goto done;
+        }
+        free(decl->query);
+        decl->query = q;
+        for (k = 0; k < d->field_count; k++) {
+            const SuHostField *rf = &d->fields[role[k]];
+            char *nm = dup_cstr(names[k]);
+            if (nm == NULL) {
+                st = SU_E_RESOURCE_LIMIT;
+                HOST_MSG_SET(msg, msg_cap, "out of memory for the host declaration");
+                goto done;
+            }
+            free(decl->fields[k].name);
+            decl->fields[k].name = nm;
+            decl->fields[k].id = ids[k];
+            decl->fields[k].access = rf->access;
+            decl->fields[k].type = SU_TYPE_U32;
+            decl->fields[k].value_type = rf->type;
+            decl->fields[k].lane = host_lane(d, role[k]);
+            bind[role[k]] = ids[k];
+        }
+        /* Semantic identity of a bound host system: the operator's digest and the binding (operator lane ->
+         * game lane ID and name), in operator lane order. */
+        su_sha256_init(&h);
+        su_sha256_update(&h, (const uint8_t *)"sutekh.host.bound.v1", 21u);
+        su_sha256_update(&h, decl->semantic_hash, 32u);
+        for (k = 0; k < d->field_count; k++) {
+            uint32_t i2 = 0;
+            uint8_t b4[4];
+            while (i2 < d->field_count && role[i2] != k) {
+                i2++;
+            }
+            b4[0] = (uint8_t)(ids[i2] & 0xFFu);
+            b4[1] = (uint8_t)((ids[i2] >> 8) & 0xFFu);
+            b4[2] = (uint8_t)((ids[i2] >> 16) & 0xFFu);
+            b4[3] = (uint8_t)(ids[i2] >> 24);
+            su_sha256_update(&h, (const uint8_t *)d->fields[k].name, strlen(d->fields[k].name) + 1u);
+            su_sha256_update(&h, b4, 4u);
+            su_sha256_update(&h, (const uint8_t *)names[i2], strlen(names[i2]) + 1u);
+        }
+        su_sha256_final(&h, decl->semantic_hash);
+        su_sha256_hex(decl->semantic_hash, decl->semantic_hash_hex);
+        *bound = 1;
     }
     memcpy(decl->capsule_hash, digest, sizeof digest);
     memcpy(decl->capsule_hash_hex, hex, sizeof hex);

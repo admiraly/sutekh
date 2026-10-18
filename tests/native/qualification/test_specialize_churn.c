@@ -17,10 +17,13 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#if !defined(_WIN32)
 #include <sys/wait.h>
 #include <unistd.h>
 #include <dirent.h>
+#endif
 
+#include "../../common/su_test_os.h"
 #include "agent/su_agent.h"
 #include "agent/su_proc.h"
 #include "agent/su_proto.h"
@@ -47,7 +50,7 @@ static char g_proj[1100];
 static int g_seq;
 
 typedef struct Sess {
-    pid_t pid;
+    SuTestServe serve; /* supervisor under test (tests/common/su_test_os.h) */
     int wfd;
     SuLineReader rd;
 } Sess;
@@ -109,12 +112,23 @@ static uint64_t err_status(const Resp *r) {
 
 /* ---------- agent sessions: one agent process per scenario ---------- */
 
+/* Sets (value != NULL) or removes an environment variable before a session starts. */
+static void fault_env(const char *name, const char *value) {
+    if (value != NULL) {
+        setenv(name, value, 1);
+    } else {
+        unsetenv(name);
+    }
+}
+
+/* Seam variables are set before the supervisor starts. POSIX: the forked agent keeps its copy. Windows: the agent
+ * is a thread of this process and reads this environment, so su_test_unset_after_start removes them only when the
+ * session ends. */
 static Sess sess_start(const char *fault, const char *fault_ms, uint64_t timeout_ms, const char *tag) {
     Sess s;
-    int req[2];
-    int rsp[2];
-    pid_t pid;
-    char spool[1200];
+    int wfd;
+    int rfd;
+    static char spool[1200]; /* static: on Windows the supervisor thread reads cfg strings after this returns */
     SuAgentConfig cfg;
     static const char *argv[2];
 
@@ -127,47 +141,25 @@ static Sess sess_start(const char *fault, const char *fault_ms, uint64_t timeout
     cfg.worker_argv = argv;
     cfg.request_timeout_ms = timeout_ms;
     cfg.spool_dir = spool;
-    if (pipe(req) != 0 || pipe(rsp) != 0) {
-        perror("pipe");
-        exit(2);
-    }
-    pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        exit(2);
-    }
-    if (pid == 0) {
-        int rc;
-        close(req[1]);
-        close(rsp[0]);
-        if (fault != NULL) {
-            setenv("SU_TEST_FAULT", fault, 1);
-        } else {
-            unsetenv("SU_TEST_FAULT");
-        }
-        if (fault_ms != NULL) {
-            setenv("SU_TEST_FAULT_MS", fault_ms, 1);
-        } else {
-            unsetenv("SU_TEST_FAULT_MS");
-        }
-        rc = su_agent_serve(req[0], rsp[1], &cfg);
-        _exit(rc == 0 ? 0 : 1);
-    }
-    close(req[0]);
-    close(rsp[1]);
+    fault_env("SU_TEST_FAULT", fault);
+    fault_env("SU_TEST_FAULT_MS", fault_ms);
     memset(&s, 0, sizeof s);
-    s.pid = pid;
-    s.wfd = req[1];
-    su_line_reader_init(&s.rd, rsp[0], -1);
+    su_test_serve_start(&s.serve, &cfg, &wfd, &rfd);
+    if (fault != NULL) {
+        su_test_unset_after_start("SU_TEST_FAULT");
+    }
+    if (fault_ms != NULL) {
+        su_test_unset_after_start("SU_TEST_FAULT_MS");
+    }
+    s.wfd = wfd;
+    su_line_reader_init(&s.rd, rfd, -1);
     return s;
 }
 
 static void sess_stop(Sess *s) {
-    int status = 0;
     close(s->wfd);
     su_line_reader_free(&s->rd);
-    waitpid(s->pid, &status, 0);
-    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(su_test_serve_wait(&s->serve));
 }
 
 static int call(Sess *s, const char *line, Resp *r, int64_t wait_ms) {
@@ -232,6 +224,59 @@ static void copy_example(const char *name) {
     fclose(fo);
 }
 
+#if defined(_WIN32)
+/* Creation time of a process (GetProcessTimes, 100 ns units since 1601), or -1. Like the /proc start time it
+ * identifies the process instance (a replacement reusing the pid differs); unlike it, it cannot be read once the
+ * process is gone. */
+static long long proc_starttime(pid_t pid) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    FILETIME created, ended, kern, user;
+    long long st = -1;
+    if (h == NULL) {
+        return -1;
+    }
+    if (GetProcessTimes(h, &created, &ended, &kern, &user)) {
+        st = (long long)(((unsigned long long)created.dwHighDateTime << 32) | created.dwLowDateTime);
+    }
+    CloseHandle(h);
+    return st;
+}
+
+/* Windows has no zombies (an ended child leaves nothing to reap). The counterpart of "no zombie child" is: no
+ * child of the agent (this test process: the supervisor is a thread) created after it is still running except the
+ * active worker. Toolhelp snapshot; parent ids survive their parent and pids are reused, hence the time filter. */
+static int leftover_children(uint64_t agent, uint64_t keep) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32 pe;
+    long long born = proc_starttime((pid_t)agent);
+    int n = 0;
+    if (snap == INVALID_HANDLE_VALUE || born < 0) {
+        if (snap != INVALID_HANDLE_VALUE) {
+            CloseHandle(snap);
+        }
+        return -1;
+    }
+    memset(&pe, 0, sizeof pe);
+    pe.dwSize = sizeof pe;
+    if (Process32First(snap, &pe)) {
+        do {
+            uint64_t id = (uint64_t)pe.th32ProcessID;
+            if ((uint64_t)pe.th32ParentProcessID == agent && id != keep && su_test_pid_alive(id) &&
+                proc_starttime((pid_t)id) >= born) {
+                n++;
+            }
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+    return n;
+}
+
+/* Zombie children (POSIX) or leftover running children other than the active worker (Windows) of the agent. */
+static int zombies_of(const Sess *s, uint64_t active) {
+    (void)s;
+    return leftover_children((uint64_t)GetCurrentProcessId(), active);
+}
+#else
 /* Start time (clock ticks since boot) of a process, or -1. */
 static long long proc_starttime(pid_t pid) {
     char path[64];
@@ -303,6 +348,12 @@ static int zombie_children(pid_t ppid) {
     closedir(d);
     return n;
 }
+
+static int zombies_of(const Sess *s, uint64_t active) {
+    (void)active;
+    return zombie_children(s->serve.pid);
+}
+#endif
 
 /* ---------- world helpers ---------- */
 
@@ -447,6 +498,39 @@ static int host_avx2(void) {
     return (su_native_host_caps() & SU_NCAP_X86_64_AVX2) != 0u;
 }
 
+#if defined(_WIN32)
+/* Mappings of pid: committed regions of its address space (VirtualQueryEx), and how many are writable and
+ * executable at once (must be zero). The Windows counterpart of /proc/<pid>/maps lines: region counts are not
+ * comparable with Linux counts, only with themselves (growth, and a drop when kernels are released). */
+static uint64_t maps_of(pid_t pid, uint64_t *wx) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, (DWORD)pid);
+    MEMORY_BASIC_INFORMATION mbi;
+    uint8_t *a = NULL;
+    uint64_t n = 0;
+    *wx = 0;
+    if (h == NULL) {
+        return UINT64_MAX;
+    }
+    while (VirtualQueryEx(h, a, &mbi, sizeof mbi) == sizeof mbi) {
+        if (mbi.State == MEM_COMMIT) {
+            DWORD p = mbi.Protect & 0xFFu;
+            n++;
+            if (p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY) {
+                (*wx)++;
+            }
+        }
+        a = (uint8_t *)mbi.BaseAddress + mbi.RegionSize;
+    }
+    CloseHandle(h);
+    return n;
+}
+
+/* Working set of pid in kB (su_test_rss_kib), or UINT64_MAX. */
+static uint64_t rss_kb(pid_t pid) {
+    long v = su_test_rss_kib((uint64_t)pid);
+    return v < 0 ? UINT64_MAX : (uint64_t)v;
+}
+#else
 /* Mappings of pid: count, and how many are writable and executable at once (must be zero). */
 static uint64_t maps_of(pid_t pid, uint64_t *wx) {
     char path[64];
@@ -492,6 +576,8 @@ static uint64_t rss_kb(pid_t pid) {
     fclose(f);
     return v;
 }
+
+#endif
 
 /* The art-hash and tier of a successful specialize answer. */
 static int spec_answer(const Resp *r, char *hash, size_t hcap, char *tier, size_t tcap) {
@@ -601,7 +687,7 @@ int main(int argc, char **argv) {
                 CHECK(n != UINT64_MAX && n <= base_maps + 4u);
             }
             CHECK(active_pid(&s) == active);
-            CHECK(zombie_children(s.pid) == 0);
+            CHECK(zombies_of(&s, active) == 0);
         }
     }
     CHECK(proc_starttime((pid_t)active) == start);
@@ -649,7 +735,7 @@ int main(int argc, char **argv) {
             resp_free(&r);
         }
         CHECK(active_pid(&s) == active);
-        CHECK(zombie_children(s.pid) == 0);
+        CHECK(zombies_of(&s, active) == 0);
     }
     maps_pre_close = maps_of((pid_t)active, &wx);
     CHECK(wx == 0u);
