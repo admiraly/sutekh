@@ -35,6 +35,22 @@ A world that uses the operator has schema ID `space3d` and reserves these field 
 
 Non-mover rows store zero counts and NONE slots; dead rows are zeroed by the world at publish.
 
+**Schema-relative binding (2026-10-18).** A game does not have to use schema `space3d` or these IDs. Its host record
+can bind the operator to its own schema: `schema.id` names the game schema, and every entry of `host.fields` carries
+the game lane's own `id`, `name`, `type` and `access` plus `"binds": "<operator lane name>"` (for example
+`{"id": 1010, "name": "g_pos_x.lo", "type": "q32", "access": "read", "binds": "pos_x.lo"}`). The record is checked by
+`su_host_load_bound` (`src/runtime/rts/host_decl.h`): binds on every entry or on none; every operator lane bound
+exactly once to an existing name; type and access equal to the bound lane's; IDs nonzero and strictly ascending;
+names unique and 1..64 bytes; the two lanes of a 64-bit operator field bound by game IDs `J`, `J + 1` in that order.
+Any violation refuses the record with `SU_E_SCHEMA_MISMATCH` and a reason. The accepted declaration carries the
+game's IDs, names and schema, so the schedule's union table checks the game's IR systems against it as usual, and its
+semantic hash covers the binding. At run time the schedule hands the operator the game's columns under the operator's
+own lane IDs (`su_sched_add_host_bound`), so the operator's code and results are unchanged. `world.create` accepts a
+bound record as a `{capsule_path, host_operator}` item, and checkpoints, restore and recovery reload it the same way.
+Evidence: `space3d_bind` (one refusal per rule, each for its intended reason, and the schedule's mapping check) and
+`space3d_serve` check 5 (the racer microcosm rewritten under the game schema `racer_game` with every ID + 1000 and every
+name prefixed `g_`, run through `sutekh serve`, VM and native: every lane equals the original run's).
+
 ## 3. Semantics
 
 **Broadphase.** Collidables are alive rows of kinds 1..4. Bounds: a mover's start and end spheres; a sphere; a box's rotated extents (plus one raw unit); a capsule's two end spheres; every bound widened by 4096 raw units (about 1 micrometre) so that rounding in the narrow phase's frame changes can never make it report a pair the broadphase dropped. Sweep axis: the axis with the largest spread of bound centres, ties to x, then y. Collidables are ordered by (minimum on that axis, slot) with a stable merge sort and swept; a pair whose intervals overlap on all three axes and that contains at least one mover becomes a candidate of each mover in it. At most 32 candidates are kept per mover (the first 32 in sweep order; flag 1). At most 2^22 overlapping-interval pairs are examined per tick; when that budget runs out every mover gets flag 4 and the remaining pairs are not examined. Both limits are deterministic functions of the world state.

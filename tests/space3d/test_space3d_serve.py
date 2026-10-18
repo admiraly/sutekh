@@ -11,7 +11,11 @@ racer.move, and space3d.query as a host operator, in the driver's schedule order
   3. `events.read` returns as many records as the driver's event log;
   4. builds with the native tier (engine.info lists world.specialize): in a second session `world.specialize` of
      racer.move with backend auto installs an IR 0.3 kernel (execution_tier native_scalar) at tick 0; stepping to
-     T reproduces the T lanes and the VM session's snapshot sha256 at T (straight run, before the restore). Otherwise this part prints "not run".
+     T reproduces the T lanes and the VM session's snapshot sha256 at T (straight run, before the restore).
+  5. schema-relative binding: the same world under a game schema of its own ("racer_game": every field ID + 1000,
+     every name prefixed "g_", capsules and fixture rewritten), with a space3d.query record that binds each operator
+     lane to the game lane ("binds", su_host_load_bound). Stepped to T through the supervisor, every lane mapped back
+     to its original name equals the in-process state (on native builds also with racer.move specialized). Otherwise this part prints "not run".
 Exit 0 only when every check ran and passed (the native part is reported, not required, on VM-only builds).
 
     test_space3d_serve.py --binary <sutekh> --driver <racer_microcosm> --work <dir> [--n 8] [--ticks 720]
@@ -95,6 +99,44 @@ def compare(cols, want, tag):
     bad = [name for name in want["columns"] if cols.get(name) != want["columns"][name]]
     check(not bad, "%s: %d lanes differ from the in-process run (first: %s)" % (tag, len(bad), bad[:3]))
     return not bad
+
+
+REMAP_ID = 1000
+REMAP_SCHEMA = "racer_game"
+
+
+def remap_project(src, dst, fixture_path):
+    """Rewrites the project under the game schema REMAP_SCHEMA (see the module docstring, check 5)."""
+    os.makedirs(dst)
+    for name in ("race", "move"):
+        cap = json.load(open(os.path.join(src, name + ".capsule.json"), encoding="utf-8"))
+        cap["schema"]["id"] = REMAP_SCHEMA
+        for f in cap["fields"]:
+            f["id"] += REMAP_ID
+            f["name"] = "g_" + f["name"]
+        lir = json.load(open(os.path.join(src, name + ".lir.json"), encoding="utf-8"))
+        lir["query"] = REMAP_SCHEMA
+        for ins in lir["instructions"]:
+            if ins["op"].startswith("load_") or ins["op"].startswith("store_"):
+                for key in ("field", "x", "y", "z"):
+                    if key in ins:
+                        ins[key] = "g_" + ins[key]
+        for obj, ext in ((cap, "capsule.json"), (lir, "lir.json")):
+            with open(os.path.join(dst, "%s.%s" % (name, ext)), "w", encoding="utf-8", newline="\n") as fh:
+                json.dump(obj, fh, indent=1)
+    rec = json.load(open(os.path.join(src, "space3d_query.capsule.json"), encoding="utf-8"))
+    rec["schema"]["id"] = REMAP_SCHEMA
+    for f in rec["host"]["fields"]:
+        f["binds"] = f["name"]
+        f["id"] += REMAP_ID
+        f["name"] = "g_" + f["name"]
+    with open(os.path.join(dst, "space3d_query.capsule.json"), "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(rec, fh, indent=1)
+    fx = json.load(open(fixture_path, encoding="utf-8"))
+    fx["schema_id"] = REMAP_SCHEMA
+    fx["columns"] = {"g_" + k: v for k, v in fx["columns"].items()}
+    with open(os.path.join(dst, "racer.json"), "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(fx, fh, separators=(",", ":"))
 
 
 def main():
@@ -189,6 +231,36 @@ def main():
             s.call("world.close", {"world_id": wid, "expected_world_revision": rev})
         finally:
             s.close()
+    # Session 3 (and 4 on native builds): the game's own schema through the bound space3d.query record.
+    gproj = os.path.join(args.work, "game_project")
+    remap_project(proj, gproj, fixture)
+    gnames = ["g_" + n for n in names]
+    remap_runs = []
+    for specialize in ((False, True) if has_native else (False,)):
+        s = Serve(args.binary, gproj)
+        try:
+            created = s.call("world.create", create)
+            wid, rev = created["world_id"], created["world_revision"]
+            if specialize:
+                sp = s.call("world.specialize", {"world_id": wid, "expected_world_revision": rev,
+                                                 "system_id": "racer.move", "backend": "auto"})
+                check(sp.get("execution_tier") == "native_scalar",
+                      "game schema: racer.move tier after world.specialize: %s" % sp.get("execution_tier"))
+            r = s.call("world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": args.ticks})
+            rev = r["world_revision"]
+            gcols, _ = read_all(s, wid, rows, gnames)
+            back = {n[2:]: v for n, v in gcols.items()}
+            ok = compare(back, want_full, "game schema %s%s, stepped to T" % (
+                REMAP_SCHEMA, " with native racer.move" if specialize else ""))
+            ev = s.call("events.read", {"world_id": wid, "cursor": 0, "max": 256})
+            check(len(ev["events"]) == rec["events"], "game schema: events.read returned %d records, want %d"
+                  % (len(ev["events"]), rec["events"]))
+            remap_runs.append("%s %s" % ("native" if specialize else "vm", "ok" if ok else "FAILED"))
+            s.call("world.close", {"world_id": wid, "expected_world_revision": rev})
+        finally:
+            s.close()
+
+    print("space3d serve: game schema %s (IDs + %d, names g_*): %s" % (REMAP_SCHEMA, REMAP_ID, ", ".join(remap_runs)))
     print("space3d serve: N=%d, %d rows, %d lanes, T=%d (snapshot at %d), %d events; native: %s"
           % (args.n, rows, len(names), args.ticks, half, rec["events"], native))
     print("space3d serve: %d checks, %d failures" % (CHECKS[0], len(FAILURES)))

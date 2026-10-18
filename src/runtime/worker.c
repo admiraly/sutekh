@@ -774,6 +774,8 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPat
         SuLirModule *mod = NULL;
         uint32_t sv = 0;
         uint32_t gen = 0;
+        uint32_t hbind[SU_LIMIT_FIELDS];
+        int hbound = 0;
         char msg[WORKER_MSG_CAP];
 
         if (hop != NULL) {
@@ -788,12 +790,14 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPat
                 fail(f, SU_E_CAPABILITY_DENIED, "no host operator for this system is built into this engine");
                 return SU_E_CAPABILITY_DENIED;
             }
-            st = su_host_load(cap, str_of(item, "capsule_sha256"), desc, &mod, &sv, &gen, msg, sizeof msg);
+            /* A record may bind the operator to this world's own schema (su_host_load_bound). */
+            st = su_host_load_bound(cap, str_of(item, "capsule_sha256"), desc, &mod, &sv, &gen, hbind, &hbound, msg,
+                                    sizeof msg);
             if (st != SU_OK) {
                 fail(f, st, msg);
                 return st;
             }
-            st = su_sched_add_host(sched, desc, mod, sv, gen, 0, 1, 0);
+            st = su_sched_add_host_bound(sched, desc, mod, hbound ? hbind : NULL, sv, gen, 0, 1, 0);
             if (st != SU_OK) {
                 su_host_decl_free(mod);
                 fail(f, st, "host system cannot join this world's schedule (schema or duplicate system_id)");
@@ -2883,6 +2887,8 @@ static uint32_t rebuild_schedule(const CkptRec *rec, const SuSnapshotData *data,
         SuLirModule *mod = NULL;
         uint32_t sv = 0;
         uint32_t gen = 0;
+        uint32_t hbind[SU_LIMIT_FIELDS];
+        int hbound = 0;
 
         if (strcmp(data->manifest[i].system_id, c->system_id) != 0 ||
             strcmp(data->manifest[i].semantic_hash, c->semantic_hash) != 0) {
@@ -2897,7 +2903,8 @@ static uint32_t rebuild_schedule(const CkptRec *rec, const SuSnapshotData *data,
                 fail(f, SU_E_SCHEMA_MISMATCH, "snapshot host system has no registered operator in this build");
                 return SU_E_SCHEMA_MISMATCH;
             }
-            st = su_host_load(c->paths.capsule, c->capsule_hash, desc, &mod, &sv, &gen, why, sizeof why);
+            st = su_host_load_bound(c->paths.capsule, c->capsule_hash, desc, &mod, &sv, &gen, hbind, &hbound, why,
+                                    sizeof why);
             if (st != SU_OK) {
                 snprintf(f->msg, sizeof f->msg, "snapshot host revision cannot be reloaded: %.300s", why);
                 f->code = st;
@@ -2908,7 +2915,7 @@ static uint32_t rebuild_schedule(const CkptRec *rec, const SuSnapshotData *data,
                 fail(f, SU_E_SCHEMA_MISMATCH, "snapshot host revision differs from the recorded semantic hash");
                 return SU_E_SCHEMA_MISMATCH;
             }
-            st = su_sched_add_host(nsched, desc, mod, sv, gen, 0, 1, 0);
+            st = su_sched_add_host_bound(nsched, desc, mod, hbound ? hbind : NULL, sv, gen, 0, 1, 0);
             if (st != SU_OK) {
                 su_host_decl_free(mod);
                 fail(f, SU_E_SCHEMA_MISMATCH, "snapshot host revision cannot join this world's schedule");

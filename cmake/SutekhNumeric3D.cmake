@@ -26,6 +26,12 @@ function(_sutekh_numeric3d_late)
     endif()
     # 6dof_racer_microcosm: the engine's schedule executor (su_agent) running two IR 0.3 systems and space3d.query.
     if(TARGET su_agent)
+        # Schema-relative binding of space3d.query (su_host_load_bound, su_sched_add_host_bound).
+        add_executable(test_space3d_bind "${CMAKE_CURRENT_SOURCE_DIR}/tests/space3d/test_space3d_bind.c")
+        target_link_libraries(test_space3d_bind PRIVATE su_agent su_space3d)
+        sutekh_apply_warnings(test_space3d_bind)
+        add_test(NAME space3d_bind COMMAND test_space3d_bind "${CMAKE_BINARY_DIR}"
+                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
         add_executable(racer_microcosm "${CMAKE_CURRENT_SOURCE_DIR}/bench/space3d/racer_microcosm.c")
         target_link_libraries(racer_microcosm PRIVATE su_agent su_space3d)
         sutekh_apply_warnings(racer_microcosm)
