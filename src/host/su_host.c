@@ -805,10 +805,11 @@ static uint32_t queue_writes(SuHostWorld *w, uint64_t tick, const SuHostInput *i
     qsort(merged, have + count, sizeof *merged, input_qcmp);
     for (i = 1; i < have + count; i++) {
         if (input_cmp(&merged[i - 1u], &merged[i]) == 0) {
+            uint32_t slot = SU_ENTITY_SLOT(merged[i].entity);
+            uint32_t field = merged[i].field_id;
             free(merged);
-            return set_err(err, SU_E_INVALID_ARGUMENT, merged[i].field_id, tick,
-                           "slot %u field %u is written twice for tick %llu", (unsigned)SU_ENTITY_SLOT(merged[i].entity),
-                           (unsigned)merged[i].field_id, (unsigned long long)tick);
+            return set_err(err, SU_E_INVALID_ARGUMENT, field, tick, "slot %u field %u is written twice for tick %llu",
+                           (unsigned)slot, (unsigned)field, (unsigned long long)tick);
         }
     }
     if (r == NULL) {
