@@ -670,4 +670,9 @@ add_executable(minimal_host examples/host/minimal_host.c)
 target_link_libraries(minimal_host PRIVATE sutekh_host)
 sutekh_apply_warnings(minimal_host)
 add_test(NAME example_minimal_host COMMAND minimal_host WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# Observation bench (not a test): bench/host/bench_host.c, run by hand from the repository root.
+add_executable(bench_host bench/host/bench_host.c)
+target_include_directories(bench_host PRIVATE src)
+target_link_libraries(bench_host PRIVATE su_host)
+sutekh_apply_warnings(bench_host)
 # ---- END in-process host API ----
