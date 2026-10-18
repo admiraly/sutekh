@@ -29,6 +29,7 @@
  * fails with SU_NLOW_INTERNAL (no partial kernels). */
 #include <asmjit/x86.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -76,17 +77,331 @@ struct Ins {
     uint32_t op, dst, a, b, c;
 };
 
+/* Register allocation (2026-10-18). A scalar IR register (u32, bool, i32, i64, q32: one 64-bit word) may live in a
+ * general-purpose register instead of its slot for the whole kernel:
+ *  - callee-saved pool (rbp, r14, r15; rsi, rdi on Win64): survives helper calls and the row loop, so it can hold
+ *    row-invariant values (hoisted constants) and values whose live range spans a helper call;
+ *  - volatile pool (r10, r11; rsi, rdi on SysV): only for live ranges with no helper call strictly inside them.
+ * Neither pool is touched by the inline templates (rax, rcx, rdx, r8, r9) or holds rbx/r12/r13 (args, row, rows).
+ * Live range of a register = [first, last] body position that accesses it; a hoisted (row-invariant) register is
+ * live for the whole loop. Registers are assigned greedily by access count, each to a pool register whose
+ * assigned ranges do not overlap its own. Around a helper call, allocated operands are stored to their slots
+ * first and an allocated destination is reloaded from its slot after. Vector registers (v3, quat) stay in slots.
+ * Values are bit-for-bit those of the slot layout (u32/bool zero-extended, i32 sign-extended), so allocation does
+ * not change any result; ir03_diff.py --native checks that end to end. */
+struct Roles {
+    uint32_t reads[3];
+    bool read_vec[3];
+    uint32_t nreads;
+    bool has_def;
+    bool def_vec;
+};
+
+bool is_vec_def(uint32_t op) {
+    switch (op) {
+    case SU_NLOW_OP_LOAD_V3:
+    case SU_NLOW_OP_MAKE_V3:
+    case SU_NLOW_OP_V3_ADD:
+    case SU_NLOW_OP_V3_SUB:
+    case SU_NLOW_OP_V3_SCALE:
+    case SU_NLOW_OP_V3_NEG:
+    case SU_NLOW_OP_V3_CROSS:
+    case SU_NLOW_OP_V3_NORMALIZE:
+    case SU_NLOW_OP_V3_CLAMP_LEN:
+    case SU_NLOW_OP_SELECT_V3:
+    case SU_NLOW_OP_MAKE_QUAT:
+    case SU_NLOW_OP_SELECT_QUAT:
+    case SU_NLOW_OP_QUAT_MUL:
+    case SU_NLOW_OP_QUAT_CONJ:
+    case SU_NLOW_OP_QUAT_ROTATE:
+    case SU_NLOW_OP_QUAT_NORMALIZE:
+    case SU_NLOW_OP_QUAT_INTEGRATE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Register operands of one instruction. False for an opcode this table does not know (allocation is then off). */
+bool roles_of(const Ins &in, Roles &r) {
+    const uint32_t op = in.op;
+    auto rd = [&](uint32_t reg, bool vec) {
+        r.reads[r.nreads] = reg;
+        r.read_vec[r.nreads] = vec;
+        r.nreads++;
+    };
+    r.nreads = 0;
+    r.has_def = true;
+    r.def_vec = is_vec_def(op);
+    if (op >= SU_NLOW_OP_I32_BASE && op < SU_NLOW_OP_Q32_BASE + SU_NLOW_X_COUNT) {
+        const uint32_t x = (op - SU_NLOW_OP_I32_BASE) % 32u;
+        if (x >= SU_NLOW_X_COUNT) {
+            return false;
+        }
+        rd(in.a, false);
+        if (x != SU_NLOW_X_NEG && x != SU_NLOW_X_ABS) {
+            rd(in.b, false);
+        }
+        if (x == SU_NLOW_X_CLAMP || x == SU_NLOW_X_SELECT) {
+            rd(in.c, false);
+        }
+        return true;
+    }
+    switch (op) {
+    case SU_NLOW_OP_CONST_U32:
+    case SU_NLOW_OP_CONST_I32:
+    case SU_NLOW_OP_CONST_I64:
+    case SU_NLOW_OP_CONST_Q32:
+    case SU_NLOW_OP_LOAD_U32:
+    case SU_NLOW_OP_LOAD_I32:
+    case SU_NLOW_OP_LOAD_I64:
+    case SU_NLOW_OP_LOAD_Q32:
+    case SU_NLOW_OP_LOAD_V3:
+        return true;
+    case SU_NLOW_OP_STORE_U32:
+    case SU_NLOW_OP_STORE_I32:
+    case SU_NLOW_OP_STORE_I64:
+    case SU_NLOW_OP_STORE_Q32:
+        r.has_def = false;
+        rd(in.b, false);
+        return true;
+    case SU_NLOW_OP_STORE_V3:
+        r.has_def = false;
+        rd(in.dst, true);
+        return true;
+    case SU_NLOW_OP_ADD_U32:
+    case SU_NLOW_OP_SUB_U32:
+    case SU_NLOW_OP_MUL_U32:
+    case SU_NLOW_OP_EQ_U32:
+    case SU_NLOW_OP_LT_U32:
+    case SU_NLOW_OP_AND_BOOL:
+    case SU_NLOW_OP_OR_BOOL:
+        rd(in.a, false);
+        rd(in.b, false);
+        return true;
+    case SU_NLOW_OP_SELECT_U32:
+        rd(in.a, false);
+        rd(in.b, false);
+        rd(in.c, false);
+        return true;
+    case SU_NLOW_OP_NOT_BOOL:
+    case SU_NLOW_OP_SQRT_Q32:
+    case SU_NLOW_OP_RSQRT_Q32:
+    case SU_NLOW_OP_I32_FROM_U32:
+    case SU_NLOW_OP_U32_FROM_I32:
+    case SU_NLOW_OP_I64_FROM_I32:
+    case SU_NLOW_OP_I32_FROM_I64:
+    case SU_NLOW_OP_Q32_FROM_I32:
+    case SU_NLOW_OP_Q32_FROM_I64:
+    case SU_NLOW_OP_Q32_TO_I32_FLOOR:
+    case SU_NLOW_OP_Q32_TO_I32_ROUND:
+    case SU_NLOW_OP_Q32_FROM_RAW:
+    case SU_NLOW_OP_Q32_RAW:
+    case SU_NLOW_OP_Q32_TO_I64_FLOOR:
+        rd(in.a, false);
+        return true;
+    case SU_NLOW_OP_MAKE_V3:
+        rd(in.a, false);
+        rd(in.b, false);
+        rd(in.c, false);
+        return true;
+    case SU_NLOW_OP_V3_GET:
+    case SU_NLOW_OP_QUAT_GET:
+    case SU_NLOW_OP_V3_NEG:
+    case SU_NLOW_OP_V3_LEN:
+    case SU_NLOW_OP_V3_LEN_SQ:
+    case SU_NLOW_OP_V3_NORMALIZE:
+    case SU_NLOW_OP_QUAT_CONJ:
+    case SU_NLOW_OP_QUAT_NORMALIZE:
+        rd(in.a, true);
+        return true;
+    case SU_NLOW_OP_V3_ADD:
+    case SU_NLOW_OP_V3_SUB:
+    case SU_NLOW_OP_V3_DOT:
+    case SU_NLOW_OP_V3_CROSS:
+    case SU_NLOW_OP_QUAT_MUL:
+    case SU_NLOW_OP_QUAT_ROTATE:
+        rd(in.a, true);
+        rd(in.b, true);
+        return true;
+    case SU_NLOW_OP_V3_SCALE:
+    case SU_NLOW_OP_V3_CLAMP_LEN:
+        rd(in.a, true);
+        rd(in.b, false);
+        return true;
+    case SU_NLOW_OP_SELECT_V3:
+    case SU_NLOW_OP_SELECT_QUAT:
+        rd(in.a, false);
+        rd(in.b, true);
+        rd(in.c, true);
+        return true;
+    case SU_NLOW_OP_MAKE_QUAT:
+        rd(in.a, false);
+        rd(in.b, true);
+        return true;
+    case SU_NLOW_OP_QUAT_INTEGRATE:
+        rd(in.a, true);
+        rd(in.b, true);
+        rd(in.c, false);
+        return true;
+    default:
+        return false;
+    }
+}
+
+#if defined(_WIN32)
+const Gp kSavedPool[] = {r14, r15, rbp, rsi, rdi};
+const Gp kVolatilePool[] = {r10, r11};
+#else
+const Gp kSavedPool[] = {r14, r15, rbp};
+const Gp kVolatilePool[] = {r10, r11, rsi, rdi};
+#endif
+constexpr uint32_t kNSaved = sizeof kSavedPool / sizeof kSavedPool[0];
+constexpr uint32_t kNVolatile = sizeof kVolatilePool / sizeof kVolatilePool[0];
+
+/* Result of the allocation: phys[r] = index into the combined pool (saved first, then volatile), or -1. */
+struct Allocation {
+    std::vector<int32_t> phys;
+    uint32_t saved_used = 0;  /* bit k: kSavedPool[k] is used (pushed in the prologue) */
+    uint32_t allocated = 0;
+};
+
+Gp pool_reg(int32_t p) {
+    return p < static_cast<int32_t>(kNSaved) ? kSavedPool[p] : kVolatilePool[p - static_cast<int32_t>(kNSaved)];
+}
+
+/* Computes the allocation for the body (instructions in index order; hoisted instructions run before the loop and
+ * keep their registers for every row). helper[k] says whether instruction k calls a C helper. */
+Allocation allocate(const std::vector<Ins> &insns, uint32_t nregs, const std::vector<bool> &hoisted,
+                    const std::vector<bool> &helper, bool enabled) {
+    Allocation out;
+    out.phys.assign(nregs, -1);
+    if (!enabled || nregs == 0u) {
+        return out;
+    }
+    const int64_t kWhole = INT64_MAX / 4;
+    std::vector<int64_t> first(nregs, INT64_MAX), last(nregs, -1);
+    std::vector<uint32_t> weight(nregs, 0u);
+    std::vector<bool> vec(nregs, false), whole(nregs, false), known(nregs, false);
+    std::vector<int64_t> calls;
+    const int64_t n = static_cast<int64_t>(insns.size());
+    for (int64_t k = 0; k < n; k++) {
+        Roles ro;
+        if (!roles_of(insns[static_cast<size_t>(k)], ro)) {
+            return out; /* unknown opcode: no allocation at all */
+        }
+        auto touch = [&](uint32_t reg, bool v) {
+            if (reg >= nregs) {
+                return false;
+            }
+            first[reg] = std::min(first[reg], k);
+            last[reg] = std::max(last[reg], k);
+            weight[reg]++;
+            known[reg] = true;
+            if (v) {
+                vec[reg] = true;
+            }
+            if (hoisted[static_cast<size_t>(k)]) {
+                whole[reg] = true;
+            }
+            return true;
+        };
+        for (uint32_t i = 0; i < ro.nreads; i++) {
+            if (!touch(ro.reads[i], ro.read_vec[i])) {
+                return out;
+            }
+        }
+        if (ro.has_def && !touch(insns[static_cast<size_t>(k)].dst, ro.def_vec)) {
+            return out;
+        }
+        if (helper[static_cast<size_t>(k)]) {
+            calls.push_back(k);
+        }
+    }
+    std::vector<uint32_t> order;
+    for (uint32_t r = 0; r < nregs; r++) {
+        if (known[r] && !vec[r]) {
+            if (whole[r]) {
+                first[r] = -1;
+                last[r] = kWhole;
+            }
+            order.push_back(r);
+        }
+    }
+    /* Most accesses first; ties by register number (deterministic). */
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t x, uint32_t y) { return weight[x] > weight[y]; });
+    std::vector<std::vector<std::pair<int64_t, int64_t>>> busy(kNSaved + kNVolatile);
+    for (uint32_t r : order) {
+        if (weight[r] < 2u) {
+            continue; /* one access: a register saves nothing */
+        }
+        bool spans_call = whole[r];
+        for (int64_t c : calls) {
+            if (c > first[r] && c < last[r]) {
+                spans_call = true;
+                break;
+            }
+        }
+        /* Volatile registers first for call-free ranges (keeps the callee-saved ones, which cost a push, free). */
+        int32_t pick = -1;
+        for (uint32_t pass = 0; pass < 2u && pick < 0; pass++) {
+            const bool vol = pass == 0u;
+            if (vol && spans_call) {
+                continue;
+            }
+            const uint32_t lo = vol ? kNSaved : 0u, hi = vol ? kNSaved + kNVolatile : kNSaved;
+            for (uint32_t p = lo; p < hi && pick < 0; p++) {
+                bool free_here = true;
+                for (const auto &iv : busy[p]) {
+                    if (first[r] <= iv.second && iv.first <= last[r]) {
+                        free_here = false;
+                        break;
+                    }
+                }
+                if (free_here) {
+                    pick = static_cast<int32_t>(p);
+                }
+            }
+        }
+        if (pick >= 0) {
+            busy[static_cast<size_t>(pick)].push_back({first[r], last[r]});
+            out.phys[r] = pick;
+            out.allocated++;
+            if (pick < static_cast<int32_t>(kNSaved)) {
+                out.saved_used |= 1u << static_cast<uint32_t>(pick);
+            }
+        }
+    }
+    return out;
+}
+
 class Lowerer {
 public:
     Lowerer(Assembler &as, const std::vector<uint32_t> &rord, const std::vector<uint32_t> &word, uint32_t nin,
-            int32_t col_base)
-        : a(as), rord_(rord), word_(word), nin_(nin), col_base_(col_base) {}
+            int32_t col_base, const std::vector<int32_t> &phys)
+        : a(as), rord_(rord), word_(word), nin_(nin), col_base_(col_base), phys_(phys) {}
 
-    Mem S(uint32_t r, uint32_t k = 0) const {
+    /* Word k of register r: its allocated GPR (k == 0 only) or its slot. */
+    Operand S(uint32_t r, uint32_t k = 0) const {
+        if (k == 0u && r < phys_.size() && phys_[r] >= 0) {
+            return pool_reg(phys_[r]);
+        }
+        return M(r, k);
+    }
+    /* Low 32 bits of register r. */
+    Operand SD(uint32_t r) const {
+        if (r < phys_.size() && phys_[r] >= 0) {
+            return pool_reg(phys_[r]).r32();
+        }
+        return dword_ptr(rsp, kShadow + static_cast<int32_t>(r) * kSlot);
+    }
+    /* The slot itself (vector words, helper arguments, spills). */
+    Mem M(uint32_t r, uint32_t k = 0) const {
         return qword_ptr(rsp, kShadow + static_cast<int32_t>(r) * kSlot + 8 * static_cast<int32_t>(k));
     }
-    Mem SD(uint32_t r) const { return dword_ptr(rsp, kShadow + static_cast<int32_t>(r) * kSlot); }
+    bool in_reg(uint32_t r) const { return r < phys_.size() && phys_[r] >= 0; }
     int32_t slot_off(uint32_t r) const { return kShadow + static_cast<int32_t>(r) * kSlot; }
+    void E(InstId id, const Operand_ &x, const Operand_ &y) { a.emit(id, x, y); }
 
     void in_col(const Gp &dst, uint32_t field) { a.mov(dst, qword_ptr(rsp, col_base_ + 8 * static_cast<int32_t>(rord_[field]))); }
     void out_col(const Gp &dst, uint32_t field) {
@@ -164,13 +479,23 @@ public:
         a.cmovne(rax, r9);
     }
 
+    /* Allocated operands go to their slots first (the helper reads slots); an allocated destination is reloaded. */
     void call_helper(uint64_t fn, uint32_t d, uint32_t ra, uint32_t rb, uint32_t rc) {
+        const uint32_t ops[3] = {ra, rb, rc};
+        for (uint32_t i = 0; i < 3u; i++) {
+            if (in_reg(ops[i])) {
+                a.mov(M(ops[i]), pool_reg(phys_[ops[i]]));
+            }
+        }
         a.lea(kCallArg[0], ptr(rsp, slot_off(d)));
         a.lea(kCallArg[1], ptr(rsp, slot_off(ra)));
         a.lea(kCallArg[2], ptr(rsp, slot_off(rb)));
         a.lea(kCallArg[3], ptr(rsp, slot_off(rc)));
         a.mov(rax, fn);
         a.call(rax);
+        if (in_reg(d)) {
+            a.mov(pool_reg(phys_[d]), M(d));
+        }
     }
 
     Assembler &a;
@@ -180,6 +505,7 @@ private:
     const std::vector<uint32_t> &word_;
     uint32_t nin_;
     int32_t col_base_;
+    const std::vector<int32_t> &phys_;
 };
 
 bool is_family(uint32_t op, uint32_t base) { return op >= base && op < base + SU_NLOW_X_COUNT; }
@@ -231,7 +557,7 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
             }
         }
         const uint64_t col_base = static_cast<uint64_t>(kShadow) + static_cast<uint64_t>(kSlot) * (nregs > 0u ? nregs : 1u);
-        const uint64_t frame = (col_base + 8u * static_cast<uint64_t>(nin + nout) + 15u) & ~static_cast<uint64_t>(15u);
+        uint64_t frame = (col_base + 8u * static_cast<uint64_t>(nin + nout) + 15u) & ~static_cast<uint64_t>(15u);
         if (frame > kFrameLimit) {
             if (msg != nullptr && msg_cap > 0u) {
                 std::snprintf(msg, msg_cap, "frame of %llu bytes exceeds the IR 0.3 lowering bound",
@@ -245,6 +571,29 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
             const uint32_t *w = in->insn_words + 5u * static_cast<size_t>(k);
             insns[k] = Ins{w[0], w[1], w[2], w[3], w[4]};
         }
+        /* Hoisted (row-invariant) instructions run once before the loop and are not repeated per row: their registers
+         * are defined once and nothing else writes them (the plan builder's condition), so the value persists. */
+        std::vector<bool> hoisted(ninsn, false), calls(ninsn, false);
+        for (uint32_t i = 0; i < in->pre_count; i++) {
+            if (in->pre_insns[i] < ninsn) {
+                hoisted[in->pre_insns[i]] = true;
+            }
+        }
+        for (uint32_t k = 0; k < ninsn; k++) {
+            calls[k] = insns[k].op < SU_NLOW_HELPER_SLOTS && in->helpers[insns[k].op] != 0u;
+        }
+        /* SUTEKH_NATIVE_REGALLOC=0 lowers with every register in its slot (diagnostic and differential switch). */
+        const char *ra_env = std::getenv("SUTEKH_NATIVE_REGALLOC");
+        const Allocation alloc = allocate(insns, nregs, hoisted, calls, !(ra_env != nullptr && std::strcmp(ra_env, "0") == 0));
+        /* Pushes: rbx, r12, r13 and every callee-saved pool register in use. rsp is 16-byte aligned at each call when
+         * the pushes plus the return address plus the frame are a multiple of 16. */
+        uint32_t pushes = 3u;
+        for (uint32_t p = 0; p < kNSaved; p++) {
+            pushes += (alloc.saved_used >> p) & 1u;
+        }
+        if (pushes % 2u == 0u) {
+            frame += 8u;
+        }
 
         Environment env(Arch::kX64);
         CodeHolder code;
@@ -256,7 +605,7 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
         StringLogger logger;
         Assembler a(&code);
         a.set_logger(&logger);
-        Lowerer L(a, rord, word, nin, static_cast<int32_t>(col_base));
+        Lowerer L(a, rord, word, nin, static_cast<int32_t>(col_base), alloc.phys);
 
         std::vector<uint32_t> ranges;
         ranges.reserve(2u * static_cast<size_t>(ninsn));
@@ -268,6 +617,11 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
         a.push(rbx);
         a.push(r12);
         a.push(r13);
+        for (uint32_t p = 0; p < kNSaved; p++) {
+            if ((alloc.saved_used >> p) & 1u) {
+                a.push(kSavedPool[p]);
+            }
+        }
         a.mov(rbx, kArgReg);
         a.sub(rsp, static_cast<int32_t>(frame));
         if (frame > static_cast<uint64_t>(kPage)) {
@@ -288,7 +642,8 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
         a.xor_(r12d, r12d);
         a.mov(r13, qword_ptr(rbx, 8));
 
-        /* Emits one instruction; false when the opcode is not lowered. */
+        /* Emits one instruction; false when the opcode is not lowered. Scalar operands go through L.S / L.SD, which
+         * name an allocated GPR or the slot; vector words always use L.M. */
         auto emit = [&](const Ins &ins) -> bool {
             const uint32_t op = ins.op, d = ins.dst, ra = ins.a, rb = ins.b, rc = ins.c;
             const uint64_t helper = op < SU_NLOW_HELPER_SLOTS ? in->helpers[op] : 0u;
@@ -308,47 +663,45 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
                 case SU_NLOW_X_SUB:
                 case SU_NLOW_X_MUL:
                     if (i32) {
-                        a.mov(eax, L.SD(ra));
-                        if (x == SU_NLOW_X_ADD) a.add(eax, L.SD(rb));
-                        else if (x == SU_NLOW_X_SUB) a.sub(eax, L.SD(rb));
-                        else a.imul(eax, L.SD(rb));
+                        L.E(Inst::kIdMov, eax, L.SD(ra));
+                        L.E(x == SU_NLOW_X_ADD ? Inst::kIdAdd : (x == SU_NLOW_X_SUB ? Inst::kIdSub : Inst::kIdImul), eax,
+                            L.SD(rb));
                         a.movsxd(rax, eax);
                     } else if (!q32) {
-                        a.mov(rax, L.S(ra));
-                        if (x == SU_NLOW_X_ADD) a.add(rax, L.S(rb));
-                        else if (x == SU_NLOW_X_SUB) a.sub(rax, L.S(rb));
-                        else a.imul(rax, L.S(rb));
+                        L.E(Inst::kIdMov, rax, L.S(ra));
+                        L.E(x == SU_NLOW_X_ADD ? Inst::kIdAdd : (x == SU_NLOW_X_SUB ? Inst::kIdSub : Inst::kIdImul), rax,
+                            L.S(rb));
                     } else {
-                        a.mov(rax, L.S(ra));
-                        a.mov(rcx, L.S(rb));
+                        L.E(Inst::kIdMov, rax, L.S(ra));
+                        L.E(Inst::kIdMov, rcx, L.S(rb));
                         if (x == SU_NLOW_X_ADD) L.q_add_rax_rcx();
                         else if (x == SU_NLOW_X_SUB) L.q_sub_rax_rcx();
                         else L.q_mul_rax_rcx();
                     }
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_X_NEG:
                     if (i32) {
-                        a.mov(eax, L.SD(ra));
+                        L.E(Inst::kIdMov, eax, L.SD(ra));
                         a.neg(eax);
                         a.movsxd(rax, eax);
                     } else {
-                        a.mov(rax, L.S(ra));
+                        L.E(Inst::kIdMov, rax, L.S(ra));
                         if (q32) L.q_neg_rax();
                         else a.neg(rax);
                     }
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_X_ABS:
                     if (i32) {
-                        a.mov(eax, L.SD(ra));
+                        L.E(Inst::kIdMov, eax, L.SD(ra));
                         a.mov(ecx, eax);
                         a.neg(ecx);
                         a.test(eax, eax);
                         a.cmovs(eax, ecx);
                         a.movsxd(rax, eax);
                     } else {
-                        a.mov(rax, L.S(ra));
+                        L.E(Inst::kIdMov, rax, L.S(ra));
                         a.mov(rcx, rax);
                         a.neg(rcx);
                         if (q32) {
@@ -358,48 +711,43 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
                         a.test(rax, rax);
                         a.cmovs(rax, rcx);
                     }
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_X_MIN:
-                    a.mov(rax, L.S(ra));
-                    a.mov(rcx, L.S(rb));
-                    a.cmp(rcx, rax);
-                    a.cmovl(rax, rcx);
-                    a.mov(L.S(d), rax);
-                    break;
                 case SU_NLOW_X_MAX:
-                    a.mov(rax, L.S(ra));
-                    a.mov(rcx, L.S(rb));
+                    L.E(Inst::kIdMov, rax, L.S(ra));
+                    L.E(Inst::kIdMov, rcx, L.S(rb));
                     a.cmp(rcx, rax);
-                    a.cmovg(rax, rcx);
-                    a.mov(L.S(d), rax);
+                    if (x == SU_NLOW_X_MIN) a.cmovl(rax, rcx);
+                    else a.cmovg(rax, rcx);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_X_CLAMP:
-                    a.mov(rax, L.S(ra));
-                    a.mov(rcx, L.S(rb));
+                    L.E(Inst::kIdMov, rax, L.S(ra));
+                    L.E(Inst::kIdMov, rcx, L.S(rb));
                     a.cmp(rcx, rax);
                     a.cmovg(rax, rcx);
-                    a.mov(rcx, L.S(rc));
+                    L.E(Inst::kIdMov, rcx, L.S(rc));
                     a.cmp(rcx, rax);
                     a.cmovl(rax, rcx);
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_X_EQ:
                 case SU_NLOW_X_LT:
                 case SU_NLOW_X_LE:
-                    a.mov(rax, L.S(ra));
-                    a.cmp(rax, L.S(rb));
+                    L.E(Inst::kIdMov, rax, L.S(ra));
+                    L.E(Inst::kIdCmp, rax, L.S(rb));
                     if (x == SU_NLOW_X_EQ) a.sete(al);
                     else if (x == SU_NLOW_X_LT) a.setl(al);
                     else a.setle(al);
                     a.movzx(eax, al);
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_X_SELECT:
-                    a.mov(rax, L.S(rc));
-                    a.cmp(L.S(ra), 0);
-                    a.cmovne(rax, L.S(rb));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, rax, L.S(rc));
+                    L.E(Inst::kIdCmp, L.S(ra), Imm(0));
+                    L.E(Inst::kIdCmovne, rax, L.S(rb));
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 default:
                     ok = false; /* div, shl, shr come with helpers */
@@ -409,176 +757,174 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
                 switch (op) {
                 case SU_NLOW_OP_CONST_U32:
                     a.mov(eax, ra);
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_CONST_I32:
                     a.mov(rax, static_cast<int64_t>(static_cast<int32_t>(ra)));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_CONST_I64:
                 case SU_NLOW_OP_CONST_Q32:
                     a.mov(rax, (static_cast<uint64_t>(rb) << 32) | static_cast<uint64_t>(ra));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_LOAD_U32:
                     L.in_col(rcx, ra);
                     a.mov(eax, dword_ptr(rcx, r12, 2));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_LOAD_I32:
                     L.in_col(rcx, ra);
                     a.movsxd(rax, dword_ptr(rcx, r12, 2));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_LOAD_I64:
                 case SU_NLOW_OP_LOAD_Q32:
                     L.load64(ra);
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_LOAD_V3:
                     L.load64(ra);
-                    a.mov(L.S(d, 0), rax);
+                    a.mov(L.M(d, 0), rax);
                     L.load64(rb);
-                    a.mov(L.S(d, 1), rax);
+                    a.mov(L.M(d, 1), rax);
                     L.load64(rc);
-                    a.mov(L.S(d, 2), rax);
+                    a.mov(L.M(d, 2), rax);
                     break;
                 case SU_NLOW_OP_STORE_U32:
                 case SU_NLOW_OP_STORE_I32:
-                    a.mov(eax, L.SD(rb));
+                    L.E(Inst::kIdMov, eax, L.SD(rb));
                     L.out_col(rcx, ra);
                     a.mov(dword_ptr(rcx, r12, 2), eax);
                     break;
                 case SU_NLOW_OP_STORE_I64:
                 case SU_NLOW_OP_STORE_Q32:
-                    a.mov(rax, L.S(rb));
+                    L.E(Inst::kIdMov, rax, L.S(rb));
                     L.store64(ra);
                     break;
                 case SU_NLOW_OP_STORE_V3:
-                    a.mov(rax, L.S(d, 0));
+                    a.mov(rax, L.M(d, 0));
                     L.store64(ra);
-                    a.mov(rax, L.S(d, 1));
+                    a.mov(rax, L.M(d, 1));
                     L.store64(rb);
-                    a.mov(rax, L.S(d, 2));
+                    a.mov(rax, L.M(d, 2));
                     L.store64(rc);
                     break;
                 case SU_NLOW_OP_ADD_U32:
                 case SU_NLOW_OP_SUB_U32:
                 case SU_NLOW_OP_MUL_U32:
-                    a.mov(eax, L.SD(ra));
-                    if (op == SU_NLOW_OP_ADD_U32) a.add(eax, L.SD(rb));
-                    else if (op == SU_NLOW_OP_SUB_U32) a.sub(eax, L.SD(rb));
-                    else a.imul(eax, L.SD(rb));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, eax, L.SD(ra));
+                    L.E(op == SU_NLOW_OP_ADD_U32 ? Inst::kIdAdd : (op == SU_NLOW_OP_SUB_U32 ? Inst::kIdSub : Inst::kIdImul),
+                        eax, L.SD(rb));
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_EQ_U32:
                 case SU_NLOW_OP_LT_U32:
-                    a.mov(eax, L.SD(ra));
-                    a.cmp(eax, L.SD(rb));
+                    L.E(Inst::kIdMov, eax, L.SD(ra));
+                    L.E(Inst::kIdCmp, eax, L.SD(rb));
                     if (op == SU_NLOW_OP_EQ_U32) a.sete(al);
                     else a.setb(al);
                     a.movzx(eax, al);
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_SELECT_U32:
-                    a.mov(rax, L.S(rc));
-                    a.cmp(L.S(ra), 0);
-                    a.cmovne(rax, L.S(rb));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, rax, L.S(rc));
+                    L.E(Inst::kIdCmp, L.S(ra), Imm(0));
+                    L.E(Inst::kIdCmovne, rax, L.S(rb));
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_AND_BOOL:
                 case SU_NLOW_OP_OR_BOOL:
-                    a.mov(rax, L.S(ra));
-                    if (op == SU_NLOW_OP_AND_BOOL) a.and_(rax, L.S(rb));
-                    else a.or_(rax, L.S(rb));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, rax, L.S(ra));
+                    L.E(op == SU_NLOW_OP_AND_BOOL ? Inst::kIdAnd : Inst::kIdOr, rax, L.S(rb));
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_NOT_BOOL:
-                    a.mov(rax, L.S(ra));
+                    L.E(Inst::kIdMov, rax, L.S(ra));
                     a.xor_(rax, 1);
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_I32_FROM_U32:
                 case SU_NLOW_OP_I32_FROM_I64:
-                    a.movsxd(rax, L.SD(ra));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMovsxd, rax, L.SD(ra));
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_U32_FROM_I32:
-                    a.mov(eax, L.SD(ra));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, eax, L.SD(ra));
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_I64_FROM_I32:
                 case SU_NLOW_OP_Q32_FROM_RAW:
                 case SU_NLOW_OP_Q32_RAW:
-                    a.mov(rax, L.S(ra));
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, rax, L.S(ra));
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_Q32_FROM_I32:
-                    a.mov(rax, L.S(ra));
+                    L.E(Inst::kIdMov, rax, L.S(ra));
                     a.shl(rax, 32);
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_Q32_TO_I32_FLOOR:
                 case SU_NLOW_OP_Q32_TO_I64_FLOOR:
-                    a.mov(rax, L.S(ra));
+                    L.E(Inst::kIdMov, rax, L.S(ra));
                     a.sar(rax, 32);
-                    a.mov(L.S(d), rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_MAKE_V3:
-                    a.mov(rax, L.S(ra));
-                    a.mov(L.S(d, 0), rax);
-                    a.mov(rax, L.S(rb));
-                    a.mov(L.S(d, 1), rax);
-                    a.mov(rax, L.S(rc));
-                    a.mov(L.S(d, 2), rax);
+                    L.E(Inst::kIdMov, rax, L.S(ra));
+                    a.mov(L.M(d, 0), rax);
+                    L.E(Inst::kIdMov, rax, L.S(rb));
+                    a.mov(L.M(d, 1), rax);
+                    L.E(Inst::kIdMov, rax, L.S(rc));
+                    a.mov(L.M(d, 2), rax);
                     break;
                 case SU_NLOW_OP_V3_GET:
                 case SU_NLOW_OP_QUAT_GET:
-                    a.mov(rax, L.S(ra, rb));
-                    a.mov(L.S(d), rax);
+                    a.mov(rax, L.M(ra, rb));
+                    L.E(Inst::kIdMov, L.S(d), rax);
                     break;
                 case SU_NLOW_OP_V3_ADD:
                 case SU_NLOW_OP_V3_SUB:
                     for (uint32_t c3 = 0; c3 < 3u; c3++) {
-                        a.mov(rax, L.S(ra, c3));
-                        a.mov(rcx, L.S(rb, c3));
+                        a.mov(rax, L.M(ra, c3));
+                        a.mov(rcx, L.M(rb, c3));
                         if (op == SU_NLOW_OP_V3_ADD) L.q_add_rax_rcx();
                         else L.q_sub_rax_rcx();
-                        a.mov(L.S(d, c3), rax);
+                        a.mov(L.M(d, c3), rax);
                     }
                     break;
                 case SU_NLOW_OP_V3_SCALE:
                     for (uint32_t c3 = 0; c3 < 3u; c3++) {
-                        a.mov(rax, L.S(ra, c3));
-                        a.mov(rcx, L.S(rb));
+                        a.mov(rax, L.M(ra, c3));
+                        L.E(Inst::kIdMov, rcx, L.S(rb));
                         L.q_mul_rax_rcx();
-                        a.mov(L.S(d, c3), rax);
+                        a.mov(L.M(d, c3), rax);
                     }
                     break;
                 case SU_NLOW_OP_V3_NEG:
                     for (uint32_t c3 = 0; c3 < 3u; c3++) {
-                        a.mov(rax, L.S(ra, c3));
+                        a.mov(rax, L.M(ra, c3));
                         L.q_neg_rax();
-                        a.mov(L.S(d, c3), rax);
+                        a.mov(L.M(d, c3), rax);
                     }
                     break;
                 case SU_NLOW_OP_SELECT_V3:
                 case SU_NLOW_OP_SELECT_QUAT: {
                     const uint32_t n = op == SU_NLOW_OP_SELECT_V3 ? 3u : 4u;
-                    a.cmp(L.S(ra), 0);
+                    L.E(Inst::kIdCmp, L.S(ra), Imm(0));
                     for (uint32_t c3 = 0; c3 < n; c3++) {
-                        a.mov(rax, L.S(rc, c3));
-                        a.cmovne(rax, L.S(rb, c3)); /* mov does not change flags */
-                        a.mov(L.S(d, c3), rax);
+                        a.mov(rax, L.M(rc, c3));
+                        a.cmovne(rax, L.M(rb, c3)); /* mov does not change flags */
+                        a.mov(L.M(d, c3), rax);
                     }
                     break;
                 }
                 case SU_NLOW_OP_MAKE_QUAT:
-                    a.mov(rax, L.S(ra));
-                    a.mov(L.S(d, 0), rax);
+                    L.E(Inst::kIdMov, rax, L.S(ra));
+                    a.mov(L.M(d, 0), rax);
                     for (uint32_t c3 = 0; c3 < 3u; c3++) {
-                        a.mov(rax, L.S(rb, c3));
-                        a.mov(L.S(d, c3 + 1u), rax);
+                        a.mov(rax, L.M(rb, c3));
+                        a.mov(L.M(d, c3 + 1u), rax);
                     }
                     break;
                 default:
@@ -588,24 +934,39 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
             }
             return ok;
         };
-
         /* Identity-row guard (src/vm/su_vm_plan.h, proven by the VM plan builder): run the guard slice; when every
          * checked definition has its required value, the row's writable lanes equal its input lanes, so they are
          * copied and the body is skipped. Otherwise the body runs (re-running the slice: pure instructions). */
         Label l_body = a.new_label();
         Label l_next = a.new_label();
-        Label l_rows = a.new_label();
-        (void)l_rows;
+        std::vector<std::pair<uint32_t, uint32_t>> pre_range(ninsn, {0u, 0u});
+        /* Identity lanes: copy each whole input column into its output column once per call (memcpy of rows u32
+         * cells). A guarded row then needs no per-lane copy, and every other row's body overwrites every writable
+         * lane, so the outputs are exactly the per-row copies' (2026-10-18). */
+        if ((in->guard_count > 0u || in->identity_count > 0u) && in->identity_count > 0u) {
+            a.comment("identity lanes: whole-column copies");
+            for (uint32_t i = 0; i < in->identity_count; i++) {
+                const uint32_t lane = in->identity_lanes[i];
+                L.out_col(kCallArg[0], lane);
+                L.in_col(kCallArg[1], lane);
+                a.mov(kCallArg[2], r13);
+                a.shl(kCallArg[2], 2);
+                a.mov(rax, reinterpret_cast<uint64_t>(&std::memcpy));
+                a.call(rax);
+            }
+        }
         if (in->pre_count > 0u) {
             a.comment("row-invariant instructions");
             for (uint32_t i = 0; i < in->pre_count; i++) {
                 const uint32_t k = in->pre_insns[i];
+                const size_t begin = a.offset();
                 if (k >= ninsn || !emit(insns[k])) {
                     if (failed_insn != nullptr) {
                         *failed_insn = k;
                     }
                     return SU_NLOW_INTERNAL;
                 }
+                pre_range[k] = {static_cast<uint32_t>(begin), static_cast<uint32_t>(a.offset())};
             }
         }
         a.bind(l_loop);
@@ -620,7 +981,7 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
                     return SU_NLOW_INTERNAL;
                 }
                 if (in->guard_checks[g] != 0u) {
-                    a.cmp(L.S(insns[k].dst), 0);
+                    L.E(Inst::kIdCmp, L.S(insns[k].dst), Imm(0));
                     if (in->guard_checks[g] == 1u) {
                         a.jne(l_body); /* required false, is true */
                     } else {
@@ -628,14 +989,7 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
                     }
                 }
             }
-            for (uint32_t i = 0; i < in->identity_count; i++) {
-                const uint32_t lane = in->identity_lanes[i];
-                L.in_col(rcx, lane);
-                a.mov(eax, dword_ptr(rcx, r12, 2));
-                L.out_col(rcx, lane);
-                a.mov(dword_ptr(rcx, r12, 2), eax);
-            }
-            a.jmp(l_next);
+            a.jmp(l_next); /* the row's writable lanes already hold their input values (copied above) */
         }
         a.bind(l_body);
 
@@ -644,6 +998,12 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
             char note[48];
             std::snprintf(note, sizeof note, "insn %u op %u", k, op);
             a.comment(note);
+            if (hoisted[k]) {
+                /* Ran before the loop; its source range is that code. */
+                ranges.push_back(pre_range[k].first);
+                ranges.push_back(pre_range[k].second);
+                continue;
+            }
             const size_t begin = a.offset();
             if (!emit(insns[k])) {
                 if (failed_insn != nullptr) {
@@ -664,6 +1024,11 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
         a.cmp(r12, r13);
         a.jb(l_loop);
         a.add(rsp, static_cast<int32_t>(frame));
+        for (uint32_t p = kNSaved; p-- > 0u;) {
+            if ((alloc.saved_used >> p) & 1u) {
+                a.pop(kSavedPool[p]);
+            }
+        }
         a.pop(r13);
         a.pop(r12);
         a.pop(rbx);
