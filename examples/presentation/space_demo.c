@@ -31,6 +31,7 @@
  *   --world-offset KM                  shift the whole presentation KM kilometres along +x (camera-relative
  *                                      rendering keeps it stable; the simulation is unchanged)
  *   --no-audio                         no mixer (default: device in a window, offline mixer otherwise)
+ *   --no-env                           paint materials (the gate rings) take ambient from the procedural sky instead of a baked cube
  *   --no-bloom, --no-glare             turn off the HDR bloom (default on: emissive gates, engine trails, flares) or the
  *                                      sun's glare streaks
  *   --auto-exposure                    stateless automatic exposure (SU_POST_AUTO_EXPOSURE)
@@ -102,6 +103,8 @@ typedef struct Demo {
     int fixed_cam;            /* --offscreen: a fixed overview camera */
     int legacy;
     int no_bloom;
+    int no_env;                /* --no-env: paint materials take ambient from the procedural sky */
+    SuRenderHandle env;        /* image-based ambient baked from a brighter sky than the visible one */
     int auto_exposure;
     int no_glare;
     uint64_t frames_drawn;
@@ -806,6 +809,20 @@ static void draw(float alpha, double dt, SuChaseCamera *chase, SuFreeCamera *fre
     f.light.up = v3(0, 1, 0);
     f.light.exposure = 1.0f;
     f.light.tonemap = SU_TONEMAP_ACES;
+    if (g.env == 0u && !g.no_env) {
+        /* a cube baked from a nebula-like sky: warm horizon, cold zenith and the sun glow (only paint materials use it) */
+        SuRenderLighting nb = f.light;
+        nb.sky_zenith = v3(0.05f, 0.08f, 0.2f);
+        nb.sky_horizon = v3(0.35f, 0.18f, 0.22f);
+        nb.sky_nadir = v3(0.02f, 0.02f, 0.04f);
+        nb.sun_intensity = 6.0f;
+        if (su_render_env_from_sky(g.r, 64, &nb, &g.env) != SU_OK) {
+            g.env = 0;
+            g.no_env = 1;
+        }
+    }
+    f.env = g.no_env ? 0u : g.env;
+    f.env_intensity = 1.0f;
 
     /* objects: ships, gate, station, the optional model; then the debris field */
     for (i = 0; i < g.n; i++) {
@@ -1089,6 +1106,8 @@ int main(int argc, char **argv) {
             offset_km = atof(argv[++i]);
         } else if (strcmp(argv[i], "--no-audio") == 0) {
             no_audio = 1;
+        } else if (strcmp(argv[i], "--no-env") == 0) {
+            g.no_env = 1;
         } else if (strcmp(argv[i], "--no-bloom") == 0) {
             g.no_bloom = 1;
         } else if (strcmp(argv[i], "--no-glare") == 0) {

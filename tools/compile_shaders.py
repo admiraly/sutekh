@@ -28,7 +28,7 @@ SRC_DIR = os.path.join(ROOT, "src", "render", "shaders")
 HEADER = os.path.join(ROOT, "src", "render", "su_render_shaders.h")
 SHADERS = ["mesh.vert", "mesh.frag", "line.vert", "line.frag", "pbr.vert", "pbr.frag", "fullscreen.vert", "sky.frag",
            "post.frag", "hud.vert", "hud.frag", "fx.vert", "fx.frag",
-"bloom_down.frag", "bloom_up.frag", "post_bloom.frag"]
+"bloom_down.frag", "bloom_up.frag", "post_bloom.frag", "paint.frag"]
 # Shared sources pulled in with #include (GL_GOOGLE_include_directive); their hashes are recorded too.
 INCLUDES = ["frame.glsl"]
 

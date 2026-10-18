@@ -820,6 +820,7 @@ typedef struct PipeSpec {
     int blend;
     int post;          /* output pass (no depth attachment) */
     int bloom;         /* 1: bloom downsample, 3: bloom upsample, 2: bloom output pass (all without depth) */
+    int paint;         /* 1: the layered paint layout (frame, paint material, environment) */
 } PipeSpec;
 
 static void attr(VkVertexInputAttributeDescription *a, uint32_t *n, uint32_t loc, uint32_t binding, VkFormat fmt,
@@ -993,7 +994,7 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
     gi.pDepthStencilState = (s->post || s->bloom) ? NULL : &ds;
     gi.pColorBlendState = &cb;
     gi.pDynamicState = &dy;
-    gi.layout = s->post ? r->post_layout : r->scene_layout;
+    gi.layout = s->post ? r->post_layout : s->paint ? r->paint_layout : r->scene_layout;
     gi.renderPass = s->post ? r->post_pass : r->scene_pass;
     if (s->bloom == 1 || s->bloom == 3) { /* 1: downsample (one sampler), 3: upsample (three samplers) */
         gi.layout = s->bloom == 1 ? r->bloom_layout : r->bloom3_layout;
@@ -1065,6 +1066,21 @@ static int make_pipelines(SuRenderer *r) {
         s.depth_write = i < PIPE_BLEND;
         s.blend = i >= PIPE_BLEND ? BLEND_ALPHA : BLEND_NONE;
         ok = make_pipe(r, &s, &r->pbr_pipe[i]);
+    }
+    /* layered paint variants (same states, same vertex stage, own layout and fragment shader) */
+    for (i = 0; i < PIPE_PBR_COUNT && ok; i++) {
+        memset(&s, 0, sizeof s);
+        s.vs = su_shader_pbr_vert;
+        s.vs_bytes = sizeof su_shader_pbr_vert;
+        s.fs = su_shader_paint_frag;
+        s.fs_bytes = sizeof su_shader_paint_frag;
+        s.vin = VIN_PBR;
+        s.paint = 1;
+        s.cull = (i & 1u) == 0u;
+        s.depth_test = 1;
+        s.depth_write = i < PIPE_BLEND;
+        s.blend = i >= PIPE_BLEND ? BLEND_ALPHA : BLEND_NONE;
+        ok = make_pipe(r, &s, &r->paint_pipe[i]);
     }
     /* output pass */
     memset(&s, 0, sizeof s);
@@ -1151,6 +1167,47 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
     if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->tex_dsl) != VK_SUCCESS) {
         return 0;
     }
+    {
+        /* layered paint: eight samplers and the layer parameters; the environment cube */
+        VkDescriptorSetLayoutBinding pb[SU_PAINT_SLOT_COUNT + 1u];
+        VkDescriptorSetLayout psets[3];
+        memset(pb, 0, sizeof pb);
+        for (i = 0; i < SU_PAINT_SLOT_COUNT; i++) {
+            pb[i].binding = i;
+            pb[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            pb[i].descriptorCount = 1;
+            pb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        pb[SU_PAINT_SLOT_COUNT].binding = SU_PAINT_SLOT_COUNT;
+        pb[SU_PAINT_SLOT_COUNT].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        pb[SU_PAINT_SLOT_COUNT].descriptorCount = 1;
+        pb[SU_PAINT_SLOT_COUNT].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        li.bindingCount = SU_PAINT_SLOT_COUNT + 1u;
+        li.pBindings = pb;
+        if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->paint_dsl) != VK_SUCCESS) {
+            return 0;
+        }
+        li.bindingCount = 1;
+        li.pBindings = b; /* binding 0, one fragment sampler (b[0] was rewritten above) */
+        if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->env_dsl) != VK_SUCCESS) {
+            return 0;
+        }
+        memset(&pcr, 0, sizeof pcr);
+        pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        pcr.size = sizeof(LegacyPush) > sizeof(MatPush) ? sizeof(LegacyPush) : sizeof(MatPush);
+        psets[0] = r->frame_dsl;
+        psets[1] = r->paint_dsl;
+        psets[2] = r->env_dsl;
+        memset(&pli, 0, sizeof pli);
+        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pli.setLayoutCount = 3;
+        pli.pSetLayouts = psets;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges = &pcr;
+        if (r->f.vkCreatePipelineLayout(r->dev, &pli, NULL, &r->paint_layout) != VK_SUCCESS) {
+            return 0;
+        }
+    }
     memset(&pcr, 0, sizeof pcr);
     pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcr.size = sizeof(LegacyPush) > sizeof(MatPush) ? sizeof(LegacyPush) : sizeof(MatPush);
@@ -1224,10 +1281,12 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
         return 0;
     }
     ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[0].descriptorCount = material_sets * SU_ASSET_SLOT_COUNT;
+    ps[0].descriptorCount = material_sets * SU_PAINT_SLOT_COUNT;
+    ps[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    ps[1].descriptorCount = material_sets;
     pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     pi.maxSets = material_sets;
-    pi.poolSizeCount = 1;
+    pi.poolSizeCount = 2;
     return r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &r->pool_mat) == VK_SUCCESS;
 }
 
@@ -1815,7 +1874,7 @@ void su_render_destroy(SuRenderer *r) {
         su_rvk_free_buffer(r, &r->mesh_vb);
         su_rvk_free_buffer(r, &r->mesh_ib);
         {
-            VkPipeline all[7 + PIPE_PBR_COUNT];
+            VkPipeline all[7 + 2 * PIPE_PBR_COUNT];
             uint32_t k;
             all[0] = r->mesh_pipe;
             all[1] = r->line_pipe;
@@ -1850,8 +1909,9 @@ void su_render_destroy(SuRenderer *r) {
             }
             for (k = 0; k < PIPE_PBR_COUNT; k++) {
                 all[7 + k] = r->pbr_pipe[k];
+                all[7 + PIPE_PBR_COUNT + k] = r->paint_pipe[k];
             }
-            for (k = 0; k < 7 + PIPE_PBR_COUNT; k++) {
+            for (k = 0; k < 7 + 2 * PIPE_PBR_COUNT; k++) {
                 if (all[k] != VK_NULL_HANDLE) {
                     r->f.vkDestroyPipeline(r->dev, all[k], NULL);
                 }
@@ -1876,6 +1936,15 @@ void su_render_destroy(SuRenderer *r) {
         }
         if (r->scene_layout != VK_NULL_HANDLE) {
             r->f.vkDestroyPipelineLayout(r->dev, r->scene_layout, NULL);
+        }
+        if (r->paint_layout != VK_NULL_HANDLE) {
+            r->f.vkDestroyPipelineLayout(r->dev, r->paint_layout, NULL);
+        }
+        if (r->paint_dsl != VK_NULL_HANDLE) {
+            r->f.vkDestroyDescriptorSetLayout(r->dev, r->paint_dsl, NULL);
+        }
+        if (r->env_dsl != VK_NULL_HANDLE) {
+            r->f.vkDestroyDescriptorSetLayout(r->dev, r->env_dsl, NULL);
         }
         if (r->post_layout != VK_NULL_HANDLE) {
             r->f.vkDestroyPipelineLayout(r->dev, r->post_layout, NULL);
@@ -2329,7 +2398,15 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     }
     su_rvk_record_uploads(r, fr, cmd);
     su_rvk_refresh_materials(r);
-    memcpy(fr->ubo.map, &in->ubo, sizeof in->ubo);
+    {
+        /* the environment: a READY cube from the frame description, else the built-in black one (params.z = 0) */
+        FrameUbo u = in->ubo;
+        float lod = 0.0f;
+        r->frame_env_set = su_rvk_env_set(r, in->scene != NULL ? in->scene->env : 0u,
+                                          in->scene != NULL ? in->scene->env_intensity : 0.0f, &lod, &u.params[2]);
+        u.params[3] = lod;
+        memcpy(fr->ubo.map, &u, sizeof u);
+    }
 
     /* debug instances, grouped by mesh (counting sort; stable within a mesh) */
     n_inst = in->inst_count < r->max_instances ? in->inst_count : r->max_instances;

@@ -19,6 +19,33 @@ The scene (sky, opaque, masked and blended meshes, debug items, additive effects
 
 `SuRenderFrameDesc.post` (`SuRenderPost`) is zero for "off", so frames that do not set it render exactly as before. With `SU_POST_BLOOM`: a half-resolution mip chain, 13-tap downsample (Jimenez 2014) whose first level applies the threshold with a soft knee and Karis weights, tent upsample with a `radius` scale, added to the scene before exposure. Threshold is scene-linear (before exposure). The chain is energy preserving per level and divided by the level count at the output, so `bloom_intensity` 1 adds back about the energy that passed the threshold; intensity 0 gives byte-identical output to no bloom. Emissive meshes (material `emissive` x `emissive_strength` x per-object `emissive`), additive billboards and ribbon trails all write values above 1 and bleed through it. `SU_POST_AUTO_EXPOSURE` sets exposure from the log-average luminance of the frame (read from the same chain, no readback), `key / average`, clamped to `[exposure_min, exposure_max]`, times `light.exposure`; it keeps no state between frames, so it is deterministic but not temporally smoothed. `su_fx_glare` is an optional CPU helper that adds a core, halo and two streaks for very bright points. None of this reads or writes simulation state. Cost and test evidence: `planning/handoffs/2026-10-18-hdr-bloom.md`.
 
+### 2.2 Layered paint material and image-based ambient
+
+An optional second material model (`SuRenderPaintDesc`, or a material entry of `type_version` 2 in a pack). The
+surface blend is specified exactly in `include/sutekh/render.h` ("layered paint material"); in short: base albedo,
+roughness and metalness are blended toward each layer by `mask[k] * opacity`, in `layer_order`, by lerp or multiply;
+glow = glow map x glow colour x intensity x `SuRenderObject.emissive`, layers may tint it; dirt darkens and roughens;
+AO multiplies ambient only. Colour space per slot is fixed (albedo and glow sRGB, everything else linear) and checked.
+Ambient and reflections come from `SuRenderFrameDesc.env`, a cube with a CPU-prefiltered GGX mip chain (RGBA16F,
+split-sum scale and bias; diffuse from the roughest mip), or from the procedural sky when none is given.
+
+**glTF mapping** (`SUTEKH_materials_layered_paint` on a material; list it in `extensionsUsed`). Core fields keep their
+meaning: `baseColorTexture` albedo (sRGB), `normalTexture` normal (cooked as BC5), `emissiveTexture` glow (sRGB),
+`occlusionTexture` AO, `baseColorFactor`, `metallicFactor`, `roughnessFactor` (factors multiplying the maps),
+`emissiveFactor` x `KHR_materials_emissive_strength` the base glow colour and intensity, `normalTexture.scale`,
+`occlusionTexture.strength`, alpha and `doubleSided`. The extension object adds:
+
+| key | meaning |
+| --- | --- |
+| `roughnessTexture`, `materialTexture`, `maskTexture`, `dirtTexture` | `{index, texCoord}` (linear) |
+| `channels` | `{roughness, metal, specular, dirt, ao}`: 0..3 = r g b a, -1 = do not read the map |
+| `specular` | dielectric specular scale, F0 = 0.08 x specular (default 0.5) |
+| `dirt` | `{amount, darken, roughen}` in 0..1 |
+| `layers` | up to four `{color [r,g,b] linear, roughness, metallic, opacity, blend "lerp"/"multiply", glowColor [r,g,b], glowStrength}`; layer k is mask channel k; `glowColor` present enables the glow tint |
+| `order` | permutation of the layer indices, bottom to top (default identity) |
+
+Malformed fields produce an import warning and keep the default; a material without the extension cooks exactly as
+before. The cooked layout is `SuAssetMaterial` + `SuAssetPaint` (`include/sutekh/asset.h`). Tests: `test_render_paint`.
 ## 3. Shader/pipeline edits
 
 Shader source is an asset with explicit include dependencies and compiler/target/resource-layout fingerprints. Compile only affected variants using an established compiler adapter. Prepare driver pipelines away from the render-critical path. Keep the last compatible pipeline active until the new one is ready; use a documented fallback when an interface change makes that impossible.

@@ -148,6 +148,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
                 }
                 it = &r->items[n];
                 it->pipe = mat != NULL ? mat->u.mat.pipeline : PIPE_OPAQUE;
+                it->kind = mat != NULL ? mat->u.mat.kind : 0u;
                 it->forced = 0;
                 if (obj->tint[3] < 1.0f && it->pipe < PIPE_BLEND) {
                     /* translucent instance of an opaque or masked material: the blend pass, same face culling */
@@ -157,7 +158,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
                 it->mat = mat_index;
                 it->mesh = mesh_index;
                 it->sub = sub;
-                it->key = ((uint64_t)it->pipe << 60) | ((uint64_t)(mat_index & 0xFFFFFu) << 40) |
+                it->key = ((uint64_t)it->kind << 63) | ((uint64_t)it->pipe << 60) | ((uint64_t)(mat_index & 0xFFFFFu) << 40) |
                           ((uint64_t)(mesh_index & 0xFFFFFFu) << 16) | (uint64_t)(sub & 0xFFFFu);
                 it->dist2 = ncw[0] * ncw[0] + ncw[1] * ncw[1] + ncw[2] * ncw[2];
                 memcpy(it->inst.r0, &m[0], sizeof it->inst.r0);
@@ -179,6 +180,28 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
     r->stats.draw_instances = n;
     r->stats.dropped += dropped;
     *item_count = n;
+}
+
+/* Push constants of a paint material (paint.frag, block Material). */
+static void paint_push(SuRenderer *r, uint32_t mat_index, uint32_t forced, MatPush *p) {
+    const MatRes *m = &r->res[mat_index].u.mat;
+    uint32_t k;
+    memset(p, 0, sizeof *p);
+    memcpy(p->base_color, m->f.base_color, sizeof p->base_color);
+    memcpy(p->emissive, m->f.emissive, 3u * sizeof(float));
+    p->mr[0] = m->f.metallic;
+    p->mr[1] = m->f.roughness;
+    p->mr[2] = m->f.normal_scale;
+    p->mr[3] = m->f.occlusion_strength;
+    p->misc[0] = m->f.alpha_cutoff;
+    p->misc[1] = forced != 0u ? 2.0f : (float)m->f.alpha_mode;
+    p->misc[2] = m->f.emissive_strength;
+    p->misc[3] = (m->bound_ready & (1u << SU_PAINT_SLOT_NORMAL)) != 0u ? 1.0f : 0.0f;
+    for (k = 0; k < SU_PAINT_SLOT_COUNT; k++) {
+        if ((m->paint.tex_info[k] & 0xFFu) == 1u) {
+            p->uvset[0] |= 1u << k;
+        }
+    }
 }
 
 static void mat_push(SuRenderer *r, uint32_t mat_index, uint32_t forced, MatPush *p) {
@@ -220,6 +243,7 @@ static void mat_push(SuRenderer *r, uint32_t mat_index, uint32_t forced, MatPush
 void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t item_count, int blend_pass) {
     uint32_t i = 0;
     uint32_t bound_pipe = UINT32_MAX;
+    uint32_t bound_kind = UINT32_MAX;
     uint32_t bound_mat = UINT32_MAX - 1u;
     uint32_t bound_forced = 0;
     uint32_t bound_mesh = UINT32_MAX;
@@ -233,22 +257,33 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
         }
         while (i + run < item_count) {
             const DrawItem *nx = &r->items[r->order[i + run]];
-            if (nx->pipe != it->pipe || nx->mat != it->mat || nx->forced != it->forced || nx->mesh != it->mesh || nx->sub != it->sub) {
+            if (nx->kind != it->kind || nx->pipe != it->pipe || nx->mat != it->mat || nx->forced != it->forced || nx->mesh != it->mesh || nx->sub != it->sub) {
                 break;
             }
             run++;
         }
-        if (it->pipe != bound_pipe) {
-            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pbr_pipe[it->pipe]);
+        if (it->pipe != bound_pipe || it->kind != bound_kind) {
+            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                   it->kind != 0u ? r->paint_pipe[it->pipe] : r->pbr_pipe[it->pipe]);
+            if (it->kind != bound_kind) {
+                bound_mat = UINT32_MAX - 1u; /* the layouts differ from set 1 on: bind the material again */
+            }
             bound_pipe = it->pipe;
+            bound_kind = it->kind;
         }
         if (it->mat != bound_mat || it->forced != bound_forced) {
-            VkDescriptorSet set = su_rvk_material_set(r, it->mat);
             MatPush mp;
-            mat_push(r, it->mat, it->forced, &mp);
-            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->scene_layout, 1, 1, &set, 0, NULL);
-            r->f.vkCmdPushConstants(cmd, r->scene_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                                    sizeof mp, &mp);
+            VkDescriptorSet sets[2];
+            VkPipelineLayout lay = it->kind != 0u ? r->paint_layout : r->scene_layout;
+            sets[0] = su_rvk_material_set(r, it->mat);
+            sets[1] = r->frame_env_set;
+            if (it->kind != 0u) {
+                paint_push(r, it->mat, it->forced, &mp);
+            } else {
+                mat_push(r, it->mat, it->forced, &mp);
+            }
+            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lay, 1, it->kind != 0u ? 2u : 1u, sets, 0, NULL);
+            r->f.vkCmdPushConstants(cmd, lay, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof mp, &mp);
             bound_mat = it->mat;
             bound_forced = it->forced;
         }

@@ -220,6 +220,78 @@ static void xform(SuAssetModelNode *n, const char *mesh, float tx, float ty, flo
     n->lod_count = 1;
 }
 
+/* The gate ring as a layered paint material: panel albedo, a paint mask (red bands, amber bands, every other panel
+ * plain), a glow map along the tube and a dirt map; all generated here, nothing loaded. */
+static uint32_t paint_gate(SuAssetWriter *w) {
+    enum { N = 16 };
+    static uint8_t alb[N * N * 4];
+    static uint8_t mask[N * N * 4];
+    static uint8_t glow[N * N * 4];
+    static uint8_t dirt[N * N * 4];
+    const uint8_t *mips[1];
+    SuAssetMaterial m;
+    SuAssetPaint p;
+    uint32_t x;
+    uint32_t y;
+    uint32_t st;
+    for (y = 0; y < N; y++) {
+        for (x = 0; x < N; x++) {
+            uint8_t *a = &alb[(y * N + x) * 4u];
+            uint8_t *k = &mask[(y * N + x) * 4u];
+            uint8_t *g = &glow[(y * N + x) * 4u];
+            uint8_t *d = &dirt[(y * N + x) * 4u];
+            int seam = x % 8u == 0u || y % 8u == 0u;
+            a[0] = a[1] = a[2] = seam ? 60 : 170;
+            a[3] = 255;
+            k[0] = (x % 8u) < 3u && !seam ? 255 : 0;           /* band 0 */
+            k[1] = (x % 8u) >= 5u && !seam ? 255 : 0;          /* band 1 */
+            k[2] = k[3] = 0;
+            g[0] = g[1] = g[2] = y % 8u == 4u ? 255 : 0;       /* a glowing line around the tube */
+            g[3] = 255;
+            d[0] = (uint8_t)(((x * 37u + y * 91u) % 17u) * 15u);
+            d[1] = d[2] = 0;
+            d[3] = 255;
+        }
+    }
+    mips[0] = alb;
+    st = su_asset_writer_add_texture(w, demo_id("tex/gate_albedo"), N, N, SU_TEX_RGBA8_SRGB, 0, 1, mips);
+    mips[0] = mask;
+    st = st == SU_OK ? su_asset_writer_add_texture(w, demo_id("tex/gate_mask"), N, N, SU_TEX_RGBA8_UNORM, 0, 1, mips) : st;
+    mips[0] = glow;
+    st = st == SU_OK ? su_asset_writer_add_texture(w, demo_id("tex/gate_glow"), N, N, SU_TEX_RGBA8_SRGB, 0, 1, mips) : st;
+    mips[0] = dirt;
+    st = st == SU_OK ? su_asset_writer_add_texture(w, demo_id("tex/gate_dirt"), N, N, SU_TEX_RGBA8_UNORM, 0, 1, mips) : st;
+    su_asset_material_default(&m);
+    m.metallic = 1.0f;
+    m.roughness = 0.5f;
+    m.emissive[0] = m.emissive[1] = m.emissive[2] = 1.0f;
+    m.emissive_strength = 2.0f;
+    su_asset_paint_default(&p);
+    p.texture[SU_PAINT_SLOT_ALBEDO] = demo_id("tex/gate_albedo");
+    p.texture[SU_PAINT_SLOT_MASK] = demo_id("tex/gate_mask");
+    p.texture[SU_PAINT_SLOT_GLOW] = demo_id("tex/gate_glow");
+    p.texture[SU_PAINT_SLOT_DIRT] = demo_id("tex/gate_dirt");
+    p.texture[SU_PAINT_SLOT_MATERIAL] = 0;
+    p.dirt_amount = 0.8f;
+    p.layer_count = 2;
+    p.layer[0].color[0] = 0.75f;
+    p.layer[0].color[1] = 0.06f;
+    p.layer[0].color[2] = 0.04f;
+    p.layer[0].roughness = 0.35f;
+    p.layer[0].metallic = 0.1f;
+    p.layer[1].color[0] = 0.9f;
+    p.layer[1].color[1] = 0.65f;
+    p.layer[1].color[2] = 0.08f;
+    p.layer[1].roughness = 0.3f;
+    p.layer[1].metallic = 0.2f;
+    p.layer[1].flags = SU_PAINT_LAYER_GLOW_TINT;
+    p.layer[1].glow_color[0] = 1.0f;
+    p.layer[1].glow_color[1] = 0.55f;
+    p.layer[1].glow_color[2] = 0.1f;
+    p.layer[1].glow_strength = 5.0f;
+    return st == SU_OK ? su_asset_writer_add_paint_material(w, demo_id("mat/gate"), &m, &p) : st;
+}
+
 uint8_t *demo_build_pack(size_t *len) {
     SuAssetWriter *w = NULL;
     SuAssetVertex *v;
@@ -235,7 +307,10 @@ uint8_t *demo_build_pack(size_t *len) {
     }
     mat(w, "mat/hull", 0.8f, 0.82f, 0.85f, 0.7f, 0.35f, 0, 0, 0, 1);
     mat(w, "mat/engine", 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.55f, 0.15f, 6.0f);
-    mat(w, "mat/gate", 0.3f, 0.32f, 0.36f, 0.9f, 0.25f, 0, 0, 0, 1);
+    if (paint_gate(w) != SU_OK) {
+        su_asset_writer_destroy(w);
+        return NULL;
+    }
     mat(w, "mat/gate_light", 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.2f, 0.6f, 1.0f, 5.0f);
     mat(w, "mat/station", 0.45f, 0.46f, 0.5f, 0.3f, 0.6f, 0, 0, 0, 1);
     mat(w, "mat/window", 0.1f, 0.1f, 0.1f, 0.0f, 0.5f, 1.0f, 0.85f, 0.5f, 3.0f);

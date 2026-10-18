@@ -250,6 +250,8 @@ float su_audio_doppler(SuVec3f lp, SuVec3f lv, SuVec3f sp, SuVec3f sv, float c, 
 #define CMD_LISTENER 4u
 #define CMD_MASTER 5u
 #define CMD_SEEK 6u
+#define CMD_PITCH 7u
+#define CMD_GAIN 8u
 
 typedef struct Cmd {
     uint32_t type;
@@ -276,6 +278,7 @@ typedef struct Voice {
     int fresh;            /* no ramp on the first block */
     float fade;           /* 1 = full */
     float fade_step;      /* per frame; < 0 while stopping */
+    float pitch_from;     /* > 0 for the block after a pitch change: the rate ramps from this pitch to d.pitch */
 } Voice;
 
 typedef struct GtSlot {
@@ -556,6 +559,40 @@ uint32_t su_audio_voice_position(const SuAudioMixer *m, SuAudioVoice v, double *
     return SU_OK;
 }
 
+uint32_t su_audio_voice_set_pitch(SuAudioMixer *m, SuAudioVoice v, float pitch) {
+    uint32_t slot;
+    Cmd c;
+    if (!voice_slot(m, v, &slot)) {
+        return SU_E_STALE_HANDLE;
+    }
+    if (!(pitch > 0.0f) || pitch > 64.0f) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memset(&c, 0, sizeof c);
+    c.type = CMD_PITCH;
+    c.slot = slot;
+    c.gen = m->gt[slot].gen;
+    c.a = pitch;
+    return push_cmd(m, &c) ? SU_OK : SU_E_RESOURCE_LIMIT;
+}
+
+uint32_t su_audio_voice_set_gain(SuAudioMixer *m, SuAudioVoice v, float gain) {
+    uint32_t slot;
+    Cmd c;
+    if (!voice_slot(m, v, &slot)) {
+        return SU_E_STALE_HANDLE;
+    }
+    if (!(gain >= 0.0f) || gain > 1.0e6f) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memset(&c, 0, sizeof c);
+    c.type = CMD_GAIN;
+    c.slot = slot;
+    c.gen = m->gt[slot].gen;
+    c.a = gain;
+    return push_cmd(m, &c) ? SU_OK : SU_E_RESOURCE_LIMIT;
+}
+
 uint32_t su_audio_voice_update(SuAudioMixer *m, SuAudioVoice v, SuWorldPos pos, SuVec3f vel, float gain) {
     uint32_t slot;
     Cmd c;
@@ -689,6 +726,18 @@ static void apply_commands(SuAudioMixer *m) {
                 v->pos = (double)c->frame;
             }
             break;
+        case CMD_GAIN:
+            if (v->active && v->gen == c->gen) {
+                v->d.gain = c->a; /* the per-block gain ramp makes this click-free */
+            }
+            break;
+        case CMD_PITCH:
+            if (v->active && v->gen == c->gen) {
+                float old = v->pitch_from > 0.0f ? v->d.pitch : (v->d.pitch > 0.0f ? v->d.pitch : 1.0f);
+                v->pitch_from = old;
+                v->d.pitch = c->a;
+            }
+            break;
         case CMD_UPDATE:
             if (v->active && v->gen == c->gen) {
                 v->d.pos = c->d.pos;
@@ -784,6 +833,9 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
         float rate;
         float dl;
         float dr;
+        float pe;
+        float pf;
+        int pitch_ramp;
         int mono_mix;
         int loop;
         int ended = 0;
@@ -813,6 +865,9 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
             v->cur_r = gr;
             v->fresh = 0;
         }
+        pe = v->d.pitch > 0.0f ? v->d.pitch : 1.0f;
+        pf = v->pitch_from > 0.0f ? v->pitch_from : pe;
+        pitch_ramp = pf != pe;
         dl = (gl - v->cur_l) / (float)(frames > 0u ? frames : 1u);
         dr = (gr - v->cur_r) / (float)(frames > 0u ? frames : 1u);
         for (i = 0; i < frames; i++) {
@@ -834,7 +889,13 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
                     break;
                 }
             }
-            v->pos += (double)rate;
+            if (pitch_ramp) {
+                /* the playback rate glides from the old pitch to the new one over the block: no phase jump */
+                float k = (pf + (pe - pf) * (float)(i + 1u) / (float)frames) / pe;
+                v->pos += (double)(rate * k);
+            } else {
+                v->pos += (double)rate;
+            }
             if (v->pos >= (double)(loop ? v->le : v->frames)) {
                 if (loop) {
                     v->pos = (double)v->ls + fmod(v->pos - (double)v->ls, (double)(v->le - v->ls));
@@ -844,6 +905,7 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
                 }
             }
         }
+        v->pitch_from = 0.0f;
         v->cur_l = gl;
         v->cur_r = gr;
         if (v->fade_step == -1.0f) {

@@ -601,9 +601,271 @@ static void slot(Cook *c, SuAssetMaterial *m, uint32_t s, const cgltf_texture_vi
     }
 }
 
+/* ---------- SUTEKH_materials_layered_paint (see docs/RENDERING_AND_ASSETS.md) ---------- */
+
+/* A tiny reader for the extension's JSON (already validated by cgltf as a whole document). */
+static const char *j_ws(const char *p) {
+    while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') {
+        p++;
+    }
+    return p;
+}
+
+/* Past the value at p (string, object, array or scalar). */
+static const char *j_skip(const char *p) {
+    int depth = 0;
+    p = j_ws(p);
+    do {
+        if (*p == '"') {
+            p++;
+            while (*p != '\0' && *p != '"') {
+                p += *p == '\\' && p[1] != '\0' ? 2 : 1;
+            }
+            if (*p == '"') {
+                p++;
+            }
+        } else if (*p == '{' || *p == '[') {
+            depth++;
+            p++;
+        } else if (*p == '}' || *p == ']') {
+            depth--;
+            p++;
+        } else if (*p == '\0') {
+            return p;
+        } else if (*p == ',' && depth == 0) {
+            return p;
+        } else if (*p == ',') {
+            p++;
+        } else {
+            while (*p != '\0' && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\n' && *p != '\r' && *p != '\t' &&
+                   *p != '"' && *p != '{' && *p != '[') {
+                p++;
+            }
+        }
+        p = j_ws(p);
+    } while (depth > 0);
+    return p;
+}
+
+/* Value of a key in the object at obj (NULL when absent). */
+static const char *j_get(const char *obj, const char *key) {
+    size_t kl = strlen(key);
+    const char *p = j_ws(obj);
+    if (*p != '{') {
+        return NULL;
+    }
+    p = j_ws(p + 1);
+    while (*p == '"') {
+        const char *ks = p + 1;
+        const char *ke = ks;
+        while (*ke != '\0' && *ke != '"') {
+            ke += *ke == '\\' && ke[1] != '\0' ? 2 : 1;
+        }
+        p = j_ws(ke + (*ke == '"' ? 1 : 0));
+        if (*p != ':') {
+            return NULL;
+        }
+        p = j_ws(p + 1);
+        if ((size_t)(ke - ks) == kl && strncmp(ks, key, kl) == 0) {
+            return p;
+        }
+        p = j_ws(j_skip(p));
+        if (*p == ',') {
+            p = j_ws(p + 1);
+        }
+    }
+    return NULL;
+}
+
+static int j_num(const char *v, float *out) {
+    char *end = NULL;
+    double d;
+    if (v == NULL) {
+        return 0;
+    }
+    d = strtod(v, &end);
+    if (end == v || !isfinite(d)) {
+        return 0;
+    }
+    *out = (float)d;
+    return 1;
+}
+
+static int j_floats(const char *v, float *out, int n) {
+    int i;
+    if (v == NULL || *j_ws(v) != '[') {
+        return 0;
+    }
+    v = j_ws(v) + 1;
+    for (i = 0; i < n; i++) {
+        v = j_ws(v);
+        if (!j_num(v, &out[i])) {
+            return 0;
+        }
+        v = j_ws(j_skip(v));
+        if (*v == ',') {
+            v++;
+        }
+    }
+    return 1;
+}
+
+static int j_is_str(const char *v, const char *s) {
+    size_t n = strlen(s);
+    return v != NULL && v[0] == '"' && strncmp(v + 1, s, n) == 0 && v[1 + n] == '"';
+}
+
+/* A textureInfo object {"index": n, "texCoord": k}: fills the paint slot (role: 0 sRGB, 1 linear, 2 normal). */
+static void paint_slot_view(Cook *c, SuAssetPaint *p, uint32_t s, const cgltf_texture_view *v, int role, uint32_t *st) {
+    if (v->texture == NULL || *st != SU_OK) {
+        return;
+    }
+    if (v->texcoord > 1) {
+        warn(c, "paint texture slot %u uses TEXCOORD_%d; only 0 and 1 are kept", (unsigned)s, v->texcoord);
+        return;
+    }
+    p->texture[s] = cook_texture(c, v->texture, role, st);
+    if (p->texture[s] != 0u) {
+        const cgltf_sampler *sm = v->texture->sampler;
+        p->tex_info[s] = SU_ASSET_TEX_INFO((uint32_t)v->texcoord, sm != NULL ? wrap_of(sm->wrap_s) : 0u,
+                                           sm != NULL ? wrap_of(sm->wrap_t) : 0u);
+    }
+}
+
+static void paint_slot_json(Cook *c, SuAssetPaint *p, uint32_t s, const char *ext, const char *key, int role, uint32_t *st) {
+    const char *o = j_get(ext, key);
+    float idx = -1.0f;
+    float tc = 0.0f;
+    cgltf_texture_view v;
+    if (o == NULL) {
+        return;
+    }
+    memset(&v, 0, sizeof v);
+    if (!j_num(j_get(o, "index"), &idx) || idx < 0.0f || (size_t)idx >= c->data->textures_count) {
+        warn(c, "%s: texture index invalid; slot left empty", key);
+        return;
+    }
+    (void)j_num(j_get(o, "texCoord"), &tc);
+    v.texture = &c->data->textures[(size_t)idx];
+    v.texcoord = (int)tc;
+    paint_slot_view(c, p, s, &v, role, st);
+}
+
+static void paint_channel(Cook *c, SuAssetPaint *p, const char *chs, const char *key, uint32_t which) {
+    float v = 0.0f;
+    if (chs != NULL && j_num(j_get(chs, key), &v)) {
+        if (v < 0.0f) {
+            p->channel[which] = SU_PAINT_CH_NONE;
+        } else if (v <= 3.0f) {
+            p->channel[which] = (uint8_t)v;
+        } else {
+            warn(c, "channels.%s out of range; default kept", key);
+        }
+    }
+}
+
+/* Fills m (factors) and p from the glTF material and its SUTEKH_materials_layered_paint object. The core textures map:
+ * baseColorTexture -> albedo (sRGB), normalTexture -> normal, emissiveTexture -> glow (sRGB), occlusionTexture -> ao. */
+static void cook_paint(Cook *c, const cgltf_material *gm, const char *ext, SuAssetPaint *p, uint32_t *st) {
+    const char *v;
+    const char *chs = j_get(ext, "channels");
+    float f = 0.0f;
+    uint32_t n = 0;
+    su_asset_paint_default(p);
+    if (gm->has_pbr_metallic_roughness) {
+        paint_slot_view(c, p, SU_PAINT_SLOT_ALBEDO, &gm->pbr_metallic_roughness.base_color_texture, 0, st);
+    }
+    paint_slot_view(c, p, SU_PAINT_SLOT_NORMAL, &gm->normal_texture, 2, st);
+    paint_slot_view(c, p, SU_PAINT_SLOT_GLOW, &gm->emissive_texture, 0, st);
+    paint_slot_view(c, p, SU_PAINT_SLOT_AO, &gm->occlusion_texture, 1, st);
+    paint_slot_json(c, p, SU_PAINT_SLOT_ROUGHNESS, ext, "roughnessTexture", 1, st);
+    paint_slot_json(c, p, SU_PAINT_SLOT_MATERIAL, ext, "materialTexture", 1, st);
+    paint_slot_json(c, p, SU_PAINT_SLOT_MASK, ext, "maskTexture", 1, st);
+    paint_slot_json(c, p, SU_PAINT_SLOT_DIRT, ext, "dirtTexture", 1, st);
+    paint_channel(c, p, chs, "roughness", SU_PAINT_CH_ROUGHNESS);
+    paint_channel(c, p, chs, "metal", SU_PAINT_CH_METAL);
+    paint_channel(c, p, chs, "specular", SU_PAINT_CH_SPECULAR);
+    paint_channel(c, p, chs, "dirt", SU_PAINT_CH_DIRT);
+    paint_channel(c, p, chs, "ao", SU_PAINT_CH_AO);
+    if (j_num(j_get(ext, "specular"), &f) && f >= 0.0f) {
+        p->specular = f;
+    }
+    v = j_get(ext, "dirt");
+    if (v != NULL) {
+        if (j_num(j_get(v, "amount"), &f)) {
+            p->dirt_amount = f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f;
+        }
+        if (j_num(j_get(v, "darken"), &f)) {
+            p->dirt_darken = f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f;
+        }
+        if (j_num(j_get(v, "roughen"), &f)) {
+            p->dirt_roughen = f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f;
+        }
+    }
+    v = j_get(ext, "layers");
+    if (v != NULL && *j_ws(v) == '[') {
+        const char *e = j_ws(v) + 1;
+        while (*j_ws(e) == '{') {
+            e = j_ws(e);
+            if (n == SU_PAINT_MAX_LAYERS) {
+                warn(c, "more than %u paint layers; the rest are ignored", SU_PAINT_MAX_LAYERS);
+                break;
+            }
+            {
+                SuAssetPaintLayer *l = &p->layer[n];
+                const char *b = j_get(e, "blend");
+                const char *gc = j_get(e, "glowColor");
+                (void)j_floats(j_get(e, "color"), l->color, 3);
+                (void)j_num(j_get(e, "roughness"), &l->roughness);
+                (void)j_num(j_get(e, "metallic"), &l->metallic);
+                (void)j_num(j_get(e, "opacity"), &l->opacity);
+                l->flags = j_is_str(b, "multiply") ? SU_PAINT_LAYER_MULTIPLY : 0u;
+                if (b != NULL && !j_is_str(b, "multiply") && !j_is_str(b, "lerp")) {
+                    warn(c, "paint layer %u: unknown blend; lerp used", (unsigned)n);
+                }
+                if (gc != NULL && j_floats(gc, l->glow_color, 3)) {
+                    l->flags |= SU_PAINT_LAYER_GLOW_TINT;
+                    (void)j_num(j_get(e, "glowStrength"), &l->glow_strength);
+                }
+                l->roughness = l->roughness < 0.0f ? 0.0f : l->roughness > 1.0f ? 1.0f : l->roughness;
+                l->metallic = l->metallic < 0.0f ? 0.0f : l->metallic > 1.0f ? 1.0f : l->metallic;
+                l->opacity = l->opacity < 0.0f ? 0.0f : l->opacity > 1.0f ? 1.0f : l->opacity;
+                l->glow_strength = l->glow_strength < 0.0f ? 0.0f : l->glow_strength;
+            }
+            n++;
+            e = j_ws(j_skip(e));
+            if (*e == ',') {
+                e++;
+            }
+        }
+    }
+    p->layer_count = n;
+    v = j_get(ext, "order");
+    if (v != NULL && n > 0u) {
+        float o[4] = {0, 0, 0, 0};
+        uint32_t seen = 0;
+        uint32_t i;
+        int ok = j_floats(v, o, (int)n);
+        for (i = 0; ok && i < n; i++) {
+            ok = o[i] >= 0.0f && o[i] < (float)n && (seen & (1u << (uint32_t)o[i])) == 0u;
+            seen |= ok ? 1u << (uint32_t)o[i] : 0u;
+        }
+        if (ok) {
+            for (i = 0; i < n; i++) {
+                p->layer_order[i] = (uint8_t)o[i];
+            }
+        } else {
+            warn(c, "paint layer order is not a permutation of the layers; identity used");
+        }
+    }
+}
+
 static uint64_t cook_material(Cook *c, const cgltf_material *gm, uint32_t *st) {
     size_t i;
     SuAssetMaterial m;
+    SuAssetPaint paint;
+    const char *pext = NULL;
+    size_t k;
     uint64_t id;
     if (gm == NULL) {
         return 0;
@@ -614,13 +876,21 @@ static uint64_t cook_material(Cook *c, const cgltf_material *gm, uint32_t *st) {
         return id;
     }
     su_asset_material_default(&m);
+    for (k = 0; k < gm->extensions_count; k++) {
+        if (gm->extensions[k].name != NULL && strcmp(gm->extensions[k].name, "SUTEKH_materials_layered_paint") == 0 &&
+            gm->extensions[k].data != NULL) {
+            pext = gm->extensions[k].data;
+        }
+    }
     if (gm->has_pbr_metallic_roughness) {
         const cgltf_pbr_metallic_roughness *p = &gm->pbr_metallic_roughness;
         memcpy(m.base_color, p->base_color_factor, sizeof m.base_color);
         m.metallic = p->metallic_factor;
         m.roughness = p->roughness_factor;
-        slot(c, &m, SU_ASSET_SLOT_BASE_COLOR, &p->base_color_texture, 0, st);
-        slot(c, &m, SU_ASSET_SLOT_METAL_ROUGH, &p->metallic_roughness_texture, 1, st);
+        if (pext == NULL) {
+            slot(c, &m, SU_ASSET_SLOT_BASE_COLOR, &p->base_color_texture, 0, st);
+            slot(c, &m, SU_ASSET_SLOT_METAL_ROUGH, &p->metallic_roughness_texture, 1, st);
+        }
     } else if (gm->has_pbr_specular_glossiness) {
         warn(c, "material %u: KHR_materials_pbrSpecularGlossiness approximated by its diffuse factor", (unsigned)i);
         memcpy(m.base_color, gm->pbr_specular_glossiness.diffuse_factor, sizeof m.base_color);
@@ -633,9 +903,13 @@ static uint64_t cook_material(Cook *c, const cgltf_material *gm, uint32_t *st) {
     }
     m.normal_scale = gm->normal_texture.texture != NULL ? gm->normal_texture.scale : 1.0f;
     m.occlusion_strength = gm->occlusion_texture.texture != NULL ? gm->occlusion_texture.scale : 1.0f;
-    slot(c, &m, SU_ASSET_SLOT_NORMAL, &gm->normal_texture, 2, st);
-    slot(c, &m, SU_ASSET_SLOT_EMISSIVE, &gm->emissive_texture, 0, st);
-    slot(c, &m, SU_ASSET_SLOT_OCCLUSION, &gm->occlusion_texture, 1, st);
+    if (pext == NULL) {
+        slot(c, &m, SU_ASSET_SLOT_NORMAL, &gm->normal_texture, 2, st);
+        slot(c, &m, SU_ASSET_SLOT_EMISSIVE, &gm->emissive_texture, 0, st);
+        slot(c, &m, SU_ASSET_SLOT_OCCLUSION, &gm->occlusion_texture, 1, st);
+    } else {
+        cook_paint(c, gm, pext, &paint, st);
+    }
     m.alpha_mode = gm->alpha_mode == cgltf_alpha_mode_mask    ? SU_ASSET_ALPHA_MASK
                    : gm->alpha_mode == cgltf_alpha_mode_blend ? SU_ASSET_ALPHA_BLEND
                                                               : SU_ASSET_ALPHA_OPAQUE;
@@ -645,7 +919,7 @@ static uint64_t cook_material(Cook *c, const cgltf_material *gm, uint32_t *st) {
     if (*st != SU_OK) {
         return 0;
     }
-    *st = su_asset_writer_add_material(c->w, id, &m);
+    *st = pext != NULL ? su_asset_writer_add_paint_material(c->w, id, &m, &paint) : su_asset_writer_add_material(c->w, id, &m);
     if (*st != SU_OK) {
         msgf(c->msg, "material %u could not be written", (unsigned)i);
         return 0;

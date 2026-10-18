@@ -19,6 +19,8 @@ _Static_assert(sizeof(SuAssetMeshHeader) == 64, "mesh header layout");
 _Static_assert(sizeof(SuAssetTextureHeader) == 64, "texture header layout");
 _Static_assert(sizeof(SuAssetMip) == 16, "mip layout");
 _Static_assert(sizeof(SuAssetMaterial) == 128, "material layout");
+_Static_assert(sizeof(SuAssetPaintLayer) == 48, "paint layer layout");
+_Static_assert(sizeof(SuAssetPaint) == 336, "paint layout");
 _Static_assert(sizeof(SuAssetModelNode) == 128, "model node layout");
 _Static_assert(sizeof(SuAssetModelHeader) == 64, "model header layout");
 
@@ -146,6 +148,7 @@ static uint32_t max_mips(uint32_t w, uint32_t h) {
 typedef struct WEntry {
     uint64_t id;
     uint32_t type;
+    uint32_t version;
     uint8_t *data;
     size_t size;
 } WEntry;
@@ -181,7 +184,8 @@ void su_asset_writer_destroy(SuAssetWriter *w) {
 }
 
 /* Takes ownership of data (freed on failure too). */
-static uint32_t writer_put(SuAssetWriter *w, uint64_t id, uint32_t type, uint8_t *data, size_t size) {
+static uint32_t writer_put_v(SuAssetWriter *w, uint64_t id, uint32_t type, uint32_t version, uint8_t *data,
+                             size_t size) {
     uint32_t i;
     if (id == 0u) {
         free(data);
@@ -205,10 +209,15 @@ static uint32_t writer_put(SuAssetWriter *w, uint64_t id, uint32_t type, uint8_t
     }
     w->e[w->n].id = id;
     w->e[w->n].type = type;
+    w->e[w->n].version = version;
     w->e[w->n].data = data;
     w->e[w->n].size = size;
     w->n++;
     return SU_OK;
+}
+
+static uint32_t writer_put(SuAssetWriter *w, uint64_t id, uint32_t type, uint8_t *data, size_t size) {
+    return writer_put_v(w, id, type, 1u, data, size);
 }
 
 static void sphere_of(const SuAssetVertex *v, const uint32_t *idx, uint32_t first, uint32_t count, float c[3],
@@ -358,6 +367,41 @@ uint32_t su_asset_writer_add_material(SuAssetWriter *w, uint64_t id, const SuAss
     return writer_put(w, id, SU_ASSET_MATERIAL, buf, sizeof *m);
 }
 
+uint32_t su_asset_writer_add_paint_material(SuAssetWriter *w, uint64_t id, const SuAssetMaterial *m, const SuAssetPaint *p) {
+    uint8_t *buf;
+    uint32_t st;
+    if (w == NULL || m == NULL || p == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    buf = malloc(sizeof *m + sizeof *p);
+    if (buf == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memcpy(buf, m, sizeof *m);
+    memcpy(buf + sizeof *m, p, sizeof *p);
+    st = writer_put_v(w, id, SU_ASSET_MATERIAL, 2u, buf, sizeof *m + sizeof *p);
+    return st;
+}
+
+void su_asset_paint_default(SuAssetPaint *p) {
+    uint32_t i;
+    memset(p, 0, sizeof *p);
+    p->layer_order[0] = 0;
+    p->layer_order[1] = 1;
+    p->layer_order[2] = 2;
+    p->layer_order[3] = 3;
+    p->channel[SU_PAINT_CH_SPECULAR] = SU_PAINT_CH_NONE;
+    p->channel[SU_PAINT_CH_METAL] = 0;
+    p->specular = 0.5f;
+    p->dirt_darken = 0.6f;
+    p->dirt_roughen = 0.5f;
+    for (i = 0; i < SU_PAINT_MAX_LAYERS; i++) {
+        p->layer[i].color[0] = p->layer[i].color[1] = p->layer[i].color[2] = 1.0f;
+        p->layer[i].roughness = 1.0f;
+        p->layer[i].opacity = 1.0f;
+    }
+}
+
 static void xform_point(const float *m, const float *p, float *out) {
     int k;
     for (k = 0; k < 3; k++) {
@@ -483,7 +527,7 @@ uint32_t su_asset_writer_finish(SuAssetWriter *w, uint8_t **bytes, size_t *len) 
         at = (at + 15u) & ~(uint64_t)15u;
         wr64(e, w->e[i].id);
         wr32(e + 8, w->e[i].type);
-        wr32(e + 12, 1u);
+        wr32(e + 12, w->e[i].version);
         wr64(e + 16, at);
         wr64(e + 24, w->e[i].size);
         su_sha256_init(&s);
@@ -633,10 +677,63 @@ static uint32_t check_texture(const SuAssetPak *p, uint32_t ei, char *msg) {
     return SU_OK;
 }
 
+static int tex_is_srgb(uint32_t f) {
+    return f == SU_TEX_RGBA8_SRGB || f == SU_TEX_BC1_SRGB || f == SU_TEX_BC3_SRGB || f == SU_TEX_BC7_SRGB;
+}
+
+static uint32_t check_paint(const SuAssetPak *p, uint32_t ei, char *msg) {
+    SuAssetPaint a;
+    uint32_t i;
+    uint32_t seen = 0;
+    unsigned long long id = (unsigned long long)p->entries[ei].id;
+    memcpy(&a, payload(p, ei) + sizeof(SuAssetMaterial), sizeof a);
+    for (i = 0; i < SU_PAINT_SLOT_COUNT; i++) {
+        uint32_t t = a.tex_info[i];
+        int need_srgb = i == SU_PAINT_SLOT_ALBEDO || i == SU_PAINT_SLOT_GLOW;
+        if (!ref_ok(p, a.texture[i], SU_ASSET_TEXTURE) || (t & 0xFFu) > 1u || ((t >> 8) & 0xFu) > 2u ||
+            ((t >> 12) & 0xFu) > 2u || (t >> 16) != 0u) {
+            msgf(msg, "material %016llx: paint texture slot %u invalid", id, (unsigned)i);
+            return SU_E_PARSE;
+        }
+        if (a.texture[i] != 0u) {
+            uint32_t fmt;
+            memcpy(&fmt, payload(p, (uint32_t)find_index(p, a.texture[i])) + 8, sizeof fmt);
+            if (tex_is_srgb(fmt) != need_srgb) {
+                msgf(msg, "material %016llx: paint slot %u needs a %s texture", id, (unsigned)i,
+                     need_srgb ? "sRGB" : "linear");
+                return SU_E_PARSE;
+            }
+        }
+    }
+    if (a.layer_count > SU_PAINT_MAX_LAYERS || !finite_n(&a.specular, 4u)) {
+        msgf(msg, "material %016llx: paint layer count or factors invalid", id);
+        return SU_E_PARSE;
+    }
+    for (i = 0; i < a.layer_count; i++) {
+        const SuAssetPaintLayer *l = &a.layer[i];
+        if (a.layer_order[i] >= a.layer_count || (seen & (1u << a.layer_order[i])) != 0u) {
+            msgf(msg, "material %016llx: paint layer order is not a permutation", id);
+            return SU_E_PARSE;
+        }
+        seen |= 1u << a.layer_order[i];
+        if (!finite_n(l->color, 10u) || (l->flags & ~3u) != 0u) {
+            msgf(msg, "material %016llx: paint layer %u invalid", id, (unsigned)i);
+            return SU_E_PARSE;
+        }
+    }
+    for (i = 0; i < SU_PAINT_CH_COUNT; i++) {
+        if (a.channel[i] > SU_PAINT_CH_NONE) {
+            msgf(msg, "material %016llx: paint channel selector %u invalid", id, (unsigned)i);
+            return SU_E_PARSE;
+        }
+    }
+    return SU_OK;
+}
+
 static uint32_t check_material(const SuAssetPak *p, uint32_t ei, char *msg) {
     SuAssetMaterial m;
     uint32_t i;
-    if (p->entries[ei].size != sizeof m) {
+    if (p->entries[ei].size != sizeof m + (p->entries[ei].type_version == 2u ? sizeof(SuAssetPaint) : 0u)) {
         msgf(msg, "material %016llx: wrong size", (unsigned long long)p->entries[ei].id);
         return SU_E_PARSE;
     }
@@ -653,7 +750,7 @@ static uint32_t check_material(const SuAssetPak *p, uint32_t ei, char *msg) {
             return SU_E_PARSE;
         }
     }
-    return SU_OK;
+    return p->entries[ei].type_version == 2u ? check_paint(p, ei, msg) : SU_OK;
 }
 
 static uint32_t check_model(const SuAssetPak *p, uint32_t ei, char *msg) {
@@ -775,7 +872,8 @@ uint32_t su_asset_pak_open(const void *bytes, size_t len, uint32_t flags, SuAsse
         en->size = rd64(e + 24);
         memcpy(en->sha256, e + 32, 32);
         if (en->id == 0u || (i > 0u && en->id <= p->entries[i - 1u].id) || en->type < SU_ASSET_MESH ||
-            en->type > SU_ASSET_MODEL || en->type_version != 1u || (en->offset & 15u) != 0u || en->offset < prev_end ||
+            en->type > SU_ASSET_MODEL ||
+            (en->type_version != 1u && !(en->type == SU_ASSET_MATERIAL && en->type_version == 2u)) || (en->offset & 15u) != 0u || en->offset < prev_end ||
             en->offset > (uint64_t)len || en->size > (uint64_t)len - en->offset) {
             msgf(message, "entry %u: id order, type, version or byte range invalid", (unsigned)i);
             su_asset_pak_close(p);
@@ -948,6 +1046,15 @@ uint32_t su_asset_pak_material(const SuAssetPak *pak, uint64_t id, SuAssetMateri
         return SU_E_INVALID_ARGUMENT;
     }
     memcpy(out, payload(pak, i), sizeof *out);
+    return SU_OK;
+}
+
+uint32_t su_asset_pak_paint(const SuAssetPak *pak, uint64_t id, SuAssetPaint *out) {
+    uint32_t i;
+    if (out == NULL || su_asset_pak_find(pak, id, SU_ASSET_MATERIAL, &i) != SU_OK || pak->entries[i].type_version != 2u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memcpy(out, payload(pak, i) + sizeof(SuAssetMaterial), sizeof *out);
     return SU_OK;
 }
 
