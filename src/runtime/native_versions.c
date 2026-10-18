@@ -8,8 +8,8 @@
 #include <string.h>
 #ifdef SU_TEST_FAULT_HOOKS
 #include <signal.h>
-#include <time.h>
-#include <unistd.h>
+
+#include "platform/su_platform.h"
 #endif
 
 #include "backends/native/su_native.h"
@@ -76,13 +76,10 @@ static void fault_before_kernel(void) {
         raise(SIGSEGV);
     } else if (g_fault_mode == SU_NV_FAULT_HANG) {
         for (;;) {
-            sleep(1);
+            su_platform_sleep_ms(1000u);
         }
     } else if (g_fault_mode == SU_NV_FAULT_DELAY) {
-        struct timespec ts;
-        ts.tv_sec = (time_t)(g_fault_delay_ms / 1000u);
-        ts.tv_nsec = (long)(g_fault_delay_ms % 1000u) * 1000000L;
-        nanosleep(&ts, NULL);
+        su_platform_sleep_ms(g_fault_delay_ms);
     }
 }
 #define NV_FAULT_BEFORE() fault_before_kernel()
