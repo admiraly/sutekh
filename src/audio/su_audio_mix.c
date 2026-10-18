@@ -378,7 +378,7 @@ void su_audio_mixer_destroy(SuAudioMixer *m) {
                 }
             }
         }
-        free(m->vpos);
+        free((void *)m->vpos); /* drop _Atomic: MSVC C4090 */
         free(m->cmds);
         free(m->ended);
         free(m->v);

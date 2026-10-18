@@ -209,6 +209,7 @@ add_test(NAME audio_mixer COMMAND test_audio "${CMAKE_CURRENT_SOURCE_DIR}/tests/
 add_executable(test_audio_stream tests/audio/test_audio_stream.c)
 target_link_libraries(test_audio_stream PRIVATE su_audio)
 sutekh_apply_warnings(test_audio_stream)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/audio_stream_work")
 add_test(NAME audio_stream COMMAND test_audio_stream "${CMAKE_CURRENT_BINARY_DIR}/audio_stream_work" "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/audio/tone440_stereo.ogg")
 add_executable(test_audio_device tests/audio/test_audio_device.c)
 target_link_libraries(test_audio_device PRIVATE su_audio)

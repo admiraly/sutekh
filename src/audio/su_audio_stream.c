@@ -4,6 +4,7 @@
  * output is a pure function of the command sequence (no worker timing). */
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
+#define _POSIX_C_SOURCE 200809L /* fseeko/ftello under -std=c17 */
 #if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
