@@ -171,7 +171,8 @@ int main(int argc, char **argv) {
            "(%u errors, %u warnings)\n",
            (unsigned long long)st.frame, st.draws, st.instances, st.line_vertices, st.cpu_ms, st.gpu_ms,
            st.validation_enabled ? "on" : "not available", st.validation_errors, st.validation_warnings);
-    CHECK(st.frame == 6u && st.draws == 4u && st.instances == 3u && st.line_vertices == 2u && st.dropped == 0u);
+    /* 3 mesh draws + 1 line draw in the scene pass, + the tonemapping draw of the output pass */
+    CHECK(st.frame == 6u && st.draws == 5u && st.instances == 3u && st.line_vertices == 2u && st.dropped == 0u);
     CHECK(st.validation_errors == 0u);
     CHECK(used.timestamps ? st.gpu_ms >= 0.0 : st.gpu_ms < 0.0);
     CHECK(su_render_write_ppm(out_path, img, W, H) == SU_OK);
