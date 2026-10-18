@@ -9,6 +9,7 @@
  * and subtracted once, which keeps every step free of signed overflow. */
 #include "ir/su_num.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* ---- limb helpers ---- */
