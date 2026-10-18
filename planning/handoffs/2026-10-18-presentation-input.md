@@ -152,8 +152,9 @@ axes, telemetry in the console and title bar.
 Machine facts for this item: `vulkaninfo --summary` over the RDP session lists one Vulkan device, the physical
 **Quadro P600** (discrete, Vulkan 1.4.312, NVIDIA 582.16, loader 1.4.309); the Microsoft Remote Display Adapter
 is not a Vulkan device. Window presentation works over RDP. The Vulkan SDK was not installed: `winget install
-KhronosGroup.VulkanSDK` stopped at a UAC elevation prompt in the RDP session (this shell is not elevated), so the
-validation layer was not available for any run; glslang 16.6.0 (release zip, sha256 `82bf434e...8d9b`) and
+KhronosGroup.VulkanSDK` stopped at a UAC elevation prompt in the RDP session (this shell is not elevated; the
+background install was ended at its 30-minute limit and the orphaned prompt stays on the remote desktop until
+someone dismisses it). The validation layer was therefore built from source (see "Validation" below); glslang 16.6.0 (release zip, sha256 `82bf434e...8d9b`) and
 Vulkan-Headers v1.4.365 (`tools/bootstrap_vulkan_headers.py`) were used instead, both recorded in
 `THIRD_PARTY_NOTICES.md`.
 
@@ -181,7 +182,7 @@ render CPU time per frame 0.02 to 0.12 ms, GPU time (timestamp queries) 0.02 to 
 for the 1280 x 720 offscreen frame, simulation step 0.07 ms per tick for 12 IR 0.3 ships (0.28 ms while the
 MAILBOX loop saturates the CPU).
 
-Not run or not done: the validation layer (SDK not installed, see above); a physical-console run and any run on
+Not run or not done: a physical-console run and any run on
 the Arc A770 (frame pacing over RDP is the remote display's, so FIFO numbers say nothing about the target); window
 presentation on Linux (offscreen only there); text/HUD, culling, pipeline caches and asynchronous pipeline
 preparation, resource retirement beyond create/destroy (M5 items after this slice). The Windows CI runner has no
@@ -196,6 +197,27 @@ device.
 | `space_demo --headless --script --frames 240 --rollback-check --expect-digest fa02b76e...defd` (ctest `demo_headless_rollback`) | 479 ticks; 59 drills (restore in place the state of 8 ticks ago, re-push the 8 recorded input records, step 8 ticks in one call), 0 differed, the gate event re-emitted with the same sequence number; final digest equals the pinned one |
 | `space_demo --offscreen ... --frames 240 --rollback-check --expect-digest ...` (ctest `demo_offscreen_rollback`, skips with exit 3 without Vulkan) | same digest, 59 drills, 0 differed, shadow world 0 differing tick digests |
 | `ctest --test-dir build-win -j 8` (Debug, all of the above) | 80 passed, 0 failed, 2 skipped (`path_fifo`, `containment`) of 82 |
+
+### Validation
+
+The Khronos validation layer was built from source outside the repository (Vulkan-ValidationLayers tag
+`vulkan-sdk-1.4.363.0`, commit `15c64e73db67`, clang-cl 23.1.3, `-DUPDATE_DEPS=ON`; about 7 minutes) and loaded
+with `VK_ADD_LAYER_PATH`; the renderer enables it with `SU_RENDER_FLAG_VALIDATION` (`--validation` in the demo)
+and counts error and warning messages.
+
+- Default validation over `render_offscreen`, the demo offscreen with rollback drills, the window exercise
+  (resize, minimize, restore) and a MAILBOX run: 0 errors, 0 warnings.
+- Synchronization validation (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true`) found one real bug: offscreen frames in
+  flight copied into the shared readback buffer with no barrier between the copies (WRITE_AFTER_WRITE, 10
+  reports over the 240-frame demo run). Fixed in `9e92b16` with a transfer-to-transfer barrier before the copy and
+  a transfer-to-host barrier after it. `render_offscreen` now renders four frames back to back before one
+  readback; with the barrier removed (mutation) it fails under synchronization validation with 3 errors, with it
+  it passes.
+- After the fix, both modes over all four runs: 0 errors, 0 warnings
+  (`planning/evidence/presentation-input/validation-runs.log`).
+
+Validation runs only where the layer is installed; ctest does not require it (`render_offscreen` reports
+"validation not available" and still checks pixels).
 
 ## Contract notes for the integrator and other streams
 
@@ -219,8 +241,8 @@ device.
 
 ## Next
 
-1. Run the validation layer over `render_offscreen`, the demo and the window exercise (`--validation`); see the
-   section below for the source-built layer, or install the SDK where elevation is available.
+1. Repeat the validation runs with an installed Vulkan SDK where elevation is available, and add a validation
+   run to CI (the Linux job could load lavapipe plus a packaged layer).
 2. A physical-console run on the Arc A770 machine: frame pacing, GPU timestamps and present modes there; over
    RDP FIFO is paced by the remote display.
 3. Faster ticks for rollback (the re-simulated ticks dominate a rollback): VM throughput or native lowering of IR
