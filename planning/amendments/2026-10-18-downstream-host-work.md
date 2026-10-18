@@ -107,3 +107,22 @@ Same authorization and boundaries (owner-authorized downstream work; no M3 gate 
 
 The IR/opcode contract (`LIVE_IR_SPEC.md`, `include/sutekh/ir.h`) is not changed: item 8 is a scheduling rule of the
 effect analysis, not an IR change.
+
+## Extension, 18 October 2026: streamed audio, voice offsets and loop points, translucent instances
+
+Same authorization and boundaries (owner-authorized downstream work; no M3 gate is closed by it; M5 is not closed
+by it). Requests from the downstream project, stated generically:
+
+14. Streamed playback of long Ogg Vorbis and WAV clips with bounded memory (`SuAudioStream`), next to the existing
+    whole-decode `SuAudioClip` for short sounds; an offline render of a streamed clip equals the whole decode.
+15. Per-voice start offset and loop start/end (frames or seconds), exact seeking and position readback, for both
+    clip kinds.
+16. Per-instance translucency: `SuRenderObject.tint[3] < 1` draws any material see-through (a "ghost" copy) in the
+    blended pass with depth-correct back-to-front ordering.
+
+Note, not an engine feature: a per-entity "collision immunity after respawn" window is game logic. It is a timer
+field on the entity that the IR collision-response system tests before applying a response (decremented once per
+tick), so it needs no engine support and no change to the operator or the IR contract.
+
+Audio and the renderer still read committed state only; neither writes a world, and the demo's pinned digest is
+unchanged.

@@ -333,6 +333,7 @@ typedef struct DrawItem {
     uint32_t mat;             /* resource index, or UINT32_MAX for the default material */
     uint32_t pipe;
     float dist2;              /* blend sorting */
+    uint32_t forced;          /* 1: opaque or masked material drawn in the blend pass because the instance tint is translucent */
     DrawInstance inst;
 } DrawItem;
 
