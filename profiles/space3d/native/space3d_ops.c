@@ -116,6 +116,12 @@ static uint32_t g_cand[SPACE3D_MAX_ROWS][SPACE3D_CAND_MAX];
 static uint8_t g_ncand[SPACE3D_MAX_ROWS];
 static uint8_t g_flags[SPACE3D_MAX_ROWS];
 static uint32_t g_gate_slot[SPACE3D_MAX_ROWS];
+/* Temporal coherence of the sweep order (2026-10-18): the collidable set (ascending slots) and its sorted order
+ * from the previous call. When the next call has the same set and axis, its sort starts from that order. */
+static uint32_t g_prev_coll[SPACE3D_MAX_ROWS];
+static uint32_t g_prev_order[SPACE3D_MAX_ROWS];
+static uint32_t g_prev_n = 0;
+static uint32_t g_prev_axis = 3u;
 
 /* ---------- column access ---------- */
 
@@ -298,6 +304,47 @@ static void sort_by_min(uint32_t *idx, uint32_t n, uint32_t axis) {
     }
 }
 
+/* (g_lo[axis][a], a) < (g_lo[axis][b], b): the strict total order of the sweep. */
+static int sweep_less(uint32_t a, uint32_t b, uint32_t axis) {
+    int64_t ka = g_lo[axis][a], kb = g_lo[axis][b];
+    return ka < kb || (ka == kb && a < b);
+}
+
+/* Sorts g_coll[0..n) by the sweep order. The order is a strict total order, so every correct sort gives the same
+ * permutation: when the set of collidables and the axis equal the previous call's, insertion sort starts from the
+ * previous order (bounded work; past 8n moves it falls back); otherwise, and on fallback, the merge sort runs on
+ * the ascending-slot list. */
+static void sort_sweep(uint32_t n, uint32_t axis) {
+    uint32_t i;
+    int done = 0;
+    if (n == g_prev_n && axis == g_prev_axis && n > 0u && memcmp(g_coll, g_prev_coll, (size_t)n * sizeof *g_coll) == 0) {
+        uint64_t moves = 0, cap = 8u * (uint64_t)n;
+        memcpy(g_tmp, g_prev_order, (size_t)n * sizeof *g_tmp);
+        done = 1;
+        for (i = 1; i < n && done; i++) {
+            uint32_t key = g_tmp[i], j = i;
+            while (j > 0 && sweep_less(key, g_tmp[j - 1u], axis)) {
+                g_tmp[j] = g_tmp[j - 1u];
+                j--;
+                if (++moves > cap) {
+                    done = 0;
+                    break;
+                }
+            }
+            g_tmp[j] = key;
+        }
+    }
+    memcpy(g_prev_coll, g_coll, (size_t)n * sizeof *g_coll);
+    if (done) {
+        memcpy(g_coll, g_tmp, (size_t)n * sizeof *g_coll);
+    } else {
+        sort_by_min(g_coll, n, axis);
+    }
+    memcpy(g_prev_order, g_coll, (size_t)n * sizeof *g_coll);
+    g_prev_n = n;
+    g_prev_axis = axis;
+}
+
 static void add_cand(uint32_t m, uint32_t o) {
     if (g_ncand[m] < SPACE3D_CAND_MAX) {
         g_cand[m][g_ncand[m]++] = o;
@@ -427,7 +474,7 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
                 axis = a;
             }
         }
-        sort_by_min(g_coll, ncoll, axis);
+        sort_sweep(ncoll, axis);
         for (i = 0; i < ncoll && !budget_hit; i++) {
             uint32_t p = g_coll[i], j;
             for (j = i + 1u; j < ncoll; j++) {
