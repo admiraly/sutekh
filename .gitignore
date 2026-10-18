@@ -22,3 +22,6 @@ __pycache__/
 /third_party/asmjit/
 # Vulkan-Headers checkout fetched by tools/bootstrap_vulkan_headers.py (third_party/vulkan-headers.lock.json is tracked)
 /third_party/vulkan-headers/
+# Single-file libraries fetched by tools/bootstrap_asset_deps.py (third_party/asset-deps.lock.json is tracked)
+/third_party/cgltf/
+/third_party/stb/

@@ -26,7 +26,10 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR = os.path.join(ROOT, "src", "render", "shaders")
 HEADER = os.path.join(ROOT, "src", "render", "su_render_shaders.h")
-SHADERS = ["mesh.vert", "mesh.frag", "line.vert", "line.frag"]
+SHADERS = ["mesh.vert", "mesh.frag", "line.vert", "line.frag", "pbr.vert", "pbr.frag", "fullscreen.vert", "sky.frag",
+           "post.frag", "hud.vert", "hud.frag", "fx.vert", "fx.frag"]
+# Shared sources pulled in with #include (GL_GOOGLE_include_directive); their hashes are recorded too.
+INCLUDES = ["frame.glsl"]
 
 
 def symbol(name):
@@ -70,6 +73,9 @@ def render_header(version, entries):
         "#include <stdint.h>",
         "",
     ]
+    for name in INCLUDES:
+        lines.append("/* include %s sha256 %s */" % (name, sha256(os.path.join(SRC_DIR, name))))
+    lines.append("")
     for name, digest, words in entries:
         lines.append("/* %s sha256 %s */" % (name, digest))
         lines.append("static const uint32_t %s[%d] = {" % (symbol(name), len(words)))
@@ -105,6 +111,13 @@ def main(argv):
         with open(HEADER, "r", encoding="utf-8") as fh:
             recorded = parse_header(fh.read())
         ok = True
+        with open(HEADER, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        for name in INCLUDES:
+            m = re.search(r"/\* include %s sha256 ([0-9a-f]{64}) \*/" % re.escape(name), text)
+            if m is None or m.group(1) != sha256(os.path.join(SRC_DIR, name)):
+                print("FAIL: include %s changed since the header was generated" % name)
+                ok = False
         for name in SHADERS:
             digest = sha256(os.path.join(SRC_DIR, name))
             if name not in recorded or recorded[name][0] != digest:
@@ -115,7 +128,7 @@ def main(argv):
                 if words != recorded[name][1]:
                     print("FAIL: %s compiles to different SPIR-V with %s" % (name, compiler_version(args.compiler)))
                     ok = False
-        print("shaders: %s (%d sources%s)" % ("ok" if ok else "STALE", len(SHADERS),
+        print("shaders: %s (%d sources, %d includes%s)" % ("ok" if ok else "STALE", len(SHADERS), len(INCLUDES),
                                                ", recompiled" if args.compiler else ", hashes only"))
         return 0 if ok else 1
     if not args.compiler:

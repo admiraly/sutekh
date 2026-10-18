@@ -4,8 +4,11 @@
 #include "sutekh/render.h"
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "render/su_font5x7.h"
 
 /* ---------- vectors ---------- */
 
@@ -431,4 +434,427 @@ uint32_t su_render_write_ppm(const char *path, const uint8_t *rgba, uint32_t wid
         }
     }
     return fclose(f) == 0 ? SU_OK : SU_E_IO;
+}
+
+/* ---------- large worlds ---------- */
+
+#define Q32_ONE 4294967296.0
+
+SuWorldPos su_wpos(double x, double y, double z) {
+    SuWorldPos p;
+    p.x = (int64_t)llround(x * Q32_ONE);
+    p.y = (int64_t)llround(y * Q32_ONE);
+    p.z = (int64_t)llround(z * Q32_ONE);
+    return p;
+}
+
+static int64_t wdiff(int64_t a, int64_t b) {
+    return (int64_t)((uint64_t)a - (uint64_t)b); /* defined wrapping, reinterpreted as signed */
+}
+
+SuVec3f su_wpos_delta(SuWorldPos a, SuWorldPos origin) {
+    return v3((float)((double)wdiff(a.x, origin.x) / Q32_ONE), (float)((double)wdiff(a.y, origin.y) / Q32_ONE),
+              (float)((double)wdiff(a.z, origin.z) / Q32_ONE));
+}
+
+SuWorldPos su_wpos_lerp(SuWorldPos a, SuWorldPos b, float t) {
+    SuWorldPos r;
+    r.x = a.x + (int64_t)llround((double)wdiff(b.x, a.x) * (double)t);
+    r.y = a.y + (int64_t)llround((double)wdiff(b.y, a.y) * (double)t);
+    r.z = a.z + (int64_t)llround((double)wdiff(b.z, a.z) * (double)t);
+    return r;
+}
+
+SuWorldPos su_wpos_add(SuWorldPos a, SuVec3f d) {
+    a.x += (int64_t)llround((double)d.x * Q32_ONE);
+    a.y += (int64_t)llround((double)d.y * Q32_ONE);
+    a.z += (int64_t)llround((double)d.z * Q32_ONE);
+    return a;
+}
+
+SuQuatf su_quatf_mul(SuQuatf a, SuQuatf b) {
+    SuQuatf r;
+    r.w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z;
+    r.x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y;
+    r.y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x;
+    r.z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w;
+    return r;
+}
+
+SuQuatf su_quatf_axis_angle(SuVec3f axis, float radians) {
+    SuQuatf r;
+    SuVec3f n = norm(axis);
+    float s = sinf(radians * 0.5f);
+    r.x = n.x * s;
+    r.y = n.y * s;
+    r.z = n.z * s;
+    r.w = cosf(radians * 0.5f);
+    return r;
+}
+
+SuMat4f su_mat4f_from_quat(SuQuatf q) {
+    SuMat4f r = su_mat4f_identity();
+    float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+    float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+    float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+    r.m[0] = 1.0f - 2.0f * (yy + zz);
+    r.m[1] = 2.0f * (xy + wz);
+    r.m[2] = 2.0f * (xz - wy);
+    r.m[4] = 2.0f * (xy - wz);
+    r.m[5] = 1.0f - 2.0f * (xx + zz);
+    r.m[6] = 2.0f * (yz + wx);
+    r.m[8] = 2.0f * (xz + wy);
+    r.m[9] = 2.0f * (yz - wx);
+    r.m[10] = 1.0f - 2.0f * (xx + yy);
+    return r;
+}
+
+SuMat4f su_mat4f_perspective_rz(float fov_y, float aspect, float near_z) {
+    SuMat4f r;
+    float f = 1.0f / tanf(fov_y * 0.5f);
+    memset(&r, 0, sizeof r);
+    r.m[0] = f / aspect;
+    r.m[5] = -f; /* Vulkan clip space: y down */
+    r.m[11] = -1.0f;
+    r.m[14] = near_z;
+    return r;
+}
+
+/* ---------- culling and LOD ---------- */
+
+void su_frustum_from_matrix(SuFrustum *f, SuMat4f vp, int infinite_far) {
+    float row[4][4];
+    int r;
+    int k;
+    uint32_t n;
+    for (r = 0; r < 4; r++) {
+        for (k = 0; k < 4; k++) {
+            row[r][k] = vp.m[k * 4 + r];
+        }
+    }
+    for (k = 0; k < 4; k++) {
+        f->planes[0][k] = row[3][k] + row[0][k]; /* x >= -w */
+        f->planes[1][k] = row[3][k] - row[0][k]; /* x <= w */
+        f->planes[2][k] = row[3][k] + row[1][k]; /* y >= -w */
+        f->planes[3][k] = row[3][k] - row[1][k]; /* y <= w */
+        f->planes[4][k] = row[3][k] - row[2][k]; /* z <= w (the near plane under reversed Z) */
+        f->planes[5][k] = row[2][k];             /* z >= 0 */
+    }
+    n = infinite_far ? 5u : 6u;
+    for (r = 0; r < (int)n; r++) {
+        float l = sqrtf(f->planes[r][0] * f->planes[r][0] + f->planes[r][1] * f->planes[r][1] +
+                        f->planes[r][2] * f->planes[r][2]);
+        if (l > 0.0f) {
+            for (k = 0; k < 4; k++) {
+                f->planes[r][k] /= l;
+            }
+        }
+    }
+    f->count = n;
+}
+
+int su_frustum_sphere(const SuFrustum *f, SuVec3f c, float radius) {
+    uint32_t i;
+    for (i = 0; i < f->count; i++) {
+        const float *p = f->planes[i];
+        if (p[0] * c.x + p[1] * c.y + p[2] * c.z + p[3] < -radius) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+float su_lod_screen_fraction(float radius, float distance, float proj_y) {
+    if (distance <= radius || distance <= 0.0f) {
+        return INFINITY;
+    }
+    return radius * proj_y / distance;
+}
+
+uint32_t su_lod_select(const float *lod_screen, uint32_t lod_count, float radius, float distance, float proj_y) {
+    float frac = su_lod_screen_fraction(radius, distance, proj_y);
+    uint32_t i;
+    uint32_t best = 0;
+    for (i = 1; i < lod_count; i++) {
+        if (frac < lod_screen[i]) {
+            best = i;
+        }
+    }
+    return best;
+}
+
+/* ---------- effects ---------- */
+
+static void fx_vertex(SuFxVertex *o, SuVec3f p, float u, float v, const float *c) {
+    o->pos[0] = p.x;
+    o->pos[1] = p.y;
+    o->pos[2] = p.z;
+    o->uv[0] = u;
+    o->uv[1] = v;
+    memcpy(o->color, c, sizeof o->color);
+}
+
+/* Quad a-b-c-d (a, b at v0; c, d at v1) as two triangles. */
+static void fx_quad(SuFxBuffer *b, SuVec3f a, SuVec3f bb, SuVec3f c, SuVec3f d, float v0, float v1, const float *c0,
+                    const float *c1) {
+    if (b->count + 6u > b->cap) {
+        b->dropped += 2u;
+        return;
+    }
+    fx_vertex(&b->v[b->count++], a, 0.0f, v0, c0);
+    fx_vertex(&b->v[b->count++], bb, 1.0f, v0, c0);
+    fx_vertex(&b->v[b->count++], c, 1.0f, v1, c1);
+    fx_vertex(&b->v[b->count++], a, 0.0f, v0, c0);
+    fx_vertex(&b->v[b->count++], c, 1.0f, v1, c1);
+    fx_vertex(&b->v[b->count++], d, 0.0f, v1, c1);
+}
+
+/* Billboards are marked by v < 0 (v = -1 at one edge, -2 at the other): the shader draws a round spot. */
+void su_fx_billboard(SuFxBuffer *b, SuVec3f pos, float size, float rotation, const float color[4], SuMat4f view) {
+    SuVec3f right = v3(view.m[0], view.m[4], view.m[8]);
+    SuVec3f up = v3(view.m[1], view.m[5], view.m[9]);
+    float cs = cosf(rotation) * size;
+    float sn = sinf(rotation) * size;
+    SuVec3f rx = add(scale(right, cs), scale(up, sn));
+    SuVec3f ry = add(scale(right, -sn), scale(up, cs));
+    fx_quad(b, sub(sub(pos, rx), ry), sub(add(pos, rx), ry), add(add(pos, rx), ry), add(sub(pos, rx), ry), -1.0f, -2.0f,
+            color, color);
+}
+
+void su_fx_beam(SuFxBuffer *b, SuVec3f a, SuVec3f c, float width, const float color[4]) {
+    SuVec3f dir = sub(c, a);
+    SuVec3f mid = scale(add(a, c), 0.5f);
+    SuVec3f side = cross(dir, mid);
+    SuVec3f s;
+    if (dot(side, side) < 1e-20f) {
+        side = v3(0.0f, 1.0f, 0.0f);
+    }
+    s = scale(norm(side), width * 0.5f);
+    fx_quad(b, sub(a, s), add(a, s), add(c, s), sub(c, s), 0.0f, 0.0f, color, color);
+}
+
+void su_trail_init(SuTrail *t, SuTrailPoint *storage, uint32_t cap, float lifetime_s, float spacing) {
+    memset(t, 0, sizeof *t);
+    t->p = storage;
+    t->cap = cap;
+    t->lifetime_s = lifetime_s;
+    t->spacing = spacing;
+}
+
+void su_trail_reset(SuTrail *t) {
+    t->head = 0;
+    t->count = 0;
+}
+
+static SuTrailPoint *trail_at(const SuTrail *t, uint32_t age_index) {
+    return &t->p[(t->head + t->cap - age_index) % t->cap];
+}
+
+void su_trail_push(SuTrail *t, SuWorldPos pos, double time_s) {
+    if (t->cap < 2u) {
+        return;
+    }
+    while (t->count > 0u && time_s - trail_at(t, t->count - 1u)->time_s > (double)t->lifetime_s) {
+        t->count--;
+    }
+    if (t->count >= 2u) {
+        SuVec3f d = su_wpos_delta(pos, trail_at(t, 1)->pos);
+        if (dot(d, d) < t->spacing * t->spacing) {
+            trail_at(t, 0)->pos = pos; /* the head follows the emitter until it is spacing away */
+            trail_at(t, 0)->time_s = time_s;
+            return;
+        }
+    }
+    t->head = (t->head + 1u) % t->cap;
+    t->p[t->head].pos = pos;
+    t->p[t->head].time_s = time_s;
+    if (t->count < t->cap) {
+        t->count++;
+    }
+}
+
+void su_trail_build(const SuTrail *t, double now_s, SuWorldPos camera, float width_head, float width_tail,
+                    const float color_head[4], const float color_tail[4], SuFxBuffer *out) {
+    uint32_t i;
+    SuVec3f prev_l = v3(0, 0, 0);
+    SuVec3f prev_r = v3(0, 0, 0);
+    float prev_v = 0.0f;
+    float prev_c[4] = {0, 0, 0, 0};
+    int have = 0;
+    for (i = 0; i < t->count; i++) {
+        const SuTrailPoint *p = trail_at(t, i);
+        float k = t->lifetime_s > 0.0f ? (float)(now_s - p->time_s) / t->lifetime_s : 0.0f;
+        SuVec3f rel = su_wpos_delta(p->pos, camera);
+        SuVec3f dir;
+        SuVec3f side;
+        float w;
+        float c[4];
+        int j;
+        if (k > 1.0f) {
+            break;
+        }
+        k = k < 0.0f ? 0.0f : k;
+        if (i + 1u < t->count) {
+            dir = sub(rel, su_wpos_delta(trail_at(t, i + 1u)->pos, camera));
+        } else if (i > 0u) {
+            dir = sub(su_wpos_delta(trail_at(t, i - 1u)->pos, camera), rel);
+        } else {
+            return;
+        }
+        side = cross(dir, rel);
+        if (dot(side, side) < 1e-20f) {
+            side = v3(0.0f, 1.0f, 0.0f);
+        }
+        w = (width_head + (width_tail - width_head) * k) * 0.5f;
+        side = scale(norm(side), w);
+        for (j = 0; j < 4; j++) {
+            c[j] = color_head[j] + (color_tail[j] - color_head[j]) * k;
+        }
+        if (have) {
+            fx_quad(out, prev_l, prev_r, add(rel, side), sub(rel, side), prev_v, k, prev_c, c);
+        }
+        prev_l = sub(rel, side);
+        prev_r = add(rel, side);
+        prev_v = k;
+        memcpy(prev_c, c, sizeof c);
+        have = 1;
+    }
+}
+
+/* ---------- HUD and font ---------- */
+
+#define GLYPH_ADVANCE 6.0f
+#define LINE_ADVANCE 9.0f
+
+const uint8_t *su_font_glyph(char c) {
+    unsigned char u = (unsigned char)c;
+    if (u < 32u || u > 126u) {
+        u = '?';
+    }
+    return su_font5x7[u - 32u];
+}
+
+void su_font_atlas(uint8_t atlas[SU_FONT_ATLAS_W * SU_FONT_ATLAS_H]) {
+    uint32_t g;
+    uint32_t x;
+    uint32_t y;
+    memset(atlas, 0, SU_FONT_ATLAS_W * SU_FONT_ATLAS_H);
+    for (g = 0; g < 95u; g++) {
+        uint32_t cx = (g % 16u) * SU_FONT_CELL;
+        uint32_t cy = (g / 16u) * SU_FONT_CELL;
+        for (y = 0; y < 7u; y++) {
+            for (x = 0; x < 5u; x++) {
+                if ((su_font5x7[g][y] >> (4u - x)) & 1u) {
+                    atlas[(cy + y) * SU_FONT_ATLAS_W + cx + x] = 255u;
+                }
+            }
+        }
+    }
+    /* cell 95 (the last of row 5): solid, for rectangles */
+    for (y = 0; y < SU_FONT_CELL; y++) {
+        for (x = 0; x < SU_FONT_CELL; x++) {
+            atlas[(5u * SU_FONT_CELL + y) * SU_FONT_ATLAS_W + 15u * SU_FONT_CELL + x] = 255u;
+        }
+    }
+}
+
+void su_hud_begin(SuHud *h, SuHudVertex *storage, uint32_t cap, uint32_t width, uint32_t height) {
+    memset(h, 0, sizeof *h);
+    h->v = storage;
+    h->cap = cap;
+    h->width = (float)width;
+    h->height = (float)height;
+}
+
+static void hud_quad(SuHud *h, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1,
+                     uint32_t rgba) {
+    SuHudVertex q[4];
+    static const int order[6] = {0, 1, 2, 0, 2, 3};
+    int i;
+    if (h->count + 6u > h->cap) {
+        h->dropped++;
+        return;
+    }
+    q[0].pos[0] = x0, q[0].pos[1] = y0, q[0].uv[0] = u0, q[0].uv[1] = v0;
+    q[1].pos[0] = x1, q[1].pos[1] = y0, q[1].uv[0] = u1, q[1].uv[1] = v0;
+    q[2].pos[0] = x1, q[2].pos[1] = y1, q[2].uv[0] = u1, q[2].uv[1] = v1;
+    q[3].pos[0] = x0, q[3].pos[1] = y1, q[3].uv[0] = u0, q[3].uv[1] = v1;
+    for (i = 0; i < 4; i++) {
+        q[i].rgba = rgba;
+    }
+    for (i = 0; i < 6; i++) {
+        h->v[h->count++] = q[order[i]];
+    }
+}
+
+void su_hud_rect(SuHud *h, float x, float y, float w, float hgt, uint32_t rgba) {
+    /* the centre of the solid cell */
+    float u = (15.0f * SU_FONT_CELL + 4.0f) / (float)SU_FONT_ATLAS_W;
+    float v = (5.0f * SU_FONT_CELL + 4.0f) / (float)SU_FONT_ATLAS_H;
+    hud_quad(h, x, y, x + w, y + hgt, u, v, u, v, rgba);
+}
+
+float su_hud_text(SuHud *h, float x, float y, float scale, uint32_t rgba, const char *text) {
+    float cx = x;
+    float cy = y;
+    float widest = 0.0f;
+    const char *s;
+    for (s = text; *s != '\0'; s++) {
+        unsigned char c = (unsigned char)*s;
+        uint32_t g;
+        float u0;
+        float v0;
+        if (c == '\n') {
+            widest = cx - x > widest ? cx - x : widest;
+            cx = x;
+            cy += LINE_ADVANCE * scale;
+            continue;
+        }
+        if (c < 32u || c > 126u) {
+            c = '?';
+        }
+        if (c != ' ') {
+            g = (uint32_t)c - 32u;
+            u0 = (float)((g % 16u) * SU_FONT_CELL) / (float)SU_FONT_ATLAS_W;
+            v0 = (float)((g / 16u) * SU_FONT_CELL) / (float)SU_FONT_ATLAS_H;
+            hud_quad(h, cx, cy, cx + GLYPH_ADVANCE * scale, cy + (float)SU_FONT_CELL * scale, u0, v0,
+                     u0 + GLYPH_ADVANCE / (float)SU_FONT_ATLAS_W, v0 + (float)SU_FONT_CELL / (float)SU_FONT_ATLAS_H,
+                     rgba);
+        }
+        cx += GLYPH_ADVANCE * scale;
+    }
+    widest = cx - x > widest ? cx - x : widest;
+    return widest;
+}
+
+float su_hud_textf(SuHud *h, float x, float y, float scale, uint32_t rgba, const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    (void)vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    return su_hud_text(h, x, y, scale, rgba, buf);
+}
+
+void su_hud_measure(const char *text, float scale, float *w, float *hgt) {
+    float line = 0.0f;
+    float widest = 0.0f;
+    uint32_t lines = 1;
+    const char *s;
+    for (s = text; *s != '\0'; s++) {
+        if (*s == '\n') {
+            widest = line > widest ? line : widest;
+            line = 0.0f;
+            lines++;
+        } else {
+            line += GLYPH_ADVANCE * scale;
+        }
+    }
+    widest = line > widest ? line : widest;
+    if (w != NULL) {
+        *w = widest;
+    }
+    if (hgt != NULL) {
+        *hgt = ((float)(lines - 1u) * LINE_ADVANCE + 7.0f) * scale;
+    }
 }

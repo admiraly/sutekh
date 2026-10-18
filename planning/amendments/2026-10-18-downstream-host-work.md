@@ -57,3 +57,34 @@ the 120 Hz simulation, and later prediction with rollback/reconciliation. Scope,
 
 Rendering here is a first diagnostic slice of M5 (`docs/RENDERING_AND_ASSETS.md` section 2); it does not
 close M5 and makes no frame-rate claim beyond recorded observations. Headless builds keep no Vulkan dependency.
+
+## Extension, 18 October 2026: assets, materials and lighting, large scenes, effects, HUD, audio
+
+Same authorization and boundaries as above (owner-authorized downstream work; no M3 gate is closed by it; M5 is
+not closed by it either). The downstream workload adds fast craft moving through large space structures (stations,
+gates, debris fields) built from meshes the downstream project converts to glTF 2.0 locally, engine trails, weapon
+and boost effects, a HUD, and positional sound. Scope, in priority order:
+
+8. An asset pipeline: a glTF 2.0 importer (positions, normals, tangents, two UV sets, indices, several primitives
+   and materials, the node hierarchy flattened to placed meshes; PNG/JPEG and uncompressed or BCn KTX2 images) built
+   on pinned, permissively licensed single-file libraries fetched at bootstrap (not vendored); an offline cook step
+   to a versioned, hash-addressed binary pack with stable resource ids, validated completely on load; background
+   loading; asynchronous, budgeted GPU upload outside the frame-critical path; deferred resource retirement.
+   Tests generate their own glTF, GLB, PNG and KTX2 files; no downloaded or third-party model enters the
+   repository.
+9. Materials and lighting for space scenes: a metallic-roughness PBR-lite forward pass with one directional sun,
+   ambient and reflections from a procedural sky, normal maps, occlusion, emissive, alpha mask and blend, an HDR
+   target, ACES-like tonemapping and sRGB output; timings on the development GPU recorded as observations.
+10. Scale: frustum culling, distance LOD, camera-relative rendering from Q32.32 world positions, a persistent
+    pipeline cache, and instancing for debris fields of thousands of objects.
+11. Effects (presentation only): ribbon trails from interpolated transforms and additive billboards and beams.
+12. A HUD: immediate-mode screen quads and text in a project-authored bitmap font.
+13. Audio event consumption: a mixer with 3D panning, distance attenuation and Doppler from interpolated
+    transforms, WAV and Ogg Vorbis clips, a WASAPI output on Windows and an offline (buffer) path everywhere,
+    triggered from committed host events read through the event API, at most once per event even when rollback
+    re-emits it. Audio never touches the simulation.
+
+The renderer and the mixer read committed state and interpolated transforms only; nothing they compute is written
+to a world. The demo keeps its pinned digest and its shadow-world and rollback checks. No original game asset,
+third-party art or downstream-specific name enters the repository; downstream content stays in the downstream
+project.
