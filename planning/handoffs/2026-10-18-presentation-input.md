@@ -249,3 +249,12 @@ Validation runs only where the layer is installed; ctest does not require it (`r
    0.3 (numeric-3d stream).
 4. Presentation next steps per M5: text/HUD, frustum culling, pipeline cache and asynchronous pipeline
    preparation, resource retirement, Linux window presentation; GameInput as an optional input backend.
+
+## Final state (branch head `4ecb060`)
+
+CI run on `4ecb060`: all four jobs passed. Linux checked runtime (GCC, lavapipe): 78 of 78 passed,
+`render_offscreen` included. Windows checked runtime (runner clang): 78 passed, 0 failed, 4 skipped of 82
+(`path_fifo`, `containment`, and, without a Vulkan device, `render_offscreen` and `demo_offscreen_rollback`);
+`demo_headless_rollback` passed there with the pinned digest, so the demo world's digest reproduces across this
+machine's clang 23.1.3 build and the runner's clang build. `validate` jobs (ubuntu, windows): passed. Local
+Windows Debug ctest: 80 passed, 0 failed, 2 skipped of 82. main was still at `66cf3a7` (already merged in).
