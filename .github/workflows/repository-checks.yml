@@ -63,10 +63,11 @@ jobs:
       - name: Fetch pinned Vulkan headers and install a CPU Vulkan driver
         run: |
           python tools/bootstrap_vulkan_headers.py
+          python tools/bootstrap_asset_deps.py
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
       - name: Configure checked reference runtime
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=ON
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=ON -DSUTEKH_ASSET_IMPORT=ON
       - name: Build runtime and test executables
         run: cmake --build build -j 2
       - name: Run runtime regression suite
@@ -87,10 +88,12 @@ jobs:
       # The runner's LLVM clang targets x86_64-pc-windows-msvc and finds the installed MSVC libraries and
       # Windows SDK itself; cmake and ninja come from the pinned requirements.
       # The renderer is compiled; render_offscreen skips (exit 77) when the runner has no usable Vulkan device.
-      - name: Fetch pinned Vulkan headers
-        run: python tools/bootstrap_vulkan_headers.py
+      - name: Fetch pinned Vulkan headers and the asset importer's single-file libraries
+        run: |
+          python tools/bootstrap_vulkan_headers.py
+          python tools/bootstrap_asset_deps.py
       - name: Configure checked reference runtime
-        run: cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=ON -DSUTEKH_ASSET_IMPORT=ON
       - name: Build runtime and test executables
         run: cmake --build build -j 2
       - name: Run runtime regression suite
