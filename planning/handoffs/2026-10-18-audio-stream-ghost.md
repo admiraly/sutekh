@@ -1,4 +1,4 @@
-﻿# Handoff: streamed audio, voice offsets and loop points, translucent instances
+# Handoff: streamed audio, voice offsets and loop points, translucent instances
 
 Branch `feat/audio-stream-render` from `origin/main` c7584c8. Scope: the third extension of
 `planning/amendments/2026-10-18-downstream-host-work.md` (items 14 to 16). Machine as in
