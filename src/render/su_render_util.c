@@ -664,7 +664,8 @@ void su_fx_glare(SuFxBuffer *b, SuVec3f pos, float size, float streak, const flo
 
 /* ---------- textured effects ---------- */
 
-static void fx_tri_quad_uv(SuFxBuffer *b, const SuVec3f p[4], const float uv[4][2], const float *c0, const float *c1) {
+/* uv is not const-qualified: C17 has no implicit float (*)[2] -> const float (*)[2] conversion (GCC -pedantic). */
+static void fx_tri_quad_uv(SuFxBuffer *b, const SuVec3f p[4], float uv[4][2], const float *c0, const float *c1) {
     /* corners in order 0-1-2-3 around the quad; c0 for corners 0 and 1, c1 for corners 2 and 3 */
     static const uint8_t order[6] = {0, 1, 2, 0, 2, 3};
     uint32_t i;
