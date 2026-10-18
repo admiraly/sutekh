@@ -136,6 +136,9 @@ static int run_probe(const SuProcLimits *lim, const char *probe, SuProc *out_pro
     argv[0] = g_exe;
     argv[1] = "--child";
     argv[2] = NULL;
+    if (out_proc != NULL) {
+        memset(out_proc, 0, sizeof *out_proc);
+    }
     if (su_proc_spawn(&p, argv, lim) != SU_OK) {
         fprintf(stderr, "spawn failed for probe %s\n", probe);
         CHECK(0);

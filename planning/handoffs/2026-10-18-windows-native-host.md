@@ -116,6 +116,11 @@ The digest is the reference SHA-256 over the snapshot bytes and dominates; resto
 - The native AsmJit tier (`SUTEKH_NATIVE=ON`) is not built or tested on Windows; the native ABI probe is
   unavailable there. Sanitizer lanes were not run on Windows.
 - `tests/broker` stays Linux-only (fcntl, resource, process groups), as the CI workflow already notes.
+- `clang --analyze` (23.1.3) is clean on the new and ported sources except the deliberate null write of the
+  crash probe in `test_containment_win.c`. It reports null dereferences in pre-existing `su_agent.c` (lines
+  2761, 2767, 2935, 2941, 2962, 3309) and `worker.c` (210) that this work did not touch; they were not reviewed.
+- GCC's `-Wuse-after-free` found two error-path bugs in the new host code on Linux CI (input push, replay
+  writer begin); both are fixed. No Windows sanitizer lane was run.
 - Windows network denial and file-size/handle limits are not enforced (see above); symlink-escape checks in
   `test_control` are reported NOT RUN on Windows without Developer Mode.
 - A Windows CI job is proposed in `planning/evidence/windows-host/ci-windows-job.patch`; the session's push

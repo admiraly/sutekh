@@ -276,6 +276,12 @@ static void test_snapshots(void) {
     snap = malloc(size);
     bad = malloc(size);
     CHECK(snap != NULL && bad != NULL);
+    if (snap == NULL || bad == NULL || size == 0u) {
+        free(snap);
+        free(bad);
+        su_host_world_destroy(w);
+        return;
+    }
     CHECK(su_host_snapshot_write(w, snap, size - 1u, &got) == SU_E_RESOURCE_LIMIT && got == size);
     CHECK(su_host_snapshot_write(w, snap, size, &got) == SU_OK && got == size);
     CHECK(memcmp(snap, "SUHSNAP", 8) == 0);

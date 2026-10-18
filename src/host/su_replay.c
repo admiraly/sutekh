@@ -231,8 +231,9 @@ uint32_t su_replay_writer_begin(SuHostWorld *w, const SuReplayOptions *opt, SuRe
     rw->di = opt->digest_interval;
     st = snapshot_of(w, &snap, &snap_len);
     if (st != SU_OK) {
+        uint64_t start = rw->start;
         free(rw);
-        return set_err(err, st, UINT32_MAX, rw->start, "initial snapshot failed");
+        return set_err(err, st, UINT32_MAX, start, "initial snapshot failed");
     }
     sha(snap, snap_len, d);
     free(snap);

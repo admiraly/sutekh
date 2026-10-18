@@ -58,6 +58,9 @@ static int lexically_under(const char *root_real, const char *input) {
         norm[n++] = input[i] == '\\' ? '/' : input[i];
     }
     norm[n] = '\0';
+    if (n < rl) {
+        return 0;
+    }
 #if defined(_WIN32)
     if (_strnicmp(norm, root_real, rl) != 0) {
         return 0;
