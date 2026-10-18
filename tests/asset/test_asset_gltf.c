@@ -617,7 +617,7 @@ static void test_scene_c(void) {
     SuAssetPak *p;
     SuAssetModelView model;
     SuAssetMeshView mv;
-    SuAssetMeshView mm;
+    SuAssetMeshView mm = {0};
     uint32_t i;
     ap = pos_acc(g, QUAD_POS, 4);
     an = add_acc(g, QUAD_NRM, sizeof QUAD_NRM, 5126, 4, "VEC3", NULL);

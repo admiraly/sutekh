@@ -215,7 +215,7 @@ static void test_roundtrip(void) {
     SuAssetTextureView tv;
     SuAssetMaterial mat;
     SuAssetModelView model;
-    SuAssetEntry e;
+    SuAssetEntry e = {0};
     uint8_t d[32];
     uint8_t d2[32];
     uint32_t i;
@@ -468,7 +468,7 @@ static void test_fuzz(void) {
             const uint8_t *base = su_asset_pak_bytes(p, &plen);
             accepted++;
             for (i = 0; i < n; i++) {
-                SuAssetEntry e;
+                SuAssetEntry e = {0};
                 SuAssetMeshView mv;
                 (void)su_asset_pak_entry(p, i, &e);
                 if (e.type == SU_ASSET_MESH && su_asset_pak_mesh(p, e.id, &mv) == SU_OK) {
