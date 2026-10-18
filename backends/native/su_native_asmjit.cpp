@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "backends/native/su_native_lower.h"
+#include "backends/native/su_native_unwind.h"
 
 using namespace asmjit;
 using namespace asmjit::x86;
@@ -143,11 +144,17 @@ extern "C" uint32_t su_native_lower_x64(const SuNativeLowerInput *in, SuNativeLo
         a.cmp(qword_ptr(kArgReg, 8), 0);
         a.je(l_zero);
 
+        su_unwind::Builder uw;
         a.push(rbx);
+        uw.push(a.offset(), rbx.id());
         a.push(r12);
+        uw.push(a.offset(), r12.id());
         a.push(r13);
+        uw.push(a.offset(), r13.id());
         a.mov(rbx, kArgReg);
         a.sub(rsp, static_cast<int32_t>(frame));
+        uw.alloc(a.offset(), static_cast<uint32_t>(frame));
+        uw.end_prolog(a.offset());
         if (frame > static_cast<uint64_t>(kPageBytes)) {
             /* Touch every page of the new frame from the top down. The slots written are
              * overwritten before any read (registers are defined before use). */
@@ -253,13 +260,14 @@ extern "C" uint32_t su_native_lower_x64(const SuNativeLowerInput *in, SuNativeLo
         a.cmp(r12, r13);
         a.jb(l_loop);
 
+        a.xor_(eax, eax); /* before the epilogue, so it has the canonical form add rsp / pops / ret */
         a.add(rsp, static_cast<int32_t>(frame));
         a.pop(r13);
         a.pop(r12);
         a.pop(rbx);
-        a.xor_(eax, eax);
         a.ret();
 
+        const size_t func_end = a.offset();
         a.bind(l_zero);
         a.xor_(eax, eax);
         a.ret();
@@ -316,6 +324,17 @@ extern "C" uint32_t su_native_lower_x64(const SuNativeLowerInput *in, SuNativeLo
         out->range_count = ninsn;
         out->disasm = disasm;
         out->disasm_len = dlen;
+        {
+            const std::vector<uint8_t> ub = uw.bytes();
+            if (!ub.empty()) {
+                out->unwind = static_cast<uint8_t *>(std::malloc(ub.size()));
+                if (out->unwind != nullptr) {
+                    std::memcpy(out->unwind, ub.data(), ub.size());
+                    out->unwind_size = static_cast<uint32_t>(ub.size());
+                    out->func_end = static_cast<uint32_t>(func_end);
+                }
+            }
+        }
         return SU_NLOW_OK;
     } catch (const std::bad_alloc &) {
         return SU_NLOW_RESOURCE;

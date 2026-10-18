@@ -3208,7 +3208,7 @@ static uint32_t write_new_file(const char *path, const uint8_t *data, size_t len
         return SU_E_IO;
     }
     while (off < len) {
-        ssize_t n = write(fd, data + off, len - off);
+        ssize_t n = write(fd, data + off, SU_IO_COUNT(len - off));
         if (n < 0 && errno == EINTR) {
             continue;
         }

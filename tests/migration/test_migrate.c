@@ -201,7 +201,7 @@ static void check_scenario_state(const SuWorld *w, const SuJsonValue *scn, const
     const SuJsonValue *ret = jm(scn, "retired");
     uint64_t cap = su_world_row_count(w);
     uint32_t i;
-    uint32_t n_expect = schema->u.array.count;
+    uint32_t n_expect = (uint32_t)schema->u.array.count; /* a test schema of a few fields */
     CHECK(su_world_field_count(w) == n_expect);
     for (i = 0; i < n_expect && i < su_world_field_count(w); i++) {
         SuWorldFieldDesc fd;

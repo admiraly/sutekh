@@ -57,7 +57,7 @@ add_test(NAME entities COMMAND test_entities)
 add_library(su_world_acct_objs OBJECT src/world/su_world.c src/world/entities/su_ents.c
     src/world/entities/su_cmdq.c)
 target_include_directories(su_world_acct_objs PRIVATE src "${SUTEKH_CONTRACT_INCLUDE}")
-target_compile_options(su_world_acct_objs PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/tests/world/acct_seam.h")
+sutekh_force_include(su_world_acct_objs "${CMAKE_CURRENT_SOURCE_DIR}/tests/world/acct_seam.h")
 sutekh_apply_warnings(su_world_acct_objs)
 add_executable(test_world_acct tests/world/test_world_acct.c $<TARGET_OBJECTS:su_world_acct_objs>)
 target_include_directories(test_world_acct PRIVATE src "${SUTEKH_CONTRACT_INCLUDE}")
@@ -253,7 +253,7 @@ if(WIN32)
     # lld-link has no --wrap: the IR objects are compiled with an allocation seam instead.
     add_library(su_ir_oom_objs OBJECT src/ir/su_sha256.c src/ir/su_json.c src/ir/su_lir.c)
     target_include_directories(su_ir_oom_objs PRIVATE src "${SUTEKH_CONTRACT_INCLUDE}")
-    target_compile_options(su_ir_oom_objs PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir/lir_oom_seam.h")
+    sutekh_force_include(su_ir_oom_objs "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir/lir_oom_seam.h")
     add_executable(test_lir_oom tests/ir/test_lir_oom.c $<TARGET_OBJECTS:su_ir_oom_objs>)
     target_include_directories(test_lir_oom PRIVATE src "${SUTEKH_CONTRACT_INCLUDE}")
     target_compile_definitions(test_lir_oom PRIVATE SU_LIR_OOM_SEAM)
@@ -504,8 +504,7 @@ add_test(NAME cmdq COMMAND test_cmdq WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_D
 # Oversized dimensions must be refused without allocating or scanning cap arrays.
 add_library(su_cmdq_admission_objs OBJECT src/world/entities/su_cmdq.c)
 target_include_directories(su_cmdq_admission_objs PRIVATE src "${SUTEKH_CONTRACT_INCLUDE}")
-target_compile_options(su_cmdq_admission_objs PRIVATE
-    -include "${CMAKE_CURRENT_SOURCE_DIR}/tests/entities/cmdq_admission_seam.h")
+sutekh_force_include(su_cmdq_admission_objs "${CMAKE_CURRENT_SOURCE_DIR}/tests/entities/cmdq_admission_seam.h")
 sutekh_apply_warnings(su_cmdq_admission_objs)
 add_executable(test_cmdq_admission tests/entities/test_cmdq_admission.c
     $<TARGET_OBJECTS:su_cmdq_admission_objs>)
@@ -710,4 +709,5 @@ target_include_directories(bench_host PRIVATE src)
 target_link_libraries(bench_host PRIVATE su_host)
 sutekh_apply_warnings(bench_host)
 # ---- END in-process host API ----
+include(cmake/SutekhHostOps.cmake)
 include(cmake/SutekhPresentation.cmake)

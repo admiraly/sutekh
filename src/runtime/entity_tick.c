@@ -65,6 +65,7 @@ typedef struct EntCache {
     uint64_t txid[SU_SCHED_MAX_SYSTEMS];
     uint32_t ps[SU_SCHED_MAX_SYSTEMS];
     uint32_t pe[SU_SCHED_MAX_SYSTEMS];
+    uint32_t tier[SU_SCHED_MAX_SYSTEMS];  /* SuSysEntry.vm_tier (0 = the process default) */
     uint8_t has_es[SU_SCHED_MAX_SYSTEMS]; /* es[i] holds contexts (never read a cached module: it may be freed) */
     SuCmdQ *q;
     SuJobPool *pool;
@@ -248,13 +249,7 @@ uint32_t su_ent_rt_create_restored(uint64_t max_struct_tick, uint64_t max_events
 /* ---- per-system chunk execution ---- */
 
 static const SuColumnBinding *find_binding(const SuColumnBinding *b, uint32_t n, uint32_t id) {
-    uint32_t j;
-    for (j = 0; j < n; j++) {
-        if (b[j].field_id == id) {
-            return &b[j];
-        }
-    }
-    return NULL;
+    return su_world_find_binding(b, n, id);
 }
 
 /* Slices one whole-table binding to rows [begin, begin+len). */
@@ -383,6 +378,9 @@ static uint32_t ent_sys_create(EntSys *e, const SuSchedule *s, uint32_t i, SuWor
             goto fail;
         }
         st = su_vm_context_create(m, s->layout_generation, &e->ctx[k]);
+        if (st == SU_OK && s->sys[i].vm_tier != 0u) {
+            st = su_vm_context_set_tier(e->ctx[k], s->sys[i].vm_tier);
+        }
         if (st != SU_OK) {
             goto fail;
         }
@@ -400,7 +398,7 @@ fail:
  * su_vm_run_system does). */
 static uint32_t ent_sys_bind(EntSys *e) {
     SuInvocation wi;
-    SuOutputs wo;
+    SuOutputs wo = {0};
     uint32_t st;
     uint32_t i;
     uint32_t nin = 0;
@@ -536,7 +534,8 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
     for (i = 0; hit && i < s->count; i++) {
         const SuSysEntry *e = &s->sys[i];
         hit = c->mods[i] == e->mod && memcmp(c->sem[i], e->mod->semantic_hash, 32u) == 0 &&
-              c->rev[i] == e->system_rev && c->txid[i] == e->txid && c->ps[i] == ps[i] && c->pe[i] == pe[i];
+              c->rev[i] == e->system_rev && c->txid[i] == e->txid && c->ps[i] == ps[i] && c->pe[i] == pe[i] &&
+              c->tier[i] == e->vm_tier;
     }
     if (!hit) {
         ent_cache_drop(c);
@@ -578,6 +577,7 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
             c->txid[i] = s->sys[i].txid;
             c->ps[i] = ps[i];
             c->pe[i] = pe[i];
+            c->tier[i] = s->sys[i].vm_tier;
         }
         c->valid = 1;
     }

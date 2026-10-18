@@ -964,12 +964,20 @@ uint32_t su_test_avx2_clobber_call(SuNativeKernelFn fn, const SuNativeArgs *args
 
 /* XSAVE the x87/SSE/AVX state and return XSTATE_BV (header bytes 512..519). Bit 2 (YMM_Hi128) is
  * set when the upper halves of ymm0-15 are not in their initial (zero) state. */
-static uint64_t xstate_bv(void) {
-    static uint8_t area[4096] __attribute__((aligned(64)));
+/* XSAVE areas, zeroed BEFORE the upper YMM state is dirtied: a library memset between dirtying and XSAVE may
+ * itself end with vzeroupper (glibc's AVX2 memset does) and clear the state the probe is looking for
+ * (2026-10-18: that made the probe invalid on CI runners). */
+static uint8_t g_xarea[2][4096] __attribute__((aligned(64)));
+
+static void xstate_prepare(void) {
+    memset(g_xarea, 0, sizeof g_xarea);
+}
+
+/* XSTATE_BV after XSAVE into area k (no call between the caller's last vector instruction and the XSAVE). */
+static uint64_t xstate_bv(unsigned k) {
     uint64_t bv;
-    memset(area, 0, sizeof area);
-    __asm__ volatile("xsave (%0)" : : "r"(area), "a"(7u), "d"(0u) : "memory");
-    memcpy(&bv, area + 512, sizeof bv);
+    __asm__ volatile("xsave (%0)" : : "r"(g_xarea[k]), "a"(7u), "d"(0u) : "memory");
+    memcpy(&bv, g_xarea[k] + 512, sizeof bv);
     return bv;
 }
 
@@ -1030,10 +1038,11 @@ static int run_abi_clobber(void) {
         fn = su_native_entry(art);
         memset(regs, 0, sizeof regs);
         memset(co.data, 0, 33u * sizeof co.data[0]);
+        xstate_prepare();
         dirty_upper_ymm();
-        bv_before = xstate_bv();
+        bv_before = xstate_bv(0u);
         CHECK_ST(su_test_avx2_clobber_call(fn, &args, regs), SU_OK);
-        bv_after = xstate_bv();
+        bv_after = xstate_bv(1u);
         for (r = 0; r < 6u; r++) {
             if (regs[r] != want[r]) {
                 fprintf(stderr, "%s: callee-saved register %u clobbered: %016llx\n",

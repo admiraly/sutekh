@@ -399,7 +399,7 @@ static int find_binding(const SuColumnBinding *b, uint32_t n, uint32_t id, SuCol
 uint32_t su_jobs_run_system_chunked(SuWorld *w, const SuLirModule *mod, uint32_t layout_generation,
                                     const SuJobsOptions *opt, SuJobsReport *rep) {
     SuInvocation wi;
-    SuOutputs wo;
+    SuOutputs wo = {0};
     SuColumnBinding *base_in = NULL;
     SuColumnBinding *base_out = NULL;
     SuColumnBinding *scr_in = NULL;

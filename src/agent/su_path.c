@@ -204,7 +204,7 @@ uint32_t su_path_read_file(const char *path, size_t max_bytes, uint8_t **data, s
         return SU_E_RESOURCE_LIMIT;
     }
     while (got < want) {
-        ssize_t r = read(fd, buf + got, want - got);
+        ssize_t r = read(fd, buf + got, SU_IO_COUNT(want - got));
         if (r < 0 && errno == EINTR) {
             continue;
         }

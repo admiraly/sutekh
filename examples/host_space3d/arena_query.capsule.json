@@ -1,0 +1,432 @@
+{
+ "capsule_format": "0.1",
+ "system_id": "space3d.query",
+ "system_rev": 1,
+ "capabilities": [],
+ "schema": {
+  "id": "arena",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "host": {
+  "operator": "space3d_ops_v1",
+  "operator_version": 1,
+  "constants_hash": "d37e6d92d86ac638cb1fc3582f348e2c098562290d41202a0b5777707aa0d5fe",
+  "fields": [
+   {
+    "id": 100,
+    "name": "a_kind",
+    "type": "u32",
+    "access": "read",
+    "binds": "kind"
+   },
+   {
+    "id": 101,
+    "name": "a_next_gate",
+    "type": "u32",
+    "access": "read",
+    "binds": "next_gate"
+   },
+   {
+    "id": 102,
+    "name": "a_gate_index",
+    "type": "u32",
+    "access": "read",
+    "binds": "gate_index"
+   },
+   {
+    "id": 103,
+    "name": "a_pos_x.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "pos_x.lo"
+   },
+   {
+    "id": 104,
+    "name": "a_pos_x.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "pos_x.hi"
+   },
+   {
+    "id": 105,
+    "name": "a_pos_y.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "pos_y.lo"
+   },
+   {
+    "id": 106,
+    "name": "a_pos_y.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "pos_y.hi"
+   },
+   {
+    "id": 107,
+    "name": "a_pos_z.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "pos_z.lo"
+   },
+   {
+    "id": 108,
+    "name": "a_pos_z.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "pos_z.hi"
+   },
+   {
+    "id": 109,
+    "name": "a_prev_x.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "prev_x.lo"
+   },
+   {
+    "id": 110,
+    "name": "a_prev_x.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "prev_x.hi"
+   },
+   {
+    "id": 111,
+    "name": "a_prev_y.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "prev_y.lo"
+   },
+   {
+    "id": 112,
+    "name": "a_prev_y.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "prev_y.hi"
+   },
+   {
+    "id": 113,
+    "name": "a_prev_z.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "prev_z.lo"
+   },
+   {
+    "id": 114,
+    "name": "a_prev_z.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "prev_z.hi"
+   },
+   {
+    "id": 115,
+    "name": "a_rot_w.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "rot_w.lo"
+   },
+   {
+    "id": 116,
+    "name": "a_rot_w.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "rot_w.hi"
+   },
+   {
+    "id": 117,
+    "name": "a_rot_x.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "rot_x.lo"
+   },
+   {
+    "id": 118,
+    "name": "a_rot_x.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "rot_x.hi"
+   },
+   {
+    "id": 119,
+    "name": "a_rot_y.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "rot_y.lo"
+   },
+   {
+    "id": 120,
+    "name": "a_rot_y.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "rot_y.hi"
+   },
+   {
+    "id": 121,
+    "name": "a_rot_z.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "rot_z.lo"
+   },
+   {
+    "id": 122,
+    "name": "a_rot_z.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "rot_z.hi"
+   },
+   {
+    "id": 123,
+    "name": "a_radius.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "radius.lo"
+   },
+   {
+    "id": 124,
+    "name": "a_radius.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "radius.hi"
+   },
+   {
+    "id": 125,
+    "name": "a_half_x.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "half_x.lo"
+   },
+   {
+    "id": 126,
+    "name": "a_half_x.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "half_x.hi"
+   },
+   {
+    "id": 127,
+    "name": "a_half_y.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "half_y.lo"
+   },
+   {
+    "id": 128,
+    "name": "a_half_y.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "half_y.hi"
+   },
+   {
+    "id": 129,
+    "name": "a_half_z.lo",
+    "type": "q32",
+    "access": "read",
+    "binds": "half_z.lo"
+   },
+   {
+    "id": 130,
+    "name": "a_half_z.hi",
+    "type": "q32",
+    "access": "read",
+    "binds": "half_z.hi"
+   },
+   {
+    "id": 131,
+    "name": "a_hit_count",
+    "type": "u32",
+    "access": "write",
+    "binds": "hit_count"
+   },
+   {
+    "id": 132,
+    "name": "a_hit_flags",
+    "type": "u32",
+    "access": "write",
+    "binds": "hit_flags"
+   },
+   {
+    "id": 133,
+    "name": "a_c0_slot",
+    "type": "u32",
+    "access": "write",
+    "binds": "c0_slot"
+   },
+   {
+    "id": 134,
+    "name": "a_c0_gen",
+    "type": "u32",
+    "access": "write",
+    "binds": "c0_gen"
+   },
+   {
+    "id": 135,
+    "name": "a_c0_toi.lo",
+    "type": "q32",
+    "access": "write",
+    "binds": "c0_toi.lo"
+   },
+   {
+    "id": 136,
+    "name": "a_c0_toi.hi",
+    "type": "q32",
+    "access": "write",
+    "binds": "c0_toi.hi"
+   },
+   {
+    "id": 137,
+    "name": "a_c0_nx.lo",
+    "type": "q32",
+    "access": "write",
+    "binds": "c0_nx.lo"
+   },
+   {
+    "id": 138,
+    "name": "a_c0_nx.hi",
+    "type": "q32",
+    "access": "write",
+    "binds": "c0_nx.hi"
+   },
+   {
+    "id": 139,
+    "name": "a_c0_ny.lo",
+    "type": "q32",
+    "access": "write",
+    "binds": "c0_ny.lo"
+   },
+   {
+    "id": 140,
+    "name": "a_c0_ny.hi",
+    "type": "q32",
+    "access": "write",
+    "binds": "c0_ny.hi"
+   },
+   {
+    "id": 141,
+    "name": "a_c0_nz.lo",
+    "type": "q32",
+    "access": "write",
+    "binds": "c0_nz.lo"
+   },
+   {
+    "id": 142,
+    "name": "a_c0_nz.hi",
+    "type": "q32",
+    "access": "write",
+    "binds": "c0_nz.hi"
+   },
+   {
+    "id": 143,
+    "name": "a_c1_slot",
+    "type": "u32",
+    "access": "write",
+    "binds": "c1_slot"
+   },
+   {
+    "id": 144,
+    "name": "a_c1_gen",
+    "type": "u32",
+    "access": "write",
+    "binds": "c1_gen"
+   },
+   {
+    "id": 145,
+    "name": "a_c1_toi.lo",
+    "type": "q32",
+    "access": "write",
+    "binds": "c1_toi.lo"
+   },
+   {
+    "id": 146,
+    "name": "a_c1_toi.hi",
+    "type": "q32",
+    "access": "write",
+    "binds": "c1_toi.hi"
+   },
+   {
+    "id": 147,
+    "name": "a_c1_nx.lo",
+    "type": "q32",
+    "access": "write",
+    "binds": "c1_nx.lo"
+   },
+   {
+    "id": 148,
+    "name": "a_c1_nx.hi",
+    "type": "q32",
+    "access": "write",
+    "binds": "c1_nx.hi"
+   },
+   {
+    "id": 149,
+    "name": "a_c1_ny.lo",
+    "type": "q32",
+    "access": "write",
+    "binds": "c1_ny.lo"
+   },
+   {
+    "id": 150,
+    "name": "a_c1_ny.hi",
+    "type": "q32",
+    "access": "write",
+    "binds": "c1_ny.hi"
+   },
+   {
+    "id": 151,
+    "name": "a_c1_nz.lo",
+    "type": "q32",
+    "access": "write",
+    "binds": "c1_nz.lo"
+   },
+   {
+    "id": 152,
+    "name": "a_c1_nz.hi",
+    "type": "q32",
+    "access": "write",
+    "binds": "c1_nz.hi"
+   },
+   {
+    "id": 153,
+    "name": "a_gate_dir",
+    "type": "u32",
+    "access": "write",
+    "binds": "gate_dir"
+   },
+   {
+    "id": 154,
+    "name": "a_gate_slot",
+    "type": "u32",
+    "access": "write",
+    "binds": "gate_slot"
+   },
+   {
+    "id": 155,
+    "name": "a_gate_toi.lo",
+    "type": "q32",
+    "access": "write",
+    "binds": "gate_toi.lo"
+   },
+   {
+    "id": 156,
+    "name": "a_gate_toi.hi",
+    "type": "q32",
+    "access": "write",
+    "binds": "gate_toi.hi"
+   }
+  ]
+ },
+ "schedule": {
+  "phase": "query",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 1,
+  "max_rows": 65536,
+  "allocation": "forbidden"
+ },
+ "tests": [
+  "examples/host_space3d/arena_host.c"
+ ]
+}
