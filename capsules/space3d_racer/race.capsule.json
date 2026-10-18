@@ -1,0 +1,81 @@
+{
+ "capsule_format": "0.1",
+ "ir_version": "0.3",
+ "system_id": "racer.race",
+ "source": "race.lir.json",
+ "schema": {
+  "id": "space3d",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "fields": [
+  {
+   "id": 2,
+   "name": "next_gate",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 40,
+   "name": "hit_count",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 42,
+   "name": "c0_slot",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 62,
+   "name": "gate_dir",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 118,
+   "name": "lap",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 119,
+   "name": "gates_passed",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 120,
+   "name": "collisions",
+   "type": "u32",
+   "read": true,
+   "write": true
+  }
+ ],
+ "schedule": {
+  "phase": "simulate",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 65536,
+  "allocation": "forbidden",
+  "max_events_per_row": 2
+ },
+ "tests": [
+  "bench/space3d/racer_microcosm.c"
+ ],
+ "capabilities": [
+  "emit_event"
+ ]
+}

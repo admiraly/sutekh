@@ -139,3 +139,46 @@ Only `"0.2"` modules may contain these; in a 0.1 module they are `SU_E_UNKNOWN_O
 **Native.** Any 0.2 module is refused by `su_native_compile` with `SU_E_CAPABILITY_DENIED` (reason `ir_0_2_not_lowered`). 0.1 modules are unaffected.
 
 **Not in 0.2:** spawn from IR, entity-typed registers, event consumption by systems, native lowering of 0.2 ops, dynamic growth. The world integration that builds the entity view for `su_vm_run_system` is not part of this section.
+
+## IR 0.3 (numeric profile `fixed_q32_v1`)
+
+Status: implemented in the reference verifier and VM (2026-10-18; owner-authorized amendment `planning/amendments/2026-10-18-numeric-3d.md`). Numeric semantics and the decision record: [docs/NUMERIC_FIXED_Q32.md](docs/NUMERIC_FIXED_Q32.md). The 0.1 and 0.2 rules are unchanged; their modules keep their semantic hashes byte for byte (checked over all 83 committed capsule/IR pairs against the pre-0.3 verifier).
+
+**Versions and profile.** `ir_version` `"0.3"` in both documents. A 0.3 module must declare `numeric_profile` `"fixed_q32_v1"`; a 0.1 or 0.2 module must declare `"u32_mod_v1"`. Any other pairing is `SU_E_TYPE` at `/numeric_profile` (stage 4); documents that are valid alone but disagree are `SU_E_SCHEMA_MISMATCH` (stage 5). Every 0.1 and 0.2 operation, including the entity operations and their capability and per-row cap rules, is valid in 0.3.
+
+**Fields and storage lanes.** A 0.3 capsule field has `type` `"u32"`, `"i32"`, `"i64"` or `"q32"` (`SU_E_TYPE` at `/fields/<i>` otherwise; 0.1/0.2 capsules still accept only `"u32"`). World storage stays u32 SoA. `u32` and `i32` occupy one lane with the field's ID and name. An `i64` or `q32` field with ID `I` and name `N` occupies two lanes: ID `I`, name `N.lo` (bits 0..31) and ID `I+1`, name `N.hi` (bits 32..63), with the field's access on both. Stage 5 rejects with `SU_E_SCHEMA_MISMATCH` a 64-bit field with ID `0xFFFFFFFF` or whose `I+1` is the ID of another declared field, and with `SU_E_RESOURCE_LIMIT` a lane count above 256. The verified table (`SuLirModule.fields`) lists lanes ascending by ID with `type` `SU_TYPE_U32` (storage), `value_type` and `lane`. IR operands always name the declared field (`N`), never a lane name. The schedule's union table carries `value_type`, and two systems that bind one lane with different value types are `SU_E_SCHEMA_MISMATCH`, like a type or name conflict.
+
+**Register types.** `u32`, `bool`, `i32`, `i64`, `q32`, `v3` (three q32) and `quat` (four q32, order w, x, y, z). No implicit conversion exists between any two types.
+
+**Operations.** The JSON name, frozen code (`include/sutekh/ir.h`), defined type and operands of every 0.3 operation are the table in `src/ir/su_ops03.c`, which the verifier, the VM shape check and the hash all read. Summary (T is `i32`, `i64` or `q32`; registers unless marked):
+
+| Group | Operations (JSON keys) | Result |
+|---|---|---|
+| constants | `const_i32` (`value`), `const_i64` (`value`), `const_q32` (`num` i64, `den` 1..2^64-1) | i32, i64, q32 = RNE(num * 2^32 / den); out of range is `SU_E_TYPE` |
+| fields | `load_T`/`store_T` (`field`, `src`); `load_v3`/`store_v3` (`x`, `y`, `z` q32 fields, `src`) | the field's value type must equal T (`SU_E_TYPE`); `load_u32`/`store_u32` need a `u32` field |
+| bool | `and_bool`, `or_bool` (`a`, `b`), `not_bool` (`a`) | bool |
+| arithmetic | `add_T sub_T mul_T div_T min_T max_T` (`a`, `b`); `neg_T abs_T` (`a`); `clamp_T` (`x`, `lo`, `hi`) | T |
+| compare/select | `eq_T lt_T le_T` (`a`, `b`); `select_T` (`cond`, `on_true`, `on_false`) | bool; T |
+| shift | `shl_T shr_T` (`a`, `n` u32) | T |
+| root | `sqrt_q32`, `rsqrt_q32` (`a`) | q32 |
+| conversion | `i32_from_u32 u32_from_i32 i64_from_i32 i32_from_i64 q32_from_i32 q32_from_i64 q32_to_i32_floor q32_to_i32_round q32_from_raw q32_raw q32_to_i64_floor` (`a`) | as named |
+| vec3 | `make_v3` (`x`,`y`,`z`), `v3_get` (`v`, `axis` 0..2), `v3_add v3_sub v3_dot v3_cross` (`a`,`b`), `v3_scale` (`v`,`s`), `v3_neg v3_len v3_len_sq v3_normalize` (`a`), `v3_clamp_len` (`v`,`max`), `select_v3` | v3 or q32 |
+| quaternion | `make_quat` (`w` q32, `v` v3), `quat_get` (`q`, `axis` 0..3), `quat_mul` (`a`,`b`), `quat_conj quat_normalize` (`a`), `quat_rotate` (`q`,`v`), `quat_integrate` (`q`, `w` v3, `dt` q32), `select_quat` | quat, q32 or v3 |
+
+Integer families wrap; q32 saturates and rounds to nearest even; division by zero, shifts by large counts and every conversion are defined in NUMERIC_FIXED_Q32.md section 4. No trigonometric operation exists in 0.3.
+
+**Verifier rules.** Unchanged stage order. Within one 0.3 instruction: unknown or missing keys and JSON types (`SU_E_TYPE`), constant ranges (`axis`, the q32 value of `num/den`; `SU_E_TYPE`), undefined registers, duplicate `dst`, operand register types (`SU_E_TYPE`), then each field operand in key order: declared (`SU_E_UNDECLARED_READ`/`_WRITE`), permission, one store per field per row (a 64-bit store stores both lanes; `store_v3` with a repeated field is a second store), value type (`SU_E_TYPE`). Stage 7 reports a writable field with no store by its declared name. 0.3 names are `SU_E_UNKNOWN_OPCODE` in 0.1 and 0.2 modules.
+
+**Encoding.** `SuInsn` operand slots come from the table. Field operands hold the lane-0 table index. `const_i64` and `const_q32` hold the low word in `a` and the high word in `b`; `const_q32` stores the rounded raw value, so `1/2` and `2/4` encode (and hash) identically. `store_v3` holds the source register in `dst` and the three field indices in `a`, `b`, `c`.
+
+**Hash.** Artifact format 3 (`SU_ARTIFACT_FORMAT_VERSION_0_3`). As format 2, plus `value_type` and `lane` (u32 each) after `access` for every lane of the field table; the version string is `"0.3"`; every field operand of a 0.3 instruction is replaced by the lane-0 field ID, as for `load_u32`/`store_u32`.
+
+**VM.** Row, entry-state and staging semantics are unchanged. 0.3 registers live in a second register file (four 64-bit words per register, allocated at context creation for 0.3 modules only). Every read checks the register tag; a hand-built module whose field operands do not name a lane-0 entry with the required value type, access and adjacent lane-1 entry is refused at context creation (`SU_E_INVALID_ARGUMENT`).
+
+**Native.** `su_native_compile` refuses every 0.3 module with `SU_E_CAPABILITY_DENIED`, reason `ir_0_3_not_lowered`; the system stays on the VM tier.
+
+**Resource bounds.** The 0.1 limits apply (4,096 instructions and registers, 256 lanes). The 0.3 register file adds at most 4,096 x 32 bytes per context. Execution remains bounded by rows x instructions; the most expensive operations (`v3_len`, `v3_normalize`, `quat_normalize`, `quat_integrate`) run a fixed-size integer square root (at most 64 bit-pair steps) and 128/64 divisions.
+
+**Evidence.** `test_num` (numeric library), `num_model` (independent Python model, 2,460,000 records), `ir03` (verifier rejections with exact codes and pointers, lane layout, hash invariants and a pinned golden, VM known answers, VM defensive checks), `ir03_diff` (300 seeded random programs covering all 100 operations of a 0.3 module, real verifier and VM against an independent interpreter, corpus SHA-256 printed).
+
+**Not in 0.3:** trigonometry, control flow, cross-row reads, floating point, native lowering of 0.3 operations, typed fields in host capsule records (see `docs/SPACE3D.md` for the host operator path), and migrations that add, rename or transform typed lanes (untested; a migration sees lanes as u32 fields).

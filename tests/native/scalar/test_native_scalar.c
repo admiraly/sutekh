@@ -916,6 +916,23 @@ static int run_ir02_refusal(void) {
     }
     su_lir_module_free(&m02);
 
+    /* IR 0.3 (fixed_q32_v1) is refused with its own reason by every capability set. */
+    if (!verify_pair("tests/fixtures/ir03/kinematics.capsule.json", "tests/fixtures/ir03/kinematics.lir.json", &m02)) {
+        return 0;
+    }
+    st = su_native_compile(&m02, 1u, SU_NCAP_X86_64_SCALAR | SU_NCAP_X86_64_AVX2, &art, &d);
+    if (st != SU_E_CAPABILITY_DENIED || art != NULL || strcmp(d.message, "ir_0_3_not_lowered") != 0) {
+        fprintf(stderr, "ir03 avx2: got %s (%s), want SU_E_CAPABILITY_DENIED ir_0_3_not_lowered\n",
+                su_status_name(st), d.message);
+        ok = 0;
+    }
+    st = su_native_compile(&m02, 1u, SU_NCAP_X86_64_SCALAR, &art, &d);
+    if (st != SU_E_CAPABILITY_DENIED || art != NULL || strcmp(d.message, "ir_0_3_not_lowered") != 0) {
+        fprintf(stderr, "ir03 scalar: got %s, want SU_E_CAPABILITY_DENIED\n", su_status_name(st));
+        ok = 0;
+    }
+    su_lir_module_free(&m02);
+
     if (!verify_pair("examples/movement.capsule.json", "examples/movement.lir.json", &m01)) {
         return 0;
     }

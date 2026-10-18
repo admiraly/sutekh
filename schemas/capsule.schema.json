@@ -51,7 +51,11 @@
       "additionalProperties": false
     },
     "numeric_profile": {
-      "const": "u32_mod_v1"
+      "enum": [
+        "u32_mod_v1",
+        "fixed_q32_v1"
+      ],
+      "description": "u32_mod_v1 for ir_version 0.1 and 0.2; fixed_q32_v1 for 0.3 (checked by the verifier)"
     },
     "fields": {
       "type": "array",
@@ -67,7 +71,13 @@
             "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
           },
           "type": {
-            "const": "u32"
+            "enum": [
+              "u32",
+              "i32",
+              "i64",
+              "q32"
+            ],
+            "description": "u32 only below ir_version 0.3; i64 and q32 occupy ids id and id+1 (checked by the verifier)"
           },
           "read": {
             "type": "boolean"
@@ -94,7 +104,11 @@
       "description": "Host variant (M3-03a, OD-16; M3-04a). A host system is an operator compiled into the engine, not IR. Its declared field table must equal the operator descriptor exactly (checked by the loader).",
       "properties": {
         "operator": {
-          "enum": ["rts_ops_v1", "rts_ops_v2"]
+          "enum": [
+            "rts_ops_v1",
+            "rts_ops_v2",
+            "space3d_ops_v1"
+          ]
         },
         "operator_version": {
           "type": "integer",
@@ -116,10 +130,17 @@
               },
               "name": {
                 "type": "string",
-                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.(lo|hi))?$",
+                "description": "a typed 64-bit lane is named <field>.lo or <field>.hi"
               },
               "type": {
-                "const": "u32"
+                "enum": [
+                  "u32",
+                  "i32",
+                  "i64",
+                  "q32"
+                ],
+                "description": "the lane's value type; u32 for every rts_ops lane"
               },
               "access": {
                 "enum": [
@@ -231,7 +252,8 @@
     "ir_version": {
       "enum": [
         "0.1",
-        "0.2"
+        "0.2",
+        "0.3"
       ],
       "description": "optional; absent means 0.1; must equal the IR ir_version. IR variant only"
     }

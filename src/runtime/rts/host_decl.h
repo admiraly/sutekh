@@ -27,8 +27,16 @@
 #define SU_HOST_OPERATOR_NAME "rts_ops_v1"
 
 /* Checks a descriptor: system and schema IDs in range, operator_version >= 1, run set, 1..SU_LIMIT_FIELDS
- * fields in strictly ascending ID order, type SU_TYPE_U32, access nonzero and within READ|WRITE, names
- * in range. Returns SU_OK or SU_E_INVALID_ARGUMENT. */
+ * fields in strictly ascending ID order, type SU_TYPE_U32 or an IR 0.3 value type (SU_TYPE_I32, SU_TYPE_I64,
+ * SU_TYPE_Q32; a 64-bit type is two adjacent entries I, I+1 with equal type and access), access nonzero and
+ * within READ|WRITE, names in range. Returns SU_OK or SU_E_INVALID_ARGUMENT.
+ *
+ * Typed lanes (2026-10-18, numeric-3d): the declaration module stores every lane with storage type SU_TYPE_U32
+ * and the descriptor type as value_type, so the schedule union checks host and IR systems for one value type
+ * per lane. The host record's operator is rts_ops_v<operator_version> for a descriptor with only u32 lanes (as in
+ * M3) and "<schema_id>_ops_v<operator_version>" for one with typed lanes (space3d_ops_v1), its
+ * numeric_profile is fixed_q32_v1 when any lane is typed (else u32_mod_v1), and each record field's "type" is
+ * the lane's type name. Descriptors with only u32 lanes keep their records, digests and identities. */
 uint32_t su_host_desc_validate(const SuHostOpDesc *d);
 
 /* Builds the declaration module of d into out (a caller-owned struct, zeroed here). The module carries

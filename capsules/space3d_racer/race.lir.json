@@ -1,0 +1,175 @@
+{
+ "ir_version": "0.3",
+ "system_id": "racer.race",
+ "numeric_profile": "fixed_q32_v1",
+ "query": "space3d",
+ "instructions": [
+  {
+   "op": "const_u32",
+   "dst": "r1",
+   "value": 1
+  },
+  {
+   "op": "const_u32",
+   "dst": "r2",
+   "value": 0
+  },
+  {
+   "op": "load_u32",
+   "dst": "r3",
+   "field": "gate_dir"
+  },
+  {
+   "op": "eq_u32",
+   "dst": "r4",
+   "a": "r3",
+   "b": "r1"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r5",
+   "field": "next_gate"
+  },
+  {
+   "op": "add_u32",
+   "dst": "r6",
+   "a": "r5",
+   "b": "r1"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r7",
+   "value": 16
+  },
+  {
+   "op": "eq_u32",
+   "dst": "r8",
+   "a": "r6",
+   "b": "r7"
+  },
+  {
+   "op": "select_u32",
+   "dst": "r9",
+   "cond": "r8",
+   "on_true": "r2",
+   "on_false": "r6"
+  },
+  {
+   "op": "select_u32",
+   "dst": "r10",
+   "cond": "r4",
+   "on_true": "r9",
+   "on_false": "r5"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r11",
+   "field": "lap"
+  },
+  {
+   "op": "and_bool",
+   "dst": "r12",
+   "a": "r4",
+   "b": "r8"
+  },
+  {
+   "op": "add_u32",
+   "dst": "r13",
+   "a": "r11",
+   "b": "r1"
+  },
+  {
+   "op": "select_u32",
+   "dst": "r14",
+   "cond": "r12",
+   "on_true": "r13",
+   "on_false": "r11"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r15",
+   "field": "gates_passed"
+  },
+  {
+   "op": "add_u32",
+   "dst": "r16",
+   "a": "r15",
+   "b": "r1"
+  },
+  {
+   "op": "select_u32",
+   "dst": "r17",
+   "cond": "r4",
+   "on_true": "r16",
+   "on_false": "r15"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r18",
+   "field": "hit_count"
+  },
+  {
+   "op": "lt_u32",
+   "dst": "r19",
+   "a": "r2",
+   "b": "r18"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r20",
+   "field": "collisions"
+  },
+  {
+   "op": "add_u32",
+   "dst": "r21",
+   "a": "r20",
+   "b": "r1"
+  },
+  {
+   "op": "select_u32",
+   "dst": "r22",
+   "cond": "r19",
+   "on_true": "r21",
+   "on_false": "r20"
+  },
+  {
+   "op": "emit_event",
+   "cond": "r4",
+   "kind": 1,
+   "a": "r5",
+   "b": "r14"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r23",
+   "field": "c0_slot"
+  },
+  {
+   "op": "emit_event",
+   "cond": "r19",
+   "kind": 2,
+   "a": "r23",
+   "b": "r18"
+  },
+  {
+   "op": "store_u32",
+   "field": "next_gate",
+   "src": "r10"
+  },
+  {
+   "op": "store_u32",
+   "field": "lap",
+   "src": "r14"
+  },
+  {
+   "op": "store_u32",
+   "field": "gates_passed",
+   "src": "r17"
+  },
+  {
+   "op": "store_u32",
+   "field": "collisions",
+   "src": "r22"
+  }
+ ]
+}

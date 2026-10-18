@@ -11,7 +11,8 @@
  *     capsule limits.max_instructions (SU_E_RESOURCE_LIMIT)
  *   6 instructions in ascending order; within one instruction: op name
  *     (SU_E_UNKNOWN_OPCODE), keys/types/constant range (SU_E_TYPE), undefined
- *     register, duplicate dst, operand type, field permission
+ *     register, duplicate dst, operand type, field permission (IR 0.3: then the
+ *     field value type, SU_E_TYPE)
  *   7 end of body: writable field never stored -> SU_E_MISSING_STORE
  * Stage 1 also covers the capsule field-count cap (256).
  */
@@ -44,10 +45,19 @@ typedef struct SuDiag {
 
 typedef struct SuLirField {
     uint32_t id;
-    uint32_t type;   /* SU_TYPE_U32 */
+    uint32_t type;   /* SU_TYPE_U32: the storage element type (a u32 lane) */
     uint32_t access; /* SU_ACCESS_READ | SU_ACCESS_WRITE */
     char *name;      /* owned, NUL-terminated; not part of the semantic hash */
+    /* IR 0.3: numeric interpretation of the lane. value_type is SU_TYPE_U32, SU_TYPE_I32, SU_TYPE_I64 or
+     * SU_TYPE_Q32; 0 (0.1/0.2 modules and host declarations) means SU_TYPE_U32. An i64/q32 field declared
+     * with id I and name N is two table entries: lane 0 (id I, name "N.lo", low word) and lane 1 (id I+1,
+     * name "N.hi", high word), adjacent in the ascending-id table. */
+    uint32_t value_type;
+    uint32_t lane;
 } SuLirField;
+
+/* value_type with 0 read as SU_TYPE_U32 (0.1/0.2 modules and host declarations leave it 0). */
+#define SU_LIR_VALUE_TYPE(f) ((f)->value_type == 0u ? SU_TYPE_U32 : (f)->value_type)
 
 /* Capability bits of SuLirModule.capabilities (audit item 4, C04). A capability names an IR 0.2
  * operation that needs a grant: "despawn_self" and "emit_event". */
@@ -64,7 +74,7 @@ typedef struct SuLirModule {
     uint32_t register_count;
     uint32_t insn_count;
     uint64_t max_rows;           /* capsule limits.max_rows; enforced by the VM wrapper */
-    uint32_t ir_version_minor;   /* 1 for "0.1", 2 for "0.2" (IR 0.2, M2-00c2) */
+    uint32_t ir_version_minor;   /* 1 for "0.1", 2 for "0.2" (IR 0.2, M2-00c2), 3 for "0.3" (fixed_q32_v1) */
     uint32_t max_struct_per_row; /* capsule limits.max_struct_per_row (0.2; 0 when absent) */
     uint32_t max_events_per_row; /* capsule limits.max_events_per_row (0.2; 0 when absent) */
     uint32_t uses_entity_ops;    /* 1 when any 0.2 op (slot/gen/tick/despawn_self/emit_event) appears */
