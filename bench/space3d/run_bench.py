@@ -5,10 +5,11 @@
     run_bench.py --driver <racer_microcosm> --check
         Small deterministic run (N = 8, 720 ticks) with replay from start and from a checkpoint; the final state
         and event-log digests must equal bench/space3d/expected.json. Exit 0 only when every check ran and passed.
-    run_bench.py --driver <racer_microcosm> --evidence <dir> [--ticks 1200]
-        N = 8, 32, 256 with the query, and without it (IR systems only), each with replay checks. Writes
-        <dir>/racer-bench.json (machine, toolchain, source and driver identities, every driver record) and prints
-        a summary table. Timings are observations on this machine (constitution C10), not qualification.
+    run_bench.py --driver <racer_microcosm> --evidence <dir> [--ticks 1200] [--repeat 3]
+        N = 8, 32, 256 with the query, and without it (IR systems only), each with replay checks, each repeated in
+        separate processes. Writes <dir>/racer-bench.json (machine, toolchain, source and driver identities, every
+        driver record) and prints a summary table with the spread over repeats. Timings are observations on this
+        machine (constitution C10), not qualification.
     run_bench.py --driver <racer_microcosm> --write-expected
         Records the --check digests in bench/space3d/expected.json (only after a reviewed semantic change).
 """
@@ -104,6 +105,7 @@ def main():
     ap.add_argument("--write-expected", action="store_true")
     ap.add_argument("--evidence")
     ap.add_argument("--ticks", type=int, default=1200)
+    ap.add_argument("--repeat", type=int, default=3)
     args = ap.parse_args()
     if args.check:
         return check(args.driver)
@@ -119,14 +121,16 @@ def main():
         ap.error("one of --check, --evidence, --write-expected")
     os.makedirs(args.evidence, exist_ok=True)
     records = []
-    for n in (8, 32, 256):
-        for query in (True, False):
-            extra = ["--n", str(n), "--ticks", str(args.ticks), "--warmup", "120", "--replay"]
-            if not query:
-                extra.append("--no-query")
-            rec = run(args.driver, extra)
-            rec["args"] = extra
-            records.append(rec)
+    for rep_i in range(args.repeat):
+        for n in (8, 32, 256):
+            for query in (True, False):
+                extra = ["--n", str(n), "--ticks", str(args.ticks), "--warmup", "120", "--replay"]
+                if not query:
+                    extra.append("--no-query")
+                rec = run(args.driver, extra)
+                rec["args"] = extra
+                rec["repeat"] = rep_i
+                records.append(rec)
     doc = {
         "format": "sutekh.bench.6dof_racer_microcosm/1",
         "statement": "observation on one machine; not performance qualification (ENGINE_CONSTITUTION C10)",
@@ -136,22 +140,30 @@ def main():
         "driver": {"path": os.path.relpath(args.driver, ROOT) if args.driver.startswith(ROOT) else args.driver,
                    "sha256": sha256_file(args.driver)},
         "measurement": "wall time of su_sched_run_ticks(1 tick) per tick, monotonic clock, single thread, "
-                       "after warm-up; one process per configuration",
+                       "after warm-up; one process per configuration and repeat; repeats interleaved",
+        "repeats": args.repeat,
         "records": records,
     }
     out = os.path.join(args.evidence, "racer-bench.json")
     with open(out, "w", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(doc, indent=1) + "\n")
-    print("| N | query | rows | p50 us | p95 us | p99 us | max us | p99 / 8.33 ms | gates | collision ticks | events | "
-          "replay start/ckpt |")
+    print("| N | query | rows | p50 us (min..max of %d runs) | p99 us | max us | worst p99 / 8.33 ms | gates | "
+          "collision ticks | events | digests equal across runs | replay start/ckpt |" % args.repeat)
     print("|---|---|---|---|---|---|---|---|---|---|---|---|")
-    for r in records:
-        t = r["tick_ns"]
-        print("| %d | %s | %d | %.1f | %.1f | %.1f | %.1f | %.2f%% | %d | %d | %d | %s/%s |" % (
-            r["n"], "yes" if r["query"] else "no", r["rows"], t["p50"] / 1e3, t["p95"] / 1e3, t["p99"] / 1e3,
-            t["max"] / 1e3, 100.0 * r["p99_fraction_of_budget"], r["race"]["gates_passed"],
-            r["race"]["collision_ticks"], r["events"], r["replay_from_start_identical"],
-            r["replay_from_checkpoint_identical"]))
+    for n in (8, 32, 256):
+        for query in (True, False):
+            rs = [r for r in records if r["n"] == n and r["query"] == query]
+            p50 = [r["tick_ns"]["p50"] / 1e3 for r in rs]
+            p99 = [r["tick_ns"]["p99"] / 1e3 for r in rs]
+            mx = [r["tick_ns"]["max"] / 1e3 for r in rs]
+            same = len({(r["final_state_sha256"], r["event_log_sha256"]) for r in rs}) == 1
+            r0 = rs[0]
+            print("| %d | %s | %d | %.1f..%.1f | %.1f..%.1f | %.1f..%.1f | %.2f%% | %d | %d | %d | %s | %s/%s |" % (
+                n, "yes" if query else "no", r0["rows"], min(p50), max(p50), min(p99), max(p99), min(mx), max(mx),
+                100.0 * max(r["p99_fraction_of_budget"] for r in rs), r0["race"]["gates_passed"],
+                r0["race"]["collision_ticks"], r0["events"], same,
+                all(r["replay_from_start_identical"] is True for r in rs),
+                all(r["replay_from_checkpoint_identical"] is True for r in rs)))
     print("wrote", out)
     bad = [r for r in records if r["replay_from_start_identical"] is not True
            or r["replay_from_checkpoint_identical"] is not True]
