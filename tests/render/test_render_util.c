@@ -296,6 +296,114 @@ static void test_env(void) {
     }
     printf("env: texel/direction round trip, mip counts, uniform chain and sky faces ok\n");
 }
+/* ---- textured effect geometry (no GPU) ---- */
+static void test_textured_fx(void) {
+    SuFxVertex store[64];
+    SuFxBuffer b;
+    float one[4] = {1, 1, 1, 1};
+    float rect[4];
+    SuMat4f view = su_mat4f_identity();
+    int az;
+    int el;
+    uint32_t axis_i;
+    /* atlas rectangles: row-major from the top left, modulo the frame count */
+    su_fx_atlas_rect(4, 2, 5, rect);
+    CHECK(rect[0] == 0.25f && rect[1] == 0.5f && rect[2] == 0.5f && rect[3] == 1.0f);
+    su_fx_atlas_rect(4, 2, 5 + 8, rect);
+    CHECK(rect[0] == 0.25f && rect[1] == 0.5f);
+    su_fx_atlas_rect(3, 3, 8, rect);
+    CHECK(near(rect[0], 2.0f / 3.0f, 1e-6f) && near(rect[3], 1.0f, 1e-6f));
+    /* a camera-facing sprite: uv corners follow the rectangle, top left first */
+    b.v = store;
+    b.cap = 64;
+    b.count = 0;
+    b.dropped = 0;
+    rect[0] = 0.25f;
+    rect[1] = 0.5f;
+    rect[2] = 0.5f;
+    rect[3] = 1.0f;
+    su_fx_sprite(&b, (SuVec3f){0, 0, -2}, 1.0f, 0.5f, 0.0f, one, rect, view);
+    CHECK(b.count == 6u && b.dropped == 0u);
+    CHECK(store[0].uv[0] == 0.25f && store[0].uv[1] == 0.5f);   /* top left */
+    CHECK(store[1].uv[0] == 0.5f && store[1].uv[1] == 0.5f);    /* top right */
+    CHECK(store[2].uv[0] == 0.5f && store[2].uv[1] == 1.0f);    /* bottom right */
+    CHECK(store[5].uv[0] == 0.25f && store[5].uv[1] == 1.0f);   /* bottom left */
+    CHECK(near(store[0].pos[0], -1.0f, 1e-6f) && near(store[0].pos[1], 0.5f, 1e-6f) && near(store[2].pos[0], 1.0f, 1e-6f) &&
+          near(store[2].pos[1], -0.5f, 1e-6f));
+    /* a full buffer drops whole triangles pairs and counts them */
+    b.count = 60;
+    b.dropped = 0;
+    su_fx_sprite(&b, (SuVec3f){0, 0, -2}, 1.0f, 1.0f, 0.0f, one, NULL, view);
+    CHECK(b.count == 60u && b.dropped == 2u);
+    /* axis sprites: the long edges are parallel to the axis whatever the camera position, the quad is perpendicular to
+     * the view direction through its centre (it faces the camera), and the lengths are as asked */
+    for (axis_i = 0; axis_i < 3u; axis_i++) {
+        static const SuVec3f axes[3] = {{0, 1, 0}, {1, 0, 0}, {0.3f, 1.0f, -0.4f}};
+        SuVec3f a = axes[axis_i];
+        float al = sqrtf(a.x * a.x + a.y * a.y + a.z * a.z);
+        a.x /= al;
+        a.y /= al;
+        a.z /= al;
+        for (el = -2; el <= 2; el++) {
+            for (az = 0; az < 360; az += 20) {
+                float ph = (float)az * 0.0174532925f;
+                SuVec3f pos = {5.0f * sinf(ph) * cosf((float)el * 0.5f), 5.0f * sinf((float)el * 0.5f), -5.0f * cosf(ph) * cosf((float)el * 0.5f)};
+                SuVec3f e1;
+                SuVec3f e2;
+                SuVec3f n;
+                float cr;
+                b.count = 0;
+                b.dropped = 0;
+                su_fx_sprite_axis(&b, pos, a, 1.5f, 0.4f, one, NULL);
+                if (b.count == 0u) {
+                    continue;
+                }
+                CHECK(b.count == 6u);
+                /* corners 0,1 at the tail, 2,3 at the head: vertices 0, 1, 2, 5 */
+                e1.x = store[5].pos[0] - store[0].pos[0]; /* tail corner 0 -> head corner 3 (the long edge) */
+                e1.y = store[5].pos[1] - store[0].pos[1];
+                e1.z = store[5].pos[2] - store[0].pos[2];
+                CHECK(near(sqrtf(e1.x * e1.x + e1.y * e1.y + e1.z * e1.z), 3.0f, 1e-4f));
+                cr = fabsf(e1.x * a.x + e1.y * a.y + e1.z * a.z) / 3.0f;
+                CHECK(near(cr, 1.0f, 1e-4f)); /* parallel to the axis */
+                e2.x = store[1].pos[0] - store[0].pos[0];
+                e2.y = store[1].pos[1] - store[0].pos[1];
+                e2.z = store[1].pos[2] - store[0].pos[2];
+                CHECK(near(sqrtf(e2.x * e2.x + e2.y * e2.y + e2.z * e2.z), 0.8f, 1e-4f));
+                CHECK(near(e2.x * a.x + e2.y * a.y + e2.z * a.z, 0.0f, 1e-4f)); /* the width is across the axis */
+                n.x = e2.x;
+                n.y = e2.y;
+                n.z = e2.z;
+                CHECK(near(n.x * pos.x + n.y * pos.y + n.z * pos.z, 0.0f, 1e-3f)); /* the width is across the view ray: facing */
+                /* centre of the quad is pos */
+                CHECK(near((store[0].pos[0] + store[2].pos[0]) * 0.5f, pos.x, 1e-4f) &&
+                      near((store[0].pos[1] + store[2].pos[1]) * 0.5f, pos.y, 1e-4f) &&
+                      near((store[0].pos[2] + store[2].pos[2]) * 0.5f, pos.z, 1e-4f));
+                /* uv: V along the axis (0 at the tail, 1 at the head), U across */
+                CHECK(store[0].uv[1] == 0.0f && store[2].uv[1] == 1.0f && store[0].uv[0] == 0.0f && store[1].uv[0] == 1.0f);
+            }
+        }
+    }
+    /* end-on: a perpendicular is chosen rather than a degenerate quad */
+    b.count = 0;
+    su_fx_sprite_axis(&b, (SuVec3f){0, 0, -4}, (SuVec3f){0, 0, 1}, 1.0f, 0.5f, one, NULL);
+    CHECK(b.count == 6u);
+    b.count = 0;
+    su_fx_sprite_axis(&b, (SuVec3f){0, 0, -4}, (SuVec3f){0, 0, 0}, 1.0f, 0.5f, one, NULL); /* no axis: nothing */
+    CHECK(b.count == 0u);
+    /* batches */
+    {
+        SuFxBatch bt;
+        b.count = 18;
+        bt = su_fx_batch(77u, SU_FX_BLEND_PREMUL, SU_FX_WRAP_REPEAT, SU_FX_WRAP_MIRROR, 6, &b);
+        CHECK(bt.texture == 77u && bt.blend == SU_FX_BLEND_PREMUL && bt.first_vertex == 6u && bt.vertex_count == 12u &&
+              bt.wrap_u == SU_FX_WRAP_REPEAT && bt.wrap_v == SU_FX_WRAP_MIRROR);
+        bt = su_fx_batch(1u, SU_FX_BLEND_ADD, 0, 0, 30, &b);
+        CHECK(bt.vertex_count == 0u);
+    }
+    printf("textured fx: atlas rectangles, sprite uv, axis sprites at %d camera positions\n", 3 * 5 * 18);
+}
+
 int main(void) {
     test_projection();
     test_quat_and_cameras();
@@ -303,6 +411,7 @@ int main(void) {
     test_debug_lines();
     test_ppm();
     test_env();
+    test_textured_fx();
     printf("test_render_util: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

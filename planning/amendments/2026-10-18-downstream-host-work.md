@@ -184,3 +184,29 @@ material, and engine pitch that can change after a voice starts.
 20. Audio: `su_audio_voice_set_pitch` and `su_audio_voice_set_gain` change a playing voice (applied at the next
     render; the playback rate glides linearly across that block so the read position is continuous, stacking with
     Doppler). Tested offline in `test_audio`.
+## Extension, 19 October 2026: textured effect sprites, DDS and BC6H, cube-map sky
+
+Same authorization and boundaries. Request from the same downstream project: engine flames, plumes and trails with real
+textures, HDR cube environments, and a sky drawn from that cube.
+
+21. Presentation only (`su_render`, plus a headless loader in `su_asset`; nothing in the simulation, IR or host
+    contracts changes). Textured effects: `SuRenderFrameDesc.fx_tex` + `fx_batches` (`SuFxBatch`: texture, blend, wrap
+    per axis, vertex range), drawn after the untextured fx, depth tested, no depth writes. Geometry helpers:
+    `su_fx_sprite` (camera-facing, per-sprite colour x intensity in HDR, `uv_rect`), `su_fx_sprite_axis` (axis-aligned
+    cylindrical quad: stretched along a world axis, rotated about it to face the camera), `su_fx_atlas_rect` (frame to
+    uv rectangle), `su_trail_build_tex` (U along the trail by age or distance, scrolling offset, V across). Blends:
+    additive and premultiplied alpha, specified exactly in `include/sutekh/render.h`. Colour space is the texture
+    format's: `_SRGB` formats decode on sampling, the others are read as stored. Existing untextured fx, trails and
+    glare are unchanged.
+22. Textures and DDS: new formats `SU_TEX_BC2_*`, `SU_TEX_BC6H_UF16/SF16`, `SU_TEX_RGBA16F` (pack level sizes and
+    names included; existing packs unchanged). `SuRenderTextureDesc.layers = 6` makes a cube texture with a cube image
+    view. `include/sutekh/dds.h`: `su_dds_parse` (2D and cube, BC1 to BC7, RGBA8, RGBA16F, legacy FourCC and DX10
+    headers, explicit colour space override, trailing bytes after the pixel data ignored and counted),
+    `su_render_texture_create_dds`, `su_render_env_from_dds` (decodes an HDR cube on the CPU and prefilters it as
+    `su_render_env_create` does), and a bit-exact CPU BC6H decoder (`su_bc6h_decode_block`, `su_dds_decode_rgba32f`)
+    for devices without BCn and for tests. `SuRenderDeviceInfo.bc_textures` says whether BCn is sampled natively.
+23. Sky from a cube: `SuRenderFrameDesc.sky_cube` (any READY cube: an environment or a raw cube texture, BC6H
+    included), `sky_intensity`, `sky_rot` (quaternion), `sky_lod`. 0 keeps the procedural sky. Tests:
+    `test_render_texfx` (GPU, validation clean), `test_asset_dds` (headless), `test_render_util` (geometry). Not done:
+    GPU-side prefiltering of the environment, BC1 to BC5 and BC7 CPU decoders, texture arrays and volumes, KTX2/other
+    containers, soft-particle depth fade, flipbook frame blending.

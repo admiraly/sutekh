@@ -39,6 +39,8 @@
 #define DEFAULT_DRAW_INSTANCES 65536u
 #define DEFAULT_FX_VERTICES 196608u
 #define DEFAULT_HUD_VERTICES 49152u
+#define DEFAULT_FX_TEX_VERTICES 98304u
+#define DEFAULT_FX_BATCHES 256u
 #define MAX_DEVICES 16u
 #define HDR_FORMAT VK_FORMAT_R16G16B16A16_SFLOAT
 
@@ -185,6 +187,8 @@ typedef struct Frame {
     Buffer lines;
     Buffer draw_inst;     /* object draw instances (DrawInstance) */
     Buffer fx;
+    Buffer fx_tex;        /* textured effects */
+    VkDescriptorPool fx_pool; /* one sampler set per textured batch, reset every frame */
     Buffer hud;
     Buffer ubo;           /* FrameUbo */
     Buffer staging;       /* upload_budget bytes */
@@ -235,7 +239,7 @@ typedef struct TexRes {
     VkFormat vkfmt;
     uint32_t format;          /* SU_TEX_* */
     uint32_t width, height, mips;
-    const uint8_t *src[SU_ASSET_MAX_MIPS];
+    const uint8_t *src[SU_ASSET_MAX_MIPS * 6u]; /* [mip * layers + layer] */
     uint8_t *owned;
     uint32_t layers;          /* array layers: 1, or 6 for an environment cube */
     uint32_t layer;           /* next layer of the current mip */
@@ -343,6 +347,12 @@ typedef struct LegacyPush {
     float light_dir_ambient[4];
 } LegacyPush;
 
+/* Push constants of the cube sky (sky_cube.frag): rows of the world-to-cube rotation, then intensity and lod. */
+typedef struct SkyPush {
+    float r[3][4];
+    float p[4];
+} SkyPush;
+
 typedef struct PostPush {
     float p[4];
 } PostPush;
@@ -354,6 +364,13 @@ typedef struct BloomPush {
 } BloomPush;
 
 #define BLOOM_MAX_LEVELS 12u
+
+/* A textured-effects batch prepared for drawing. */
+typedef struct FxBatchDraw {
+    VkDescriptorSet set;
+    uint32_t first, count;
+    uint32_t pipe;            /* index into fxtex_pipe */
+} FxBatchDraw;
 
 /* One draw item of the scene: an instance of a submesh with a material. */
 typedef struct DrawItem {
@@ -399,6 +416,10 @@ struct SuRenderer {
     VkPipeline line_pipe;
     VkPipeline sky_pipe;
     VkPipeline fx_pipe;
+    VkPipeline fxtex_pipe[2];           /* textured effects: additive, premultiplied alpha */
+    VkPipeline skycube_pipe;
+    VkPipelineLayout fxtex_layout;      /* frame, one sampler */
+    VkPipelineLayout skycube_layout;    /* frame, one cube sampler, SkyPush */
     VkPipeline pbr_pipe[PIPE_PBR_COUNT];
     VkPipeline paint_pipe[PIPE_PBR_COUNT];
     VkDescriptorSetLayout paint_dsl;    /* eight samplers and the PaintUbo */
@@ -474,6 +495,9 @@ struct SuRenderer {
     uint32_t max_draw;
     uint32_t max_fx;
     uint32_t max_hud;
+    uint32_t max_fx_tex;
+    uint32_t max_fx_batches;
+    FxBatchDraw *fxb;
     uint32_t budget;
     SuRenderInstance *sorted;
     DrawItem *items;

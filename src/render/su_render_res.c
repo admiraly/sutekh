@@ -370,13 +370,18 @@ static VkFormat vk_format(uint32_t f) {
     case SU_TEX_BC5_UNORM: return VK_FORMAT_BC5_UNORM_BLOCK;
     case SU_TEX_BC7_UNORM: return VK_FORMAT_BC7_UNORM_BLOCK;
     case SU_TEX_BC7_SRGB: return VK_FORMAT_BC7_SRGB_BLOCK;
+    case SU_TEX_BC2_UNORM: return VK_FORMAT_BC2_UNORM_BLOCK;
+    case SU_TEX_BC2_SRGB: return VK_FORMAT_BC2_SRGB_BLOCK;
+    case SU_TEX_BC6H_UF16: return VK_FORMAT_BC6H_UFLOAT_BLOCK;
+    case SU_TEX_BC6H_SF16: return VK_FORMAT_BC6H_SFLOAT_BLOCK;
+    case SU_TEX_RGBA16F: return VK_FORMAT_R16G16B16A16_SFLOAT;
     case TEXFMT_ENV: return VK_FORMAT_R16G16B16A16_SFLOAT;
     default: return VK_FORMAT_UNDEFINED;
     }
 }
 
 static int is_bc(uint32_t f) {
-    return f >= SU_TEX_BC1_UNORM && f <= SU_TEX_BC7_SRGB;
+    return (f >= SU_TEX_BC1_UNORM && f <= SU_TEX_BC7_SRGB) || (f >= SU_TEX_BC2_UNORM && f <= SU_TEX_BC6H_SF16);
 }
 
 static uint64_t level_bytes(uint32_t format, uint32_t w, uint32_t h) {
@@ -429,11 +434,40 @@ static int make_texture_image(SuRenderer *r, TexRes *t) {
     return r->f.vkCreateImageView(r->dev, &vi, NULL, &t->view) == VK_SUCCESS;
 }
 
+/* The sampler set of a cube texture (env_dsl, binding 0): linear, mipmapped, clamp to edge. 1 on success. */
+static int make_cube_set(SuRenderer *r, TexRes *t) {
+    VkDescriptorSetAllocateInfo ai;
+    VkDescriptorImageInfo ii;
+    VkWriteDescriptorSet w;
+    memset(&ai, 0, sizeof ai);
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = r->pool_mat;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &r->env_dsl;
+    if (r->f.vkAllocateDescriptorSets(r->dev, &ai, &t->env_set) != VK_SUCCESS) {
+        t->env_set = VK_NULL_HANDLE;
+        return 0;
+    }
+    ii.sampler = r->samplers[4];
+    ii.imageView = t->view;
+    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    memset(&w, 0, sizeof w);
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = t->env_set;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &ii;
+    r->f.vkUpdateDescriptorSets(r->dev, 1, &w, 0, NULL);
+    return 1;
+}
+
 static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int internal, SuRenderHandle *out) {
     uint32_t idx;
     uint32_t i;
     uint32_t maxm = 1;
     uint32_t big;
+    uint32_t layers;
+    uint32_t l;
     Res *s;
     TexRes *t;
     VkFormatProperties fp;
@@ -441,9 +475,10 @@ static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int 
                                 VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     if (r == NULL || d == NULL || out == NULL || d->mip_data == NULL || d->width == 0u || d->height == 0u ||
         d->width > 16384u || d->height > 16384u || vk_format(d->format) == VK_FORMAT_UNDEFINED || d->mip_count == 0u ||
-        (d->flags & ~SU_RENDER_UPLOAD_COPY) != 0u) {
+        (d->flags & ~SU_RENDER_UPLOAD_COPY) != 0u || (d->layers > 1u && (d->layers != 6u || d->width != d->height))) {
         return SU_E_INVALID_ARGUMENT;
     }
+    layers = d->layers > 1u ? d->layers : 1u;
     big = d->width > d->height ? d->width : d->height;
     while ((big >>= 1) != 0u) {
         maxm++;
@@ -451,7 +486,7 @@ static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int 
     if (d->mip_count > maxm || d->mip_count > SU_ASSET_MAX_MIPS) {
         return SU_E_INVALID_ARGUMENT;
     }
-    for (i = 0; i < d->mip_count; i++) {
+    for (i = 0; i < d->mip_count * layers; i++) {
         if (d->mip_data[i] == NULL) {
             return SU_E_INVALID_ARGUMENT;
         }
@@ -464,7 +499,8 @@ static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int 
     s->internal = (uint8_t)internal;
     t = &s->u.tex;
     t->format = d->format;
-    t->layers = 1;
+    t->layers = layers;
+    t->cube_mips = d->mip_count;
     t->vkfmt = vk_format(d->format);
     t->width = d->width;
     t->height = d->height;
@@ -484,8 +520,8 @@ static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int 
         uint64_t total = 0;
         uint8_t *p;
         for (i = 0; i < d->mip_count; i++) {
-            total += su_asset_texture_level_size(d->format, d->width >> i ? d->width >> i : 1u,
-                                                 d->height >> i ? d->height >> i : 1u);
+            total += layers * su_asset_texture_level_size(d->format, d->width >> i ? d->width >> i : 1u,
+                                                            d->height >> i ? d->height >> i : 1u);
         }
         t->owned = malloc((size_t)total);
         if (t->owned == NULL) {
@@ -496,12 +532,14 @@ static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int 
         for (i = 0; i < d->mip_count; i++) {
             uint64_t n = su_asset_texture_level_size(d->format, d->width >> i ? d->width >> i : 1u,
                                                      d->height >> i ? d->height >> i : 1u);
-            memcpy(p, d->mip_data[i], (size_t)n);
-            t->src[i] = p;
-            p += n;
+            for (l = 0; l < layers; l++) {
+                memcpy(p, d->mip_data[i * layers + l], (size_t)n);
+                t->src[i * layers + l] = p;
+                p += n;
+            }
         }
     } else {
-        for (i = 0; i < d->mip_count; i++) {
+        for (i = 0; i < d->mip_count * layers; i++) {
             t->src[i] = d->mip_data[i];
         }
     }
@@ -516,6 +554,17 @@ static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int 
         free_slot(r, idx);
         return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "device memory for a %ux%u texture", (unsigned)d->width,
                            (unsigned)d->height);
+    }
+    if (layers == 6u && !make_cube_set(r, t)) {
+        Retired rt;
+        memset(&rt, 0, sizeof rt);
+        rt.img = t->img;
+        rt.mem = t->mem;
+        rt.view = t->view;
+        destroy_retired(r, &rt);
+        free(t->owned);
+        free_slot(r, idx);
+        return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "descriptor pool exhausted");
     }
     enqueue(r, idx);
     if (!internal) {
@@ -608,7 +657,7 @@ static int upload_texture(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, TexRes 
         if (n == 0u) {
             return 0;
         }
-        memcpy((uint8_t *)fr->staging.map + at, t->src[t->mip] + (uint64_t)t->layer * lvl_bytes + (uint64_t)t->row * row_bytes,
+        memcpy((uint8_t *)fr->staging.map + at, t->src[t->mip * t->layers + t->layer] + (uint64_t)t->row * row_bytes,
                (size_t)(n * row_bytes));
         memset(&c, 0, sizeof c);
         c.bufferOffset = at;
@@ -825,7 +874,8 @@ static VkDescriptorSet write_paint_set(SuRenderer *r, const SuRenderHandle *tex,
 }
 
 static int tex_srgb_format(uint32_t f) {
-    return f == SU_TEX_RGBA8_SRGB || f == SU_TEX_BC1_SRGB || f == SU_TEX_BC3_SRGB || f == SU_TEX_BC7_SRGB;
+    return f == SU_TEX_RGBA8_SRGB || f == SU_TEX_BC1_SRGB || f == SU_TEX_BC3_SRGB || f == SU_TEX_BC7_SRGB ||
+           f == SU_TEX_BC2_SRGB;
 }
 
 static int all_finite(const float *v, uint32_t n) {
@@ -1129,8 +1179,11 @@ static uint32_t env_create(SuRenderer *r, uint32_t size, uint32_t mips, uint16_t
     }
     t->owned = p;
     for (m = 0; m < mips; m++) {
-        t->src[m] = p;
-        p += 6u * level_bytes(TEXFMT_ENV, size >> m, size >> m);
+        uint32_t f;
+        for (f = 0; f < 6u; f++) {
+            t->src[m * 6u + f] = p;
+            p += level_bytes(TEXFMT_ENV, size >> m, size >> m);
+        }
     }
     if (!make_texture_image(r, t)) {
         Retired rt;
@@ -1143,36 +1196,16 @@ static uint32_t env_create(SuRenderer *r, uint32_t size, uint32_t mips, uint16_t
         free_slot(r, idx);
         return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "device memory for a %ux%u environment cube", (unsigned)size, (unsigned)size);
     }
-    {
-        VkDescriptorSetAllocateInfo ai;
-        VkDescriptorImageInfo ii;
-        VkWriteDescriptorSet w;
-        memset(&ai, 0, sizeof ai);
-        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        ai.descriptorPool = r->pool_mat;
-        ai.descriptorSetCount = 1;
-        ai.pSetLayouts = &r->env_dsl;
-        if (r->f.vkAllocateDescriptorSets(r->dev, &ai, &t->env_set) != VK_SUCCESS) {
-            Retired rt;
-            memset(&rt, 0, sizeof rt);
-            rt.img = t->img;
-            rt.mem = t->mem;
-            rt.view = t->view;
-            destroy_retired(r, &rt);
-            free(t->owned);
-            free_slot(r, idx);
-            return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "descriptor pool exhausted");
-        }
-        ii.sampler = r->samplers[4]; /* linear, mipmapped, clamp to edge */
-        ii.imageView = t->view;
-        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        memset(&w, 0, sizeof w);
-        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet = t->env_set;
-        w.descriptorCount = 1;
-        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w.pImageInfo = &ii;
-        r->f.vkUpdateDescriptorSets(r->dev, 1, &w, 0, NULL);
+    if (!make_cube_set(r, t)) {
+        Retired rt;
+        memset(&rt, 0, sizeof rt);
+        rt.img = t->img;
+        rt.mem = t->mem;
+        rt.view = t->view;
+        destroy_retired(r, &rt);
+        free(t->owned);
+        free_slot(r, idx);
+        return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "descriptor pool exhausted");
     }
     enqueue(r, idx);
     if (!internal) {
@@ -1211,6 +1244,59 @@ uint32_t su_render_env_from_sky(SuRenderer *r, uint32_t size, const SuRenderLigh
     }
     su_env_sky_faces(size, light, faces);
     st = su_render_env_create(r, size, faces, out);
+    free(faces);
+    return st;
+}
+
+uint32_t su_render_texture_create_dds(SuRenderer *r, const SuDdsImage *img, uint32_t flags, SuRenderHandle *out) {
+    const uint8_t *ptrs[SU_ASSET_MAX_MIPS * 6u];
+    SuRenderTextureDesc d;
+    if (r == NULL || img == NULL || out == NULL || (img->faces != 1u && img->faces != 6u) || img->mip_count == 0u ||
+        img->mip_count > SU_ASSET_MAX_MIPS) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    su_dds_level_table(img, ptrs);
+    memset(&d, 0, sizeof d);
+    d.width = img->width;
+    d.height = img->height;
+    d.format = img->format;
+    d.mip_count = img->mip_count;
+    d.mip_data = ptrs;
+    d.flags = flags;
+    d.layers = img->faces;
+    return texture_create(r, &d, 0, out);
+}
+
+uint32_t su_render_env_from_dds(SuRenderer *r, const SuDdsImage *img, SuRenderHandle *out) {
+    uint32_t m;
+    uint32_t f;
+    uint32_t size = 0;
+    uint32_t st = SU_OK;
+    float *faces;
+    if (r == NULL || img == NULL || out == NULL || img->faces != 6u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (m = 0; m < img->mip_count; m++) {
+        uint32_t w = img->width >> m;
+        uint32_t h = img->height >> m;
+        if (w == h && su_env_mip_count(w) != 0u) {
+            size = w;
+            break;
+        }
+    }
+    if (size == 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    faces = malloc((size_t)6u * size * size * 4u * sizeof *faces);
+    if (faces == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (f = 0; f < 6u && st == SU_OK; f++) {
+        st = su_dds_decode_rgba32f(img, f, m, faces + (size_t)f * size * size * 4u);
+    }
+    if (st == SU_OK) {
+        st = su_render_env_create(r, size, faces, out);
+    }
     free(faces);
     return st;
 }
