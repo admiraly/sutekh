@@ -209,6 +209,72 @@ SU_HOST_API uint32_t su_host_digest(const SuHostWorld *w, uint8_t out[32]);
 /* Lowercase hex helper (out holds 65 bytes). */
 SU_HOST_API void su_host_hex(const uint8_t digest[32], char out[65]);
 
+/* ---- events (additive, API version 1) ----
+ *
+ * The world's event log is part of its state (it is in snapshots and the digest). Systems append events
+ * with emit_event; the boundary of a tick appends one record per structural command (despawn applied or
+ * refused); su_host_spawn and su_host_despawn append a record each. Every event has a sequence number
+ * (event_seq) that increases by one per event for the life of the world, so (event_seq) orders events
+ * exactly as the engine committed them: by tick, then system, then slot, then per-row emission order, with
+ * host records where the host made them. The log is a ring of SuHostWorldDesc.event_log_max events: older
+ * events are evicted, and readers are told how many they missed. Reading never changes the world.
+ *
+ * tick of an event: a system event or command record carries the tick that step published (a step from
+ * tick T to T + 1 emits events with tick T + 1); a host spawn or despawn record carries the committed tick
+ * at the moment of the call. Rollback: restoring a snapshot restores its log, so su_host_event_next_seq
+ * goes back too, and re-simulating the same inputs re-emits the same events with the same sequence numbers.
+ * A cursor beyond the restored log is SU_E_INVALID_ARGUMENT; clamp it to su_host_event_next_seq. */
+
+/* Same layout as the engine's event record (40 bytes). kind is the IR constant, or an engine kind below. */
+typedef struct SuHostEvent {
+    uint64_t event_seq;
+    uint64_t tick;
+    uint32_t kind;
+    uint32_t system_index;  /* schedule position of the emitting system; SU_HOST_EVENT_SYSTEM_HOST for host records */
+    uint32_t slot;          /* emitting row */
+    uint32_t seq;           /* emission order within the row */
+    uint32_t a;
+    uint32_t b;
+} SuHostEvent;
+
+#define SU_HOST_EVENT_SYSTEM_HOST UINT32_C(0xFFFFFFFF)
+#define SU_HOST_EVENT_REJECTED    UINT32_C(0xFFFFFFFF) /* structural command refused (a = command kind, b = status) */
+#define SU_HOST_EVENT_SPAWNED     UINT32_C(0xFFFFFFFE) /* host spawn (a = slot, b = generation) */
+#define SU_HOST_EVENT_DESPAWNED   UINT32_C(0xFFFFFFFD) /* despawn applied (a = slot, b = old generation) */
+
+/* Sequence number the next event will receive (= the cursor that is fully caught up). */
+SU_HOST_API uint64_t su_host_event_next_seq(const SuHostWorld *w);
+/* Copies up to max events with event_seq >= cursor, oldest first, into out. *count receives the number
+ * copied, *next_cursor the cursor to pass next time, and *skipped (optional) how many events after cursor
+ * were already evicted from the ring (reading then starts at the oldest retained event). */
+SU_HOST_API uint32_t su_host_events_read(const SuHostWorld *w, uint64_t cursor, SuHostEvent *out, uint32_t max,
+                                         uint32_t *count, uint64_t *next_cursor, uint64_t *skipped);
+/* Copies up to max retained events whose tick field equals tick, in event_seq order. *total (optional)
+ * receives how many retained events match (more than max means the copy was truncated); *complete
+ * (optional) is 1 when no event of that tick can have been evicted (nothing was ever evicted, or the
+ * oldest retained event is from an earlier tick), else 0. */
+SU_HOST_API uint32_t su_host_events_for_tick(const SuHostWorld *w, uint64_t tick, SuHostEvent *out, uint32_t max,
+                                             uint32_t *count, uint32_t *total, uint32_t *complete);
+
+/* ---- rollback-grade state operations (additive, API version 1) ---- */
+
+/* su_host_snapshot_restore without reallocation: the snapshot is validated completely and then written into
+ * the world's existing columns, entity table and event log. It accepts exactly the snapshots
+ * su_host_snapshot_restore accepts, with the same codes, leaves the world unchanged on failure, and keeps
+ * queued inputs. The first call on a world allocates a scratch entity table and event log once (sized by
+ * the capacity and event_log_max; SU_E_RESOURCE_LIMIT if that fails); later calls allocate nothing. */
+SU_HOST_API uint32_t su_host_snapshot_restore_inplace(SuHostWorld *w, const uint8_t *buf, size_t len,
+                                                      SuHostError *err);
+
+/* FAST, NON-CANONICAL digest. This is not su_host_digest and the two are never interchangeable: it is the
+ * 64-bit XXH64 (seed 0) of the same canonical snapshot bytes that su_host_digest hashes with SHA-256.
+ * Identical states give identical values and different values prove different states, but it is not
+ * collision resistant: use it for per-tick desync checks between cooperating peers or for rollback
+ * self-checks, and use su_host_digest for replays, files and anything that crosses a trust boundary.
+ * The value is defined by SU_HOST_FAST_DIGEST_VERSION. */
+#define SU_HOST_FAST_DIGEST_VERSION 1u
+SU_HOST_API uint32_t su_host_digest_fast(const SuHostWorld *w, uint64_t *out);
+
 #ifdef __cplusplus
 }
 #endif

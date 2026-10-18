@@ -1389,3 +1389,93 @@ uint32_t su_world_memory(const SuWorld *w, SuWorldMemory *out) {
                  out->entity_table + out->metadata;
     return SU_OK;
 }
+
+/* ---- in-place restore (rollback) ---------------------------------------- */
+
+/* Offset of the first field block and the high water of checked bytes. */
+static size_t su_inplace_layout(const uint8_t *buf, uint32_t *hw) {
+    *hw = (uint32_t)su_rd_u64(buf + SU_WORLD_V2_HEADER_BYTES + SU_WORLD_ENTS_HW_OFF);
+    return SU_WORLD_V2_HEADER_BYTES + SU_WORLD_ENTS_HEADER_BYTES + (size_t)*hw * SU_WORLD_ENTS_RECORD_BYTES;
+}
+
+uint32_t su_world_restore_canonical_check(const SuWorld *w, const uint8_t *buf, size_t len, SuEnts *scratch) {
+    uint64_t hw64;
+    uint32_t fc;
+    uint32_t hw;
+    uint32_t i;
+    uint32_t r;
+    uint32_t st;
+    size_t ents_len;
+    size_t off;
+
+    if (w == NULL || buf == NULL || scratch == NULL || su_ents_capacity(scratch) != w->row_count ||
+        scratch == w->ents_committed || scratch == w->ents_working || w->phase != SU_WORLD_PHASE_IDLE) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    /* Same checks, in the same order, as the version 2 path of su_world_restore_canonical. */
+    if (len < SU_WORLD_MAGIC_BYTES + 4u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (memcmp(buf, SU_WORLD_MAGIC, SU_WORLD_MAGIC_BYTES) != 0 ||
+        su_rd_u32(buf + SU_WORLD_MAGIC_BYTES) != SU_WORLD_STATE_VERSION ||
+        len < SU_WORLD_V2_HEADER_BYTES + SU_WORLD_ENTS_HEADER_BYTES) {
+        return SU_E_PARSE;
+    }
+    fc = su_rd_u32(buf + SU_WORLD_MAGIC_BYTES + 12u);
+    if (fc != w->field_count) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    hw64 = su_rd_u64(buf + SU_WORLD_V2_HEADER_BYTES + SU_WORLD_ENTS_HW_OFF);
+    if (hw64 > SU_LIMIT_ROWS) {
+        return SU_E_PARSE;
+    }
+    hw = (uint32_t)hw64;
+    ents_len = SU_WORLD_ENTS_HEADER_BYTES + (size_t)hw * SU_WORLD_ENTS_RECORD_BYTES;
+    if (len - SU_WORLD_V2_HEADER_BYTES < ents_len) {
+        return SU_E_PARSE;
+    }
+    st = su_ents_canonical_parse_into(scratch, buf + SU_WORLD_V2_HEADER_BYTES, ents_len);
+    if (st != SU_OK) {
+        return st == SU_E_RESOURCE_LIMIT || st == SU_E_SCHEMA_MISMATCH ? st : SU_E_PARSE;
+    }
+    off = SU_WORLD_V2_HEADER_BYTES + ents_len;
+    if (len != off + (size_t)fc * (8u + 4u * (size_t)hw)) {
+        return SU_E_PARSE;
+    }
+    for (i = 0; i < fc; i++) {
+        if (su_rd_u32(buf + off) != w->fields[i].id || su_rd_u32(buf + off + 4u) != w->fields[i].type) {
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        off += 8u;
+        for (r = 0; r < hw; r++) {
+            if (su_rd_u32(buf + off + 4u * (size_t)r) != 0u && !su_ents_slot_alive(scratch, r)) {
+                return SU_E_TYPE;
+            }
+        }
+        off += 4u * (size_t)hw;
+    }
+    return SU_OK;
+}
+
+void su_world_restore_canonical_commit(SuWorld *w, const uint8_t *buf, SuEnts *scratch) {
+    uint32_t old_hw = su_ents_high_water(w->ents_committed);
+    uint32_t hw = 0;
+    size_t off = su_inplace_layout(buf, &hw);
+    uint32_t i;
+    uint32_t r;
+
+    (void)su_ents_swap(w->ents_committed, scratch);
+    for (i = 0; i < w->field_count; i++) {
+        uint32_t *col = w->committed[i];
+        off += 8u;
+        for (r = 0; r < hw; r++) {
+            col[r] = su_rd_u32(buf + off + 4u * (size_t)r);
+        }
+        /* Rows at or above the high water are dead and zero; clear what the previous state used there. */
+        if (old_hw > hw) {
+            memset(col + hw, 0, (size_t)(old_hw - hw) * sizeof *col);
+        }
+        off += 4u * (size_t)hw;
+    }
+    w->tick = su_rd_u64(buf + SU_WORLD_MAGIC_BYTES + 4u);
+}
