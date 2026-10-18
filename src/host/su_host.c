@@ -5,6 +5,7 @@
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #include "sutekh/host.h"
+#include "host/su_host_internal.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -35,27 +36,6 @@
 #define HOST_INPUT_HEADER (8u + 4u + 8u + 4u)
 #define HOST_INPUT_ENTRY 16u
 
-/* One tick's input record: writes sorted by (slot, field id), unique. */
-typedef struct HostRecord {
-    uint64_t tick;
-    uint32_t count;
-    uint32_t cap;
-    SuHostInput *writes;
-} HostRecord;
-
-struct SuHostWorld {
-    SuSchedule sched;              /* owns the modules, VM contexts and the entity runtime */
-    SuWorld *w;
-    uint32_t hz;
-    uint64_t seed;
-    uint64_t max_struct;
-    uint64_t max_events;
-    uint64_t log_max;
-    uint8_t identity[32];
-    HostRecord *recs;              /* ascending tick */
-    uint32_t rec_count;
-    uint32_t rec_cap;
-};
 
 /* ---------- small helpers ---------- */
 

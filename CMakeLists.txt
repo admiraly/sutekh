@@ -622,15 +622,17 @@ add_test(NAME rts_behavior_regeneration COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CUR
 # ---- BEGIN in-process host API (include/sutekh/host.h; planning/amendments/2026-10-18-downstream-host-work.md) ----
 # The schedule, entity tick and host-operator declaration sources are compiled into the host library in their
 # default configuration (no native tier, no test seams), so it does not pull in the control plane.
-set(SU_HOST_SOURCES src/host/su_host.c src/host/su_host_clock.c src/runtime/schedule.c src/runtime/entity_tick.c src/runtime/rts/host_decl.c)
+set(SU_HOST_SOURCES src/host/su_host.c src/host/su_host_clock.c src/host/su_replay.c src/runtime/schedule.c src/runtime/entity_tick.c src/runtime/rts/host_decl.c)
 add_library(su_host STATIC ${SU_HOST_SOURCES})
 target_include_directories(su_host PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
 target_link_libraries(su_host PUBLIC su_vm su_world su_ents su_ir su_jobs su_cmdq su_platform)
+target_compile_definitions(su_host PRIVATE SUTEKH_VERSION_STRING="${PROJECT_VERSION}")
 sutekh_apply_warnings(su_host)
 # The same API as a shared library (sutekh_host.dll / libsutekh_host.so). Users define SUTEKH_HOST_DLL.
 add_library(sutekh_host SHARED ${SU_HOST_SOURCES})
 target_include_directories(sutekh_host PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
-target_compile_definitions(sutekh_host PRIVATE SUTEKH_HOST_BUILD PUBLIC SUTEKH_HOST_DLL)
+target_compile_definitions(sutekh_host PRIVATE SUTEKH_HOST_BUILD SUTEKH_VERSION_STRING="${PROJECT_VERSION}"
+                           PUBLIC SUTEKH_HOST_DLL)
 target_link_libraries(sutekh_host PRIVATE su_vm su_world su_ents su_ir su_jobs su_cmdq su_platform)
 set_target_properties(sutekh_host PROPERTIES C_VISIBILITY_PRESET hidden)
 set_target_properties(su_vm su_world su_ents su_ir su_jobs su_cmdq su_platform PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -649,6 +651,20 @@ add_executable(test_clock tests/host/test_clock.c)
 target_link_libraries(test_clock PRIVATE su_host)
 sutekh_apply_warnings(test_clock)
 add_test(NAME host_clock COMMAND test_clock)
+# Command-stream replay (include/sutekh/replay.h): in-process checks, then a recording made by the static
+# library in one process and verified through the DLL in another.
+add_executable(test_replay tests/host/test_replay.c)
+target_link_libraries(test_replay PRIVATE su_host)
+sutekh_apply_warnings(test_replay)
+add_test(NAME host_replay COMMAND test_replay WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_executable(test_replay_dll tests/host/test_replay.c)
+target_link_libraries(test_replay_dll PRIVATE sutekh_host)
+sutekh_apply_warnings(test_replay_dll)
+add_test(NAME host_replay_record COMMAND test_replay record "${CMAKE_BINARY_DIR}/host_replay.bin"
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME host_replay_verify_dll COMMAND test_replay_dll verify "${CMAKE_BINARY_DIR}/host_replay.bin"
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+set_tests_properties(host_replay_verify_dll PROPERTIES DEPENDS host_replay_record)
 # Example presentation-host loop (examples/host); run as a test so it keeps working.
 add_executable(minimal_host examples/host/minimal_host.c)
 target_link_libraries(minimal_host PRIVATE sutekh_host)
