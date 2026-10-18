@@ -70,6 +70,16 @@ if(NOT SUTEKH_RENDER STREQUAL "OFF" AND NOT SUTEKH_VULKAN_INCLUDE STREQUAL "")
         add_executable(space_demo examples/presentation/space_demo.c)
         target_link_libraries(space_demo PRIVATE su_render su_input su_host user32)
         sutekh_apply_warnings(space_demo)
+        # The demo's world, scripted input and rollback drills, headless and offscreen: both runs must reach the
+        # same pinned digest (480 ticks of IR 0.3 at a fixed 60 Hz frame time). Exit 3 (no Vulkan) skips the
+        # offscreen run; the headless run needs no GPU.
+        set(SUTEKH_DEMO_DIGEST fa02b76e1269693a5f4daa5c7139818c0fff106bd5f57c656556e1336aa1defd)
+        add_test(NAME demo_headless_rollback COMMAND space_demo --headless --script --frames 240 --rollback-check
+                 --expect-digest ${SUTEKH_DEMO_DIGEST} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME demo_offscreen_rollback COMMAND space_demo --offscreen "${CMAKE_BINARY_DIR}/space_demo.ppm"
+                 --frames 240 --rollback-check --expect-digest ${SUTEKH_DEMO_DIGEST}
+                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(demo_offscreen_rollback PROPERTIES SKIP_RETURN_CODE 3)
     endif()
 else()
     message(STATUS "Sutekh renderer: skipped (no Vulkan headers; run tools/bootstrap_vulkan_headers.py)")

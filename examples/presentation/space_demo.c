@@ -17,8 +17,12 @@
  *                                      against a shadow world that has no renderer (exit 1 on any difference);
  *                                      the camera is a fixed overview
  *   space_demo --headless              no renderer at all
+ *   --expect-digest HEX                fail unless the final canonical digest is HEX
  *   options: --no-vsync, --validation, --map file, --width W --height H, --exercise-window (resize, minimize,
- *            restore and resize back during the run, to drive swapchain recreation)
+ *            restore and resize back during the run, to drive swapchain recreation), --rollback-check (every
+ *            8 ticks, so every tick is re-simulated once: restore the state of 8 ticks ago in place, re-push the recorded input records,
+ *            re-simulate, and require the same fast digest and events)
+ * Offscreen runs, and headless runs with --script, use a fixed 60 Hz frame time, so they are reproducible.
  * Exit status: 0 success, 1 failure, 3 presentation unavailable (the simulation still ran headless). */
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
@@ -40,6 +44,8 @@
 #define MAX_SHIPS 12u
 #define TICK_HZ 120u
 #define GATE_EVENT 1u
+#define RB_DEPTH 8u             /* --rollback-check: ticks re-simulated per drill */
+#define RB_SNAP_BYTES 65536u    /* one snapshot of this 12-ship world, event log included */
 
 /* Field ids of examples/presentation/flight.capsule.json (q32 fields use id and id + 1). */
 enum {
@@ -76,6 +82,15 @@ typedef struct Demo {
     double gate_flash;        /* seconds left */
     uint64_t gate_events;
     uint64_t shadow_mismatch;
+    int rollback;
+    uint8_t rb_snap[RB_DEPTH][RB_SNAP_BYTES];
+    size_t rb_len[RB_DEPTH];
+    uint64_t rb_seq[RB_DEPTH];
+    SuInputRecord rb_rec[RB_DEPTH];
+    uint64_t rollbacks;
+    uint64_t rb_mismatch;
+    uint64_t rb_events;      /* events compared across drills */
+    double rb_ms_sum;
     double step_ms_sum;
     uint64_t step_count;
 } Demo;
@@ -250,6 +265,54 @@ static void push_and_step(SuHostWorld *w, uint64_t tick, const SuInputRecord *re
     }
 }
 
+/* Prediction/reconciliation drill: restore the state of RB_DEPTH ticks ago in place, re-push the recorded input
+ * records, re-simulate all RB_DEPTH ticks in one step call, and require the same fast digest and the same events
+ * (same sequence numbers) as before the rollback. */
+static void rollback_check(uint64_t now_tick) {
+    uint64_t base = now_tick - RB_DEPTH;
+    uint32_t b = (uint32_t)(base % RB_DEPTH);
+    SuHostEvent before[64];
+    SuHostEvent after[64];
+    uint32_t n_before = 0;
+    uint32_t n_after = 0;
+    uint64_t cur = 0;
+    uint64_t fa = 0;
+    uint64_t fb = 0;
+    uint64_t done = 0;
+    uint64_t k;
+    SuHostError e;
+    double t0;
+    (void)su_host_digest_fast(g.w, &fa);
+    (void)su_host_events_read(g.w, g.rb_seq[b], before, 64, &n_before, &cur, NULL);
+    t0 = now_s();
+    if (su_host_snapshot_restore_inplace(g.w, g.rb_snap[b], g.rb_len[b], &e) != SU_OK) {
+        fprintf(stderr, "rollback restore: %s\n", e.message);
+        exit(1);
+    }
+    for (k = base; k < now_tick; k++) {
+        SuHostInput writes[1 + SU_INPUT_MAX_AXES];
+        uint32_t n = 0;
+        if (su_input_record_writes(&g.rb_rec[k % RB_DEPTH], &g.fields, g.ents[0], writes, &n) != SU_OK ||
+            su_host_input_push(g.w, k, writes, n, &e) != SU_OK) {
+            fprintf(stderr, "rollback input: %s\n", e.message);
+            exit(1);
+        }
+    }
+    if (su_host_step(g.w, RB_DEPTH, &done, &e) != SU_OK || done != RB_DEPTH) {
+        fprintf(stderr, "rollback step: %s\n", e.message);
+        exit(1);
+    }
+    (void)su_host_digest_fast(g.w, &fb);
+    g.rb_ms_sum += (now_s() - t0) * 1000.0;
+    (void)su_host_events_read(g.w, g.rb_seq[b], after, 64, &n_after, &cur, NULL);
+    g.rollbacks++;
+    g.rb_events += n_after;
+    if (fa != fb || n_before != n_after || memcmp(before, after, (size_t)n_before * sizeof before[0]) != 0) {
+        g.rb_mismatch++;
+        fprintf(stderr, "rollback at tick %llu: re-simulation differs\n", (unsigned long long)now_tick);
+    }
+}
+
 /* Runs one tick: map the state, push the record, step, read events, and step the shadow world. */
 static void tick(const SuInputState *s) {
     SuInputRecord rec;
@@ -265,6 +328,16 @@ static void tick(const SuInputState *s) {
     }
     g.last_buttons = rec.buttons;
     memcpy(g.prev, g.cur, sizeof g.prev);
+    if (g.rollback) {
+        /* Keep the state before tick t, its event cursor and its input record for rollback_check. */
+        uint32_t k = (uint32_t)(t % RB_DEPTH);
+        if (su_host_snapshot_write(g.w, g.rb_snap[k], RB_SNAP_BYTES, &g.rb_len[k]) != SU_OK) {
+            fprintf(stderr, "rollback snapshot does not fit\n");
+            exit(1);
+        }
+        g.rb_seq[k] = su_host_event_next_seq(g.w);
+        g.rb_rec[k] = rec;
+    }
     t0 = now_s();
     push_and_step(g.w, t, &rec);
     g.step_ms_sum += (now_s() - t0) * 1000.0;
@@ -285,6 +358,9 @@ static void tick(const SuInputState *s) {
             g.gate_flash = 0.5;
             printf("tick %llu: ship %u crossed the gate\n", (unsigned long long)ev[i].tick, (unsigned)ev[i].a);
         }
+    }
+    if (g.rollback && (t + 1u) % RB_DEPTH == 0u) {
+        rollback_check(t + 1u);
     }
 }
 
@@ -434,10 +510,13 @@ static void draw(float alpha, double dt, SuChaseCamera *chase, SuFreeCamera *fre
 int main(int argc, char **argv) {
     const char *map_path = "examples/input/default_map.json";
     const char *offscreen = NULL;
+    const char *expect_digest = NULL;
+    int fixed_dt = 0;
     uint64_t max_frames = 0;
     double seconds = 0.0;
     int script = 0;
     int exercise = 0;
+    int rollback = 0;
     int headless = 0;
     uint32_t flags = 0;
     uint32_t width = 1280;
@@ -466,6 +545,10 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--offscreen") == 0 && i + 1 < argc) {
             offscreen = argv[++i];
             script = 1;
+        } else if (strcmp(argv[i], "--expect-digest") == 0 && i + 1 < argc) {
+            expect_digest = argv[++i];
+        } else if (strcmp(argv[i], "--rollback-check") == 0) {
+            rollback = 1;
         } else if (strcmp(argv[i], "--exercise-window") == 0) {
             exercise = 1;
         } else if (strcmp(argv[i], "--headless") == 0) {
@@ -489,6 +572,7 @@ int main(int argc, char **argv) {
         max_frames = 240u;
     }
     memset(&g, 0, sizeof g);
+    g.rollback = rollback;
     g.w = make_world();
     g.n = MAX_SHIPS;
     for (i = 0; i < (int)g.n; i++) {
@@ -566,6 +650,8 @@ int main(int argc, char **argv) {
         seconds = 2.0;
     }
 
+    /* Offscreen and headless scripted runs use a fixed 60 Hz frame time: reproducible ticks, image and digest. */
+    fixed_dt = offscreen != NULL || (script && !presentation && headless);
     (void)su_host_clock_init(&clock, TICK_HZ, 8);
     memset(&chase, 0, sizeof chase);
     chase.offset.y = 3.0f;
@@ -592,7 +678,7 @@ int main(int argc, char **argv) {
         }
         now = now_s();
         /* Offscreen runs use a fixed 60 Hz frame time so the image and digest are reproducible. */
-        dt = offscreen != NULL ? 1.0 / 60.0 : now - t_prev;
+        dt = fixed_dt ? 1.0 / 60.0 : now - t_prev;
         t_prev = now;
         ticks = su_host_clock_advance(&clock, (uint64_t)(dt * 1e9), &alpha);
         if (!script && g.input != NULL) {
@@ -633,7 +719,7 @@ int main(int argc, char **argv) {
             (void)su_render_stats(g.r, &rs);
             draw((float)alpha, dt, &chase, &freec, rs.width != 0u ? rs.width : width, rs.height != 0u ? rs.height : height,
                  &last_rec);
-        } else if (offscreen == NULL) {
+        } else if (!fixed_dt) {
             Sleep(1);
         }
         frames++;
@@ -685,6 +771,10 @@ int main(int argc, char **argv) {
         int ok = 1;
         (void)su_host_digest(g.w, dg);
         su_host_hex(dg, hex);
+        if (expect_digest != NULL && strcmp(expect_digest, hex) != 0) {
+            printf("digest differs from --expect-digest %s\n", expect_digest);
+            ok = 0;
+        }
         (void)su_host_digest_fast(g.w, &fast);
         printf("frames %llu, ticks %llu, dropped ticks %llu, gate events %llu, mean step %.3f ms\n",
                (unsigned long long)frames, (unsigned long long)su_host_tick(g.w),
@@ -700,6 +790,13 @@ int main(int argc, char **argv) {
             printf("frames drawn %llu, paused %llu, failed %llu\n", (unsigned long long)g.frames_drawn,
                    (unsigned long long)g.frames_paused, (unsigned long long)g.frames_failed);
             ok = rs.validation_errors == 0u && g.frames_failed == 0u;
+        }
+        if (g.rollback) {
+            printf("rollback drills: %llu (restore in place, re-push %u records, step %u ticks), %llu differed, "
+                   "%llu re-emitted events compared, mean %.3f ms each\n",
+                   (unsigned long long)g.rollbacks, RB_DEPTH, RB_DEPTH, (unsigned long long)g.rb_mismatch,
+                   (unsigned long long)g.rb_events, g.rollbacks ? g.rb_ms_sum / (double)g.rollbacks : 0.0);
+            ok = ok && g.rb_mismatch == 0u && g.rollbacks > 0u;
         }
         if (g.shadow != NULL) {
             printf("shadow world (no renderer): %llu tick digests differed\n", (unsigned long long)g.shadow_mismatch);
