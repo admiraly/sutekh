@@ -15,8 +15,10 @@ Lanes:
   win64-cross    Linux host with x86_64-w64-mingw32 GCC: cross-compile the M0 core, the native
                  backend and the Win64 probe; run them under wine when wine is installed. wine is a
                  compatibility layer, so a wine result is labelled as wine evidence, never Windows.
-  win64-native   Real Windows host. Not executed by this runner: always not_run here, because no
-                 Windows host is available in this environment. Never inferred from wine or mingw.
+  win64-native   Real Windows host with Clang and the MSVC libraries (tools/env-windows.ps1): configure,
+                 build the M0 unit tests, the engine and the default suite natively, run them, and run
+                 the native ABI probe when the AsmJit checkout is present. On any other host every check
+                 is not_run: Windows-native results are never inferred from wine or mingw.
   macos          unavailable: not a supported platform.
   arm64          unavailable: no ARM64 native backend (AsmJit ARM support is compiled out).
 
@@ -247,12 +249,64 @@ def win64_native_not_run(R):
     lane = "win64-native"
     reason = ("no Windows host in this environment (host OS: " + platform.system() + "); "
               "Windows-native execution is not inferred from wine or the mingw cross build")
-    if platform.system() == "Windows":
-        reason = ("this runner has no Windows-native lane implementation; no Windows-native "
-                  "evidence was collected by run_platform.py")
     for cid in ("win64native.build", "win64native.unit_tests", "win64native.native_abi_probe",
-                "win64native.sutekh_version"):
+                "win64native.sutekh_version", "win64native.ctest"):
         R.record(lane, cid, NOT_RUN, reason)
+
+
+def lane_win64_native(R, report):
+    """Native Windows: Clang targeting x86_64-pc-windows-msvc with the MSVC libraries and the Windows SDK, as
+    tools/env-windows.ps1 sets them up (INCLUDE, LIB, CC). Release build in the work directory."""
+    lane = "win64-native"
+    if platform.system() != "Windows":
+        win64_native_not_run(R)
+        return
+    clang = os.environ.get("CC") or caps.find_tool("clang")
+    cmake = caps.find_tool("cmake")
+    if not (clang and cmake and caps.find_tool("ninja")):
+        R.record(lane, "win64native.build", UNAVAILABLE, "clang, cmake or ninja not found (run tools/env-windows.ps1)")
+        return
+    build_dir = os.path.join(R.work_dir, "win64-native")
+    rc, text = R.run(lane, "win64native.configure",
+                     ["cmake", "-S", REPO_ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
+                      "-DCMAKE_C_COMPILER=" + clang], timeout=600)
+    if rc != 0:
+        R.record(lane, "win64native.build", FAILED, f"cmake configure returned {rc}")
+        return
+    rc, text = R.run(lane, "win64native.build", [cmake, "--build", build_dir], timeout=3600)
+    if rc != 0:
+        R.record(lane, "win64native.build", FAILED, f"build returned {rc}; failed: {failed_objects(text)[:5]}")
+        return
+    R.record(lane, "win64native.build", PASSED, "configured and built the default graph (Release)")
+    R.meta(lane, "compiler", {"path": clang, "version": caps.tool_entry("clang").get("version")})
+    for test in UNIT_TESTS:
+        exe = os.path.join(build_dir, test + ".exe")
+        rc, _ = R.run(lane, f"win64native.unit.{test}", [exe], timeout=600)
+        R.record(lane, f"win64native.unit.{test}", PASSED if rc == 0 else FAILED, f"exit {rc}", returncode=rc)
+    rc, text = R.run(lane, "win64native.sutekh_version", [os.path.join(build_dir, "sutekh.exe"), "--version"],
+                     timeout=60)
+    if rc == 0 and re.search(r"^sutekh \S+", text, re.M) and "build_type Release" in text:
+        R.record(lane, "win64native.sutekh_version", PASSED, text.splitlines()[0])
+    else:
+        R.record(lane, "win64native.sutekh_version", FAILED, f"exit {rc}")
+    rc, text = R.run(lane, "win64native.ctest", [caps.find_tool("ctest") or "ctest", "--test-dir", build_dir,
+                                                 "-j", "8", "--timeout", "900"], timeout=7200)
+    m = re.search(r"(\d+)% tests passed, (\d+) tests failed out of (\d+)", text)
+    skipped = re.findall(r"^\s*\d+ - (\S+) \(Skipped\)", text, re.M)
+    if m:
+        R.meta(lane, "ctest", {"failed": int(m.group(2)), "total": int(m.group(3)), "skipped": skipped})
+    if rc == 0 and m:
+        R.record(lane, "win64native.ctest", PASSED,
+                 f"{int(m.group(3)) - len(skipped)} passed, 0 failed, {len(skipped)} skipped ({', '.join(skipped)}) "
+                 f"of {m.group(3)}")
+    else:
+        R.record(lane, "win64native.ctest", FAILED, f"exit {rc}; summary {m.group(0) if m else None}")
+    if not report["asmjit_checkout_present"]:
+        R.record(lane, "win64native.native_abi_probe", UNAVAILABLE,
+                 "AsmJit checkout missing; the probe needs su_native (SUTEKH_NATIVE=ON is not built on Windows yet)")
+    else:
+        R.record(lane, "win64native.native_abi_probe", NOT_RUN,
+                 "the native (AsmJit) backend is not configured by this lane on Windows yet")
 
 
 def lane_win64_cross(R, report, skip_full_graph):
@@ -422,7 +476,7 @@ def main(argv=None):
     if "win64-cross" in lanes:
         lane_win64_cross(R, report, args.skip_full_graph)
     if "win64-native" in lanes:
-        win64_native_not_run(R)
+        lane_win64_native(R, report)
     if "macos" in lanes:
         lane_macos(R)
     if "arm64" in lanes:
@@ -445,6 +499,15 @@ def main(argv=None):
         probe_bin = os.path.join(R.work_dir, "linux-native", "probe", "native_abi_probe")
         R.write_lane("linux-native", "platform-linux.json", host, linux_tools, linux_inputs,
                      {"native_abi_probe_sysv": sha256_file(probe_bin)})
+    if "win64-native" in lanes and platform.system() == "Windows":
+        build_dir = os.path.join(R.work_dir, "win64-native")
+        art = {"build-platform/win64-native/" + n + ".exe": sha256_file(os.path.join(build_dir, n + ".exe"))
+               for n in list(UNIT_TESTS) + ["sutekh"]}
+        win_inputs = {rel(p): sha256_file(p) for p in (os.path.join(REPO_ROOT, "tests", "platform", "run_platform.py"),
+                      os.path.join(REPO_ROOT, "tests", "platform", "capabilities.py"),
+                      os.path.join(REPO_ROOT, "tools", "env-windows.ps1"))}
+        R.write_lane("win64-native", "platform-windows-native.json", host,
+                     tools_for(report, ["clang", "cmake", "ninja"]), win_inputs, art)
     if "win64-cross" in lanes:
         art = {}
         build_dir = os.path.join(R.work_dir, "win64-cross")

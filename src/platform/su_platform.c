@@ -182,8 +182,8 @@ int su_platform_path_is_absolute(const char *path) {
         return 0;
     }
 #if defined(_WIN32)
-    if (su_platform_is_sep(path[0]) && su_platform_is_sep(path[1])) {
-        return 1; /* UNC or an extended-length prefix */
+    if (su_platform_is_sep(path[0])) {
+        return 1; /* UNC, an extended-length prefix, or the root of the current drive ("/etc/x") */
     }
     return ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' &&
            su_platform_is_sep(path[2]);

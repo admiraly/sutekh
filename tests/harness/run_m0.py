@@ -65,6 +65,22 @@ sys.path.insert(0, HERE)
 
 import reference_eval as ref  # noqa: E402
 
+# Process facts come from /proc on Linux and from the kernel through ctypes on Windows (os_facts_win.py).
+OSW = None
+if os.name == "nt":
+    import os_facts_win as OSW  # noqa: E402,N812
+
+
+EXE_SUFFIX = ".exe" if os.name == "nt" else ""
+
+
+def hard_kill(pid) -> None:
+    """SIGKILL on POSIX; TerminateProcess (exit code 137) on Windows. Raises OSError like os.kill."""
+    if OSW is not None:
+        OSW.kill(pid)
+    else:
+        os.kill(pid, signal.SIGKILL)
+
 HARNESS_FORMAT = "m0-harness/0.1"
 PROTOCOL = "0.1"
 MAX_MESSAGE = 1048576          # AGENT_RPC.md section 1: 1 MiB per message
@@ -334,6 +350,8 @@ def os_identity(pid):
     so a pid that was recycled for a new process has a different identity."""
     if not isinstance(pid, int) or isinstance(pid, bool):
         return None
+    if OSW is not None:
+        return OSW.identity(pid)
     try:
         with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
             raw = fh.read()
@@ -1156,7 +1174,7 @@ def t00(t: TestCtx):
     t.check("clean configure returncode", 0, rc_cfg)
     rc_bld, _ = t.run_cmd(["cmake", "--build", bdir, "--parallel"], timeout=1800)
     t.check("clean build returncode", 0, rc_bld)
-    clean_bin = os.path.join(bdir, "sutekh")
+    clean_bin = os.path.join(bdir, "sutekh" + EXE_SUFFIX)
     if not os.path.isfile(clean_bin):
         raise Failed(f"clean build produced no binary at {clean_bin}")
     clean_sha = sha256_file(clean_bin)
@@ -1329,7 +1347,7 @@ def tx2(t: TestCtx):
             raise Failed("engine.info does not report the active worker pid")
         t.check(f"TX2 {label}: worker pid is a live child of the supervisor (OS ppid)", True,
                 (identity_key(os_identity(pid)) or (0, 0, 0))[2] == sup_pid)
-        os.kill(pid, signal.SIGKILL)
+        hard_kill(pid)
         env = sess.request("world.step", {"world_id": wid, "expected_world_revision": sess.revs[wid], "ticks": 1})
         t.check_mismatches(f"TX2 {label}: request that found the dead worker", recovery_mismatches(env, pid))
         new = env.get("recovery", {}).get("replaced_pid_new")
@@ -1743,6 +1761,8 @@ def t09(t: TestCtx):
 
 def _children_fast(pid) -> set:
     """Child pids of a process, from /proc/<pid>/task/<tid>/children (one small read per thread)."""
+    if OSW is not None:
+        return OSW.children(pid)
     kids: set = set()
     try:
         tids = os.listdir(f"/proc/{pid}/task")
@@ -1761,6 +1781,8 @@ T10_ATTEMPTS = 12
 
 
 def _comm(pid):
+    if OSW is not None:
+        return OSW.comm(pid)
     try:
         with open(f"/proc/{pid}/comm", encoding="utf-8") as fh:
             return fh.read().strip()
@@ -1777,7 +1799,7 @@ def t10(t: TestCtx):
     and retried in a fresh serve process, up to T10_ATTEMPTS. A success requires a kill that landed
     while the evaluation was in flight (reply is an error).
     """
-    if not os.path.isdir("/proc/self"):
+    if OSW is None and not os.path.isdir("/proc/self"):
         raise NotRun("no /proc: child processes cannot be observed or signalled")
     attempts = []
     found = None
@@ -1803,7 +1825,7 @@ def t10(t: TestCtx):
                     if pid != active and pid not in killed:
                         ident = os_identity(pid)
                         try:
-                            os.kill(pid, signal.SIGKILL)
+                            hard_kill(pid)
                             killed.append(pid)
                             meta[pid] = ident
                         except OSError:
@@ -1859,6 +1881,9 @@ def t10(t: TestCtx):
 
 
 def _rss_kib(pid):
+    """VmRSS in KiB on Linux; the working set on Windows."""
+    if OSW is not None:
+        return OSW.rss_kib(pid)
     path = f"/proc/{pid}/status"
     if not os.path.exists(path):
         return None
@@ -2660,7 +2685,7 @@ def tx3(t: TestCtx):
                                              "system_id": SPEC_SYSTEM, "backend": "scalar"})
     t.check("TX3 kill: scalar installed before the kill", "native_scalar", res.get("execution_tier"))
     old_pid = call(t, sess, "engine.info", {})["active_worker"]["pid"]
-    os.kill(old_pid, signal.SIGKILL)
+    hard_kill(old_pid)
     env = sess.request("world.inspect", {"world_id": nat})
     t.check_mismatches("TX3 kill: first request after the death reports the recovery",
                        recovery_mismatches(env, old_pid))
@@ -3385,7 +3410,7 @@ def tx7(t: TestCtx):
     # Crash of the active worker with spawn and despawn history: the request that finds the dead worker is
     # not executed; after recovery the world is exactly the acknowledged state and the retry succeeds.
     pid = call(t, sess, "world.inspect", {"world_id": wid, "limit": 1})["worker_pid"]
-    os.kill(pid, signal.SIGKILL)
+    hard_kill(pid)
     env = sess.request("world.despawn", {"world_id": wid, "expected_world_revision": rev, "entity": h3})
     t.check_mismatches("TX7 request that found the dead worker reports SU_E_WORKER_FAILED",
                        classify_error(env, "SU_E_WORKER_FAILED"))
@@ -3984,7 +4009,7 @@ def git_head():
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--binary", default=os.path.join(REPO, "build", "sutekh"))
+    parser.add_argument("--binary", default=os.path.join(REPO, "build", "sutekh" + EXE_SUFFIX))
     parser.add_argument("--report-dir", default=os.path.join(REPO, "build", "m0_harness"))
     parser.add_argument("--no-build", action="store_true", help="skip the T00 build command")
     parser.add_argument("--only", default="", help="comma-separated test ids, e.g. T00,T15")

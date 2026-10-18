@@ -40,6 +40,36 @@ static const char *next_sep(const char *p) {
     return NULL;
 }
 
+/* 1 when the absolute path input names root_real or a path below it, compared as text ('\\' read as '/';
+ * on Windows a path that starts with one separator is on the root's drive, and letters compare without
+ * case). Used only when input cannot be resolved; resolvable paths are compared after realpath. */
+static int lexically_under(const char *root_real, const char *input) {
+    char norm[SU_PATH_BUF];
+    size_t rl = strlen(root_real);
+    size_t n = 0;
+    size_t i;
+#if defined(_WIN32)
+    if (su_platform_is_sep(input[0]) && !su_platform_is_sep(input[1]) && rl >= 2u && root_real[1] == ':') {
+        norm[n++] = root_real[0];
+        norm[n++] = ':';
+    }
+#endif
+    for (i = 0; input[i] != '\0' && n + 1u < sizeof norm; i++) {
+        norm[n++] = input[i] == '\\' ? '/' : input[i];
+    }
+    norm[n] = '\0';
+#if defined(_WIN32)
+    if (_strnicmp(norm, root_real, rl) != 0) {
+        return 0;
+    }
+#else
+    if (strncmp(norm, root_real, rl) != 0) {
+        return 0;
+    }
+#endif
+    return rl > 0u && (root_real[rl - 1u] == '/' || norm[rl] == '\0' || norm[rl] == '/');
+}
+
 static int has_dotdot(const char *p) {
     const char *seg = p;
     for (;;) {
@@ -81,6 +111,11 @@ uint32_t su_path_resolve(const char *root_real, const char *input, char *out, si
     {
         int rc = su_platform_realpath(cand, real, sizeof real);
         if (rc != 0) {
+            /* An absolute path outside the root is a capability refusal whether or not it exists, so the
+             * reply never tells a client which files exist outside the root. */
+            if (su_platform_path_is_absolute(input) && !lexically_under(root_real, input)) {
+                return SU_E_CAPABILITY_DENIED;
+            }
             return rc == ENAMETOOLONG ? SU_E_RESOURCE_LIMIT : SU_E_IO;
         }
     }

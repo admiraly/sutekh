@@ -21,8 +21,8 @@ uint32_t su_platform_pid(void);
  * result does not fit cap, EINVAL for bad arguments. */
 int su_platform_realpath(const char *path, char *out, size_t cap);
 
-/* Nonzero when path is absolute on this platform: "/x" on POSIX; "C:/", "C:\\" or a UNC "//"/"\\\\"
- * prefix on Windows. */
+/* Nonzero when path is absolute on this platform: "/x" on POSIX; on Windows a drive prefix ("C:/", "C:\"), a
+ * UNC or extended-length prefix, or a leading separator (the root of the current drive). */
 int su_platform_path_is_absolute(const char *path);
 
 /* Nonzero when c separates path components on this platform ('/' always, also '\' on Windows). */
