@@ -187,7 +187,7 @@ static uint32_t union_add(SuSchedField **tab, uint32_t *n, uint32_t *cap, const 
     for (i = 0; i < *n; i++) {
         SuSchedField *x = &(*tab)[i];
         if (x->id == f->id) {
-            if (x->type != f->type || strcmp(x->name, f->name) != 0) {
+            if (x->type != f->type || x->value_type != SU_LIR_VALUE_TYPE(f) || strcmp(x->name, f->name) != 0) {
                 return SU_E_SCHEMA_MISMATCH;
             }
             x->access |= f->access;
@@ -216,6 +216,7 @@ static uint32_t union_add(SuSchedField **tab, uint32_t *n, uint32_t *cap, const 
     memset(&(*tab)[*n], 0, sizeof(SuSchedField));
     (*tab)[*n].id = f->id;
     (*tab)[*n].type = f->type;
+    (*tab)[*n].value_type = SU_LIR_VALUE_TYPE(f);
     (*tab)[*n].access = f->access;
     snprintf((*tab)[*n].name, sizeof (*tab)[*n].name, "%s", f->name);
     (*n)++;
@@ -288,7 +289,7 @@ uint32_t su_sched_check_candidate(const SuSchedule *s, const SuLirModule *m, uin
                 continue;
             }
             found = 1;
-            if (w->type != f->type || strcmp(w->name, f->name) != 0) {
+            if (w->type != f->type || w->value_type != SU_LIR_VALUE_TYPE(f) || strcmp(w->name, f->name) != 0) {
                 snprintf(why, cap, "field %u is not the same field as in the world", (unsigned)f->id);
                 return SU_E_SCHEMA_MISMATCH;
             }

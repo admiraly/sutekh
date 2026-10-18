@@ -1,0 +1,123 @@
+{
+  "ir_version": "0.3",
+  "system_id": "ship.kinematics",
+  "numeric_profile": "fixed_q32_v1",
+  "query": "ship",
+  "instructions": [
+    {
+      "op": "const_q32",
+      "dst": "dt",
+      "num": 1,
+      "den": 120
+    },
+    {
+      "op": "load_v3",
+      "dst": "p",
+      "x": "pos_x",
+      "y": "pos_y",
+      "z": "pos_z"
+    },
+    {
+      "op": "load_v3",
+      "dst": "v",
+      "x": "vel_x",
+      "y": "vel_y",
+      "z": "vel_z"
+    },
+    {
+      "op": "v3_scale",
+      "dst": "dp",
+      "v": "v",
+      "s": "dt"
+    },
+    {
+      "op": "v3_add",
+      "dst": "p2",
+      "a": "p",
+      "b": "dp"
+    },
+    {
+      "op": "store_v3",
+      "x": "pos_x",
+      "y": "pos_y",
+      "z": "pos_z",
+      "src": "p2"
+    },
+    {
+      "op": "load_q32",
+      "dst": "qw",
+      "field": "rot_w"
+    },
+    {
+      "op": "load_v3",
+      "dst": "qv",
+      "x": "rot_x",
+      "y": "rot_y",
+      "z": "rot_z"
+    },
+    {
+      "op": "make_quat",
+      "dst": "q",
+      "w": "qw",
+      "v": "qv"
+    },
+    {
+      "op": "load_v3",
+      "dst": "w",
+      "x": "angvel_x",
+      "y": "angvel_y",
+      "z": "angvel_z"
+    },
+    {
+      "op": "quat_integrate",
+      "dst": "q2",
+      "q": "q",
+      "w": "w",
+      "dt": "dt"
+    },
+    {
+      "op": "quat_get",
+      "dst": "q2w",
+      "q": "q2",
+      "axis": 0
+    },
+    {
+      "op": "quat_get",
+      "dst": "q2x",
+      "q": "q2",
+      "axis": 1
+    },
+    {
+      "op": "quat_get",
+      "dst": "q2y",
+      "q": "q2",
+      "axis": 2
+    },
+    {
+      "op": "quat_get",
+      "dst": "q2z",
+      "q": "q2",
+      "axis": 3
+    },
+    {
+      "op": "store_q32",
+      "field": "rot_w",
+      "src": "q2w"
+    },
+    {
+      "op": "store_q32",
+      "field": "rot_x",
+      "src": "q2x"
+    },
+    {
+      "op": "store_q32",
+      "field": "rot_y",
+      "src": "q2y"
+    },
+    {
+      "op": "store_q32",
+      "field": "rot_z",
+      "src": "q2z"
+    }
+  ]
+}
