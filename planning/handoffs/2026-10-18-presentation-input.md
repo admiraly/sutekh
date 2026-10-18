@@ -115,3 +115,75 @@ Not run: a physical gamepad (none attached; the XInput path is covered only by t
 or mouse driven by a person (injected input checks registration, delivery and translation, not a device). The
 absolute-mouse path is covered by the synthetic test only: in this session injected motion arrived relative.
 Raw Input registration is per process, so one `SuInputWin32` per process.
+
+## 3. First Vulkan presentation slice (M5)
+
+`include/sutekh/render.h`; libraries `su_render_util` (portable, always built) and `su_render` (Vulkan backend,
+built when Vulkan headers are found: the pinned bootstrap checkout or `VULKAN_SDK`; `-DSUTEKH_RENDER=OFF|AUTO|ON`).
+Headless builds have no Vulkan dependency, and `su_render` links no Vulkan library: `vulkan-1.dll` /
+`libvulkan.so.1` is opened at run time, so a machine without Vulkan gets a status and a reason, not a crash.
+
+- Portable: float math in Vulkan clip space (`SuVec3f`, `SuQuatf`, `SuMat4f`, `su_mat4f_look_at`,
+  `su_mat4f_perspective`), chase camera (frame-rate independent smoothing) and free camera, procedural meshes
+  (box, 24 x 16 sphere, arrow ship), debug lines (`su_debug_line`, `_vector`, `_ellipse`, `_plane`, `_box`,
+  `_axes`, with a dropped-line count), PPM writer.
+- Vulkan: `su_render_enumerate` (name, type including CPU rasterizers, API and driver versions, device-local
+  memory, timestamp support, and why a device does not meet the baseline), `su_render_create` (window HWND or
+  offscreen; Vulkan 1.2 instance and device, graphics queue that can present, depth and sRGB colour formats,
+  optional `VK_LAYER_KHRONOS_validation` with an error counter), `su_render_frame` (instances grouped by mesh into
+  one instanced draw per mesh, then a line-list draw; swapchain recreation on resize, out-of-date or suboptimal;
+  zero-size windows pause), `su_render_stats` (CPU, wait, present and GPU times, draws, counts, dropped,
+  recreations, validation), `su_render_readback` (offscreen), `su_render_last_error`.
+- Shaders: GLSL in `src/render/shaders`, compiled offline with glslang 16.6.0 (`tools/compile_shaders.py`)
+  into `src/render/su_render_shaders.h`, which records each source's SHA-256; `render_shaders_fresh` fails when a
+  source changed without regenerating.
+- Renderer boundary: it receives float instances and lines per frame and never sees a world. The demo reads
+  committed state through `su_host_read_i64` and interpolates with the clock's alpha; `--offscreen` steps a
+  shadow world without a renderer on the same inputs and compares fast digests every tick.
+
+Demo `examples/presentation/space_demo.c` with `flight.capsule.json` / `flight.lir.json` (IR 0.3, 72
+instructions, Q32.32 position, velocity and orientation; input axes arrive as Q16.16 i32 fields and are shifted to
+Q32.32 in the system; attitude by `quat_integrate`, thrust along the nose, a spring toward the origin, per-entity
+drag; a ship crossing the gate disc emits event kind 1). Window, Raw Input/XInput through the default map, 120 Hz
+clock with up to 8 ticks per frame, per-tick input split, chase camera (free camera on the `camera_next` button),
+velocity vectors, gate ellipse that flashes on the gate event (read with `su_host_events_for_tick`), grid and
+axes, telemetry in the console and title bar.
+
+Machine facts for this item: `vulkaninfo --summary` over the RDP session lists one Vulkan device, the physical
+**Quadro P600** (discrete, Vulkan 1.4.312, NVIDIA 582.16, loader 1.4.309); the Microsoft Remote Display Adapter
+is not a Vulkan device. Window presentation works over RDP. The Vulkan SDK was not installed: `winget install
+KhronosGroup.VulkanSDK` stopped at a UAC elevation prompt in the RDP session (this shell is not elevated), so the
+validation layer was not available for any run; glslang 16.6.0 (release zip, sha256 `82bf434e...8d9b`) and
+Vulkan-Headers v1.4.365 (`tools/bootstrap_vulkan_headers.py`) were used instead, both recorded in
+`THIRD_PARTY_NOTICES.md`.
+
+### Commands and results (item 3)
+
+| Command | Result |
+|---|---|
+| `python -I tools/bootstrap_vulkan_headers.py` then `--check` | v1.4.365 at `c46850864f46`, license sha256 recorded, check ok |
+| `python -I tools/compile_shaders.py --check --compiler <glslang.exe>` | 4 sources, recompiled, identical SPIR-V |
+| `build-win\test_render_util.exe` | 42 checks, 0 failures (projection and view against hand values, cameras, mesh volumes 1.0 / 0.5127 / 0.042 and outward normals, debug lines, PPM) |
+| `build-win\test_render_offscreen.exe` (Debug) and `build-rel\...` (Release) | 17 checks, 0 failures each on the P600: corner = clear colour (89, 89, 108), centre = lit red box (255, 0, 0: depth test and winding), green sphere beside it, blue ship, yellow line on the predicted row, two frames byte-identical |
+| `space_demo --offscreen ... --frames 240` (Release) | 479 ticks, gate event at tick 187, shadow world: 0 of 479 tick digests differed, image written |
+| `space_demo --script --seconds 5` (window, FIFO) | presented through the swapchain over RDP; 32 fps (the wait is in acquire: about 31 ms, the remote display's pace), 120 ticks/s, 0 dropped ticks |
+| `space_demo --script --seconds 5 --no-vsync` (window, MAILBOX) | about 7,700 to 8,300 fps, 120 ticks/s, 0 dropped ticks |
+| `ctest --test-dir build-win -j 8` (Debug, renderer built) | 78 passed, 0 failed, 2 skipped (`path_fifo`, `containment`) of 80 |
+| CI run 39122156097 (commit `91e9baa`): Linux checked runtime (GCC, `SUTEKH_RENDER=ON`, Mesa lavapipe) | 78 of 78 passed, `render_offscreen` included (rendered and pixel-checked on a CPU Vulkan device) |
+| same run: Windows checked runtime (clang, `SUTEKH_RENDER=ON`) | 77 passed, 0 failed, 3 skipped of 80: `path_fifo`, `containment`, and `render_offscreen` (no Vulkan device on the runner); `input_win32` passed on the runner |
+| same run: `validate` jobs | failed: `PACK_VALIDATION.json` stale after the workflow edit; regenerated in the next commit |
+
+Logs and images: `planning/evidence/presentation-input/renderer-runs.log` (source commit, all commands and
+output), `render-offscreen.png`, `space-demo-offscreen.png` (converted from the PPM readbacks).
+
+Timing observations (Release, P600 over RDP, trivial scene; not the Arc A770 target and not qualification):
+render CPU time per frame 0.02 to 0.12 ms, GPU time (timestamp queries) 0.02 to 0.06 ms in the window and 0.31 ms
+for the 1280 x 720 offscreen frame, simulation step 0.07 ms per tick for 12 IR 0.3 ships (0.28 ms while the
+MAILBOX loop saturates the CPU).
+
+Not run or not done: the validation layer (SDK not installed, see above); a physical-console run and any run on
+the Arc A770 (frame pacing over RDP is the remote display's, so FIFO numbers say nothing about the target); window
+presentation on Linux (offscreen only there); text/HUD, culling, pipeline caches and asynchronous pipeline
+preparation, resource retirement beyond create/destroy (M5 items after this slice). The Windows CI runner has no
+Vulkan device, so `render_offscreen` skips there; the Linux CI job installs Mesa's lavapipe to run it on a CPU
+device.
