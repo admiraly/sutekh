@@ -79,6 +79,9 @@
 #define SPACE3D_F_PROX_SLOT 68u   /* u32 write: closest collidable within the margin (0xFFFFFFFF when none) */
 #define SPACE3D_F_PROX_GEN 69u    /* u32 write: its generation (0 when none) */
 #define SPACE3D_F_PROX_DIST 70u   /* q32 write: its surface distance, [0, margin] (0 when none) */
+/* space3d.query_shape (2026-10-18): the proximity lanes plus the capsule-mover shape. */
+#define SPACE3D_F_Z0 72u /* q32 read: mover core segment start on local +z (z0 = z1 = 0: sphere) */
+#define SPACE3D_F_Z1 74u /* q32 read: mover core segment end on local +z */
 
 /* Instrumentation (tests): counters of the last run. */
 typedef struct Space3dStats {
@@ -117,6 +120,12 @@ extern const SuHostOpDesc g_space3d_query_desc;
  * positive margin have their broadphase bounds widened by it; proximity is taken over the same kept candidates
  * (so SPACE3D_FLAG_CAND_TRUNCATED also covers it). docs/SPACE3D.md section 3. */
 extern const SuHostOpDesc g_space3d_query_prox_desc;
+/* space3d.query_shape: every lane and result of space3d.query_prox, plus an optional capsule shape per mover: the
+ * core segment from local (0, 0, z0) to (0, 0, z1), rotated by the mover's rot lanes (its orientation at the end of
+ * the tick, held for the whole tick: the sweep is translation only), with radius `radius`. A mover with z0 = z1 = 0
+ * is the sphere of space3d.query_prox bit for bit. Gate crossings stay on the reference point's segment.
+ * docs/SPACE3D.md section 3. */
+extern const SuHostOpDesc g_space3d_query_shape_desc;
 /* The descriptor's static context (process-wide scratch for SPACE3D_MAX_ROWS rows; one world per worker
  * process, not reentrant). */
 Space3dCtx *space3d_query_ctx(void);
@@ -132,5 +141,6 @@ void space3d_query_instance_destroy(void *ctx); /* NULL-safe; matches su_sched_s
 /* Canonical constants text (its SHA-256 is the descriptor's constants_hash). */
 const char *space3d_constants_text(void);
 const char *space3d_prox_constants_text(void);
+const char *space3d_shape_constants_text(void);
 
 #endif

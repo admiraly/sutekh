@@ -67,9 +67,13 @@ static const SuHostField k_fields[] = {
     W32(SPACE3D_F_PROX_SLOT, "prox_slot"),
     W32(SPACE3D_F_PROX_GEN, "prox_gen"),
     WQ(SPACE3D_F_PROX_DIST, "prox_dist"),
+    /* space3d.query_shape only: the capsule-mover lanes follow the proximity lanes. */
+    RQ(SPACE3D_F_Z0, "z0"),
+    RQ(SPACE3D_F_Z1, "z1"),
 };
 
-#define S3_NFIELDS_PROX (sizeof k_fields / sizeof k_fields[0])
+#define S3_NFIELDS_SHAPE (sizeof k_fields / sizeof k_fields[0])
+#define S3_NFIELDS_PROX (S3_NFIELDS_SHAPE - 4u)
 #define S3_NFIELDS (S3_NFIELDS_PROX - 6u)
 
 static Space3dScratch g_scratch;
@@ -77,6 +81,7 @@ static Space3dCtx g_ctx = {{0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, &g_scratch};
 
 static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 static uint32_t query_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
+static uint32_t query_run_shape(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 
 /* Literal: SHA-256 of space3d_constants_text() (checked by test_space3d_ops). */
 const SuHostOpDesc g_space3d_query_desc = {
@@ -102,6 +107,19 @@ const SuHostOpDesc g_space3d_query_prox_desc = {
     (uint32_t)S3_NFIELDS_PROX,
     k_fields,
     query_run_prox,
+    &g_ctx,
+};
+
+/* Literal: SHA-256 of space3d_shape_constants_text() (checked by test_space3d_ops). */
+const SuHostOpDesc g_space3d_query_shape_desc = {
+    "space3d.query_shape",
+    SPACE3D_SCHEMA_ID,
+    SPACE3D_OPS_VERSION,
+    {0xfb, 0x82, 0x87, 0xe3, 0x59, 0xd7, 0x86, 0x62, 0xd0, 0xea, 0x1f, 0xd2, 0xb7, 0x78, 0xc9, 0xec,
+     0x0d, 0x03, 0x49, 0xbc, 0x34, 0x32, 0x50, 0xed, 0xa6, 0x1b, 0x91, 0xa7, 0x4b, 0xa9, 0x7a, 0xb8},
+    (uint32_t)S3_NFIELDS_SHAPE,
+    k_fields,
+    query_run_shape,
     &g_ctx,
 };
 
@@ -135,6 +153,19 @@ const char *space3d_prox_constants_text(void) {
            "prox_set=kept_candidates,other_than_self\n"
            "prox_distance=end_positions,centre_to_shape_minus_radii,clamp_ge_0\n"
            "prox_keep=distance_le_margin,min_distance,ties_lowest_slot\n"
+           "none=4294967295\n";
+}
+
+const char *space3d_shape_constants_text(void) {
+    return "space3d_ops_v1+proximity+capsule_movers\n"
+           "base=space3d.query_prox\n"
+           "mover_shape=capsule_segment_local_z_z0_z1,rot_lanes,radius\n"
+           "mover_shape_off=z0_eq_0_and_z1_eq_0,sphere_path_bit_exact\n"
+           "rotation=end_of_tick_orientation,held_constant,translation_only_sweep\n"
+           "capsule_sweep=rounded_parallelogram,face_then_edges,min_s_earlier_feature\n"
+           "capsule_box=end_spheres_then_12_edges,start_crossing_toi_0_chord_mid_normal\n"
+           "capsule_bounds=union_end_spheres_at_prev_and_pos\n"
+           "gate=reference_point_segment\n"
            "none=4294967295\n";
 }
 
@@ -265,6 +296,8 @@ typedef struct Cols {
     uint32_t *gate_toi[2];
     const uint32_t *prox_margin[2]; /* query_prox only */
     uint32_t *prox_slot, *prox_gen, *prox_dist[2];
+    const uint32_t *z[2][2]; /* query_shape only: z0, z1; [lo, hi] */
+    int shape;
 } Cols;
 
 enum { F_POSX, F_POSY, F_POSZ, F_PREVX, F_PREVY, F_PREVZ, F_ROTW, F_ROTX, F_ROTY, F_ROTZ, F_RADIUS, F_HALFX,
@@ -290,7 +323,7 @@ static uint32_t *out_col(SuOutputs *out, uint32_t id) {
     return NULL;
 }
 
-static int bind_cols(const SuInvocation *in, SuOutputs *out, Cols *c, int prox) {
+static int bind_cols(const SuInvocation *in, SuOutputs *out, Cols *c, int prox, int shape) {
     static const uint32_t qid[14] = {SPACE3D_F_POS_X,  SPACE3D_F_POS_Y,  SPACE3D_F_POS_Z,  SPACE3D_F_PREV_X,
                                      SPACE3D_F_PREV_Y, SPACE3D_F_PREV_Z, SPACE3D_F_ROT_W,  SPACE3D_F_ROT_X,
                                      SPACE3D_F_ROT_Y,  SPACE3D_F_ROT_Z,  SPACE3D_F_RADIUS, SPACE3D_F_HALF_X,
@@ -335,6 +368,14 @@ static int bind_cols(const SuInvocation *in, SuOutputs *out, Cols *c, int prox) 
         ok &= c->prox_margin[0] != NULL && c->prox_margin[1] != NULL && c->prox_slot != NULL && c->prox_gen != NULL &&
               c->prox_dist[0] != NULL && c->prox_dist[1] != NULL;
     }
+    c->shape = shape;
+    if (shape) {
+        for (j = 0; j < 2u; j++) {
+            c->z[j][0] = in_col(in, SPACE3D_F_Z0 + 2u * j);
+            c->z[j][1] = in_col(in, SPACE3D_F_Z0 + 2u * j + 1u);
+            ok &= c->z[j][0] != NULL && c->z[j][1] != NULL;
+        }
+    }
     return ok;
 }
 
@@ -378,6 +419,30 @@ static void capsule_ends(const Cols *c, uint32_t r, SuV3 *a, SuV3 *b) {
     *b = su_v3_addf(p, axis);
 }
 
+/* Capsule mover (query_shape): world offsets e0 = rot * (0, 0, z0), e1 = rot * (0, 0, z1) of mover r. Returns 0 (a
+ * sphere mover, offsets zero) unless the operator is query_shape, r is a mover and z0 or z1 is nonzero. */
+static int mover_seg(const Cols *c, uint32_t r, SuV3 *e0, SuV3 *e1) {
+    SuV3 l = {0, 0, 0};
+    int64_t z0, z1;
+    SuQuat q;
+    e0->x = e0->y = e0->z = 0;
+    *e1 = *e0;
+    if (!c->shape || c->kind[r] != SPACE3D_KIND_MOVER) {
+        return 0;
+    }
+    z0 = su_i64_from_bits(((uint64_t)c->z[0][1][r] << 32) | (uint64_t)c->z[0][0][r]);
+    z1 = su_i64_from_bits(((uint64_t)c->z[1][1][r] << 32) | (uint64_t)c->z[1][0][r]);
+    if (z0 == 0 && z1 == 0) {
+        return 0;
+    }
+    q = rdrot(c, r);
+    l.z = z0;
+    *e0 = su_quat_rotatef(q, l);
+    l.z = z1;
+    *e1 = su_quat_rotatef(q, l);
+    return 1;
+}
+
 static void bounds_union(SuV3 *lo, SuV3 *hi, SuV3 lo2, SuV3 hi2) {
     lo->x = lo2.x < lo->x ? lo2.x : lo->x;
     lo->y = lo2.y < lo->y ? lo2.y : lo->y;
@@ -397,7 +462,25 @@ static int64_t prox_distance(const Cols *c, uint32_t m, uint32_t o) {
     SuV3 p = rd3(c, F_POSX, m);
     int64_t d;
     uint32_t ko = c->kind[o];
-    if (ko == SPACE3D_KIND_MOVER || ko == SPACE3D_KIND_SPHERE) {
+    SuV3 e0, e1, f0, f1;
+    int mseg = mover_seg(c, m, &e0, &e1);
+    int oseg = mover_seg(c, o, &f0, &f1);
+    if (mseg || oseg) {
+        /* Capsule mover involved (query_shape): core segment distances. */
+        if (ko == SPACE3D_KIND_BOX) {
+            d = s3_dist_seg_obb(p, e0, e1, rd3(c, F_POSX, o), rdrot(c, o), rd3(c, F_HALFX, o));
+        } else {
+            SuV3 a, b;
+            if (ko == SPACE3D_KIND_CAPSULE) {
+                capsule_ends(c, o, &a, &b);
+            } else {
+                SuV3 po = rd3(c, F_POSX, o);
+                a = su_v3_addf(po, f0);
+                b = su_v3_addf(po, f1);
+            }
+            d = su_q32_subf(s3_dist_seg_seg(p, e0, e1, a, b), rdq(c, F_RADIUS, o));
+        }
+    } else if (ko == SPACE3D_KIND_MOVER || ko == SPACE3D_KIND_SPHERE) {
         d = su_q32_subf(su_v3_lenf(su_v3_subf(p, rd3(c, F_POSX, o))), rdq(c, F_RADIUS, o));
     } else if (ko == SPACE3D_KIND_CAPSULE) {
         SuV3 a, b, ab, cp;
@@ -426,7 +509,18 @@ static int64_t prox_distance(const Cols *c, uint32_t m, uint32_t o) {
 static void row_bounds(Space3dScratch *s, const Cols *c, uint32_t r, uint32_t kind) {
     SuV3 lo, hi, lo2, hi2;
     int64_t rad = rdq(c, F_RADIUS, r);
-    if (kind == SPACE3D_KIND_MOVER) {
+    SuV3 e0, e1;
+    if (kind == SPACE3D_KIND_MOVER && mover_seg(c, r, &e0, &e1)) {
+        /* Capsule mover: the end spheres at the start and end positions (the swept shape is their convex hull). */
+        SuV3 p0 = rd3(c, F_PREVX, r), p1 = rd3(c, F_POSX, r);
+        s3_bounds_sphere(su_v3_addf(p0, e0), rad, &lo, &hi);
+        s3_bounds_sphere(su_v3_addf(p0, e1), rad, &lo2, &hi2);
+        bounds_union(&lo, &hi, lo2, hi2);
+        s3_bounds_sphere(su_v3_addf(p1, e0), rad, &lo2, &hi2);
+        bounds_union(&lo, &hi, lo2, hi2);
+        s3_bounds_sphere(su_v3_addf(p1, e1), rad, &lo2, &hi2);
+        bounds_union(&lo, &hi, lo2, hi2);
+    } else if (kind == SPACE3D_KIND_MOVER) {
         s3_bounds_sphere(rd3(c, F_PREVX, r), rad, &lo, &hi);
         s3_bounds_sphere(rd3(c, F_POSX, r), rad, &lo2, &hi2);
         bounds_union(&lo, &hi, lo2, hi2);
@@ -547,6 +641,32 @@ static S3Hit narrow(const Cols *c, uint32_t m, uint32_t o) {
     SuV3 v = su_v3_subf(rd3(c, F_POSX, m), c0);
     int64_t r = rdq(c, F_RADIUS, m);
     uint32_t ko = c->kind[o];
+    SuV3 e0, e1, f0, f1;
+    int mseg = mover_seg(c, m, &e0, &e1);
+    int oseg = mover_seg(c, o, &f0, &f1);
+    if (mseg || oseg) {
+        /* Capsule mover involved (query_shape). Another mover is taken at its start position with the relative
+         * displacement, as for spheres. */
+        if (ko == SPACE3D_KIND_MOVER) {
+            SuV3 o0 = rd3(c, F_PREVX, o);
+            SuV3 vr = su_v3_subf(v, su_v3_subf(rd3(c, F_POSX, o), o0));
+            SuV3 a = su_v3_addf(o0, f0), b = su_v3_addf(o0, f1);
+            if (!mseg) {
+                return s3_sweep_sphere_capsule(c0, vr, r, a, b, rdq(c, F_RADIUS, o));
+            }
+            return s3_sweep_capsule_capsule(c0, vr, r, e0, e1, a, b, rdq(c, F_RADIUS, o));
+        }
+        if (ko == SPACE3D_KIND_SPHERE) {
+            return s3_sweep_capsule_sphere(c0, v, r, e0, e1, rd3(c, F_POSX, o), rdq(c, F_RADIUS, o));
+        }
+        if (ko == SPACE3D_KIND_BOX) {
+            return s3_sweep_capsule_obb(c0, v, r, e0, e1, rd3(c, F_POSX, o), rdrot(c, o), rd3(c, F_HALFX, o));
+        } else {
+            SuV3 a, b;
+            capsule_ends(c, o, &a, &b);
+            return s3_sweep_capsule_capsule(c0, v, r, e0, e1, a, b, rdq(c, F_RADIUS, o));
+        }
+    }
     if (ko == SPACE3D_KIND_MOVER) {
         SuV3 o0 = rd3(c, F_PREVX, o);
         SuV3 vo = su_v3_subf(rd3(c, F_POSX, o), o0);
@@ -593,7 +713,8 @@ static void sort_gates(uint32_t *gate_slot, const Cols *c, uint32_t ng) {
     }
 }
 
-static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx, int prox) {
+static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx, int prox,
+                           int shape) {
     Space3dCtx *ctx = host_ctx != NULL ? (Space3dCtx *)host_ctx : &g_ctx;
     Space3dScratch *s = ctx->scratch == &g_scratch ? static_scratch() : ctx->scratch;
     Cols c;
@@ -607,7 +728,7 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
         return SU_E_RESOURCE_LIMIT;
     }
     rows = (uint32_t)rows64;
-    if (!bind_cols(in, out, &c, prox)) {
+    if (!bind_cols(in, out, &c, prox, shape)) {
         return SU_E_SCHEMA_MISMATCH;
     }
     memset(&st, 0, sizeof st);
@@ -786,11 +907,11 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
                 uint32_t g = find_gate(s->gate_slot, &c, ngate, c.next_gate[r]);
                 if (g != S3_NONE) {
                     S3GateHit gh;
-                    int shape = c.kind[g] == SPACE3D_KIND_GATE_DISC      ? S3_GATE_DISC
+                    int gshape = c.kind[g] == SPACE3D_KIND_GATE_DISC     ? S3_GATE_DISC
                                 : c.kind[g] == SPACE3D_KIND_GATE_ELLIPSE ? S3_GATE_ELLIPSE
                                                                          : S3_GATE_RECT;
                     if (s3_segment_gate(rd3(&c, F_PREVX, r), rd3(&c, F_POSX, r), rd3(&c, F_POSX, g), rdrot(&c, g),
-                                        rdq(&c, F_HALFX, g), rdq(&c, F_HALFY, g), rdq(&c, F_RADIUS, g), shape,
+                                        rdq(&c, F_HALFX, g), rdq(&c, F_HALFY, g), rdq(&c, F_RADIUS, g), gshape,
                                         &gh) != 0) {
                         gdir = gh.dir > 0 ? SPACE3D_GATE_FORWARD : SPACE3D_GATE_BACKWARD;
                         gslot = g;
@@ -826,9 +947,13 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
 }
 
 static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 0);
+    return query_core(w, in, out, host_ctx, 0, 0);
 }
 
 static uint32_t query_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 1);
+    return query_core(w, in, out, host_ctx, 1, 0);
+}
+
+static uint32_t query_run_shape(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
+    return query_core(w, in, out, host_ctx, 1, 1);
 }

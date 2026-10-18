@@ -376,12 +376,260 @@ static void test_random(const char *label, int kind, int cases) {
     CHECK(hits > cases / 10);
 }
 
+/* ---------- capsule movers (2026-10-18) ---------- */
+
+static void test_capsule_known(void) {
+    S3Hit h;
+    SuV3 ez0 = V(0, 0, -Q(2)), ez1 = V(0, 0, Q(2));
+    /* 1. Mover segment z in [-2, 2], r 1, from x = -10 along +x by 20, against a sphere (r 1) at (0, 0, 3): the
+     * top end is 1 below the centre, R = 2, so contact at horizontal distance sqrt(3): s = 10 - sqrt(3),
+     * toi = (10 - sqrt 3) / 20 = 0.41340; normal (-sqrt 3, 0, -1) / 2. A sphere mover on the same path misses. */
+    h = s3_sweep_capsule_sphere(V(-Q(10), 0, 0), V(Q(20), 0, 0), ONE, ez0, ez1, V(0, 0, Q(3)), ONE);
+    CHECK(h.hit && fabs(qd(h.toi) - (10.0 - sqrt(3.0)) / 20.0) < 1e-8);
+    CHECK(fabs(qd(h.n.x) + sqrt(3.0) / 2) < 1e-8 && h.n.y == 0 && fabs(qd(h.n.z) + 0.5) < 1e-8);
+    CHECK(!s3_sweep_sphere_sphere(V(-Q(10), 0, 0), V(Q(20), 0, 0), ONE, V(0, 0, Q(3)), ONE).hit);
+    /* 2. Crossed capsules (face of the parallelogram): obstacle along y at x = 5, rc 1; mover r 1 from x = 0
+     * by +10: contact at x = 3, toi 0.3 exactly representable as s / L = 3 / 10; normal -x. */
+    h = s3_sweep_capsule_capsule(V(0, 0, 0), V(Q(10), 0, 0), ONE, ez0, ez1, V(Q(5), -Q(3), 0), V(Q(5), Q(3), 0), ONE);
+    CHECK(h.hit && near_q(h.toi, su_q32_div(Q(3), Q(10)), 2) && h.n.x == -ONE && h.n.y == 0 && h.n.z == 0);
+    /* 3. Parallel capsules (edges): the obstacle along z at x = 5 from z = -1 to 1. Same answer. */
+    h = s3_sweep_capsule_capsule(V(0, 0, 0), V(Q(10), 0, 0), ONE, ez0, ez1, V(Q(5), 0, -ONE), V(Q(5), 0, ONE), ONE);
+    CHECK(h.hit && near_q(h.toi, su_q32_div(Q(3), Q(10)), 2) && h.n.x == -ONE && h.n.y == 0 && h.n.z == 0);
+    /* 4. Box edge: unit box at (5, 0, 0); mover segment along y in [-3, 3] at height z = 1.5, r 1, from x = 0 by
+     * +10. Its line meets the box's top edge x = 4, z = 1 at distance 1 when 4 - x = sqrt(0.75): toi 0.31340,
+     * normal (-sqrt 0.75, 0, 0.5). The end spheres (|y| = 3 > 1) hit later. */
+    h = s3_sweep_capsule_obb(V(0, 0, Q(3) / 2), V(Q(10), 0, 0), ONE, V(0, -Q(3), 0), V(0, Q(3), 0), V(Q(5), 0, 0), QID,
+                             V(ONE, ONE, ONE));
+    CHECK(h.hit && fabs(qd(h.toi) - (4.0 - sqrt(0.75)) / 10.0) < 1e-8);
+    CHECK(fabs(qd(h.n.x) + sqrt(0.75)) < 1e-7 && fabs(qd(h.n.y)) < 1e-7 && fabs(qd(h.n.z) - 0.5) < 1e-7);
+    /* 5. Box face via an end sphere: the same mover at z = 0 along x (segment x in [-2, 2]) hits the face x = 4
+     * when its front end (x + 2) is 1 away: x = 1, toi 0.1, normal -x. */
+    h = s3_sweep_capsule_obb(V(0, 0, 0), V(Q(10), 0, 0), ONE, V(-Q(2), 0, 0), V(Q(2), 0, 0), V(Q(5), 0, 0), QID,
+                             V(ONE, ONE, ONE));
+    CHECK(h.hit && near_q(h.toi, su_q32_div(ONE, Q(10)), 2) && h.n.x == -ONE && h.n.y == 0 && h.n.z == 0);
+    /* 6. Start crossing: a long segment through the box (end points outside, r 0.1): toi 0, normal of the chord
+     * middle (inside: least penetration axis). */
+    h = s3_sweep_capsule_obb(V(Q(5), 0, ONE / 2), V(ONE, 0, 0), ONE / 10, V(0, -Q(5), 0), V(0, Q(5), 0),
+                             V(Q(5), 0, 0), QID, V(ONE, ONE, ONE));
+    CHECK(h.hit && h.toi == 0 && h.n.z == ONE);
+    /* 7. Moving away from the sphere (and z0 = z1 = 0 against the sphere sweep): no hit; equal results. */
+    h = s3_sweep_capsule_sphere(V(-Q(10), 0, 0), V(-Q(20), 0, 0), ONE, ez0, ez1, V(0, 0, Q(3)), ONE);
+    CHECK(!h.hit);
+    {
+        S3Hit hs = s3_sweep_sphere_sphere(V(-Q(10), 0, 0), V(Q(10), 0, 0), ONE, V(0, 0, 0), ONE);
+        h = s3_sweep_capsule_sphere(V(-Q(10), 0, 0), V(Q(10), 0, 0), ONE, V(0, 0, 0), V(0, 0, 0), V(0, 0, 0), ONE);
+        CHECK(h.hit && hs.hit && h.toi == hs.toi && h.n.x == hs.n.x && h.n.y == hs.n.y && h.n.z == hs.n.z);
+    }
+    /* 8. Core distances: crossed segments 3 apart; the segment of case 4 at x = 3 is sqrt(1 + 0.25) from the edge. */
+    CHECK(near_q(s3_dist_seg_seg(V(0, 0, 0), ez0, ez1, V(Q(3), -ONE, 0), V(Q(3), ONE, 0)), Q(3), 4));
+    CHECK(fabs(qd(s3_dist_seg_obb(V(Q(3), 0, Q(3) / 2), V(0, -Q(3), 0), V(0, Q(3), 0), V(Q(5), 0, 0), QID,
+                                  V(ONE, ONE, ONE))) - sqrt(1.25)) < 1e-8);
+    CHECK(s3_dist_seg_obb(V(Q(5), 0, 0), V(0, -Q(5), 0), V(0, Q(5), 0), V(Q(5), 0, 0), QID, V(ONE, ONE, ONE)) == 0);
+}
+
+/* Double-precision reference for a capsule mover: the core distance f(t) = dist(segment(t), core) is convex in t and
+ * in the segment parameter (distance to a convex set from an affine family), so nested ternary searches give its
+ * minimum exactly enough, and bisection on [0, argmin] gives the first root of f - R. */
+typedef struct CapRef {
+    const Shape *s;
+    D3 c0, v, e0, e1;
+} CapRef;
+
+static double cap_seg_dist(const CapRef *c, double t, double *lam_out) {
+    D3 base = dadd(c->c0, dsc(c->v, t));
+    D3 d = dsub(c->e1, c->e0);
+    double lo = 0, hi = 1, l;
+    int k;
+    for (k = 0; k < 80; k++) {
+        double m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3;
+        double f1 = core_dist(c->s, dadd(base, dadd(c->e0, dsc(d, m1))));
+        double f2 = core_dist(c->s, dadd(base, dadd(c->e0, dsc(d, m2))));
+        if (f1 <= f2) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    l = 0.5 * (lo + hi);
+    if (lam_out != NULL) {
+        *lam_out = l;
+    }
+    return core_dist(c->s, dadd(base, dadd(c->e0, dsc(d, l))));
+}
+
+static double cap_oracle(const CapRef *c, double R, double *minf) {
+    double lo = 0, hi = 1, tmin;
+    int k;
+    if (cap_seg_dist(c, 0, NULL) - R <= 0) {
+        *minf = cap_seg_dist(c, 0, NULL) - R;
+        return 0;
+    }
+    for (k = 0; k < 80; k++) {
+        double m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3;
+        if (cap_seg_dist(c, m1, NULL) <= cap_seg_dist(c, m2, NULL)) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    tmin = 0.5 * (lo + hi);
+    *minf = cap_seg_dist(c, tmin, NULL) - R;
+    if (*minf > 0) {
+        return -1;
+    }
+    lo = 0;
+    hi = tmin;
+    for (k = 0; k < 70; k++) {
+        double mid = 0.5 * (lo + hi);
+        if (cap_seg_dist(c, mid, NULL) - R <= 0) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    return hi;
+}
+
+/* Closest point of the core to p (double). */
+static D3 core_closest(const Shape *s, D3 p) {
+    if (s->kind == 0) {
+        return s->c;
+    }
+    if (s->kind == 1) {
+        D3 d = dsub(s->b, s->a);
+        double t = clampd(ddot(dsub(p, s->a), d) / ddot(d, d), 0, 1);
+        return dadd(s->a, dsc(d, t));
+    } else {
+        D3 l = drot(s->qc, dsub(p, s->c));
+        D3 cl = {clampd(l.x, -s->half.x, s->half.x), clampd(l.y, -s->half.y, s->half.y),
+                 clampd(l.z, -s->half.z, s->half.z)};
+        return dadd(s->c, drot(s->q, cl));
+    }
+}
+
+static void test_capsule_random(const char *label, int kind, int cases) {
+    int i, compared = 0, grazing = 0, hits = 0, mism = 0;
+    double worst_t = 0, worst_n = 0;
+    for (i = 0; i < cases; i++) {
+        Shape s;
+        CapRef cr;
+        SuV3 c0 = V(rq(30), rq(30), rq(30)), vq, sc = V(rq(3), rq(3), rq(3)), sa, sb, half, e0, e1;
+        SuQuat q = QID, qm, q0;
+        int64_t r = rpos(0, 3) + ONE / 4, rs = rpos(0, 4) + ONE / 4;
+        int64_t z0 = -rpos(0, 8), z1 = rpos(0, 8);
+        S3Hit h;
+        double minf, tref, R;
+        D3 target;
+        memset(&s, 0, sizeof s);
+        s.kind = kind;
+        q0.w = rq(1);
+        q0.x = rq(1);
+        q0.y = rq(1);
+        q0.z = rq(1);
+        qm = su_quat_normalize(q0);
+        e0 = su_quat_rotate(qm, V(0, 0, z0));
+        e1 = su_quat_rotate(qm, V(0, 0, z1));
+        target = dsub(dv(V(rq(4), rq(4), rq(4))), dv(c0));
+        {
+            double L = 5 + qd(rpos(0, 40));
+            double tl = dlen(target);
+            D3 dd = (rng() & 1) ? dsc(target, L / (tl > 0 ? tl : 1)) : dv(V(rq(25), rq(25), rq(25)));
+            vq = V((int64_t)llround(dd.x * 4294967296.0), (int64_t)llround(dd.y * 4294967296.0),
+                   (int64_t)llround(dd.z * 4294967296.0));
+        }
+        if (kind == 0) {
+            s.c = dv(sc);
+            h = s3_sweep_capsule_sphere(c0, vq, r, e0, e1, sc, rs);
+            R = qd(r) + qd(rs);
+        } else if (kind == 1) {
+            sa = V(rq(10), rq(10), rq(10));
+            sb = V(rq(10), rq(10), rq(10));
+            s.a = dv(sa);
+            s.b = dv(sb);
+            h = s3_sweep_capsule_capsule(c0, vq, r, e0, e1, sa, sb, rs);
+            R = qd(r) + qd(rs);
+        } else {
+            q0.w = rq(1);
+            q0.x = rq(1);
+            q0.y = rq(1);
+            q0.z = rq(1);
+            q = su_quat_normalize(q0);
+            half = V(rpos(0, 8) + ONE / 8, rpos(0, 8) + ONE / 8, rpos(0, 8) + ONE / 8);
+            s.c = dv(sc);
+            s.half = dv(half);
+            s.q[0] = qd(q.w); s.q[1] = qd(q.x); s.q[2] = qd(q.y); s.q[3] = qd(q.z);
+            s.qc[0] = s.q[0]; s.qc[1] = -s.q[1]; s.qc[2] = -s.q[2]; s.qc[3] = -s.q[3];
+            h = s3_sweep_capsule_obb(c0, vq, r, e0, e1, sc, q, half);
+            R = qd(r);
+        }
+        cr.s = &s;
+        cr.c0 = dv(c0);
+        cr.v = dv(vq);
+        cr.e0 = dv(e0);
+        cr.e1 = dv(e1);
+        tref = cap_oracle(&cr, R, &minf);
+        if (fabs(minf) < 1e-4 || (tref >= 0 && tref < 1e-9 && minf > -1e-4)) {
+            grazing++;
+            continue;
+        }
+        compared++;
+        if ((tref >= 0) != (h.hit != 0)) {
+            mism++;
+            if (mism <= 5) {
+                fprintf(stderr, "%s case %d: oracle %s (t %.9f, minf %.3g), engine %s (t %.9f)\n", label, i,
+                        tref >= 0 ? "hit" : "miss", tref, minf, h.hit ? "hit" : "miss", qd(h.toi));
+            }
+            continue;
+        }
+        if (tref < 0) {
+            continue;
+        }
+        hits++;
+        {
+            double L = dlen(dv(vq)), lam, nerr;
+            double dt = fabs(qd(h.toi) - tref) * L;
+            D3 p, nref;
+            double dcore = cap_seg_dist(&cr, tref, &lam);
+            p = dadd(dadd(cr.c0, dsc(cr.v, tref)), dadd(cr.e0, dsc(dsub(cr.e1, cr.e0), lam)));
+            nref = dsub(p, core_closest(&s, p));
+            if (dt > worst_t) worst_t = dt;
+            if (dt > 1e-5) {
+                mism++;
+                if (mism <= 5) {
+                    fprintf(stderr, "%s case %d: toi err %.3g m\n", label, i, dt);
+                }
+                continue;
+            }
+            if (dcore < 1e-6 || tref == 0) {
+                continue; /* cores intersect or start contact: the normal is a convention, checked by known answers */
+            }
+            nref = dsc(nref, 1.0 / dlen(nref));
+            nerr = dlen(dsub(dv(h.n), nref));
+            if (nerr > worst_n) worst_n = nerr;
+            if (nerr > 1e-4) {
+                mism++;
+                if (mism <= 5) {
+                    fprintf(stderr, "%s case %d: normal err %.3g\n", label, i, nerr);
+                }
+            }
+        }
+    }
+    printf("%s: %d cases, %d compared (%d hits), %d grazing skipped, %d mismatches, worst toi err %.3g m, "
+           "worst normal err %.3g\n", label, cases, compared, hits, grazing, mism, worst_t, worst_n);
+    CHECK(mism == 0);
+    CHECK(hits > cases / 10);
+}
+
 int main(void) {
     test_known();
+    test_capsule_known();
     g_rng = UINT64_C(20261018);
     test_random("sphere_sphere", 0, 20000);
     test_random("sphere_capsule", 1, 20000);
     test_random("sphere_obb", 2, 20000);
+    test_capsule_random("capsule_sphere", 0, 6000);
+    test_capsule_random("capsule_capsule", 1, 6000);
+    test_capsule_random("capsule_obb", 2, 6000);
     printf("test_space3d_geom: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

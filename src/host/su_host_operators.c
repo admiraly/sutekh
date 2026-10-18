@@ -24,6 +24,7 @@ static uint32_t space3d_create(uint64_t rows, void **inst) {
 static const HostOperator k_operators[] = {
     {&g_space3d_query_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy},
     {&g_space3d_query_prox_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy},
+    {&g_space3d_query_shape_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy},
 };
 
 #define HOST_OPERATOR_COUNT (sizeof k_operators / sizeof k_operators[0])

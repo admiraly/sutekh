@@ -757,12 +757,207 @@ static void test_prox(void) {
     D = base;
 }
 
+/* ---------- space3d.query_shape: capsule movers (2026-10-18) ---------- */
+
+static void cap_mover(uint32_t r, SuV3 prev, SuV3 pos, int64_t radius, SuQuat q, int64_t z0, int64_t z1) {
+    mover(r, prev, pos, radius, 0);
+    set_rot(r, q);
+    setq(SPACE3D_F_Z0, r, z0);
+    setq(SPACE3D_F_Z1, r, z1);
+}
+
+static int near64(int64_t a, int64_t b, int64_t tol) {
+    return (a > b ? a - b : b - a) <= tol;
+}
+
+static void test_shape(void) {
+    static uint32_t a[40 * MAXR], b[40 * MAXR], c[40 * MAXR];
+    const SuHostOpDesc *prox = &g_space3d_query_prox_desc;
+    SuSha256 sh;
+    uint8_t h[32];
+    char msg[256];
+    uint32_t i, sv = 0, gen = 0, seed, compared = 0, flagged = 0, contacts = 0, nw, np;
+    SuLirModule *decl = NULL;
+    Scene s;
+    SuWorld *w = NULL;
+    /* 90 degrees about y: local +z -> world +x. */
+    SuQuat qy;
+    qy.w = su_q32_sqrt(ONE / 2);
+    qy.x = 0;
+    qy.y = qy.w;
+    qy.z = 0;
+
+    D = &g_space3d_query_shape_desc;
+    CHECK(su_host_desc_validate(D) == SU_OK);
+    CHECK(D->field_count == prox->field_count + 4u);
+    for (i = 0; i < prox->field_count; i++) {
+        CHECK(D->fields[i].id == prox->fields[i].id && D->fields[i].access == prox->fields[i].access &&
+              strcmp(D->fields[i].name, prox->fields[i].name) == 0);
+    }
+    su_sha256_init(&sh);
+    su_sha256_update(&sh, space3d_shape_constants_text(), strlen(space3d_shape_constants_text()));
+    su_sha256_final(&sh, h);
+    CHECK(memcmp(h, D->constants_hash, 32) == 0);
+    CHECK(su_host_load("profiles/space3d/space3d_query_shape.capsule.json", NULL, D, &decl, &sv, &gen, msg,
+                       sizeof msg) == SU_OK);
+    su_host_decl_free(decl);
+    decl = NULL;
+    CHECK(su_host_load("profiles/space3d/space3d_query_shape.capsule.json", NULL, prox, &decl, &sv, &gen, msg,
+                       sizeof msg) != SU_OK && decl == NULL);
+    CHECK(su_host_load("profiles/space3d/space3d_query_prox.capsule.json", NULL, D, &decl, &sv, &gen, msg,
+                       sizeof msg) != SU_OK && decl == NULL);
+
+    /* Known: a long mover (z in [-8, 8], r 2) moving +x by 20 from the origin past a sphere (r 1) at (10, 0, 7): the
+     * segment passes 3 from the centre once x = 7: toi 0.35, normal -x. A sphere mover (row 2, lanes zero) on a
+     * parallel path 50 m away misses its own sphere (row 3) at the same offset. Margins: the capsule mover's
+     * proximity to the sphere at its end position (x = 20) is 10 - 3 = 7. */
+    scene_init(&s, 4);
+    cap_mover(0, V(0, 0, 0), V(Q(20), 0, 0), Q(2), QID, -Q(8), Q(8));
+    setq(SPACE3D_F_PROX_MARGIN, 0, Q(20));
+    sphere(1, V(Q(10), 0, Q(7)), ONE);
+    mover(2, V(0, Q(50), 0), V(Q(20), Q(50), 0), Q(2), 0);
+    sphere(3, V(Q(10), Q(50), Q(7)), ONE);
+    CHECK(run_scene(&s, &w) == SU_OK);
+    if (w != NULL) {
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 1u && rd32(w, 42u, 0) == 1u);
+        CHECK(near64(rdq(w, 44u, 0), su_q32_div(Q(7), Q(20)), 2));
+        CHECK(rdq(w, 46u, 0) == -ONE && rdq(w, 48u, 0) == 0 && rdq(w, 50u, 0) == 0);
+        CHECK(rd32(w, SPACE3D_F_PROX_SLOT, 0) == 1u && near64(rdq(w, SPACE3D_F_PROX_DIST, 0), Q(7), 4));
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 2) == 0u);
+        su_world_destroy(w);
+        w = NULL;
+    }
+    /* Orientation: the same capsule rotated so its axis is world x, moving +x by 40 towards a sphere at (30, 0, 1):
+     * its front end x + 8 is 3 from the centre when 22 - x = sqrt(8): toi (22 - sqrt 8) / 40 = 0.47929. */
+    scene_init(&s, 2);
+    cap_mover(0, V(0, 0, 0), V(Q(40), 0, 0), Q(2), qy, -Q(8), Q(8));
+    sphere(1, V(Q(30), 0, ONE), ONE);
+    CHECK(run_scene(&s, &w) == SU_OK);
+    if (w != NULL) {
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 1u);
+        CHECK(near64(rdq(w, 44u, 0), (int64_t)((22.0 - 2.8284271247461903) / 40.0 * 4294967296.0), 64));
+        su_world_destroy(w);
+        w = NULL;
+    }
+    /* Two capsule movers (axes along z, r 1 each) passing head-on along x, 1.5 apart in y and overlapping in z: R = 2,
+     * contact at an x gap of sqrt(4 - 2.25); both report each other at the same toi with opposite normals. */
+    scene_init(&s, 2);
+    cap_mover(0, V(-Q(10), 0, 0), V(Q(10), 0, 0), ONE, QID, -Q(4), Q(4));
+    cap_mover(1, V(Q(10), Q(3) / 2, Q(2)), V(-Q(10), Q(3) / 2, Q(2)), ONE, QID, -Q(4), Q(4));
+    CHECK(run_scene(&s, &w) == SU_OK);
+    if (w != NULL) {
+        int64_t t0 = rdq(w, 44u, 0), t1 = rdq(w, 44u, 1);
+        double want = (20.0 - 1.3228756555322954) / 40.0; /* sqrt(1.75) */
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 1u && rd32(w, SPACE3D_F_HIT_COUNT, 1) == 1u);
+        CHECK(rd32(w, 42u, 0) == 1u && rd32(w, 42u, 1) == 0u);
+        CHECK(near64(t0, (int64_t)(want * 4294967296.0), 64) && near64(t1, t0, 64));
+        CHECK(near64(rdq(w, 46u, 0), -rdq(w, 46u, 1), 64) && near64(rdq(w, 48u, 0), -rdq(w, 48u, 1), 64));
+        su_world_destroy(w);
+        w = NULL;
+    }
+    /* Tie-break: two spheres touched at the same toi by the two ends of the segment (z = +/-8): contacts ordered by
+     * slot at equal toi; the proximity tie goes to the lower slot; swapping the slots swaps the outputs. */
+    for (i = 0; i < 2u; i++) {
+        uint32_t lo = 1u + i, hi = 2u - i;
+        scene_init(&s, 3);
+        cap_mover(0, V(0, 0, 0), V(Q(20), 0, 0), Q(2), QID, -Q(8), Q(8));
+        setq(SPACE3D_F_PROX_MARGIN, 0, Q(30));
+        sphere(lo, V(Q(10), 0, Q(9)), ONE);
+        sphere(hi, V(Q(10), 0, -Q(9)), ONE);
+        CHECK(run_scene(&s, &w) == SU_OK);
+        if (w != NULL) {
+            CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 2u && rdq(w, 44u, 0) == rdq(w, 54u, 0));
+            CHECK(rd32(w, 42u, 0) == 1u && rd32(w, 52u, 0) == 2u);
+            CHECK(rdq(w, 50u, 0) == -rdq(w, 60u, 0));
+            CHECK((rdq(w, 50u, 0) < 0) == (i == 0)); /* slot 1 is the upper sphere for i = 0 */
+            CHECK(rd32(w, SPACE3D_F_PROX_SLOT, 0) == 1u);
+            su_world_destroy(w);
+            w = NULL;
+        }
+    }
+
+    /* Random scenes: (1) z lanes zero: every lane equals space3d.query_prox (random margins); (2) random capsule
+     * movers: broadphase equals brute force on every lane when nothing is truncated; repeat is bit-identical. */
+    nw = write_lanes();
+    for (seed = 1; seed <= 30; seed++) {
+        uint32_t rows = 64u + (seed * 151u) % 700u, r;
+        int64_t span = 20 + (int64_t)(seed % 4u) * 40;
+        SuWorld *w1 = NULL, *w2 = NULL, *w3 = NULL;
+        int flags_any = 0;
+        g_rng = seed * UINT64_C(15485863);
+        random_scene(&s, rows, span);
+        for (r = 0; r < rows; r++) {
+            if (g_col[SPACE3D_F_KIND][r] == SPACE3D_KIND_MOVER) {
+                setq(SPACE3D_F_PROX_MARGIN, r, (int64_t)(rng() % (uint64_t)(8 * ONE)) - ONE);
+            }
+        }
+        D = prox;
+        np = write_lanes();
+        CHECK(run_scene(&s, &w1) == SU_OK);
+        if (w1 != NULL) {
+            snapshot_out(w1, rows, a);
+            su_world_destroy(w1);
+            w1 = NULL;
+        }
+        D = &g_space3d_query_shape_desc;
+        CHECK(run_scene(&s, &w1) == SU_OK);
+        if (w1 != NULL) {
+            snapshot_out(w1, rows, b);
+            CHECK(np == nw && memcmp(a, b, sizeof(uint32_t) * np * rows) == 0); /* lanes zero: query_prox exactly */
+            su_world_destroy(w1);
+            w1 = NULL;
+        }
+        for (r = 0; r < rows; r++) {
+            if (g_col[SPACE3D_F_KIND][r] == SPACE3D_KIND_MOVER && rng() % 4u != 0u) {
+                SuQuat q0;
+                q0.w = rq(1);
+                q0.x = rq(1);
+                q0.y = rq(1);
+                q0.z = rq(1);
+                set_rot(r, su_quat_normalize(q0));
+                setq(SPACE3D_F_Z0, r, -(int64_t)(rng() % (uint64_t)(10 * ONE)));
+                setq(SPACE3D_F_Z1, r, (int64_t)(rng() % (uint64_t)(10 * ONE)));
+            }
+        }
+        CHECK(run_scene(&s, &w1) == SU_OK);
+        CHECK(run_scene(&s, &w2) == SU_OK);
+        space3d_query_ctx()->brute_force = 1;
+        CHECK(run_scene(&s, &w3) == SU_OK);
+        space3d_query_ctx()->brute_force = 0;
+        if (w1 != NULL && w2 != NULL && w3 != NULL) {
+            snapshot_out(w1, rows, a);
+            snapshot_out(w2, rows, b);
+            snapshot_out(w3, rows, c);
+            CHECK(memcmp(a, b, sizeof(uint32_t) * nw * rows) == 0);
+            for (r = 0; r < rows; r++) {
+                flags_any |= (rd32(w1, SPACE3D_F_HIT_FLAGS, r) &
+                              (SPACE3D_FLAG_CAND_TRUNCATED | SPACE3D_FLAG_SWEEP_BUDGET)) != 0u;
+                contacts += rd32(w1, SPACE3D_F_HIT_COUNT, r);
+            }
+            if (flags_any) {
+                flagged++;
+            } else {
+                compared++;
+                CHECK(memcmp(a, c, sizeof(uint32_t) * nw * rows) == 0); /* capsule bounds lose nothing */
+            }
+        }
+        su_world_destroy(w1);
+        su_world_destroy(w2);
+        su_world_destroy(w3);
+    }
+    printf("space3d shape: %u capsule scenes equal to brute force, %u truncated (repeat-only), %u contacts%c",
+           compared, flagged, contacts, 10);
+    CHECK(compared >= 20u && contacts > 100u);
+    D = &g_space3d_query_desc;
+}
+
 int main(void) {
     test_descriptor();
     test_known();
     test_random();
     test_limits();
     test_prox();
+    test_shape();
     printf("test_space3d_ops: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
