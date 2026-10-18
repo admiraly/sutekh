@@ -1317,3 +1317,101 @@ uint32_t su_host_digest(const SuHostWorld *w, uint8_t out[32]) {
 void su_host_hex(const uint8_t digest[32], char out[65]) {
     su_sha256_hex(digest, out);
 }
+
+/* ---------- IR 0.3 typed lanes (numeric-3d) ---------- */
+
+/* Value type and lane of the field at table index i. 64-bit fields are adjacent lane pairs (id, id + 1) in the
+ * ascending table, so pairs are counted from the start. */
+static void lane_of(const SuHostWorld *w, uint32_t i, uint32_t *vt, uint32_t *lane) {
+    uint32_t k = 0;
+    *vt = w->sched.fields[i].value_type == 0u ? SU_TYPE_U32 : w->sched.fields[i].value_type;
+    while (k < i) {
+        uint32_t t = w->sched.fields[k].value_type;
+        k += (t == SU_TYPE_I64 || t == SU_TYPE_Q32) ? 2u : 1u;
+    }
+    *lane = k == i ? 0u : 1u;
+}
+
+/* Index of the lane-0 entry of a 64-bit (i64 or q32) field, or -1. */
+static long wide_index(const SuHostWorld *w, uint32_t field_id) {
+    long i = field_index(w, field_id);
+    uint32_t vt, lane;
+    if (i < 0) {
+        return -1;
+    }
+    lane_of(w, (uint32_t)i, &vt, &lane);
+    if ((vt != SU_TYPE_I64 && vt != SU_TYPE_Q32) || lane != 0u || (uint32_t)i + 1u >= w->sched.field_count) {
+        return -2;
+    }
+    return i;
+}
+
+uint32_t su_host_field_value_type(const SuHostWorld *w, uint32_t field_id, uint32_t *value_type, uint32_t *lane) {
+    long i;
+    if (w == NULL || value_type == NULL || lane == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    i = field_index(w, field_id);
+    if (i < 0) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    lane_of(w, (uint32_t)i, value_type, lane);
+    return SU_OK;
+}
+
+uint32_t su_host_read_i64(const SuHostWorld *w, uint32_t field_id, uint64_t first, uint64_t count, int64_t *out) {
+    const uint32_t *lo = NULL, *hi = NULL;
+    uint64_t rows = 0, k;
+    long i;
+    uint32_t st;
+    if (w == NULL || (out == NULL && count > 0u)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    i = wide_index(w, field_id);
+    if (i == -1) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    if (i < 0) {
+        return SU_E_TYPE;
+    }
+    st = su_world_read_committed(w->w, field_id, &lo, &rows);
+    if (st == SU_OK) {
+        st = su_world_read_committed(w->w, field_id + 1u, &hi, &rows);
+    }
+    if (st != SU_OK) {
+        return st;
+    }
+    if (first > rows || count > rows - first) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (k = 0; k < count; k++) {
+        uint64_t u = ((uint64_t)hi[first + k] << 32) | (uint64_t)lo[first + k];
+        out[k] = u <= (uint64_t)INT64_MAX ? (int64_t)u : -(int64_t)(~u) - 1;
+    }
+    return SU_OK;
+}
+
+uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint64_t entity, uint32_t field_id, int64_t value,
+                                SuHostError *err) {
+    SuHostInput two[2];
+    long i;
+    clear_err(err);
+    if (w == NULL) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, tick, "invalid arguments");
+    }
+    i = wide_index(w, field_id);
+    if (i == -1) {
+        return set_err(err, SU_E_SCHEMA_MISMATCH, field_id, tick, "field %u is not in the schema", (unsigned)field_id);
+    }
+    if (i < 0) {
+        return set_err(err, SU_E_TYPE, field_id, tick, "field %u is not the low lane of an i64 or q32 field",
+                       (unsigned)field_id);
+    }
+    two[0].entity = entity;
+    two[0].field_id = field_id;
+    two[0].value = (uint32_t)((uint64_t)value & 0xFFFFFFFFu);
+    two[1].entity = entity;
+    two[1].field_id = field_id + 1u;
+    two[1].value = (uint32_t)((uint64_t)value >> 32);
+    return su_host_input_push(w, tick, two, 2u, err);
+}
