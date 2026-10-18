@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "backends/native/avx2/su_native_avx2.h"
+#include "backends/native/su_native_unwind.h"
 
 using namespace asmjit;
 using namespace asmjit::x86;
@@ -303,15 +304,26 @@ extern "C" uint32_t su_native_lower_avx2(const SuNativeLowerInput *in, SuNativeL
         a.cmp(qword_ptr(kArgReg, 8), 0);
         a.je(l_zero);
 
+        /* MSVC-style frame for the unwind data (su_native_unwind.h): pushes, fixed allocation, frame pointer = rsp
+         * after the allocation, then the dynamic 32-byte alignment the frame pointer undoes in the epilogue. */
+        su_unwind::Builder uw;
         a.push(rbp);
+        uw.push(a.offset(), rbp.id());
         a.push(rbx);
+        uw.push(a.offset(), rbx.id());
         a.push(r12);
+        uw.push(a.offset(), r12.id());
         a.push(r13);
+        uw.push(a.offset(), r13.id());
         a.push(r14);
+        uw.push(a.offset(), r14.id());
         a.mov(rbx, kArgReg);
-        a.mov(rbp, rsp);
         a.sub(rsp, static_cast<int32_t>(frame));
+        uw.alloc(a.offset(), static_cast<uint32_t>(frame));
+        a.mov(rbp, rsp);
+        uw.set_fp(a.offset(), rbp.id());
         a.and_(rsp, -32);
+        uw.end_prolog(a.offset());
         if (frame > static_cast<uint64_t>(kPageBytes)) {
             /* Touch every page of the frame from the top down (slots are written before read). */
             for (int64_t off = static_cast<int64_t>(frame) - 4; off >= 0; off -= kPageBytes) {
@@ -366,15 +378,16 @@ extern "C" uint32_t su_native_lower_avx2(const SuNativeLowerInput *in, SuNativeL
 
         a.bind(l_sc_done);
         a.vzeroupper();
-        a.mov(rsp, rbp);
+        a.xor_(eax, eax); /* before the epilogue, so it has the canonical form lea rsp, [rbp + frame] / pops / ret */
+        a.lea(rsp, ptr(rbp, static_cast<int32_t>(frame)));
         a.pop(r14);
         a.pop(r13);
         a.pop(r12);
         a.pop(rbx);
         a.pop(rbp);
-        a.xor_(eax, eax);
         a.ret();
 
+        const size_t func_end = a.offset();
         a.bind(l_zero);
         a.vzeroupper();
         a.xor_(eax, eax);
@@ -432,6 +445,17 @@ extern "C" uint32_t su_native_lower_avx2(const SuNativeLowerInput *in, SuNativeL
         out->range_count = ninsn;
         out->disasm = disasm;
         out->disasm_len = dlen;
+        {
+            const std::vector<uint8_t> ub = uw.bytes();
+            if (!ub.empty()) {
+                out->unwind = static_cast<uint8_t *>(std::malloc(ub.size()));
+                if (out->unwind != nullptr) {
+                    std::memcpy(out->unwind, ub.data(), ub.size());
+                    out->unwind_size = static_cast<uint32_t>(ub.size());
+                    out->func_end = static_cast<uint32_t>(func_end);
+                }
+            }
+        }
         return SU_NLOW_OK;
     } catch (const std::bad_alloc &) {
         return SU_NLOW_RESOURCE;

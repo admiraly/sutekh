@@ -84,3 +84,17 @@ if(Python3_Interpreter_FOUND AND TARGET su_agent)
              --tiers ${SU_HOST_ROLLBACK_TIERS} --repeat 1 --iters 5)
     set_tests_properties(host_rollback_bench_smoke PROPERTIES TIMEOUT 300)
 endif()
+
+# Windows x64 unwind data of native kernels (backends/native/su_native_unwind.h): lookup, a real fault inside a kernel
+# delivered to the caller's __except, RtlVirtualUnwind to the caller, removal with the artifact.
+if(SUTEKH_NATIVE)
+    if(WIN32)
+        add_executable(test_native_unwind "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/test_native_unwind.c")
+        target_link_libraries(test_native_unwind PRIVATE su_native su_vm su_world su_ir)
+        target_include_directories(test_native_unwind PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        sutekh_apply_warnings(test_native_unwind)
+        add_test(NAME native_unwind COMMAND test_native_unwind WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    else()
+        sutekh_unsupported_test(native_unwind "Windows x64 unwind tables (RtlAddFunctionTable); SysV kernels are not registered")
+    endif()
+endif()

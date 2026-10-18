@@ -142,6 +142,69 @@ void su_native_exec_release(uint8_t *code, size_t map_size) {
     }
 }
 
+uint32_t su_native_exec_publish_unwind(const uint8_t *src, size_t size, const uint8_t *unwind, uint32_t unwind_size,
+                                       uint32_t func_end, uint8_t **code, size_t *map_size, void **table) {
+    SYSTEM_INFO si;
+    size_t page;
+    size_t map;
+    size_t uw_off = 0;
+    size_t rf_off = 0;
+    size_t total = size;
+    DWORD old = 0;
+    uint8_t *p;
+    RUNTIME_FUNCTION *rf = NULL;
+    const char *seam = getenv("SUTEKH_NATIVE_NO_UNWIND");
+    int reg = unwind != NULL && unwind_size > 0u && func_end > 0u && (size_t)func_end <= size &&
+              !(seam != NULL && strcmp(seam, "1") == 0);
+    *table = NULL;
+    if (reg) {
+        uw_off = (size + 3u) & ~(size_t)3u;
+        rf_off = (uw_off + unwind_size + 3u) & ~(size_t)3u;
+        total = rf_off + sizeof(RUNTIME_FUNCTION);
+        if (total > (size_t)UINT32_MAX) {
+            reg = 0;
+            total = size;
+        }
+    }
+    GetSystemInfo(&si);
+    page = si.dwPageSize;
+    map = (total + page - 1u) / page * page;
+    if ((g_inject_mask & SU_NATIVE_FAIL_MMAP) != 0u) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    p = VirtualAlloc(NULL, map, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (p == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memcpy(p, src, size);
+    if (reg) {
+        memcpy(p + uw_off, unwind, unwind_size);
+        rf = (RUNTIME_FUNCTION *)(void *)(p + rf_off);
+        rf->BeginAddress = 0u;
+        rf->EndAddress = func_end;
+        rf->UnwindData = (DWORD)uw_off;
+    }
+    if ((g_inject_mask & SU_NATIVE_FAIL_MPROTECT) != 0u || !VirtualProtect(p, map, PAGE_EXECUTE_READ, &old)) {
+        VirtualFree(p, 0, MEM_RELEASE);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    FlushInstructionCache(GetCurrentProcess(), p, size);
+    if (reg && !RtlAddFunctionTable(rf, 1u, (DWORD64)(uintptr_t)p)) {
+        VirtualFree(p, 0, MEM_RELEASE);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    *code = p;
+    *map_size = map;
+    *table = rf;
+    return SU_OK;
+}
+
+void su_native_exec_unregister(void *table) {
+    if (table != NULL) {
+        (void)RtlDeleteFunctionTable((RUNTIME_FUNCTION *)table);
+    }
+}
+
 #else
 
 uint32_t su_native_exec_publish(const uint8_t *src, size_t size, uint8_t **code, size_t *map_size) {
@@ -172,6 +235,20 @@ void su_native_exec_release(uint8_t *code, size_t map_size) {
     if (code != NULL) {
         munmap(code, map_size);
     }
+}
+
+/* SysV: no unwind registration here (the Windows x64 format only); gdb and libgcc unwind kernels heuristically. */
+uint32_t su_native_exec_publish_unwind(const uint8_t *src, size_t size, const uint8_t *unwind, uint32_t unwind_size,
+                                       uint32_t func_end, uint8_t **code, size_t *map_size, void **table) {
+    (void)unwind;
+    (void)unwind_size;
+    (void)func_end;
+    *table = NULL;
+    return su_native_exec_publish(src, size, code, map_size);
+}
+
+void su_native_exec_unregister(void *table) {
+    (void)table;
 }
 
 #endif
@@ -236,6 +313,7 @@ static void lowered_free(SuNativeLowered *l) {
     free(l->bytes);
     free(l->insn_ranges);
     free(l->disasm);
+    free(l->unwind);
     memset(l, 0, sizeof *l);
 }
 
@@ -295,6 +373,7 @@ void su_native_artifact_free(SuNativeArtifact *a) {
     if (a == NULL) {
         return;
     }
+    su_native_exec_unregister(a->unwind_table);
     su_native_exec_release(a->code, a->map_size);
     free(a->ranges);
     free(a->disasm);
@@ -476,7 +555,8 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
         diag_set(diag, SU_E_RESOURCE_LIMIT, SU_NATIVE_NO_FAILED_INSN, "allocation failed");
         return SU_E_RESOURCE_LIMIT;
     }
-    st = su_native_exec_publish(low.bytes, low.size, &a->code, &a->map_size);
+    st = su_native_exec_publish_unwind(low.bytes, low.size, low.unwind, low.unwind_size, low.func_end, &a->code,
+                                       &a->map_size, &a->unwind_table);
     if (st != SU_OK) {
         free(ranges);
         free(a);

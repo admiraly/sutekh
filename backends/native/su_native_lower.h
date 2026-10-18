@@ -133,6 +133,11 @@ typedef struct SuNativeLowered {
     uint32_t range_count;  /* == insn_count */
     char *disasm;          /* malloc-owned, NUL-terminated AsmJit logger text */
     size_t disasm_len;
+    /* Windows x64 unwind data (2026-10-18, backends/native/su_native_unwind.h): malloc-owned UNWIND_INFO bytes for
+     * the code range [0, func_end) (the zero-row tail after it is a leaf); NULL / 0 when none was produced. */
+    uint8_t *unwind;
+    uint32_t unwind_size;
+    uint32_t func_end;
 } SuNativeLowered;
 
 #ifdef __cplusplus
