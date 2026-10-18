@@ -132,8 +132,8 @@ static int decl_matches_host(const SuLirModule *decl, const SuHostOpDesc *d) {
     }
     for (i = 0; i < d->field_count; i++) {
         const SuLirField *f = &decl->fields[i];
-        if (f->id != d->fields[i].id || f->type != d->fields[i].type || f->access != d->fields[i].access ||
-            strcmp(f->name, d->fields[i].name) != 0) {
+        if (f->id != d->fields[i].id || f->type != SU_TYPE_U32 || SU_LIR_VALUE_TYPE(f) != d->fields[i].type ||
+            f->access != d->fields[i].access || strcmp(f->name, d->fields[i].name) != 0) {
             return 0;
         }
     }

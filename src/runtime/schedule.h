@@ -32,7 +32,7 @@
 
 typedef struct SuHostField {
     uint32_t id;
-    uint32_t type;        /* SU_TYPE_U32 */
+    uint32_t type;        /* SU_TYPE_U32, or an IR 0.3 value type of a u32 storage lane (host_decl.h) */
     uint32_t access;      /* SU_ACCESS_READ and/or SU_ACCESS_WRITE; never 0 */
     const char *name;
 } SuHostField;

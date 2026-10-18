@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "ir/su_json.h"
+#include "ir/su_ops03.h"
 #include "ir/su_sha256.h"
 #include "sutekh/ir.h"
 #include "sutekh/status.h"
@@ -20,6 +21,26 @@
         }                                                            \
     } while (0)
 
+
+/* Numeric profile of a host operator: fixed_q32_v1 when any field is a typed (non-u32) lane, else u32_mod_v1. */
+static const char *host_profile(const SuHostOpDesc *d) {
+    uint32_t i;
+    for (i = 0; i < d->field_count; i++) {
+        if (d->fields[i].type != SU_TYPE_U32) {
+            return SU_NUMERIC_PROFILE_FIXED_Q32_V1;
+        }
+    }
+    return SU_NUMERIC_PROFILE_U32_MOD_V1;
+}
+
+/* Lane of field i of a validated descriptor: 1 for the second entry of an i64/q32 pair, else 0. */
+static uint32_t host_lane(const SuHostOpDesc *d, uint32_t i) {
+    uint32_t k = 0;
+    while (k < i) {
+        k += su_type_lanes(d->fields[k].type) == 2u ? 2u : 1u;
+    }
+    return k == i ? 0u : 1u;
+}
 
 uint32_t su_host_desc_validate(const SuHostOpDesc *d) {
     uint32_t i;
@@ -40,12 +61,25 @@ uint32_t su_host_desc_validate(const SuHostOpDesc *d) {
         if (f->name == NULL || strlen(f->name) == 0u || strlen(f->name) > SU_WORLD_NAME_MAX) {
             return SU_E_INVALID_ARGUMENT;
         }
-        if (f->type != SU_TYPE_U32 || f->access == 0u || (f->access & ~(SU_ACCESS_READ | SU_ACCESS_WRITE)) != 0u) {
+        if (su_type_lanes(f->type) == 0u || f->access == 0u || (f->access & ~(SU_ACCESS_READ | SU_ACCESS_WRITE)) != 0u) {
             return SU_E_INVALID_ARGUMENT;
         }
         if (i > 0u && f->id <= d->fields[i - 1u].id) {
             return SU_E_INVALID_ARGUMENT;
         }
+    }
+    /* Typed lanes (IR 0.3 value types in SuHostField.type): an i64/q32 field is two adjacent entries with IDs
+     * I and I+1, the same type and the same access (lane 0 then lane 1). */
+    for (i = 0; i < d->field_count; i++) {
+        const SuHostField *f = &d->fields[i];
+        if (su_type_lanes(f->type) != 2u) {
+            continue;
+        }
+        if (i + 1u >= d->field_count || d->fields[i + 1u].id != f->id + 1u || d->fields[i + 1u].type != f->type ||
+            d->fields[i + 1u].access != f->access) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        i++;
     }
     return SU_OK;
 }
@@ -95,7 +129,9 @@ static void host_semantic_digest(const SuHostOpDesc *d, uint8_t out[32]) {
         snprintf(num, sizeof num, ",\"id\":%u,\"name\":", (unsigned)d->fields[i].id);
         put(&c, num);
         json_put_str(&c, d->fields[i].name);
-        put(&c, ",\"type\":\"u32\"}");
+        put(&c, ",\"type\":");
+        json_put_str(&c, su_type_name(d->fields[i].type)); /* "u32" for every u32 lane: RTS identities unchanged */
+        put(&c, "}");
     }
     put(&c, "],\"operator_version\":");
     snprintf(num, sizeof num, "%u", (unsigned)d->operator_version);
@@ -117,7 +153,7 @@ uint32_t su_host_decl_build(const SuHostOpDesc *d, SuLirModule *out) {
     out->artifact_format = SU_ARTIFACT_FORMAT_VERSION;
     out->system_id = dup_cstr(d->system_id);
     out->query = dup_cstr(d->schema_id);
-    out->numeric_profile = dup_cstr(SU_NUMERIC_PROFILE_U32_MOD_V1);
+    out->numeric_profile = dup_cstr(host_profile(d));
     out->field_count = d->field_count;
     out->fields = calloc(d->field_count, sizeof *out->fields);
     if (out->system_id == NULL || out->query == NULL || out->numeric_profile == NULL || out->fields == NULL) {
@@ -126,7 +162,9 @@ uint32_t su_host_decl_build(const SuHostOpDesc *d, SuLirModule *out) {
     }
     for (i = 0; i < d->field_count; i++) {
         out->fields[i].id = d->fields[i].id;
-        out->fields[i].type = d->fields[i].type;
+        out->fields[i].type = SU_TYPE_U32; /* storage lane */
+        out->fields[i].value_type = d->fields[i].type;
+        out->fields[i].lane = host_lane(d, i);
         out->fields[i].access = d->fields[i].access;
         out->fields[i].name = dup_cstr(d->fields[i].name);
         if (out->fields[i].name == NULL) {
@@ -229,8 +267,12 @@ static uint32_t check_host_object(const SuJsonValue *host, const SuHostOpDesc *d
         HOST_MSG_SET(msg, cap, "host capsule has no host object");
         return SU_E_SCHEMA_MISMATCH;
     }
-    char operator_name[32];
-    snprintf(operator_name, sizeof operator_name, "rts_ops_v%u", (unsigned)d->operator_version);
+    /* Operator family: rts_ops for descriptors with only u32 lanes (M3), "<schema_id>_ops" for descriptors with
+     * typed lanes (space3d_ops for the space3d schema). */
+    char operator_name[SU_WORLD_NAME_MAX + 32u];
+    snprintf(operator_name, sizeof operator_name, "%s_ops_v%u",
+             strcmp(host_profile(d), SU_NUMERIC_PROFILE_U32_MOD_V1) == 0 ? "rts" : d->schema_id,
+             (unsigned)d->operator_version);
     if (strcmp(jstr(jmember(host, "operator")) != NULL ? jstr(jmember(host, "operator")) : "", operator_name) != 0) {
         HOST_MSG_SET(msg, cap, "host.operator is not %s", operator_name);
         return SU_E_SCHEMA_MISMATCH;
@@ -255,7 +297,7 @@ static uint32_t check_host_object(const SuJsonValue *host, const SuHostOpDesc *d
         uint64_t id = 0;
         if (f == NULL || f->type != SU_JSON_OBJECT || !juint(jmember(f, "id"), &id) || id != d->fields[i].id ||
             name == NULL || strcmp(name, d->fields[i].name) != 0 ||
-            jstr(jmember(f, "type")) == NULL || strcmp(jstr(jmember(f, "type")), "u32") != 0 ||
+            jstr(jmember(f, "type")) == NULL || strcmp(jstr(jmember(f, "type")), su_type_name(d->fields[i].type)) != 0 ||
             acc == NULL || access_of_name(acc) != d->fields[i].access) {
             HOST_MSG_SET(msg, cap, "host.fields[%u] differs from the descriptor (id, name, type or access)",
                          (unsigned)i);
@@ -348,9 +390,9 @@ uint32_t su_host_load(const char *capsule_path, const char *expect_capsule_hash,
         goto done;
     }
     if (jstr(jmember(root, "numeric_profile")) == NULL ||
-        strcmp(jstr(jmember(root, "numeric_profile")), SU_NUMERIC_PROFILE_U32_MOD_V1) != 0) {
+        strcmp(jstr(jmember(root, "numeric_profile")), host_profile(d)) != 0) {
         st = SU_E_TYPE;
-        HOST_MSG_SET(msg, msg_cap, "host capsule numeric_profile is not %s", SU_NUMERIC_PROFILE_U32_MOD_V1);
+        HOST_MSG_SET(msg, msg_cap, "host capsule numeric_profile is not %s", host_profile(d));
         goto done;
     }
     sched = jmember(root, "schedule");
