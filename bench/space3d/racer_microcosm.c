@@ -159,6 +159,8 @@ typedef struct Cols {
     uint32_t *col[SU_LIMIT_FIELDS];
 } Cols;
 
+/* Column of a field ID, or NULL when no system of the schedule binds the field (--no-query drops the fields
+ * only space3d.query reads; the scene sets them only when they exist). */
 static uint32_t *colp(Cols *c, uint32_t id) {
     uint32_t i;
     for (i = 0; i < c->nfields; i++) {
@@ -166,17 +168,19 @@ static uint32_t *colp(Cols *c, uint32_t id) {
             return c->col[i];
         }
     }
-    fprintf(stderr, "field %u is not in the schedule's field table\n", (unsigned)id);
-    exit(2);
+    return NULL;
 }
 
 static void set32(Cols *c, uint32_t id, uint32_t r, uint32_t v) {
-    colp(c, id)[r] = v;
+    uint32_t *col = colp(c, id);
+    if (col != NULL) {
+        col[r] = v;
+    }
 }
 
 static void setq(Cols *c, uint32_t id, uint32_t r, int64_t v) {
-    colp(c, id)[r] = (uint32_t)((uint64_t)v & 0xFFFFFFFFu);
-    colp(c, id + 1u)[r] = (uint32_t)((uint64_t)v >> 32);
+    set32(c, id, r, (uint32_t)((uint64_t)v & 0xFFFFFFFFu));
+    set32(c, id + 1u, r, (uint32_t)((uint64_t)v >> 32));
 }
 
 static void set3(Cols *c, uint32_t id, uint32_t r, SuV3 v) {
