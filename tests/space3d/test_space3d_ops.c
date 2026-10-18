@@ -158,6 +158,8 @@ static uint32_t run_scene(const Scene *s, SuWorld **wout) {
     wd.fields = fd;
     wd.field_count = D->field_count;
     *wout = NULL;
+    memset(&wi, 0, sizeof wi);
+    memset(&wo, 0, sizeof wo);
     st = su_world_create(&wd, &w);
     if (st != SU_OK) {
         return st;

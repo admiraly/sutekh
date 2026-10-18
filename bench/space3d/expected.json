@@ -1,0 +1,20 @@
+{
+ "n8_t720": {
+  "final_state_sha256": "07bfc5281dabb91205fdb438458e7d2bc4f0b03f2dd38d4ae4fbcde218d20795",
+  "event_log_sha256": "c52e176cf4b48f88366ad2ade4d039b3fd06ffc53cf4aec407172abdb319dba4",
+  "events": 12,
+  "final_tick": 720
+ },
+ "args": [
+  "--n",
+  "8",
+  "--ticks",
+  "720",
+  "--warmup",
+  "0",
+  "--digest-every",
+  "120",
+  "--replay"
+ ],
+ "note": "bit-exact on every conforming compiler and target (integer-only)"
+}
