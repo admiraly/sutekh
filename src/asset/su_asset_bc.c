@@ -275,6 +275,8 @@ uint32_t su_asset_bc_encode(uint32_t format, const uint8_t *rgba, uint32_t width
         for (bx = 0; bx < bw; bx++) {
             uint8_t px[16][4];
             uint8_t *o = out + ((size_t)by * bw + bx) * block;
+            /* C17 has no implicit uint8_t (*)[4] -> const uint8_t (*)[4] conversion (GCC -pedantic). */
+            const uint8_t(*cpx)[4] = (const uint8_t(*)[4])px;
             int i;
             for (i = 0; i < 16; i++) {
                 uint32_t x = bx * 4u + (uint32_t)(i & 3);
@@ -286,19 +288,19 @@ uint32_t su_asset_bc_encode(uint32_t format, const uint8_t *rgba, uint32_t width
             switch (format) {
             case SU_TEX_BC1_UNORM:
             case SU_TEX_BC1_SRGB:
-                bc1_block(px, o);
+                bc1_block(cpx, o);
                 break;
             case SU_TEX_BC3_UNORM:
             case SU_TEX_BC3_SRGB:
-                bc4_block(px, 3, o);
-                bc1_block(px, o + 8);
+                bc4_block(cpx, 3, o);
+                bc1_block(cpx, o + 8);
                 break;
             case SU_TEX_BC4_UNORM:
-                bc4_block(px, 0, o);
+                bc4_block(cpx, 0, o);
                 break;
             default:
-                bc4_block(px, 0, o);
-                bc4_block(px, 1, o + 8);
+                bc4_block(cpx, 0, o);
+                bc4_block(cpx, 1, o + 8);
                 break;
             }
         }
