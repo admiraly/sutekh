@@ -50,3 +50,18 @@ if(TARGET su_agent)
         set_tests_properties(host_ops${variant} PROPERTIES FIXTURES_REQUIRED host_ops_fixture TIMEOUT 300)
     endforeach()
 endif()
+
+# Embedded space3d example: a game schema of its own with space3d.query bound schema-relatively, run through the DLL.
+add_executable(arena_host "${CMAKE_CURRENT_SOURCE_DIR}/examples/host_space3d/arena_host.c")
+target_link_libraries(arena_host PRIVATE sutekh_host)
+sutekh_apply_warnings(arena_host)
+add_test(NAME example_arena_host COMMAND arena_host --root "${CMAKE_CURRENT_SOURCE_DIR}" --ticks 900 --rollback-check
+         --quiet --expect-digest "3b1f7e1dc74d79f9fd0d86bddd1478e614cd717c8b9184956322b564c3f8eac9")
+if(SUTEKH_NATIVE)
+    add_test(NAME example_arena_host_native COMMAND arena_host --root "${CMAKE_CURRENT_SOURCE_DIR}" --ticks 900
+             --rollback-check --native --quiet --expect-digest "3b1f7e1dc74d79f9fd0d86bddd1478e614cd717c8b9184956322b564c3f8eac9")
+endif()
+if(Python3_Interpreter_FOUND)
+    add_test(NAME example_arena_generated COMMAND "${Python3_EXECUTABLE}" -I
+             "${CMAKE_CURRENT_SOURCE_DIR}/examples/host_space3d/gen_arena.py" --check)
+endif()

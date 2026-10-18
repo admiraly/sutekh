@@ -1,0 +1,74 @@
+{
+ "capsule_format": "0.1",
+ "ir_version": "0.3",
+ "system_id": "arena.score",
+ "source": "arena_score.lir.json",
+ "schema": {
+  "id": "arena",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "fields": [
+  {
+   "id": 1,
+   "name": "score",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 2,
+   "name": "bumps",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 101,
+   "name": "a_next_gate",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 131,
+   "name": "a_hit_count",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 133,
+   "name": "a_c0_slot",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 153,
+   "name": "a_gate_dir",
+   "type": "u32",
+   "read": true,
+   "write": false
+  }
+ ],
+ "schedule": {
+  "phase": "simulate",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 65536,
+  "allocation": "forbidden",
+  "max_events_per_row": 2
+ },
+ "tests": [
+  "examples/host_space3d/arena_host.c"
+ ],
+ "capabilities": [
+  "emit_event"
+ ]
+}

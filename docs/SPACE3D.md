@@ -51,6 +51,17 @@ Evidence: `space3d_bind` (one refusal per rule, each for its intended reason, an
 `space3d_serve` check 5 (the racer microcosm rewritten under the game schema `racer_game` with every ID + 1000 and every
 name prefixed `g_`, run through `sutekh serve`, VM and native: every lane equals the original run's).
 
+**In-process host API (2026-10-18).** A game that embeds Sutekh through `include/sutekh/host.h` passes the record's
+bytes as one of the world's capsules (`SuHostCapsule.lir_json = NULL`, `lir_len = 0`); exact and bound records are
+checked by `su_host_load_bound_bytes`, the same checks as the file loader. `su_host_operator_count`/`_info` list the
+operators built into the library. Every world gets its own operator scratch, sized for its capacity at creation
+(`space3d_query_instance_create`, `SuSysEntry.host_inst`), so worlds in one process are independent and may step on
+different threads; the worker keeps the static context. The operator's results are world columns, so snapshots,
+digests, in-place restore and replays carry them. Evidence: `host_ops` / `host_ops_dll` (the racer microcosm through
+the host API reproduces the pinned in-process digests; rollback re-emits events; two worlds on two threads) and
+`example_arena_host` (`examples/host_space3d`: a game schema `arena` with a bound record, gates and bumps, rollback
+drills, pinned digest on the VM and native tiers).
+
 ## 3. Semantics
 
 **Broadphase.** Collidables are alive rows of kinds 1..4. Bounds: a mover's start and end spheres; a sphere; a box's rotated extents (plus one raw unit); a capsule's two end spheres; every bound widened by 4096 raw units (about 1 micrometre) so that rounding in the narrow phase's frame changes can never make it report a pair the broadphase dropped. Sweep axis: the axis with the largest spread of bound centres, ties to x, then y. Collidables are ordered by (minimum on that axis, slot) with a stable merge sort and swept; a pair whose intervals overlap on all three axes and that contains at least one mover becomes a candidate of each mover in it. At most 32 candidates are kept per mover (the first 32 in sweep order; flag 1). At most 2^22 overlapping-interval pairs are examined per tick; when that budget runs out every mover gets flag 4 and the remaining pairs are not examined. Both limits are deterministic functions of the world state.
