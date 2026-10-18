@@ -1,0 +1,43 @@
+{
+  "format": "sutekh.input_map",
+  "version": 1,
+  "axes": ["pitch", "yaw", "roll", "throttle", "strafe_x", "strafe_y"],
+  "buttons": ["boost", "brake", "camera_next", "reset"],
+  "curves": [
+    {"name": "fine_center", "points_milli": [[0, 0], [300, 120], [700, 500], [1000, 1000]]}
+  ],
+  "bindings": [
+    {"target": "pitch", "source": "pad_stick", "pad": 0, "stick": "ly", "dead_zone_milli": 120, "saturation_milli": 960, "curve": "fine_center", "scale_milli": -1000},
+    {"target": "yaw", "source": "pad_stick", "pad": 0, "stick": "lx", "dead_zone_milli": 120, "saturation_milli": 960, "curve": "fine_center"},
+    {"target": "strafe_x", "source": "pad_stick", "pad": 0, "stick": "rx", "dead_zone_milli": 150},
+    {"target": "strafe_y", "source": "pad_stick", "pad": 0, "stick": "ry", "dead_zone_milli": 150},
+    {"target": "roll", "source": "pad_button", "pad": 0, "button": "LSHOULDER", "scale_milli": -1000},
+    {"target": "roll", "source": "pad_button", "pad": 0, "button": "RSHOULDER"},
+    {"target": "throttle", "source": "pad_trigger", "pad": 0, "trigger": "right", "dead_zone_milli": 40},
+    {"target": "throttle", "source": "pad_trigger", "pad": 0, "trigger": "left", "dead_zone_milli": 40, "scale_milli": -1000},
+    {"target": "boost", "source": "pad_button", "pad": 0, "button": "A"},
+    {"target": "brake", "source": "pad_button", "pad": 0, "button": "B"},
+    {"target": "camera_next", "source": "pad_button", "pad": 0, "button": "Y"},
+    {"target": "reset", "source": "pad_button", "pad": 0, "button": "BACK"},
+
+    {"target": "pitch", "source": "mouse_stick", "axis": "y", "counts": 600, "recenter_milli": 15, "dead_zone_milli": 30, "curve": "fine_center"},
+    {"target": "yaw", "source": "mouse_stick", "axis": "x", "counts": 600, "recenter_milli": 15, "dead_zone_milli": 30, "curve": "fine_center"},
+    {"target": "throttle", "source": "key", "key": "W"},
+    {"target": "throttle", "source": "key", "key": "S", "scale_milli": -1000},
+    {"target": "strafe_x", "source": "key", "key": "D"},
+    {"target": "strafe_x", "source": "key", "key": "A", "scale_milli": -1000},
+    {"target": "strafe_y", "source": "key", "key": "SPACE"},
+    {"target": "strafe_y", "source": "key", "key": "LCTRL", "scale_milli": -1000},
+    {"target": "roll", "source": "key", "key": "E"},
+    {"target": "roll", "source": "key", "key": "Q", "scale_milli": -1000},
+    {"target": "pitch", "source": "key", "key": "UP", "scale_milli": -1000},
+    {"target": "pitch", "source": "key", "key": "DOWN"},
+    {"target": "yaw", "source": "key", "key": "LEFT", "scale_milli": -1000},
+    {"target": "yaw", "source": "key", "key": "RIGHT"},
+    {"target": "boost", "source": "key", "key": "LSHIFT"},
+    {"target": "boost", "source": "mouse_button", "button": "left"},
+    {"target": "brake", "source": "mouse_button", "button": "right"},
+    {"target": "camera_next", "source": "key", "key": "C"},
+    {"target": "reset", "source": "key", "key": "R"}
+  ]
+}
