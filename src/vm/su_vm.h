@@ -65,7 +65,8 @@ uint32_t su_vm_context_last_failed_insn(const SuExecContext *ctx);
  *                         values (no emission) copied instead of executed. A module without a plan, or an
  *                         invocation that leaves a lane the plan uses unbound, runs on the reference tier.
  * The default for new contexts is planned unless su_vm_set_default_tier chose otherwise or the environment
- * variable SUTEKH_VM_TIER is "reference". su_vm_set_default_tier(0) restores that rule. It is a plain
+ * variable SUTEKH_VM_TIER is "reference" (read once, at the first call that needs it; su_vm_set_default_tier(0)
+ * restores the rule and reads it again). It is a plain
  * process-wide setting: call it before contexts are created on other threads. */
 #define SU_VM_TIER_REFERENCE 1u
 #define SU_VM_TIER_PLANNED 2u

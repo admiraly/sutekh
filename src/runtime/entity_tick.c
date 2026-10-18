@@ -249,13 +249,7 @@ uint32_t su_ent_rt_create_restored(uint64_t max_struct_tick, uint64_t max_events
 /* ---- per-system chunk execution ---- */
 
 static const SuColumnBinding *find_binding(const SuColumnBinding *b, uint32_t n, uint32_t id) {
-    uint32_t j;
-    for (j = 0; j < n; j++) {
-        if (b[j].field_id == id) {
-            return &b[j];
-        }
-    }
-    return NULL;
+    return su_world_find_binding(b, n, id);
 }
 
 /* Slices one whole-table binding to rows [begin, begin+len). */
