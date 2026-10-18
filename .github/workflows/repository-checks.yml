@@ -64,6 +64,11 @@ jobs:
         run: cmake --build build -j 2
       - name: Run runtime regression suite
         run: ctest --test-dir build --output-on-failure -j 2
+      - name: Run runtime regression suite on the reference VM tier
+        # The planned VM tier is the default; this keeps the reference interpreter covered end to end.
+        run: ctest --test-dir build --output-on-failure -j 2
+        env:
+          SUTEKH_VM_TIER: reference
 
   runtime-native:
     name: Linux native tier (AsmJit, SUTEKH_NATIVE=ON)
