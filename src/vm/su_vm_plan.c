@@ -457,15 +457,30 @@ int su_vm_plan_bound(const SuVmPlan *p, uint32_t *const *in_cols, uint32_t *cons
     return 1;
 }
 
+/* Copies the identity lanes of rows [from, to) (all live, all guarded) from input to staging. */
+static void copy_run(const SuVmPlan *p, const SuVmPlanRun *run, uint64_t from, uint64_t to) {
+    uint32_t i;
+    if (to <= from) {
+        return;
+    }
+    for (i = 0; i < p->n_identity; i++) {
+        memcpy(run->out_cols[p->identity[i]] + from, run->in_cols[p->identity[i]] + from,
+               (size_t)(to - from) * sizeof(uint32_t));
+    }
+}
+
 uint32_t su_vm_plan_run(SuVmPlan *p, SuVmPlanRun *run, uint64_t rows, uint32_t *failed_insn) {
     int64_t *R = p->regs;
     const uint8_t *alive = run->alive;
     uint64_t r;
     uint64_t body_rows = 0, skipped = 0;
+    uint64_t run_from = 0; /* first row of the pending run of guarded rows (rows [run_from, r) are guarded) */
     for (r = 0; r < rows; r++) {
         uint32_t seq = 0;
         uint32_t i;
         if (alive != NULL && alive[r] == 0u) {
+            copy_run(p, run, run_from, r); /* a dead row is never written */
+            run_from = r + 1u;
             continue;
         }
         if (p->has_guard) {
@@ -479,13 +494,12 @@ uint32_t su_vm_plan_run(SuVmPlan *p, SuVmPlanRun *run, uint64_t rows, uint32_t *
                 }
             }
             if (skip) {
-                for (i = 0; i < p->n_identity; i++) {
-                    run->out_cols[p->identity[i]][r] = run->in_cols[p->identity[i]][r];
-                }
                 skipped++;
-                continue;
+                continue; /* copied with its run */
             }
         }
+        copy_run(p, run, run_from, r);
+        run_from = r + 1u;
         for (i = 0; i < p->n_body; i++) {
             uint32_t st = exec1(&p->body[i], R, run, (size_t)r, &seq);
             if (st != SU_OK) {
@@ -497,6 +511,7 @@ uint32_t su_vm_plan_run(SuVmPlan *p, SuVmPlanRun *run, uint64_t rows, uint32_t *
         }
         body_rows++;
     }
+    copy_run(p, run, run_from, rows);
     run->rows_body = body_rows;
     run->rows_skipped = skipped;
     return SU_OK;

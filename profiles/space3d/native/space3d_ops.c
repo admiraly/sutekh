@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "ir/su_num.h"
+#include "ir/su_num_fast.h" /* exact inline equivalents (tests/num/test_num_fast.c) */
 #include "space3d_geom.h"
 #include "sutekh/abi.h"
 #include "sutekh/status.h"
@@ -223,9 +224,9 @@ static void capsule_ends(const Cols *c, uint32_t r, SuV3 *a, SuV3 *b) {
     SuV3 axis = {0, 0, 0};
     SuV3 p = rd3(c, F_POSX, r);
     axis.z = rdq(c, F_HALFZ, r);
-    axis = su_quat_rotate(rdrot(c, r), axis);
-    *a = su_v3_sub(p, axis);
-    *b = su_v3_add(p, axis);
+    axis = su_quat_rotatef(rdrot(c, r), axis);
+    *a = su_v3_subf(p, axis);
+    *b = su_v3_addf(p, axis);
 }
 
 static void bounds_union(SuV3 *lo, SuV3 *hi, SuV3 lo2, SuV3 hi2) {
@@ -255,12 +256,12 @@ static void row_bounds(const Cols *c, uint32_t r, uint32_t kind) {
         s3_bounds_sphere(b, rad, &lo2, &hi2);
         bounds_union(&lo, &hi, lo2, hi2);
     }
-    g_lo[0][r] = su_q32_sub(lo.x, S3_BOUNDS_SLACK);
-    g_lo[1][r] = su_q32_sub(lo.y, S3_BOUNDS_SLACK);
-    g_lo[2][r] = su_q32_sub(lo.z, S3_BOUNDS_SLACK);
-    g_hi[0][r] = su_q32_add(hi.x, S3_BOUNDS_SLACK);
-    g_hi[1][r] = su_q32_add(hi.y, S3_BOUNDS_SLACK);
-    g_hi[2][r] = su_q32_add(hi.z, S3_BOUNDS_SLACK);
+    g_lo[0][r] = su_q32_subf(lo.x, S3_BOUNDS_SLACK);
+    g_lo[1][r] = su_q32_subf(lo.y, S3_BOUNDS_SLACK);
+    g_lo[2][r] = su_q32_subf(lo.z, S3_BOUNDS_SLACK);
+    g_hi[0][r] = su_q32_addf(hi.x, S3_BOUNDS_SLACK);
+    g_hi[1][r] = su_q32_addf(hi.y, S3_BOUNDS_SLACK);
+    g_hi[2][r] = su_q32_addf(hi.z, S3_BOUNDS_SLACK);
 }
 
 /* Stable bottom-up merge sort of idx[0..n) by (g_lo[axis][slot], slot). */
@@ -314,13 +315,13 @@ typedef struct Contact {
 /* Narrow phase of mover m against candidate o. */
 static S3Hit narrow(const Cols *c, uint32_t m, uint32_t o) {
     SuV3 c0 = rd3(c, F_PREVX, m);
-    SuV3 v = su_v3_sub(rd3(c, F_POSX, m), c0);
+    SuV3 v = su_v3_subf(rd3(c, F_POSX, m), c0);
     int64_t r = rdq(c, F_RADIUS, m);
     uint32_t ko = c->kind[o];
     if (ko == SPACE3D_KIND_MOVER) {
         SuV3 o0 = rd3(c, F_PREVX, o);
-        SuV3 vo = su_v3_sub(rd3(c, F_POSX, o), o0);
-        return s3_sweep_sphere_sphere(c0, su_v3_sub(v, vo), r, o0, rdq(c, F_RADIUS, o));
+        SuV3 vo = su_v3_subf(rd3(c, F_POSX, o), o0);
+        return s3_sweep_sphere_sphere(c0, su_v3_subf(v, vo), r, o0, rdq(c, F_RADIUS, o));
     }
     if (ko == SPACE3D_KIND_SPHERE) {
         return s3_sweep_sphere_sphere(c0, v, r, rd3(c, F_POSX, o), rdq(c, F_RADIUS, o));
@@ -416,11 +417,11 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
         for (a = 0; a < 3u; a++) {
             int64_t mn = INT64_MAX, mx = INT64_MIN, spread;
             for (i = 0; i < ncoll; i++) {
-                int64_t cen = su_q32_add(g_lo[a][g_coll[i]], g_hi[a][g_coll[i]]);
+                int64_t cen = su_q32_addf(g_lo[a][g_coll[i]], g_hi[a][g_coll[i]]);
                 mn = cen < mn ? cen : mn;
                 mx = cen > mx ? cen : mx;
             }
-            spread = su_q32_sub(mx, mn);
+            spread = su_q32_subf(mx, mn);
             if (spread > best) {
                 best = spread;
                 axis = a;

@@ -90,7 +90,7 @@ target_link_libraries(test_vm_tiers PRIVATE su_vm)
 sutekh_apply_warnings(test_vm_tiers)
 add_test(NAME vm_tiers COMMAND test_vm_tiers WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 if(UNIX)
-    target_link_libraries(su_vm PUBLIC m) # sqrt: the estimate of su_num_fast.h
+    target_link_libraries(su_ir PUBLIC m) # sqrt: the estimate of src/ir/su_num_fast.h (su_vm, su_space3d)
 endif()
 # su_num_fast.h (planned VM tier) against the reference su_num.c, with and without compiler intrinsics.
 add_executable(test_num_fast tests/num/test_num_fast.c)
