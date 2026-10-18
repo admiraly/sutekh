@@ -16,14 +16,14 @@ A world that uses the operator has schema ID `space3d` and reserves these field 
 
 | ID | Field | Type | Operator access | Meaning |
 |---|---|---|---|---|
-| 1 | `kind` | u32 | read | 0 none, 1 mover (swept sphere), 2 sphere, 3 oriented box, 4 capsule, 5 rectangular gate, 6 disc gate |
+| 1 | `kind` | u32 | read | 0 none, 1 mover (swept sphere), 2 sphere, 3 oriented box, 4 capsule, 5 rectangular gate, 6 disc gate, 7 elliptical gate |
 | 2 | `next_gate` | u32 | read | mover: `gate_index` of the gate it must cross next |
 | 3 | `gate_index` | u32 | read | gate: its index in the course |
 | 10, 12, 14 | `pos_x/y/z` | q32 | read | position at the end of the tick (movers), centre (others) |
 | 16, 18, 20 | `prev_x/y/z` | q32 | read | mover position at the start of the tick |
 | 22..28 | `rot_w/x/y/z` | q32 | read | unit orientation, local to world (boxes, capsules, gates) |
 | 30 | `radius` | q32 | read | sphere/mover/capsule radius, disc gate radius |
-| 32, 34, 36 | `half_x/y/z` | q32 | read | box half extents; capsule half length along local z (`half_z`); gate rectangle half width/height |
+| 32, 34, 36 | `half_x/y/z` | q32 | read | box half extents; capsule half length along local z (`half_z`); gate rectangle half width/height; ellipse semi-axes along local x and y |
 | 40 | `hit_count` | u32 | write | contacts reported (0..2) |
 | 41 | `hit_flags` | u32 | write | 1 candidates truncated, 2 contacts truncated, 4 sweep budget exhausted |
 | 42 + 10k | `ck_slot`, `ck_gen` | u32 | write | contact k (k = 0, 1): other row's slot and generation (slot 0xFFFFFFFF when absent) |
@@ -45,7 +45,7 @@ Non-mover rows store zero counts and NONE slots; dead rows are zeroed by the wor
 - Oriented box: the problem is rotated into the box frame by the conjugate orientation. A sphere touching or overlapping the box at the start has toi 0 and the normal from the closest box point (centre inside the box: the axis of least penetration, ties to the lower axis). Otherwise the slab test against the box expanded by r gives the entry point; by its Voronoi region (face, edge, vertex; Ericson, RTCD 5.5.7) the hit is the face entry or the earliest root among the edge capsules at that edge or corner. The normal is always taken from the closest box point to the contact centre, so a near-tie between an edge and its corner sphere cannot tilt it.
 - Contacts per mover: candidates are tested in ascending slot order; hits are kept by (toi, slot), at most 2 (flag 2 when more were found).
 
-**Gate crossing.** The mover's centre segment `prev -> pos` against the gate whose `gate_index` equals the mover's `next_gate` (lowest slot among equal indices). n = rotate(q, +z), x and y axes likewise; d0, d1 are the signed distances of the end points. Forward when d0 < 0 <= d1, backward when d0 >= 0 > d1; t = d0 / (d0 - d1) clamped to [0, 1]; the crossing point's gate coordinates (lx, ly) must satisfy |lx| <= half_x and |ly| <= half_y (rectangle) or lx^2 + ly^2 <= radius^2 (disc). The operator reports the crossing; advancing `next_gate`, laps and wrong-way handling are capsule logic.
+**Gate crossing.** The mover's centre segment `prev -> pos` against the gate whose `gate_index` equals the mover's `next_gate` (lowest slot among equal indices). n = rotate(q, +z), x and y axes likewise; d0, d1 are the signed distances of the end points. Forward when d0 < 0 <= d1, backward when d0 >= 0 > d1; t = d0 / (d0 - d1) clamped to [0, 1]; the crossing point's gate coordinates (lx, ly) must satisfy |lx| <= half_x and |ly| <= half_y (rectangle), lx^2 + ly^2 <= radius^2 (disc), or u^2 + v^2 <= 1 with u = div(lx, half_x), v = div(ly, half_y) (ellipse; q32 operations in that order, no crossing when a semi-axis is <= 0). A disc is the ellipse with equal semi-axes up to rounding; tests check that they agree on a grid. The operator reports the crossing; advancing `next_gate`, laps and wrong-way handling are capsule logic.
 
 **Accuracy domain.** Results are bit-exact for every input. Geometric accuracy holds while the relative coordinates of a tested pair stay within about 16 km and radii and extents within about 4 km (squares stay inside Q32.32); outside that range intermediate values saturate deterministically.
 

@@ -245,7 +245,7 @@ static void build_scene(const Args *a, const Course *course, Cols *c, uint32_t r
         uint32_t r = a->n + i;
         SuV3 pos, tan;
         course_at(course, (int64_t)i * (ONE / 4), &pos, &tan);
-        set32(c, SPACE3D_F_KIND, r, SPACE3D_KIND_GATE_RECT);
+        set32(c, SPACE3D_F_KIND, r, SPACE3D_KIND_GATE_ELLIPSE); /* semi-axes 120 m x 80 m */
         set32(c, SPACE3D_F_GATE_INDEX, r, i);
         set3(c, SPACE3D_F_POS_X, r, pos);
         setrot(c, r, quat_from_to(za, tan));

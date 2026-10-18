@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
  *
  * space3d narrow phase (docs/SPACE3D.md section 3): swept sphere against sphere, capsule and oriented box, and
- * segment against an oriented finite gate (rectangle or disc). Every value is Q32.32 (src/ir/su_num.h) and every
+ * segment against an oriented finite gate (rectangle, disc or ellipse). Every value is Q32.32 (src/ir/su_num.h) and every
  * step is a profile operation in a fixed order, so results are bit-exact on every compiler and target. These
  * functions are the normative definition of the queries; the text in SPACE3D.md describes them.
  *
@@ -39,9 +39,14 @@ S3Hit s3_sweep_sphere_sphere(SuV3 c0, SuV3 v, int64_t r, SuV3 s, int64_t rs);
 S3Hit s3_sweep_sphere_capsule(SuV3 c0, SuV3 v, int64_t r, SuV3 a, SuV3 b, int64_t rc);
 /* Oriented box: centre, unit orientation q (local -> world), half extents half (all >= 0). */
 S3Hit s3_sweep_sphere_obb(SuV3 c0, SuV3 v, int64_t r, SuV3 center, SuQuat q, SuV3 half);
-/* Gate: centre c, orientation q; rectangle |lx| <= half_x and |ly| <= half_y when disc == 0, else the disc
- * lx^2 + ly^2 <= radius^2. Returns dir and fills *out (out->dir == 0 when there is no crossing). */
-int s3_segment_gate(SuV3 p0, SuV3 p1, SuV3 c, SuQuat q, int64_t half_x, int64_t half_y, int64_t radius, int disc,
+/* Gate shapes in the gate plane (local x, y). */
+#define S3_GATE_RECT 0    /* |lx| <= half_x and |ly| <= half_y */
+#define S3_GATE_DISC 1    /* lx^2 + ly^2 <= radius^2 */
+#define S3_GATE_ELLIPSE 2 /* (lx / half_x)^2 + (ly / half_y)^2 <= 1 (q32 div, mul, add); half_x or half_y <= 0: none */
+
+/* Gate: centre c, orientation q, shape S3_GATE_*. Returns dir and fills *out (out->dir == 0 when there is no
+ * crossing). */
+int s3_segment_gate(SuV3 p0, SuV3 p1, SuV3 c, SuQuat q, int64_t half_x, int64_t half_y, int64_t radius, int shape,
                     S3GateHit *out);
 
 /* World-space axis-aligned bounds of the shapes (inclusive; used by the broadphase). */

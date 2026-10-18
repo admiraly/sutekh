@@ -111,8 +111,10 @@ static void capsule(uint32_t r, SuV3 c, SuQuat q, int64_t half_len, int64_t radi
     set_rot(r, q);
 }
 
-static void gate(uint32_t r, SuV3 c, SuQuat q, uint32_t index, int disc, int64_t hx, int64_t hy, int64_t radius) {
-    set32(SPACE3D_F_KIND, r, disc ? SPACE3D_KIND_GATE_DISC : SPACE3D_KIND_GATE_RECT);
+/* shape: 0 rectangle, 1 disc, 2 ellipse (semi-axes hx, hy). */
+static void gate(uint32_t r, SuV3 c, SuQuat q, uint32_t index, int shape, int64_t hx, int64_t hy, int64_t radius) {
+    set32(SPACE3D_F_KIND, r, shape == 1 ? SPACE3D_KIND_GATE_DISC
+                             : shape == 2 ? SPACE3D_KIND_GATE_ELLIPSE : SPACE3D_KIND_GATE_RECT);
     set3(SPACE3D_F_POS_X, r, c.x, c.y, c.z);
     set_rot(r, q);
     set32(SPACE3D_F_GATE_INDEX, r, index);
@@ -404,8 +406,12 @@ static void test_known(void) {
         CHECK(ctoi(w, 0, 1) > ctoi(w, 0, 0));
         su_world_destroy(w);
     }
-    /* Gate backward crossing, disc gate, and a missed gate (outside the rectangle). */
-    scene_init(&s, 5);
+    /* Gate backward crossing, disc gate, a missed gate (outside the rectangle), and an elliptical gate (semi-axes
+     * 20 x 5): (12, 3) is inside (0.36 + 0.36), (12, 4.5) outside (0.36 + 0.81). */
+    scene_init(&s, 8);
+    gate(5, V(0, 0, Q(100)), QID, 9, 2, Q(20), Q(5), 0);
+    mover(6, V(Q(12), Q(3), Q(99)), V(Q(12), Q(3), Q(101)), ONE, 9);
+    mover(7, V(Q(12), Q(9) / 2, Q(99)), V(Q(12), Q(9) / 2, Q(101)), ONE, 9);
     mover(0, V(0, 0, ONE), V(0, 0, -ONE), ONE, 1);
     gate(1, V(0, 0, 0), QID, 1, 1, 0, 0, Q(5));
     mover(2, V(Q(10), 0, -ONE), V(Q(10), 0, ONE), ONE, 2);
@@ -416,6 +422,9 @@ static void test_known(void) {
         CHECK(rd32(w, SPACE3D_F_GATE_DIR, 0) == SPACE3D_GATE_BACKWARD && rd32(w, SPACE3D_F_GATE_SLOT, 0) == 1u);
         CHECK(rd32(w, SPACE3D_F_GATE_DIR, 2) == SPACE3D_GATE_NONE);
         CHECK(rd32(w, SPACE3D_F_GATE_DIR, 4) == SPACE3D_GATE_FORWARD); /* (3,3) inside the radius-5 disc */
+        CHECK(rd32(w, SPACE3D_F_GATE_DIR, 6) == SPACE3D_GATE_FORWARD && rd32(w, SPACE3D_F_GATE_SLOT, 6) == 5u);
+        CHECK(rdq(w, SPACE3D_F_GATE_TOI, 6) == ONE / 2);
+        CHECK(rd32(w, SPACE3D_F_GATE_DIR, 7) == SPACE3D_GATE_NONE);
         su_world_destroy(w);
     }
     /* Zero rows. */
@@ -461,7 +470,7 @@ static void random_scene(Scene *s, uint32_t rows, int64_t span) {
         } else if (k < 9) {
             capsule(r, p, q, (int64_t)(rng() % (uint64_t)(8 * ONE)), ONE / 2 + (int64_t)(rng() % (uint64_t)(2 * ONE)));
         } else {
-            gate(r, p, q, (uint32_t)(rng() % 4u), (int)(rng() & 1u), Q(8), Q(6), Q(7));
+            gate(r, p, q, (uint32_t)(rng() % 4u), (int)(rng() % 3u), Q(8), Q(6), Q(7));
         }
         if (rng() % 50u == 0u) {
             s->dead[r] = 1;

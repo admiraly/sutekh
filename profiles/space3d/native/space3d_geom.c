@@ -320,7 +320,7 @@ S3Hit s3_sweep_sphere_obb(SuV3 c0, SuV3 v, int64_t r, SuV3 center, SuQuat q, SuV
     return h;
 }
 
-int s3_segment_gate(SuV3 p0, SuV3 p1, SuV3 c, SuQuat q, int64_t half_x, int64_t half_y, int64_t radius, int disc,
+int s3_segment_gate(SuV3 p0, SuV3 p1, SuV3 c, SuQuat q, int64_t half_x, int64_t half_y, int64_t radius, int shape,
                     S3GateHit *out) {
     SuV3 nrm = su_quat_rotate(q, v3(0, 0, ONE));
     SuV3 xa = su_quat_rotate(q, v3(ONE, 0, 0));
@@ -346,8 +346,15 @@ int s3_segment_gate(SuV3 p0, SuV3 p1, SuV3 c, SuQuat q, int64_t half_x, int64_t 
     rel = su_v3_sub(su_v3_add(p0, su_v3_scale(su_v3_sub(p1, p0), t)), c);
     lx = su_v3_dot(rel, xa);
     ly = su_v3_dot(rel, ya);
-    if (disc) {
+    if (shape == S3_GATE_DISC) {
         inside = su_q32_add(su_q32_mul(lx, lx), su_q32_mul(ly, ly)) <= su_q32_mul(radius, radius);
+    } else if (shape == S3_GATE_ELLIPSE) {
+        if (half_x <= 0 || half_y <= 0) {
+            inside = 0;
+        } else {
+            int64_t u = su_q32_div(lx, half_x), v = su_q32_div(ly, half_y);
+            inside = su_q32_add(su_q32_mul(u, u), su_q32_mul(v, v)) <= ONE;
+        }
     } else {
         inside = su_q32_abs(lx) <= half_x && su_q32_abs(ly) <= half_y;
     }

@@ -99,6 +99,39 @@ static void test_known(void) {
     /* Disc radius 5: (3,3) inside (18 <= 25), (4,4) outside (32 > 25). */
     CHECK(s3_segment_gate(V(Q(3), Q(3), -ONE), V(Q(3), Q(3), ONE), V(0, 0, 0), QID, 0, 0, Q(5), 1, &g) == 1);
     CHECK(s3_segment_gate(V(Q(4), Q(4), -ONE), V(Q(4), Q(4), ONE), V(0, 0, 0), QID, 0, 0, Q(5), 1, &g) == 0);
+    /* Ellipse, semi-axes 10 (local x) and 4 (local y): (9,0), (0,3.9), (6,3) inside (0.9225); (0,4.5), (7,3)
+     * outside (1.0525); equal semi-axes agree with the disc; a zero semi-axis admits nothing. */
+    {
+        static const int64_t pts[][3] = {{9, 0, 1}, {0, 39, 1}, {6, 3, 1}, {0, 45, 0}, {7, 3, 0}, {10, 0, 1}, {0, 4, 1}};
+        size_t k;
+        for (k = 0; k < sizeof pts / sizeof pts[0]; k++) {
+            int64_t x = Q(pts[k][0]), y = pts[k][1] >= 10 ? Q(pts[k][1]) / 10 : Q(pts[k][1]);
+            int r = s3_segment_gate(V(x, y, -ONE), V(x, y, ONE), V(0, 0, 0), QID, Q(10), Q(4), 0, S3_GATE_ELLIPSE, &g);
+            CHECK(r == (pts[k][2] ? 1 : 0));
+            if (r != (pts[k][2] ? 1 : 0)) {
+                fprintf(stderr, "ellipse point %zu\n", k);
+            }
+        }
+        for (k = 0; k < 40; k++) {
+            int64_t x = Q((int64_t)k % 7) - Q(3), y = Q((int64_t)k / 7) - Q(3);
+            S3GateHit g2;
+            int re = s3_segment_gate(V(x, y, -ONE), V(x, y, ONE), V(0, 0, 0), QID, Q(5), Q(5), 0, S3_GATE_ELLIPSE, &g);
+            int rd = s3_segment_gate(V(x, y, -ONE), V(x, y, ONE), V(0, 0, 0), QID, 0, 0, Q(5), S3_GATE_DISC, &g2);
+            CHECK(re == rd);
+        }
+        CHECK(s3_segment_gate(V(0, 0, -ONE), V(0, 0, ONE), V(0, 0, 0), QID, 0, Q(4), 0, S3_GATE_ELLIPSE, &g) == 0);
+    }
+    {
+        /* Ellipse rotated 90 degrees about z: local x (semi-axis 10) lies along world y. */
+        SuQuat q;
+        q.w = su_q32_sqrt(ONE / 2);
+        q.x = 0;
+        q.y = 0;
+        q.z = q.w;
+        CHECK(s3_segment_gate(V(0, Q(9), -ONE), V(0, Q(9), ONE), V(0, 0, 0), q, Q(10), Q(4), 0, S3_GATE_ELLIPSE, &g) == 1);
+        CHECK(near_q(g.lx, Q(9), 16) && near_q(g.ly, 0, 16));
+        CHECK(s3_segment_gate(V(Q(9), 0, -ONE), V(Q(9), 0, ONE), V(0, 0, 0), q, Q(10), Q(4), 0, S3_GATE_ELLIPSE, &g) == 0);
+    }
     {
         /* Gate rotated 90 degrees about y: normal = +x (local z -> world x). Crossing along +x is forward. */
         SuQuat q;

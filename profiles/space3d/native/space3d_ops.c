@@ -73,8 +73,8 @@ const SuHostOpDesc g_space3d_query_desc = {
     "space3d.query",
     SPACE3D_SCHEMA_ID,
     SPACE3D_OPS_VERSION,
-    {0xd5, 0xea, 0x0d, 0xcc, 0x63, 0x58, 0x94, 0xf0, 0xc1, 0xf8, 0xca, 0x6c, 0x3d, 0x7d, 0x7b, 0xbc,
-     0xfe, 0xa2, 0xfb, 0x3e, 0x82, 0xb4, 0x85, 0x70, 0x1c, 0x14, 0xc9, 0x75, 0x80, 0x07, 0xcf, 0x63},
+    {0xd3, 0x7e, 0x6d, 0x92, 0xd8, 0x6a, 0xc6, 0x38, 0xcb, 0x1f, 0xc3, 0x58, 0x2f, 0x34, 0x8e, 0x2c,
+     0x09, 0x85, 0x62, 0x29, 0x0d, 0x41, 0x20, 0x2a, 0x0b, 0x57, 0x77, 0x70, 0x7a, 0xa0, 0xd5, 0xfe},
     (uint32_t)S3_NFIELDS,
     k_fields,
     query_run,
@@ -99,6 +99,7 @@ const char *space3d_constants_text(void) {
            "contact_order=toi,slot\n"
            "gate_lookup=gate_index_equals_next_gate,lowest_slot\n"
            "gate_side=front_ge_0\n"
+           "gate_shapes=rect,disc,ellipse_q32_div\n"
            "none=4294967295\n";
 }
 
@@ -397,7 +398,7 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
             row_bounds(&c, r, k);
             g_coll[ncoll++] = r;
             st.movers += k == SPACE3D_KIND_MOVER;
-        } else if (k == SPACE3D_KIND_GATE_RECT || k == SPACE3D_KIND_GATE_DISC) {
+        } else if (k >= SPACE3D_KIND_GATE_RECT && k <= SPACE3D_KIND_GATE_ELLIPSE) {
             g_gate_slot[ngate++] = r;
         }
     }
@@ -524,9 +525,11 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
                 uint32_t g = find_gate(&c, ngate, c.next_gate[r]);
                 if (g != S3_NONE) {
                     S3GateHit gh;
-                    int disc = c.kind[g] == SPACE3D_KIND_GATE_DISC;
+                    int shape = c.kind[g] == SPACE3D_KIND_GATE_DISC      ? S3_GATE_DISC
+                                : c.kind[g] == SPACE3D_KIND_GATE_ELLIPSE ? S3_GATE_ELLIPSE
+                                                                         : S3_GATE_RECT;
                     if (s3_segment_gate(rd3(&c, F_PREVX, r), rd3(&c, F_POSX, r), rd3(&c, F_POSX, g), rdrot(&c, g),
-                                        rdq(&c, F_HALFX, g), rdq(&c, F_HALFY, g), rdq(&c, F_RADIUS, g), disc,
+                                        rdq(&c, F_HALFX, g), rdq(&c, F_HALFY, g), rdq(&c, F_RADIUS, g), shape,
                                         &gh) != 0) {
                         gdir = gh.dir > 0 ? SPACE3D_GATE_FORWARD : SPACE3D_GATE_BACKWARD;
                         gslot = g;

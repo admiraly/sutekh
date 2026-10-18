@@ -37,6 +37,7 @@
 #define SPACE3D_KIND_CAPSULE 4u    /* static capsule: segment pos -/+ rot*(0,0,half_z), radius */
 #define SPACE3D_KIND_GATE_RECT 5u  /* gate rectangle: pos, rot (normal = local +z), half_x, half_y */
 #define SPACE3D_KIND_GATE_DISC 6u  /* gate disc: pos, rot, radius */
+#define SPACE3D_KIND_GATE_ELLIPSE 7u /* gate ellipse: pos, rot, semi-axes half_x (local x), half_y (local y) */
 
 /* hit_flags bits */
 #define SPACE3D_FLAG_CAND_TRUNCATED 1u    /* more than SPACE3D_CAND_MAX candidates overlapped */
