@@ -111,3 +111,17 @@ The left-to-right order of every composite above is normative: an implementation
 ## 5. Reference implementation and evidence
 
 `src/ir/su_num.c` implements every operation with 64-bit limbs (`U128`, `U192`), sign-and-magnitude accumulation of products, Hacker's Delight 128/64 division and an exact integer square root (normalization, a 64-bit integer Newton estimate, one 128/64 Newton step and an exact fix-up by multiplication; the bit-serial restoring method is kept as `su_num_isqrt_u128_ref` and compared on 952,969 inputs per test run). The method is free: any implementation that returns the specified result is conforming. Tests: `tests/num/test_num.c` (known answers hand-derived from this text, algebraic checks q*d + r = n and r^2 <= n < (r+1)^2 on 200,000 random cases each, symmetry and identity properties, the 1,000,000-step drift band) and `tests/num/q32_model.py` (independent Python model; the C binary prints random records, the model recomputes them with exact rationals).
+
+## Fast paths (2026-10-18)
+
+`src/ir/su_num_fast.h` holds inline functions (`su_q32_mulf`, `su_v3_normalizef`, ...) that return exactly the bits
+of the reference functions in `src/ir/su_num.c` for every input; the planned VM tier and the space3d operators use
+them. They change only how the result is reached: compiler 128-bit multiplies, signed 128-bit accumulation of up
+to four products when every operand lies in [-2^62, 2^62) (otherwise the reference function is called), the
+hardware 128/64 divide when the quotient fits 64 bits, and an integer square root that starts from a
+double-precision estimate and is then corrected with exact integer comparisons until x^2 <= n < (x+1)^2 (roots of
+2^52 and above, where the estimate may be several units off, use the reference method). No result depends on the
+floating-point environment. `test_num_fast` compares every function with the reference on edge combinations and
+seeded random inputs at every magnitude (15.9 million checks per run); `test_num_fast_portable` repeats it with
+`SU_NUM_FAST_PORTABLE`, which disables the compiler intrinsics.
+
