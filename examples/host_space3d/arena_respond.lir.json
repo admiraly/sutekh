@@ -1,0 +1,236 @@
+{
+ "ir_version": "0.3",
+ "system_id": "arena.respond",
+ "numeric_profile": "fixed_q32_v1",
+ "query": "arena",
+ "instructions": [
+  {
+   "op": "const_q32",
+   "dst": "qzero",
+   "num": 0,
+   "den": 1
+  },
+  {
+   "op": "const_q32",
+   "dst": "restitution1",
+   "num": 18,
+   "den": 10
+  },
+  {
+   "op": "const_u32",
+   "dst": "one",
+   "value": 1
+  },
+  {
+   "op": "const_u32",
+   "dst": "zero",
+   "value": 0
+  },
+  {
+   "op": "const_u32",
+   "dst": "none",
+   "value": 4294967295
+  },
+  {
+   "op": "load_u32",
+   "dst": "kind",
+   "field": "a_kind"
+  },
+  {
+   "op": "eq_u32",
+   "dst": "mover",
+   "a": "kind",
+   "b": "one"
+  },
+  {
+   "op": "load_v3",
+   "dst": "p",
+   "x": "a_pos_x",
+   "y": "a_pos_y",
+   "z": "a_pos_z"
+  },
+  {
+   "op": "load_v3",
+   "dst": "p0",
+   "x": "a_prev_x",
+   "y": "a_prev_y",
+   "z": "a_prev_z"
+  },
+  {
+   "op": "load_v3",
+   "dst": "v",
+   "x": "vel_x",
+   "y": "vel_y",
+   "z": "vel_z"
+  },
+  {
+   "op": "load_u32",
+   "dst": "hc",
+   "field": "a_hit_count"
+  },
+  {
+   "op": "lt_u32",
+   "dst": "hit",
+   "a": "zero",
+   "b": "hc"
+  },
+  {
+   "op": "load_q32",
+   "dst": "toi",
+   "field": "a_c0_toi"
+  },
+  {
+   "op": "load_v3",
+   "dst": "n",
+   "x": "a_c0_nx",
+   "y": "a_c0_ny",
+   "z": "a_c0_nz"
+  },
+  {
+   "op": "v3_sub",
+   "dst": "d",
+   "a": "p",
+   "b": "p0"
+  },
+  {
+   "op": "v3_dot",
+   "dst": "dn",
+   "a": "d",
+   "b": "n"
+  },
+  {
+   "op": "lt_q32",
+   "dst": "into",
+   "a": "dn",
+   "b": "qzero"
+  },
+  {
+   "op": "and_bool",
+   "dst": "hit_into",
+   "a": "hit",
+   "b": "into"
+  },
+  {
+   "op": "and_bool",
+   "dst": "clamp",
+   "a": "hit_into",
+   "b": "mover"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "dt",
+   "v": "d",
+   "s": "toi"
+  },
+  {
+   "op": "v3_add",
+   "dst": "pc",
+   "a": "p0",
+   "b": "dt"
+  },
+  {
+   "op": "v3_dot",
+   "dst": "vn",
+   "a": "v",
+   "b": "n"
+  },
+  {
+   "op": "lt_q32",
+   "dst": "vinto",
+   "a": "vn",
+   "b": "qzero"
+  },
+  {
+   "op": "and_bool",
+   "dst": "bounce",
+   "a": "clamp",
+   "b": "vinto"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "k",
+   "a": "vn",
+   "b": "restitution1"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "dvn",
+   "v": "n",
+   "s": "k"
+  },
+  {
+   "op": "v3_sub",
+   "dst": "vb",
+   "a": "v",
+   "b": "dvn"
+  },
+  {
+   "op": "select_v3",
+   "dst": "pn",
+   "cond": "clamp",
+   "on_true": "pc",
+   "on_false": "p"
+  },
+  {
+   "op": "select_v3",
+   "dst": "vnew",
+   "cond": "bounce",
+   "on_true": "vb",
+   "on_false": "v"
+  },
+  {
+   "op": "load_u32",
+   "dst": "ps",
+   "field": "a_prox_slot"
+  },
+  {
+   "op": "eq_u32",
+   "dst": "far",
+   "a": "ps",
+   "b": "none"
+  },
+  {
+   "op": "not_bool",
+   "dst": "near",
+   "a": "far"
+  },
+  {
+   "op": "not_bool",
+   "dst": "nohit",
+   "a": "hit"
+  },
+  {
+   "op": "and_bool",
+   "dst": "near_nohit",
+   "a": "near",
+   "b": "nohit"
+  },
+  {
+   "op": "and_bool",
+   "dst": "near_miss",
+   "a": "near_nohit",
+   "b": "mover"
+  },
+  {
+   "op": "emit_event",
+   "cond": "near_miss",
+   "kind": 3,
+   "a": "ps",
+   "b": "zero"
+  },
+  {
+   "op": "store_v3",
+   "src": "pn",
+   "x": "a_pos_x",
+   "y": "a_pos_y",
+   "z": "a_pos_z"
+  },
+  {
+   "op": "store_v3",
+   "src": "vnew",
+   "x": "vel_x",
+   "y": "vel_y",
+   "z": "vel_z"
+  }
+ ]
+}

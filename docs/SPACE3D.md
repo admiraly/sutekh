@@ -62,6 +62,55 @@ the host API reproduces the pinned in-process digests; rollback re-emits events;
 `example_arena_host` (`examples/host_space3d`: a game schema `arena` with a bound record, gates and bumps, rollback
 drills, pinned digest on the VM and native tiers).
 
+**Binding rules for IR systems (2026-10-18).** (1) An IR 0.3 field of type `q32` or `i64` named `x` with ID `J`
+binds two storage lanes: `x.lo` at ID `J` and `x.hi` at ID `J + 1` (LIVE_IR_SPEC.md, "Fields and storage lanes"). A
+host record names lanes, so an IR system that consumes the record's `pos_x.lo`/`pos_x.hi` declares one q32 field
+`pos_x` at the `.lo` lane's ID, and IR operands name `pos_x`. A disagreement is refused with
+`SU_E_SCHEMA_MISMATCH` and a message naming both systems, both IDs and names and the lane rule (for example
+`field mismatch: racer.move has id 10 "posx_.lo" (q32), space3d.query has id 10 "pos_x.lo" (q32); a q32/i64 IR field
+"x" at ID J binds lanes "x.lo" (J), "x.hi" (J+1)`; `su_sched_explain_mismatch`, used by `world.create` and
+`su_host_world_create`). (2) A capsule's `read`/`write` flags must equal what its IR actually loads and stores: a
+field declared `read: true` that no instruction loads is refused at world creation with `SU_E_SCHEMA_MISMATCH` and
+the message `... declared read=1 write=0 but IR reads=0 writes=0 (the capsule's read/write flags must equal what the IR
+actually loads and stores: set read:false or load the field)`.
+
+**Post-query ordering: same-tick consumption (2026-10-18).** Systems run in capsule order; phases only group
+systems for effect analysis (phases sort by name, so `query` sorts before `simulate`). An `after` edge across
+phases is refused, with one exception: an IR system may name a **host operator of an earlier phase** in its
+`after` list. The edge is verified like any other (the target must exist, be a host entry, sort in an earlier
+phase, and come earlier in the capsule order; ordering cycles are refused) and makes the IR system run after the
+operator in the same tick, so it can respond to this tick's contacts before the state is committed. Other
+cross-phase edges (a `before` edge, an edge from a host operator, an edge to an operator of a later phase) are
+still refused with a message saying so. Nothing changes for schedules without such an edge. The pattern
+(`examples/host_space3d/arena_respond.*`, `arena_host --respond`): the operator in phase `query` after the motion
+system, then a response system in phase `simulate` with `"after": ["<motion system>", "space3d.query_prox"]` that
+puts a mover that moved into its first contact back to `prev + toi * (pos - prev)` and reflects its velocity.
+Evidence: `example_arena_host_respond` (900 ticks, 30 rollback drills with 0 differences, pinned digest; the deepest
+committed penetration of a ship into the sphere or another ship is at most 1e-6 m, measured each tick; the same run
+without the response system commits 0.209 m), and `space3d_serve` check 6 (the same capsules through
+`sutekh serve`, including a snapshot/restore, equal the in-process host API on every lane).
+
+**Proximity: `space3d.query_prox` (2026-10-18).** A second operator, record
+`profiles/space3d/space3d_query_prox.capsule.json`, with every lane and result of `space3d.query` plus:
+
+| ID | Field | Type | Access | Meaning |
+|---|---|---|---|---|
+| 66 | `prox_margin` | q32 | read | mover: proximity margin; <= 0 turns proximity off for the mover |
+| 68 | `prox_slot` | u32 | write | closest other collidable within the margin (0xFFFFFFFF when none) |
+| 69 | `prox_gen` | u32 | write | its generation (0 when none) |
+| 70 | `prox_dist` | q32 | write | its surface distance in [0, margin] (0 when none) |
+
+The distance is taken at the end positions: centre-to-shape distance (sphere and mover: centre distance; capsule:
+distance to the clamped closest point of the segment, `t = clamp(dot(p - a, b - a) / dot(b - a, b - a), 0, 1)`;
+box: length of the box-frame offset minus its clamp to the half extents) minus the other shape's radius, minus the
+mover's radius, clamped at 0; every step a profile operation. The kept collidable is the one with the smallest
+distance, ties to the lowest slot. A mover with a positive margin has its broadphase bounds widened by the margin,
+and proximity is chosen among the same kept candidates as contacts (so flag 1 also covers proximity). With every
+margin <= 0 the base lanes equal `space3d.query`'s bit for bit. Constants hash `79204fc0...` (SHA-256 of
+`space3d_prox_constants_text()`). Evidence: `space3d_ops` (known answers for sphere, capsule and box distances, ties
+and margins; 30 random scenes: margin 0 equals the base operator on every base lane, random margins equal brute force
+on every lane when nothing is truncated; a tie-break mutant fails).
+
 ## 3. Semantics
 
 **Broadphase.** Collidables are alive rows of kinds 1..4. Bounds: a mover's start and end spheres; a sphere; a box's rotated extents (plus one raw unit); a capsule's two end spheres; every bound widened by 4096 raw units (about 1 micrometre) so that rounding in the narrow phase's frame changes can never make it report a pair the broadphase dropped. Sweep axis: the axis with the largest spread of bound centres, ties to x, then y. Collidables are ordered by (minimum on that axis, slot) with a stable merge sort and swept; a pair whose intervals overlap on all three axes and that contains at least one mover becomes a candidate of each mover in it. At most 32 candidates are kept per mover (the first 32 in sweep order; flag 1). At most 2^22 overlapping-interval pairs are examined per tick; when that budget runs out every mover gets flag 4 and the remaining pairs are not examined. Both limits are deterministic functions of the world state.

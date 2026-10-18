@@ -321,6 +321,52 @@ static uint32_t union_add(SuSchedField **tab, uint32_t *n, uint32_t *cap, const 
     return SU_OK;
 }
 
+static const char *vtype_name(uint32_t t) {
+    return t == SU_TYPE_Q32 ? "q32" : t == SU_TYPE_I64 ? "i64" : t == SU_TYPE_I32 ? "i32" : "u32";
+}
+
+/* 1 when name ends in ".lo" or ".hi" (a lane of a 64-bit field). */
+static int lane_suffix(const char *name) {
+    size_t n = strlen(name);
+    return n > 3u && (strcmp(name + n - 3u, ".lo") == 0 || strcmp(name + n - 3u, ".hi") == 0);
+}
+
+void su_sched_explain_mismatch(const SuSchedule *s, char *msg, size_t cap) {
+    uint32_t a, b, i, j;
+    if (msg == NULL || cap == 0u) {
+        return;
+    }
+    msg[0] = '\0';
+    for (a = 0; a < s->count; a++) {
+        const SuLirModule *ma = s->sys[a].mod;
+        for (b = a; b < s->count; b++) {
+            const SuLirModule *mb = s->sys[b].mod;
+            for (i = 0; i < ma->field_count; i++) {
+                const SuLirField *fa = &ma->fields[i];
+                for (j = (a == b ? i + 1u : 0u); j < mb->field_count; j++) {
+                    const SuLirField *fb = &mb->fields[j];
+                    int same_id = fa->id == fb->id, same_name = strcmp(fa->name, fb->name) == 0;
+                    const char *hint = "";
+                    if (same_id == same_name && (!same_id || (fa->type == fb->type &&
+                                                              SU_LIR_VALUE_TYPE(fa) == SU_LIR_VALUE_TYPE(fb)))) {
+                        continue;
+                    }
+                    if (!same_name && (lane_suffix(fa->name) || lane_suffix(fb->name))) {
+                        hint = "; a q32/i64 IR field \"x\" at ID J binds lanes \"x.lo\" (J), \"x.hi\" (J+1)";
+                    } else if (same_id && same_name) {
+                        hint = "; every system binding a lane must agree on its value type";
+                    }
+                    snprintf(msg, cap,
+                             "field mismatch: %s has id %u \"%s\" (%s), %s has id %u \"%s\" (%s)%s",
+                             s->sys[a].system_id, (unsigned)fa->id, fa->name, vtype_name(SU_LIR_VALUE_TYPE(fa)),
+                             s->sys[b].system_id, (unsigned)fb->id, fb->name, vtype_name(SU_LIR_VALUE_TYPE(fb)), hint);
+                    return;
+                }
+            }
+        }
+    }
+}
+
 uint32_t su_sched_finalize(SuSchedule *s) {
     SuSchedField *tab = NULL;
     uint32_t n = 0;

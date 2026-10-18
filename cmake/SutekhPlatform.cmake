@@ -19,11 +19,15 @@ if(WIN32)
     # MSVC's cl implements C11 <stdatomic.h> (used by su_cmdq, su_jobs and their tests) behind this switch
     # (VS 2022 17.5 and later); clang and clang-cl support it as is.
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/experimental:c11atomics>)
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
-    set(SUTEKH_PYTHON "${Python3_EXECUTABLE}")
+    if(NOT SUTEKH_PYTHON)
+        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+        set(SUTEKH_PYTHON "${Python3_EXECUTABLE}" CACHE FILEPATH "Interpreter for Sutekh's Python tests and generators")
+    endif()
 else()
-    set(SUTEKH_PYTHON python3)
+    set(SUTEKH_PYTHON python3 CACHE STRING "Interpreter for Sutekh's Python tests and generators")
 endif()
+# Exported to a consumer that includes Sutekh with add_subdirectory (cache variables are global): SUTEKH_PYTHON
+# above, and SUTEKH_VULKAN_INCLUDE / target Sutekh::vulkan_headers (cmake/SutekhPresentation.cmake).
 
 # Compiles every source of target with header force-included first (-include for GCC and Clang, /FI for MSVC's cl,
 # which ignores -include with only a command-line warning). Used by the allocation and accounting seams.

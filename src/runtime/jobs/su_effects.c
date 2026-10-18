@@ -100,8 +100,13 @@ uint32_t su_effects_check_declared(const SuLirModule *m, char *err, size_t err_c
         int dw = (acc & SU_ACCESS_WRITE) != 0u;
         if (dr != (rd[i] != 0u) || dw != (wr[i] != 0u)) {
             set_err(err, err_cap,
-                    "system %s: field %s declared read=%d write=%d but IR reads=%d writes=%d",
-                    m->system_id, m->fields[i].name, (int)dr, (int)dw, (int)rd[i], (int)wr[i]);
+                    "system %s: field %s declared read=%d write=%d but IR reads=%d writes=%d (the capsule's "
+                    "read/write flags must equal what the IR actually loads and stores: %s)",
+                    m->system_id, m->fields[i].name, (int)dr, (int)dw, (int)rd[i], (int)wr[i],
+                    dr && !rd[i]   ? "set read:false or load the field"
+                    : !dr && rd[i] ? "set read:true"
+                    : dw && !wr[i] ? "set write:false or store the field"
+                                   : "set write:true");
             return SU_E_SCHEMA_MISMATCH;
         }
     }
@@ -331,8 +336,15 @@ uint32_t su_effects_build(const SuEffectInput *in, uint32_t n, SuEffectGraph **o
             if (t < 0) {
                 set_err(err, err_cap, "system %s: after names unknown system %s", g->ids[i], e->after[k]);
                 st = SU_E_INVALID_ARGUMENT;
-            } else if (strcmp(in[t].phase, e->phase) != 0) {
-                set_err(err, err_cap, "system %s: after edge to %s crosses phases", g->ids[i], e->after[k]);
+            } else if (strcmp(in[t].phase, e->phase) != 0 &&
+                       !(in[t].host_declared != 0u && e->host_declared == 0u && g->rank[t] < g->rank[i])) {
+                /* Post-query ordering (2026-10-18): the one admitted cross-phase edge is an IR system's `after`
+                 * edge to a host operator of an earlier phase (strcmp order), so the IR system can consume the
+                 * operator's results in the same tick. */
+                set_err(err, err_cap,
+                        "system %s: after edge to %s crosses phases (%s -> %s); only an IR system's after edge to a "
+                        "host operator of an earlier phase may cross phases",
+                        g->ids[i], e->after[k], in[t].phase, e->phase);
                 st = SU_E_INVALID_ARGUMENT;
             } else {
                 g->adj[(uint32_t)t * n + i] = 1u;
@@ -344,7 +356,10 @@ uint32_t su_effects_build(const SuEffectInput *in, uint32_t n, SuEffectGraph **o
                 set_err(err, err_cap, "system %s: before names unknown system %s", g->ids[i], e->before[k]);
                 st = SU_E_INVALID_ARGUMENT;
             } else if (strcmp(in[t].phase, e->phase) != 0) {
-                set_err(err, err_cap, "system %s: before edge to %s crosses phases", g->ids[i], e->before[k]);
+                set_err(err, err_cap,
+                        "system %s: before edge to %s crosses phases (%s -> %s); use an after edge from the later "
+                        "IR system to the host operator instead",
+                        g->ids[i], e->before[k], e->phase, in[t].phase);
                 st = SU_E_INVALID_ARGUMENT;
             } else {
                 g->adj[i * n + (uint32_t)t] = 1u;

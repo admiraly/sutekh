@@ -205,6 +205,8 @@ static void test_refusals(void) {
               strcmp(op, "space3d_ops_v1") == 0,
           "operator 0 is space3d.query / space3d_ops_v1");
     check(su_host_operator_info(su_host_operator_count(), &sid, &op) == SU_E_INVALID_ARGUMENT, "operator index range");
+    st = su_host_operator_info(1, &sid, &op);
+    check(st == SU_OK && sid != NULL && strcmp(sid, "space3d.query_prox") == 0, "operator 1 is space3d.query_prox");
 
     /* Unknown operator: the record names a system no operator of this library implements. */
     t = malloc(g_query.n + 16u);
@@ -232,6 +234,57 @@ static void test_refusals(void) {
     check(st == SU_E_SCHEMA_MISMATCH && err.index == 2u && w == NULL && strstr(err.message, "host record") != NULL,
           "altered record: %s (%s)", su_host_status_name(st), err.message);
     free(t);
+
+    /* Verifier messages (2026-10-18). (a) An IR q32 field binds the lanes "<name>.lo"/"<name>.hi" of the record:
+     * renaming racer.move's q32 field pos_x to posx (capsule and IR) makes its lanes posx.lo/posx.hi, which the
+     * record calls pos_x.lo/pos_x.hi; the message names both and explains the lane rule. */
+    {
+        Bytes mc, ml;
+        char *p;
+        mc.p = malloc(g_move_cap.n + 1u);
+        ml.p = malloc(g_move_lir.n + 1u);
+        memcpy(mc.p, g_move_cap.p, g_move_cap.n + 1u);
+        memcpy(ml.p, g_move_lir.p, g_move_lir.n + 1u);
+        mc.n = g_move_cap.n;
+        ml.n = g_move_lir.n;
+        /* Rename in place to "posx_" (same length). */
+        for (p = strstr((char *)mc.p, "\"pos_x\""); p != NULL; p = strstr(p + 1, "\"pos_x\"")) {
+            memcpy(p + 1, "posx_", 5);
+        }
+        for (p = strstr((char *)ml.p, "\"pos_x\""); p != NULL; p = strstr(p + 1, "\"pos_x\"")) {
+            memcpy(p + 1, "posx_", 5);
+        }
+        desc_init(&d, caps, &g_query);
+        caps[1].capsule_json = mc.p;
+        caps[1].lir_json = ml.p;
+        st = su_host_world_create(&d, &w, &err);
+        check(st == SU_E_SCHEMA_MISMATCH && w == NULL && strstr(err.message, "posx_.lo") != NULL &&
+                  strstr(err.message, "pos_x.lo") != NULL && strstr(err.message, "binds lanes") != NULL,
+              "q32 lane naming: %s (%s)", su_host_status_name(st), err.message);
+        /* (b) A declared read the IR never loads: refused, and the message states the rule. */
+        memcpy(mc.p, g_move_cap.p, g_move_cap.n + 1u);
+        p = strstr((char *)mc.p, "\"fields\": [");
+        check(p != NULL, "move capsule has a fields array");
+        if (p != NULL) {
+            static const char extra[] = "{\"id\": 900, \"name\": \"unused_lane\", \"type\": \"u32\", \"read\": true, "
+                                        "\"write\": false},";
+            size_t head = (size_t)(p - (char *)mc.p) + strlen("\"fields\": [");
+            uint8_t *q = malloc(g_move_cap.n + sizeof extra);
+            memcpy(q, g_move_cap.p, head);
+            memcpy(q + head, extra, sizeof extra - 1u);
+            memcpy(q + head + sizeof extra - 1u, g_move_cap.p + head, g_move_cap.n - head + 1u);
+            caps[1].capsule_json = q;
+            caps[1].capsule_len = g_move_cap.n + sizeof extra - 1u;
+            caps[1].lir_json = g_move_lir.p;
+            st = su_host_world_create(&d, &w, &err);
+            check(st == SU_E_SCHEMA_MISMATCH && w == NULL && strstr(err.message, "unused_lane") != NULL &&
+                      strstr(err.message, "must equal what the IR actually loads") != NULL,
+                  "declared read without load: %s (%s)", su_host_status_name(st), err.message);
+            free(q);
+        }
+        free(mc.p);
+        free(ml.p);
+    }
 
     /* lir_len without lir_json is not a host record. */
     desc_init(&d, caps, &g_query);

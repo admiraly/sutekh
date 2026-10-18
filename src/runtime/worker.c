@@ -829,7 +829,12 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPat
     }
     st = su_sched_finalize(sched);
     if (st != SU_OK) {
-        fail(f, st, "systems disagree on a field's ID, name or type");
+        char why[512];
+        char full[600];
+        su_sched_explain_mismatch(sched, why, sizeof why);
+        snprintf(full, sizeof full, "systems disagree on a field's ID, name or type%s%s", why[0] != '\0' ? ": " : "",
+                 why);
+        fail(f, st, full);
         return st;
     }
     return check_system_effects(sched, paths, f);

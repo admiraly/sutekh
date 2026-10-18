@@ -1,0 +1,147 @@
+{
+ "capsule_format": "0.1",
+ "ir_version": "0.3",
+ "system_id": "arena.respond",
+ "source": "arena_respond.lir.json",
+ "schema": {
+  "id": "arena",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "fields": [
+  {
+   "id": 10,
+   "name": "vel_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 12,
+   "name": "vel_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 14,
+   "name": "vel_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 100,
+   "name": "a_kind",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 103,
+   "name": "a_pos_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 105,
+   "name": "a_pos_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 107,
+   "name": "a_pos_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 109,
+   "name": "a_prev_x",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 111,
+   "name": "a_prev_y",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 113,
+   "name": "a_prev_z",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 131,
+   "name": "a_hit_count",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 135,
+   "name": "a_c0_toi",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 137,
+   "name": "a_c0_nx",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 139,
+   "name": "a_c0_ny",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 141,
+   "name": "a_c0_nz",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 159,
+   "name": "a_prox_slot",
+   "type": "u32",
+   "read": true,
+   "write": false
+  }
+ ],
+ "schedule": {
+  "phase": "simulate",
+  "after": [
+   "arena.move",
+   "space3d.query_prox"
+  ],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 65536,
+  "allocation": "forbidden",
+  "max_events_per_row": 2
+ },
+ "tests": [
+  "examples/host_space3d/arena_host.c"
+ ],
+ "capabilities": [
+  "emit_event"
+ ]
+}

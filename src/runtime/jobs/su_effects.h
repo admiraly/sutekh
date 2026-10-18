@@ -13,7 +13,9 @@
  *
  * su_effects_build checks, in order:
  *   1. duplicate system IDs, unknown edge targets, edges across phases:
- *      SU_E_INVALID_ARGUMENT
+ *      SU_E_INVALID_ARGUMENT. One cross-phase edge is admitted (post-query
+ *      ordering, 2026-10-18): an `after` edge from an IR system to a host
+ *      operator (host_declared) whose phase sorts before the IR system's
  *   2. declared effects differ from IR effects: SU_E_SCHEMA_MISMATCH
  *   3. ordering cycles (self edges included): SU_E_INVALID_ARGUMENT, with the
  *      cycle written to err as "ordering cycle: a -> b -> ... -> a"
