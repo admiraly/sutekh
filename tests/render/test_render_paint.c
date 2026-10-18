@@ -273,8 +273,8 @@ static void test_mask_channels(void) {
     static const float lc[4][3] = {{1.0f, 0.1f, 0.1f}, {0.1f, 1.0f, 0.1f}, {0.1f, 0.1f, 1.0f}, {1.0f, 1.0f, 0.1f}};
     Scene sc;
     Pm p;
-    uint8_t base[W * H * 4];
-    uint8_t full[W * H * 4];
+    static uint8_t base[W * H * 4];
+    static uint8_t full[W * H * 4];
     uint32_t x;
     uint32_t y;
     uint32_t j;
@@ -322,7 +322,7 @@ static void test_mask_channels(void) {
     }
     /* switching layer j off (opacity 0) changes exactly region j and nothing else */
     for (j = 0; j < 4; j++) {
-        uint8_t one[W * H * 4];
+        static uint8_t one[W * H * 4];
         p.d.paint.layer[j].opacity = 0.0f;
         CHECK(shoot(&sc, &p, one));
         p.d.paint.layer[j].opacity = 1.0f;
@@ -347,10 +347,10 @@ static void test_blend_order(void) {
     static uint8_t mask[16 * 16 * 4];
     Scene sc;
     Pm p;
-    uint8_t a[W * H * 4];
-    uint8_t b[W * H * 4];
-    uint8_t black[W * H * 4];
-    uint8_t clean[W * H * 4];
+    static uint8_t a[W * H * 4];
+    static uint8_t b[W * H * 4];
+    static uint8_t black[W * H * 4];
+    static uint8_t clean[W * H * 4];
     double pa[3];
     double pb[3];
     double pk[3];
@@ -524,8 +524,8 @@ static void test_zero_layers(void) {
         if (bc != NULL) {
             SuRenderHandle t_bc;
             uint8_t flat[4] = {128, 128, 255, 255};
-            uint8_t img_bc[W * H * 4];
-            uint8_t img_flat[W * H * 4];
+            static uint8_t img_bc[W * H * 4];
+            static uint8_t img_flat[W * H * 4];
             double sum = 0;
             double sum_flat = 0;
             uint32_t cnt = 0;
@@ -566,8 +566,8 @@ static void test_glow(void) {
     Scene sc;
     Pm p;
     double v[3];
-    uint8_t img[W * H * 4];
-    uint8_t off[W * H * 4];
+    static uint8_t img[W * H * 4];
+    static uint8_t off[W * H * 4];
     uint32_t x;
     uint32_t y;
     static const float mults[4] = {0.0f, 0.5f, 1.0f, 2.0f};
@@ -646,9 +646,9 @@ static void test_dirt_ao(void) {
     static uint8_t ao[16 * 16 * 4];
     Scene sc;
     Pm p;
-    uint8_t black[W * H * 4];
-    uint8_t clean[W * H * 4];
-    uint8_t img[W * H * 4];
+    static uint8_t black[W * H * 4];
+    static uint8_t clean[W * H * 4];
+    static uint8_t img[W * H * 4];
     double pk[3];
     double pc[3];
     double pd[3];
@@ -707,12 +707,12 @@ static void test_dirt_ao(void) {
     lin_px(clean, 0.5f, 0.5f, pc);
     lin_px(img, 0.5f, 0.5f, pd);
     printf("ao: ambient x %.3f (map 0.251, strength 1)\n", pd[1] / pc[1]);
-    CHECK(fabs(pd[1] / pc[1] - lin(64)) < 0.02);
+    CHECK(fabs(pd[1] / pc[1] - 64.0 / 255.0) < 0.02);
     p.d.factors.occlusion_strength = 0.5f;
     CHECK(shoot(&sc, &p, img));
     lin_px(img, 0.5f, 0.5f, pd);
-    printf("ao: ambient x %.3f (strength 0.5, expected %.3f)\n", pd[1] / pc[1], 1.0 - 0.5 * (1.0 - lin(64)));
-    CHECK(fabs(pd[1] / pc[1] - (1.0 - 0.5 * (1.0 - lin(64)))) < 0.02);
+    printf("ao: ambient x %.3f (strength 0.5, expected %.3f)\n", pd[1] / pc[1], 1.0 - 0.5 * (1.0 - 64.0 / 255.0));
+    CHECK(fabs(pd[1] / pc[1] - (1.0 - 0.5 * (1.0 - 64.0 / 255.0))) < 0.02);
     p.d.factors.occlusion_strength = 1.0f;
     sc.sun_intensity = 3.0f;
     sc.ambient = 0.0f;
@@ -752,7 +752,7 @@ static void test_environment(void) {
     SuRenderHandle env = 0;
     SuRenderHandle uni = 0;
     SuRenderLighting sky;
-    uint8_t img[W * H * 4];
+    static uint8_t img[W * H * 4];
     float *faces;
     float *flat;
     uint32_t k;
@@ -940,8 +940,8 @@ static void test_pack(void) {
     char msg[256];
     Scene sc;
     Pm p;
-    uint8_t viapak[W * H * 4];
-    uint8_t direct[W * H * 4];
+    static uint8_t viapak[W * H * 4];
+    static uint8_t direct[W * H * 4];
     uint64_t id_alb = su_asset_id("t/albedo");
     uint64_t id_mask = su_asset_id("t/mask");
     uint32_t x;

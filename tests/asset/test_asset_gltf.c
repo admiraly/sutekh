@@ -405,6 +405,98 @@ static void write_scene_a(float x0) {
     free(g);
 }
 
+/* ---------- scene P: SUTEKH_materials_layered_paint ---------- */
+
+static void test_scene_paint(void) {
+    G *g = calloc(1, sizeof *g);
+    uint8_t px[4 * 4 * 4];
+    size_t png_len = 0;
+    uint8_t *png;
+    char rest[6144];
+    char *json;
+    int ap;
+    int an;
+    int au;
+    int ai;
+    int i;
+    SuAssetCookReport rep;
+    uint32_t st;
+    char msg[256];
+    SuAssetPak *p;
+    SuAssetMaterial m;
+    SuAssetPaint pt;
+    uint64_t mid = su_asset_id("p/mat/craft");
+    for (i = 0; i < 16; i++) {
+        px[i * 4] = (uint8_t)(i * 16);
+        px[i * 4 + 1] = 128;
+        px[i * 4 + 2] = 64;
+        px[i * 4 + 3] = 255;
+    }
+    png = make_png(px, 4, 4, &png_len);
+    write_file("paint_a.png", png, png_len);
+    write_file("paint_n.png", png, png_len);
+    write_file("paint_m.png", png, png_len);
+    free(png);
+    ap = pos_acc(g, QUAD_POS, 4);
+    an = add_acc(g, QUAD_NRM, sizeof QUAD_NRM, 5126, 4, "VEC3", NULL);
+    au = add_acc(g, QUAD_UV, sizeof QUAD_UV, 5126, 4, "VEC2", NULL);
+    ai = add_acc(g, QUAD_IDX, sizeof QUAD_IDX, 5123, 6, "SCALAR", NULL);
+    snprintf(rest, sizeof rest,
+             "\"extensionsUsed\":[\"SUTEKH_materials_layered_paint\",\"KHR_materials_emissive_strength\"],"
+             "\"meshes\":[{\"name\":\"hull\",\"primitives\":[{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d,\"TEXCOORD_0\":%d},"
+             "\"indices\":%d,\"material\":0}]}],"
+             "\"materials\":[{\"name\":\"craft\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.5,0.5,0.5,1],"
+             "\"baseColorTexture\":{\"index\":0},\"metallicFactor\":0.9,\"roughnessFactor\":0.7},"
+             "\"normalTexture\":{\"index\":1,\"scale\":0.5},\"emissiveFactor\":[1,0.5,0.25],"
+             "\"extensions\":{\"KHR_materials_emissive_strength\":{\"emissiveStrength\":3},"
+             "\"SUTEKH_materials_layered_paint\":{\"maskTexture\":{\"index\":2},\"roughnessTexture\":{\"index\":2,\"texCoord\":1},"
+             "\"channels\":{\"roughness\":1,\"metal\":2,\"specular\":3,\"dirt\":0,\"ao\":-1},\"specular\":0.25,"
+             "\"dirt\":{\"amount\":0.4,\"darken\":0.7,\"roughen\":0.2},"
+             "\"layers\":[{\"color\":[1,0,0],\"roughness\":0.3,\"metallic\":1,\"opacity\":0.8},"
+             "{\"color\":[0.5,0.5,1],\"blend\":\"multiply\",\"glowColor\":[0,1,0],\"glowStrength\":4,\"metallic\":0.5,\"roughness\":0.9}],"
+             "\"order\":[1,0]}}}],"
+             "\"textures\":[{\"source\":0},{\"source\":1},{\"source\":2}],"
+             "\"images\":[{\"uri\":\"paint_a.png\"},{\"uri\":\"paint_n.png\"},{\"uri\":\"paint_m.png\"}],"
+             "\"nodes\":[{\"name\":\"root\",\"mesh\":0}],\"scenes\":[{\"nodes\":[0]}],\"scene\":0",
+             ap, an, au, ai);
+    json = gltf_json(g, "scene_p.bin", rest);
+    write_file("scene_p.bin", g->bin, g->n);
+    write_file("scene_p.gltf", json, strlen(json));
+    free(json);
+    free(g);
+    p = cook("scene_p.gltf", "p", &rep, &st, msg);
+    CHECK(st == SU_OK && p != NULL);
+    if (p == NULL) {
+        fprintf(stderr, "scene paint: %s\n", msg);
+        return;
+    }
+    CHECK(rep.materials == 1u && rep.warnings == 0u);
+    CHECK(su_asset_pak_material(p, mid, &m) == SU_OK && su_asset_pak_paint(p, mid, &pt) == SU_OK);
+    CHECK(m.base_color[0] == 0.5f && m.metallic == 0.9f && m.roughness == 0.7f && m.normal_scale == 0.5f &&
+          m.emissive[1] == 0.5f && m.emissive_strength == 3.0f);
+    CHECK(m.texture[0] == 0u && m.texture[SU_ASSET_SLOT_NORMAL] == 0u); /* the paint slots hold the textures */
+    CHECK(pt.texture[SU_PAINT_SLOT_ALBEDO] == su_asset_id("p/tex/paint_a.png.srgb"));
+    CHECK(pt.texture[SU_PAINT_SLOT_NORMAL] == su_asset_id("p/tex/paint_n.png.normal"));
+    CHECK(pt.texture[SU_PAINT_SLOT_MASK] == su_asset_id("p/tex/paint_m.png.linear"));
+    CHECK(pt.texture[SU_PAINT_SLOT_ROUGHNESS] == su_asset_id("p/tex/paint_m.png.linear"));
+    CHECK((pt.tex_info[SU_PAINT_SLOT_ROUGHNESS] & 0xFFu) == 1u && (pt.tex_info[SU_PAINT_SLOT_MASK] & 0xFFu) == 0u);
+    CHECK(pt.texture[SU_PAINT_SLOT_GLOW] == 0u && pt.texture[SU_PAINT_SLOT_AO] == 0u && pt.texture[SU_PAINT_SLOT_DIRT] == 0u);
+    CHECK(pt.channel[SU_PAINT_CH_ROUGHNESS] == 1 && pt.channel[SU_PAINT_CH_METAL] == 2 &&
+          pt.channel[SU_PAINT_CH_SPECULAR] == 3 && pt.channel[SU_PAINT_CH_DIRT] == 0 &&
+          pt.channel[SU_PAINT_CH_AO] == SU_PAINT_CH_NONE);
+    CHECK(pt.specular == 0.25f && pt.dirt_amount == 0.4f && pt.dirt_darken == 0.7f && pt.dirt_roughen == 0.2f);
+    CHECK(pt.layer_count == 2u && pt.layer_order[0] == 1 && pt.layer_order[1] == 0);
+    CHECK(pt.layer[0].color[0] == 1.0f && pt.layer[0].roughness == 0.3f && pt.layer[0].metallic == 1.0f &&
+          pt.layer[0].opacity == 0.8f && pt.layer[0].flags == 0u);
+    CHECK(pt.layer[1].flags == (SU_PAINT_LAYER_MULTIPLY | SU_PAINT_LAYER_GLOW_TINT) && pt.layer[1].glow_color[1] == 1.0f &&
+          pt.layer[1].glow_strength == 4.0f && pt.layer[1].opacity == 1.0f);
+    {
+        SuAssetTextureView tv;
+        CHECK(su_asset_pak_texture(p, pt.texture[SU_PAINT_SLOT_NORMAL], &tv) == SU_OK && (tv.header->format == SU_TEX_BC5_UNORM || tv.header->format == SU_TEX_RGBA8_UNORM)); /* linear, 2-channel capable */
+        CHECK(su_asset_pak_texture(p, pt.texture[SU_PAINT_SLOT_ALBEDO], &tv) == SU_OK && tv.header->format != SU_TEX_RGBA8_UNORM);
+    }
+    su_asset_pak_close(p);
+}
 static void test_scene_a(void) {
     SuAssetCookReport rep;
     uint32_t st;
@@ -867,6 +959,7 @@ int main(int argc, char **argv) {
     crc_init();
     CHECK(su_asset_import_available() == 1);
     test_scene_a();
+    test_scene_paint();
     {
         /* scene A with SU_ASSET_COOK_BC: the opaque base colour becomes BC1 sRGB with the same mip count */
         SuAssetCookOptions o;

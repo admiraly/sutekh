@@ -159,3 +159,28 @@ emissive surfaces should bleed light like a camera.
     (`SuRenderObject.emissive`) emissive multipliers already existed and feed it. `examples/presentation` shows it
     (`--no-bloom`, `--no-glare`, `--auto-exposure`). Tests: `test_render_bloom`. Not done: temporal exposure
     adaptation, a lens-dirt or anamorphic flare, a compute-based chain.
+
+## Extension, 18 October 2026: layered paint material, image-based ambient, live voice pitch
+
+Same authorization and boundaries. Request from the same downstream project: craft shaded by a paint-mask driven
+material, and engine pitch that can change after a voice starts.
+
+19. Presentation and asset format (nothing in the simulation, IR or host contracts changes): a second, optional
+    material model beside PBR-lite. `su_render_paint_material_create(SuRenderPaintDesc)`: albedo (sRGB), two-channel
+    normal (BC5 or RG, z rebuilt), roughness, a material map with configurable channel meanings (metalness, specular
+    type), a four-channel paint mask selecting up to four layers (colour, roughness, metalness, opacity, lerp or
+    multiply blend, optional tinted glow, configurable order), glow (sRGB) x colour x intensity feeding HDR (the
+    per-instance multiplier is `SuRenderObject.emissive`), dirt (amount, darken, roughen) and AO (multiplies ambient
+    only). Per-slot colour space is enforced. The exact blend is written in `include/sutekh/render.h`. Image-based
+    ambient: `su_render_env_create` / `su_render_env_from_sky` (CPU-prefiltered GGX mip chain in RGBA16F, split-sum
+    scale and bias, diffuse from the roughest mip), `SuRenderFrameDesc.env` and `env_intensity`. Cooked format: a
+    material entry of `type_version` 2 is a `SuAssetMaterial` plus a `SuAssetPaint`; version 1 entries and packs
+    without paint materials are byte-identical to before. glTF: the extension `SUTEKH_materials_layered_paint`
+    (documented in `docs/RENDERING_AND_ASSETS.md`), with core textures as albedo, normal, glow and AO. Existing
+    materials and golden images are unchanged (paint has its own pipelines and layout). Tests: `test_render_paint`
+    (zero layers is byte-identical to PBR-lite), `test_render_util` (cube maths), `test_asset_gltf`. Not done: a
+    cubemap background, spherical-harmonic irradiance, a shared uniform-buffer pool for paint materials (one small
+    buffer allocation each).
+20. Audio: `su_audio_voice_set_pitch` and `su_audio_voice_set_gain` change a playing voice (applied at the next
+    render; the playback rate glides linearly across that block so the read position is continuous, stacking with
+    Doppler). Tested offline in `test_audio`.

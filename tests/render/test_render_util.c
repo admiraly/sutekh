@@ -205,12 +205,104 @@ static void test_ppm(void) {
     CHECK(su_render_write_ppm(NULL, px, 2, 2) == SU_E_INVALID_ARGUMENT);
 }
 
+static void test_env(void) {
+    enum { S = 16 };
+    static float faces[6 * S * S * 4];
+    static uint16_t half[6 * S * S * 4 * 2];
+    uint32_t f;
+    uint32_t x;
+    uint32_t y;
+    int round_trip = 1;
+    uint64_t off = 0;
+    uint32_t m;
+    int uniform_ok = 1;
+    SuRenderLighting l;
+    CHECK(su_env_mip_count(8) == 2u && su_env_mip_count(16) == 3u && su_env_mip_count(64) == 5u && su_env_mip_count(1024) == 9u);
+    CHECK(su_env_mip_count(7) == 0u && su_env_mip_count(4) == 0u && su_env_mip_count(2048) == 0u);
+    CHECK(su_env_half_count(16) == 6u * 4u * (16u * 16u + 8u * 8u + 4u * 4u));
+    for (f = 0; f < 6u; f++) {
+        for (y = 0; y < S; y++) {
+            for (x = 0; x < S; x++) {
+                SuVec3f d = su_env_texel_dir(f, S, x, y);
+                uint32_t f2 = 9;
+                uint32_t x2 = 99;
+                uint32_t y2 = 99;
+                su_env_dir_texel(d, S, &f2, &x2, &y2);
+                round_trip &= f2 == f && x2 == x && y2 == y;
+                CHECK(fabsf(d.x * d.x + d.y * d.y + d.z * d.z - 1.0f) < 1e-5f);
+            }
+        }
+    }
+    CHECK(round_trip);
+    {
+        SuVec3f d = su_env_texel_dir(0, S, S / 2u, S / 2u);
+        CHECK(d.x > 0.99f);
+        d = su_env_texel_dir(3, S, S / 2u, S / 2u);
+        CHECK(d.y < -0.99f);
+        d = su_env_texel_dir(4, S, S / 2u, S / 2u);
+        CHECK(d.z > 0.99f);
+    }
+    /* a uniform environment stays uniform through every mip (half floats: 1/1024 relative) */
+    for (f = 0; f < 6u * S * S; f++) {
+        faces[f * 4u] = 0.25f;
+        faces[f * 4u + 1u] = 2.0f;
+        faces[f * 4u + 2u] = 8.0f;
+        faces[f * 4u + 3u] = 1.0f;
+    }
+    CHECK(su_env_prefilter(S, faces, half) == 1u);
+    for (m = 0; m < 3u; m++) {
+        uint64_t n = 6ull * (S >> m) * (S >> m);
+        uint64_t i;
+        for (i = 0; i < n; i++) {
+            const uint16_t *h = &half[(off + i) * 4u];
+            /* decode 0.25 = 0x3400, 2 = 0x4000, 8 = 0x4800 */
+            uniform_ok &= h[0] == 0x3400u && h[1] == 0x4000u && h[2] == 0x4800u && h[3] == 0x3C00u;
+        }
+        off += n;
+    }
+    CHECK(uniform_ok);
+    CHECK(su_env_prefilter(S, NULL, half) == 0u && su_env_prefilter(7, faces, half) == 0u);
+    /* a bright texel spreads: the peak falls with the mip (roughness) while the energy stays */
+    memset(faces, 0, sizeof faces);
+    for (f = 0; f < 6u * S * S; f++) {
+        faces[f * 4u] = faces[f * 4u + 1u] = faces[f * 4u + 2u] = 0.01f;
+    }
+    faces[(((size_t)4 * S + 8) * S + 8) * 4u] = 100.0f;
+    CHECK(su_env_prefilter(S, faces, half) == 1u);
+    {
+        /* mip 0 keeps it exactly (100 -> half 0x5640), mip 1 spreads over the neighbourhood at lower peak */
+        CHECK(half[(((size_t)4 * S + 8) * S + 8) * 4u] == 0x5640u);
+        {
+            size_t o1 = (size_t)6 * S * S * 4u;
+            uint16_t p1 = half[o1 + (((size_t)4 * (S / 2) + 4) * (S / 2) + 4) * 4u];
+            CHECK(p1 > 0x3C00u && p1 < 0x5640u);
+        }
+    }
+    memset(&l, 0, sizeof l);
+    l.sky_zenith.z = 1.0f;
+    l.sky_horizon.y = 1.0f;
+    l.sky_nadir.x = 1.0f;
+    l.up.y = 1.0f;
+    l.sun_dir.y = -1.0f;
+    l.sun_color.x = l.sun_color.y = l.sun_color.z = 1.0f;
+    l.sun_intensity = 10.0f;
+    su_env_sky_faces(S, &l, faces);
+    {
+        /* +Y face centre looks along up: the zenith colour (plus no sun: the sun is above, glow along +Y) */
+        const float *c = &faces[(((size_t)2 * S + 8) * S + 8) * 4u];
+        CHECK(c[2] > 1.5f && c[0] > 0.5f && fabsf(c[0] - c[1]) < 0.01f); /* zenith blue plus the white sun glow overhead */
+        c = &faces[(((size_t)3 * S + 8) * S + 8) * 4u];
+        CHECK(c[0] > 0.9f && c[0] < 1.1f && c[2] < 0.1f); /* nadir red */
+    }
+    printf("env: texel/direction round trip, mip counts, uniform chain and sky faces ok\n");
+}
 int main(void) {
     test_projection();
     test_quat_and_cameras();
     test_meshes();
     test_debug_lines();
     test_ppm();
+    test_env();
     printf("test_render_util: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
