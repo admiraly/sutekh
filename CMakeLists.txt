@@ -314,9 +314,11 @@ if(SUTEKH_NATIVE)
 
     # M1-03: AVX2 lowering (C++, same AsmJit library) and host capability detection (C).
     add_library(su_native STATIC backends/native/su_native.c backends/native/su_native_asmjit.cpp
-                backends/native/avx2/su_native_avx2.cpp backends/native/avx2/su_native_caps.c)
+                backends/native/avx2/su_native_avx2.cpp backends/native/avx2/su_native_caps.c
+                # IR 0.3 scalar lowering and its C helpers (2026-10-18).
+                backends/native/su_native_lower03.cpp backends/native/su_native_ops03.c)
     target_include_directories(su_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" src "${SUTEKH_CONTRACT_INCLUDE}")
-    target_link_libraries(su_native PUBLIC su_ir su_asmjit)
+    target_link_libraries(su_native PUBLIC su_ir su_vm su_asmjit) # su_vm: the plan builder (identity-row guard)
     target_compile_definitions(su_native PRIVATE SU_NATIVE_ASMJIT_COMMIT="${SU_ASMJIT_COMMIT}")
     set_target_properties(su_native PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     # Strict C17 set for the C files. The C++ adapter gets -Wall -Wextra -Werror only: the AsmJit

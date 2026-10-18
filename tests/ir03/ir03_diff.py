@@ -16,6 +16,9 @@ select between a computed value and the field's own loaded value under condition
 (identity on the false side, on the true side, nested, or a decoy that stores another field's value), which is
 the shape the planned tier's identity-row guard proves and skips. "Clean" guarded programs must get a guard and
 skip rows, so the proof is exercised, not only tolerated.
+
+--native (with ir03_native_driver, SUTEKH_NATIVE=ON): every program is also compiled by the native IR 0.3 lowering
+and run on the same inputs; the kernel's committed lanes must equal the VM's for every program.
 """
 import argparse
 import hashlib
@@ -460,7 +463,9 @@ def main():
     ap.add_argument("--programs", type=int, default=300)
     ap.add_argument("--rows", type=int, default=48)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--native", action="store_true", help="require native kernels identical to the VM")
     args = ap.parse_args()
+    native_ok = 0
     os.makedirs(args.work, exist_ok=True)
     rng = random.Random(args.seed)
     corpus = hashlib.sha256()
@@ -496,6 +501,14 @@ def main():
             mismatches.append("program %d: planned and reference VM tiers differ (%s)" % (p, out[1]))
             continue
         has_plan, has_guard, body_rows, skipped, hoisted = (int(x) for x in tiers[2:7])
+        native = int(tiers[7]) if len(tiers) > 7 else -1
+        if args.native:
+            if native != 1:
+                mismatches.append("program %d: native kernel %s" % (
+                    p, {0: "differs from the VM", 2: "was refused", -1: "not built (use ir03_native_driver)"}
+                    .get(native, "?")))
+                continue
+            native_ok += 1
         tier_stats["plans"] += has_plan
         tier_stats["guards"] += has_guard
         tier_stats["body_rows"] += body_rows
@@ -521,6 +534,9 @@ def main():
                           % (tier_stats["clean_guards"], tier_stats["clean"]))
     for m in mismatches[:20]:
         print("MISMATCH", m)
+    if args.native:
+        print("ir03_diff native: %d of %d programs compiled by the IR 0.3 lowering with lanes identical to the VM"
+              % (native_ok, args.programs))
     print("ir03_diff tiers: %d programs with a plan, %d with a guard (%d of %d clean guarded programs), "
           "%d rows executed, %d rows skipped by guards, %d hoisted instructions"
           % (tier_stats["plans"], tier_stats["guards"], tier_stats["clean_guards"], tier_stats["clean"],

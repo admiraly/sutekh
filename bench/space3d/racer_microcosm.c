@@ -12,7 +12,7 @@
  * along a generated 41 km course (bench/space3d/course.json), seeded; no external assets.
  *
  *   racer_microcosm --root <repo> --n 32 [--ticks 1200] [--warmup 120] [--obstacles 48] [--seed 1]
- *                   [--no-query] [--replay] [--digest-every 120] [--vm-tier reference|planned]
+ *                   [--no-query] [--replay] [--digest-every 120] [--vm-tier reference|planned] [--native]
  *   racer_microcosm --root <repo> --n 32 --rollback 1,6,12 [--rollback-iters 200] [--warmup 120]
  * Prints one JSON object: identities, per-tick wall time distribution, digests, event counts, race totals.
  * --replay additionally runs the scene again from scratch and from a mid-run canonical checkpoint and reports
@@ -21,7 +21,11 @@
  * --rollback measures client-side rollback resimulation: after the warm-up the world is saved (canonical bytes),
  * restored and stepped K ticks once to obtain the reference digest, then restored and re-stepped K ticks (one
  * su_sched_run_ticks call) --rollback-iters times per K. Every iteration's digest must equal the reference
- * digest, or the driver exits 1. Save, restore and resimulation are timed separately. */
+ * digest, or the driver exits 1. Save, restore and resimulation are timed separately.
+ *
+ * --native (builds with SUTEKH_NATIVE=ON): every IR system without entity operations (racer.move) is compiled by
+ * the native backend (scalar; IR 0.3 lowering), admitted by the registry's differential check against the VM
+ * (su_nv_admit) and installed in the schedule entry; the schedule then runs it as a native kernel. */
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,17 +43,22 @@
 #include "sutekh/status.h"
 #include "vm/su_vm.h"
 #include "world/su_world.h"
+#ifdef SU_HAVE_NATIVE
+#include "runtime/native_versions.h"
+#include "sutekh/native/abi.h"
+#endif
 
 #define ONE SU_Q32_ONE
 #define GATES 16u
 #define MAX_TICKS 200000u
-#define VM_TIER_NAME (su_vm_default_tier() == SU_VM_TIER_REFERENCE ? "reference" : "planned")
+#define VM_TIER_NAME (g_native ? "native" : (su_vm_default_tier() == SU_VM_TIER_REFERENCE ? "reference" : "planned"))
+static int g_native = 0; /* --native: the reported tier of the IR systems that have a kernel */
 
 typedef struct Args {
     const char *root;
     uint32_t n, ticks, warmup, obstacles, digest_every;
     uint64_t seed;
-    int no_query, replay, dump_racers;
+    int no_query, replay, dump_racers, native;
     uint32_t rollback_k[8], rollback_nk, rollback_iters;
     int trace; /* racer index to trace per tick on stderr, -1 none */
 } Args;
@@ -344,6 +353,31 @@ static void sim_schedule(Sim *sim, const Args *a) {
     if (st != SU_OK) {
         fprintf(stderr, "schedule: %s\n", su_status_name(st));
         exit(2);
+    }
+    if (a->native) {
+#ifdef SU_HAVE_NATIVE
+        uint32_t i;
+        for (i = 0; i < sim->s.count; i++) {
+            SuSysEntry *e = &sim->s.sys[i];
+            uint64_t seq = 0, rows = 0, bad = 0;
+            uint32_t cases = 0;
+            if (e->kind != SU_SYS_KIND_IR || e->mod->uses_entity_ops) {
+                continue;
+            }
+            st = su_nv_prepare(e->mod, sim->s.layout_generation, SU_NCAP_X86_64_SCALAR, &seq, msg, sizeof msg);
+            if (st == SU_OK) st = su_nv_admit(seq, 20261018u, &cases, &rows, &bad);
+            if (st == SU_OK) st = su_nv_install(seq);
+            if (st != SU_OK) {
+                fprintf(stderr, "native %s: %s %s (admission mismatches %llu)\n", e->system_id, su_status_name(st),
+                        msg, (unsigned long long)bad);
+                exit(2);
+            }
+            e->native_seq = seq;
+        }
+#else
+        fprintf(stderr, "--native needs a build with SUTEKH_NATIVE=ON\n");
+        exit(2);
+#endif
     }
 }
 
@@ -676,6 +710,7 @@ int main(int argc, char **argv) {
         else if (strcmp(k, "--no-query") == 0) { a.no_query = 1; }
         else if (strcmp(k, "--replay") == 0) { a.replay = 1; }
         else if (strcmp(k, "--dump-racers") == 0) { a.dump_racers = 1; }
+        else if (strcmp(k, "--native") == 0) { a.native = 1; }
         else if (strcmp(k, "--trace") == 0) { a.trace = (int)strtol(v, NULL, 10); i++; }
         else if (strcmp(k, "--rollback") == 0) {
             const char *p = v;
@@ -700,6 +735,7 @@ int main(int argc, char **argv) {
         else if (strcmp(k, "--rollback-iters") == 0) { a.rollback_iters = (uint32_t)strtoul(v, NULL, 10); i++; }
         else { fprintf(stderr, "unknown argument %s\n", k); return 2; }
     }
+    g_native = a.native;
     if (a.n == 0 || a.ticks == 0 || a.ticks + a.warmup > MAX_TICKS || a.digest_every == 0 ||
         a.n + GATES + a.obstacles > SPACE3D_MAX_ROWS) {
         fprintf(stderr, "bad arguments\n");

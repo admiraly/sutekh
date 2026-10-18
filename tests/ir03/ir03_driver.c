@@ -5,12 +5,15 @@
  * every lane with seeded biased values, runs the module once through su_vm_run_system, and prints the inputs and
  * the committed outputs, one lane per line:
  *   STATUS <code> <semantic hash>
- *   TIERS <identical 0|1> <has_plan> <has_guard> <body rows> <skipped rows> <hoisted insns>
+ *   TIERS <identical 0|1> <has_plan> <has_guard> <body rows> <skipped rows> <hoisted insns> <native>
  *   IN <row> <lane name> <u32>
  *   OUT <row> <lane name> <u32>
  * tests/ir03/ir03_diff.py recomputes every OUT value with an independent interpreter. The module runs twice on
  * identical worlds, once on each VM tier (su_vm.h); TIERS reports whether the statuses and every committed lane
  * of the two runs are identical and what the planned tier did. OUT lines are the planned tier's.
+ * <native> is -1 in this build. Built with SU_IR03_NATIVE (ir03_native_driver, SUTEKH_NATIVE=ON) the module is
+ * also compiled with su_native_compile (scalar) and run on a third identical world: 1 when the kernel's status
+ * and committed lanes equal the VM's, 0 when they differ, 2 when the compile was refused.
  *
  *   ir03_driver <capsule> <lir> <rows> <seed>
  */
@@ -24,6 +27,51 @@
 #include "sutekh/status.h"
 #include "vm/su_vm.h"
 #include "world/su_world.h"
+#ifdef SU_IR03_NATIVE
+#include "backends/native/su_native.h"
+
+/* su_vm_run_system for a native kernel: the module's fields from the world's views, checked call, commit. */
+static uint32_t native_run_system(SuWorld *w, SuNativeArtifact *art, const SuLirModule *m) {
+    SuInvocation wi, inv;
+    SuOutputs wo, outs;
+    static SuColumnBinding in[SU_LIMIT_FIELDS], out[SU_LIMIT_FIELDS];
+    static uint32_t ids[SU_LIMIT_FIELDS];
+    uint32_t i, j, n_in = 0, n_out = 0, st;
+    st = su_world_build_invocation(w, &wi);
+    if (st == SU_OK) st = su_world_build_outputs(w, &wo);
+    if (st != SU_OK) {
+        return st;
+    }
+    for (i = 0; i < m->field_count; i++) {
+        if ((m->fields[i].access & SU_ACCESS_READ) != 0u) {
+            for (j = 0; j < wi.binding_count; j++) {
+                if (wi.bindings[j].field_id == m->fields[i].id) {
+                    in[n_in++] = wi.bindings[j];
+                    break;
+                }
+            }
+        }
+        if ((m->fields[i].access & SU_ACCESS_WRITE) != 0u) {
+            for (j = 0; j < wo.binding_count; j++) {
+                if (wo.bindings[j].field_id == m->fields[i].id) {
+                    ids[n_out] = m->fields[i].id;
+                    out[n_out++] = wo.bindings[j];
+                    break;
+                }
+            }
+        }
+    }
+    inv = wi;
+    inv.bindings = in;
+    inv.binding_count = n_in;
+    outs = wo;
+    outs.bindings = out;
+    outs.binding_count = n_out;
+    outs.failed_insn = UINT32_MAX;
+    st = su_native_run_checked(art, &inv, &outs);
+    return st == SU_OK ? su_world_commit_staging(w, ids, n_out) : st;
+}
+#endif
 
 static uint64_t g_rng = 0;
 static uint64_t rng_next(void) {
@@ -183,10 +231,48 @@ int main(int argc, char **argv) {
         if (ctx != NULL) {
             su_vm_context_tier_info(ctx, &info);
         }
-        printf("STATUS %u %s\n", (unsigned)st, m.semantic_hash_hex);
-        printf("TIERS %d %u %u %llu %llu %u\n", same, (unsigned)info.has_plan, (unsigned)info.has_guard,
-               (unsigned long long)info.last_rows_body, (unsigned long long)info.last_rows_skipped,
-               (unsigned)info.hoisted_insns);
+        {
+            int native = -1;
+#ifdef SU_IR03_NATIVE
+            SuNativeArtifact *art = NULL;
+            SuNativeDiag nd;
+            SuWorld *w3 = NULL;
+            uint32_t st3 = su_native_compile(&m, 1u, SU_NCAP_X86_64_SCALAR, &art, &nd);
+            if (st3 != SU_OK) {
+                native = 2;
+                fprintf(stderr, "native compile: %s %s (insn %u)\n", su_status_name(st3), nd.message,
+                        (unsigned)nd.failed_insn);
+            } else {
+                native = 1;
+                st3 = su_world_create(&wd, &w3);
+                for (i = 0; st3 == SU_OK && i < m.field_count; i++) {
+                    st3 = su_world_init_committed(w3, m.fields[i].id, cols[i], rows);
+                }
+                if (st3 == SU_OK) st3 = su_world_begin_tick(w3);
+                if (st3 == SU_OK) st3 = native_run_system(w3, art, &m);
+                if (st3 == SU_OK) st3 = su_world_publish(w3);
+                else su_world_abort(w3);
+                if (st3 != st) {
+                    native = 0;
+                }
+                for (i = 0; native == 1 && st == SU_OK && i < m.field_count; i++) {
+                    const uint32_t *ca, *cn;
+                    uint64_t na, nn;
+                    su_world_read_committed(w, m.fields[i].id, &ca, &na);
+                    su_world_read_committed(w3, m.fields[i].id, &cn, &nn);
+                    if (na != nn || memcmp(ca, cn, (size_t)na * sizeof *ca) != 0) {
+                        native = 0;
+                    }
+                }
+                su_world_destroy(w3);
+                su_native_artifact_free(art);
+            }
+#endif
+            printf("STATUS %u %s\n", (unsigned)st, m.semantic_hash_hex);
+            printf("TIERS %d %u %u %llu %llu %u %d\n", same, (unsigned)info.has_plan, (unsigned)info.has_guard,
+                   (unsigned long long)info.last_rows_body, (unsigned long long)info.last_rows_skipped,
+                   (unsigned)info.hoisted_insns, native);
+        }
         su_vm_context_destroy(c2);
         su_world_destroy(w2);
     }

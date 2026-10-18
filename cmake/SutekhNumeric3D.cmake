@@ -56,6 +56,18 @@ add_test(NAME ir03 COMMAND test_ir03 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_D
 add_executable(ir03_driver tests/ir03/ir03_driver.c)
 target_link_libraries(ir03_driver PRIVATE su_vm)
 sutekh_apply_warnings(ir03_driver)
+if(SUTEKH_NATIVE)
+    # The same driver with a third engine: the native IR 0.3 lowering (scalar), compared lane by lane with the VM.
+    add_executable(ir03_native_driver tests/ir03/ir03_driver.c)
+    target_compile_definitions(ir03_native_driver PRIVATE SU_IR03_NATIVE)
+    target_link_libraries(ir03_native_driver PRIVATE su_native su_vm)
+    sutekh_apply_warnings(ir03_native_driver)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME ir03_native_diff COMMAND "${Python3_EXECUTABLE}" -I
+                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/ir03_diff.py" --driver $<TARGET_FILE:ir03_native_driver>
+                 --work "${CMAKE_BINARY_DIR}/ir03_native_diff_scratch" --programs 600 --rows 48 --seed 11 --native)
+    endif()
+endif()
 if(Python3_Interpreter_FOUND)
     # Seeded random IR 0.3 programs: real verifier + VM against an independent interpreter.
     add_test(NAME ir03_diff COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/ir03_diff.py"

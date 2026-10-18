@@ -4056,7 +4056,13 @@ static uint32_t spec_caps(const char *backend, WorkerFail *f, uint32_t *caps, in
  * disposable worker and the active worker use this, so the two compile the same artifact. */
 static uint32_t spec_prepare(const SuLirModule *m, uint32_t gen, int tier_auto, uint32_t *caps,
                              uint64_t *seq, char *fallback, size_t fb_cap, char *msg, size_t cap) {
-    uint32_t st = su_nv_prepare(m, gen, *caps, seq, msg, cap);
+    uint32_t st;
+    /* IR 0.3 modules have a scalar lowering only: auto selects it directly. */
+    if (tier_auto && *caps == SU_NCAP_X86_64_AVX2 && m->ir_version_minor >= 3u) {
+        snprintf(fallback, fb_cap, "IR 0.3 has no avx2 lowering; used scalar");
+        *caps = SU_NCAP_X86_64_SCALAR;
+    }
+    st = su_nv_prepare(m, gen, *caps, seq, msg, cap);
     if (st == SU_E_RESOURCE_LIMIT && tier_auto && *caps == SU_NCAP_X86_64_AVX2) {
         snprintf(fallback, fb_cap, "avx2 frame bound exceeded; fell back to scalar");
         *caps = SU_NCAP_X86_64_SCALAR;
