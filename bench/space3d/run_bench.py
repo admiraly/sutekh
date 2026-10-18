@@ -12,6 +12,11 @@
         machine (constitution C10), not qualification.
     run_bench.py --driver <racer_microcosm> --write-expected
         Records the --check digests in bench/space3d/expected.json (only after a reviewed semantic change).
+    run_bench.py --driver <racer_microcosm> --rollback-evidence <dir> [--repeat 3] [--iters 200]
+        Rollback resimulation (racer_microcosm --rollback 1,6,12) at N = 8, 32, 256 on both VM tiers
+        (reference and planned), repeats interleaved in separate processes. Writes <dir>/rollback-bench.json and
+        prints a table. Exit 0 only when every resimulated digest matched its reference digest and both tiers
+        produced the same digests. Observations on this machine, not qualification.
 """
 import argparse
 import hashlib
@@ -98,6 +103,69 @@ def check(driver):
     return 1 if failures else 0
 
 
+ROLLBACK_K = (1, 6, 12)
+
+
+def rollback_evidence(args):
+    os.makedirs(args.rollback_evidence, exist_ok=True)
+    records = []
+    for rep_i in range(args.repeat):
+        for n in (8, 32, 256):
+            for tier in ("reference", "planned"):
+                extra = ["--n", str(n), "--warmup", "120", "--rollback", ",".join(str(k) for k in ROLLBACK_K),
+                         "--rollback-iters", str(args.iters), "--vm-tier", tier]
+                rec = run(args.driver, extra)
+                rec["args"] = extra
+                rec["repeat"] = rep_i
+                records.append(rec)
+    failures = []
+    for r in records:
+        if r["digests_identical"] is not True:
+            failures.append("N=%d %s repeat %d: a resimulated digest differed" % (r["n"], r["vm"], r["repeat"]))
+    for n in (8, 32, 256):
+        digests = {tuple(k["final_state_sha256"] for k in r["k"]) for r in records if r["n"] == n}
+        if len(digests) != 1:
+            failures.append("N=%d: tiers or repeats disagree on the resimulated digests" % n)
+    doc = {
+        "format": "sutekh.bench.6dof_racer_rollback/1",
+        "statement": "observation on one machine; not performance qualification (ENGINE_CONSTITUTION C10)",
+        "machine": {"cpu": cpu_name(), "logical_cpus": os.cpu_count(), "os": platform.platform(),
+                    "python": platform.python_version()},
+        "source": {"git_head": git_head(), "worktree_dirty": git_dirty()},
+        "driver": {"path": os.path.relpath(args.driver, ROOT) if args.driver.startswith(ROOT) else args.driver,
+                   "sha256": sha256_file(args.driver)},
+        "measurement": "per K: restore = su_world_restore_canonical of the saved anchor state (new world); resim = "
+                       "one su_sched_run_ticks(K) call; total = restore + resim; save = su_world_canonical_write "
+                       "into a preallocated buffer; monotonic clock, single thread, after a 120-tick warm-up",
+        "repeats": args.repeat,
+        "iterations": args.iters,
+        "records": records,
+        "failures": failures,
+    }
+    out = os.path.join(args.rollback_evidence, "rollback-bench.json")
+    with open(out, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(doc, indent=1) + "\n")
+    print("| N | VM tier | K | restore p50 us | resim p50 us (min..max of %d runs) | per tick p50 us | "
+          "total p50 / 8.33 ms | total p99 / 8.33 ms | save p50 us |" % args.repeat)
+    print("|---|---|---|---|---|---|---|---|---|")
+    for n in (8, 32, 256):
+        for tier in ("reference", "planned"):
+            rs = [r for r in records if r["n"] == n and r["vm"] == tier]
+            for ki, k in enumerate(ROLLBACK_K):
+                ks = [r["k"][ki] for r in rs]
+                resim = [x["resim_ns"]["p50"] / 1e3 for x in ks]
+                print("| %d | %s | %d | %.1f | %.1f..%.1f | %.1f | %.1f%% | %.1f%% | %.1f |" % (
+                    n, tier, k, max(x["restore_ns"]["p50"] for x in ks) / 1e3, min(resim), max(resim),
+                    max(x["resim_per_tick_p50_ns"] for x in ks) / 1e3,
+                    100.0 * max(x["total_p50_fraction_of_budget"] for x in ks),
+                    100.0 * max(x["total_p99_fraction_of_budget"] for x in ks),
+                    max(r["save_ns"]["p50"] for r in rs) / 1e3))
+    for f in failures:
+        print("FAIL", f)
+    print("wrote", out)
+    return 1 if failures else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--driver", required=True)
@@ -106,7 +174,11 @@ def main():
     ap.add_argument("--evidence")
     ap.add_argument("--ticks", type=int, default=1200)
     ap.add_argument("--repeat", type=int, default=3)
+    ap.add_argument("--rollback-evidence")
+    ap.add_argument("--iters", type=int, default=200)
     args = ap.parse_args()
+    if args.rollback_evidence:
+        return rollback_evidence(args)
     if args.check:
         return check(args.driver)
     if args.write_expected:
@@ -118,7 +190,7 @@ def main():
         print(json.dumps(exp, indent=1))
         return 0
     if not args.evidence:
-        ap.error("one of --check, --evidence, --write-expected")
+        ap.error("one of --check, --evidence, --rollback-evidence, --write-expected")
     os.makedirs(args.evidence, exist_ok=True)
     records = []
     for rep_i in range(args.repeat):
