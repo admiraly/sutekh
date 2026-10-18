@@ -1154,6 +1154,12 @@ static void test_bc6h_gpu(void) {
         printf("BC6H GPU comparison skipped: no BCn sampling on this device\n");
         return;
     }
+    /* A software rasterizer's BC6H decode is not a hardware reference (Mesa lavapipe differs from the spec decode by
+     * up to ~13 levels here). The CPU decoder itself is checked by test_asset_dds. */
+    if (dev.type == SU_RENDER_DEVICE_CPU) {
+        printf("BC6H GPU comparison skipped: software rasterizer (%s) is not a BC6H reference\n", dev.name);
+        return;
+    }
     for (sg = 0; sg < 2; sg++) {
         for (round = 0; round < 12; round++) {
             Scene s;
