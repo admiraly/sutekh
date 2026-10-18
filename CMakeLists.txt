@@ -622,7 +622,7 @@ add_test(NAME rts_behavior_regeneration COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CUR
 # ---- BEGIN in-process host API (include/sutekh/host.h; planning/amendments/2026-10-18-downstream-host-work.md) ----
 # The schedule, entity tick and host-operator declaration sources are compiled into the host library in their
 # default configuration (no native tier, no test seams), so it does not pull in the control plane.
-set(SU_HOST_SOURCES src/host/su_host.c src/runtime/schedule.c src/runtime/entity_tick.c src/runtime/rts/host_decl.c)
+set(SU_HOST_SOURCES src/host/su_host.c src/host/su_host_clock.c src/runtime/schedule.c src/runtime/entity_tick.c src/runtime/rts/host_decl.c)
 add_library(su_host STATIC ${SU_HOST_SOURCES})
 target_include_directories(su_host PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
 target_link_libraries(su_host PUBLIC su_vm su_world su_ents su_ir su_jobs su_cmdq su_platform)
@@ -644,4 +644,14 @@ add_executable(test_host_dll tests/host/test_host.c)
 target_link_libraries(test_host_dll PRIVATE sutekh_host)
 sutekh_apply_warnings(test_host_dll)
 add_test(NAME host_api_dll COMMAND test_host_dll WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# Fixed-step clock (include/sutekh/clock.h).
+add_executable(test_clock tests/host/test_clock.c)
+target_link_libraries(test_clock PRIVATE su_host)
+sutekh_apply_warnings(test_clock)
+add_test(NAME host_clock COMMAND test_clock)
+# Example presentation-host loop (examples/host); run as a test so it keeps working.
+add_executable(minimal_host examples/host/minimal_host.c)
+target_link_libraries(minimal_host PRIVATE sutekh_host)
+sutekh_apply_warnings(minimal_host)
+add_test(NAME example_minimal_host COMMAND minimal_host WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # ---- END in-process host API ----
