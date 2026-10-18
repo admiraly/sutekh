@@ -33,6 +33,12 @@ function(_sutekh_numeric3d_late)
             add_test(NAME space3d_racer_replay COMMAND "${Python3_EXECUTABLE}" -I
                      "${CMAKE_CURRENT_SOURCE_DIR}/bench/space3d/run_bench.py" --driver $<TARGET_FILE:racer_microcosm> --check)
             set_tests_properties(space3d_racer_replay PROPERTIES TIMEOUT 300)
+            # IR 0.3 + space3d.query through `sutekh serve` (world.create, step, inspect, snapshot, restore, events;
+            # world.specialize of racer.move on native builds), compared lane by lane with the in-process driver.
+            add_test(NAME space3d_serve COMMAND "${Python3_EXECUTABLE}" -I
+                     "${CMAKE_CURRENT_SOURCE_DIR}/tests/space3d/test_space3d_serve.py" --binary $<TARGET_FILE:sutekh>
+                     --driver $<TARGET_FILE:racer_microcosm> --work "${CMAKE_BINARY_DIR}/space3d_serve_scratch")
+            set_tests_properties(space3d_serve PROPERTIES TIMEOUT 600)
             add_test(NAME space3d_racer_generated COMMAND "${Python3_EXECUTABLE}" -I
                      "${CMAKE_CURRENT_SOURCE_DIR}/bench/space3d/gen_racer.py" --check)
         endif()

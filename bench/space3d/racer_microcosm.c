@@ -13,6 +13,7 @@
  *
  *   racer_microcosm --root <repo> --n 32 [--ticks 1200] [--warmup 120] [--obstacles 48] [--seed 1]
  *                   [--no-query] [--replay] [--digest-every 120] [--vm-tier reference|planned] [--native]
+ *                   [--dump-fixture <path>] [--dump-final <path>]
  *   racer_microcosm --root <repo> --n 32 --rollback 1,6,12 [--rollback-iters 200] [--warmup 120]
  * Prints one JSON object: identities, per-tick wall time distribution, digests, event counts, race totals.
  * --replay additionally runs the scene again from scratch and from a mid-run canonical checkpoint and reports
@@ -25,7 +26,12 @@
  *
  * --native (builds with SUTEKH_NATIVE=ON): every IR system without entity operations (racer.move) is compiled by
  * the native backend (scalar; IR 0.3 lowering), admitted by the registry's differential check against the VM
- * (su_nv_admit) and installed in the schedule entry; the schedule then runs it as a native kernel. */
+ * (su_nv_admit) and installed in the schedule entry; the schedule then runs it as a native kernel.
+ *
+ * --dump-fixture writes the initial world as a world.create fixture (fixture_format 0.1, schema space3d, one
+ * column per storage lane by lane name); --dump-final writes {"tick", "columns"} of the committed state after the
+ * run (warm-up + timed ticks). tests/space3d/test_space3d_serve.py builds the same world through `sutekh serve`
+ * and compares every lane. */
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,12 +62,49 @@ static int g_native = 0; /* --native: the reported tier of the IR systems that h
 
 typedef struct Args {
     const char *root;
+    const char *dump_fixture, *dump_final;
     uint32_t n, ticks, warmup, obstacles, digest_every;
     uint64_t seed;
     int no_query, replay, dump_racers, native;
     uint32_t rollback_k[8], rollback_nk, rollback_iters;
     int trace; /* racer index to trace per tick on stderr, -1 none */
 } Args;
+
+/* ---------- dumps ---------- */
+
+/* {"fixture_format":"0.1",...} of the world's committed state (fixture != 0) or {"tick":T,"columns":{...}}. */
+static int dump_world(const char *path, const SuWorld *w, const SuSchedule *s, int fixture) {
+    FILE *f = fopen(path, "wb");
+    uint32_t i, r;
+    uint64_t rows = 0;
+    if (f == NULL) {
+        return 0;
+    }
+    if (fixture) {
+        const uint32_t *col;
+        su_world_read_committed(w, s->fields[0].id, &col, &rows);
+        fprintf(f, "{\"fixture_format\":\"0.1\",\"schema_id\":\"%s\",\"schema_version\":%u,\"tick\":0,"
+                   "\"entity_ids\":[", s->schema_id, (unsigned)s->schema_version);
+        for (r = 0; r < rows; r++) {
+            fprintf(f, "%s%u", r ? "," : "", (unsigned)(r + 1u));
+        }
+        fprintf(f, "],");
+    } else {
+        fprintf(f, "{\"tick\":%llu,", (unsigned long long)su_world_tick(w));
+    }
+    fprintf(f, "\"columns\":{");
+    for (i = 0; i < s->field_count; i++) {
+        const uint32_t *col;
+        su_world_read_committed(w, s->fields[i].id, &col, &rows);
+        fprintf(f, "%s\"%s\":[", i ? "," : "", s->fields[i].name);
+        for (r = 0; r < rows; r++) {
+            fprintf(f, "%s%u", r ? "," : "", (unsigned)col[r]);
+        }
+        fprintf(f, "]");
+    }
+    fprintf(f, "}}\n");
+    return fclose(f) == 0;
+}
 
 /* ---------- course ---------- */
 
@@ -711,6 +754,8 @@ int main(int argc, char **argv) {
         else if (strcmp(k, "--replay") == 0) { a.replay = 1; }
         else if (strcmp(k, "--dump-racers") == 0) { a.dump_racers = 1; }
         else if (strcmp(k, "--native") == 0) { a.native = 1; }
+        else if (strcmp(k, "--dump-fixture") == 0) { a.dump_fixture = v; i++; }
+        else if (strcmp(k, "--dump-final") == 0) { a.dump_final = v; i++; }
         else if (strcmp(k, "--trace") == 0) { a.trace = (int)strtol(v, NULL, 10); i++; }
         else if (strcmp(k, "--rollback") == 0) {
             const char *p = v;
@@ -762,6 +807,10 @@ int main(int argc, char **argv) {
 
     /* Run A: warm-up, then timed single ticks; digests every digest_every ticks; checkpoint at the midpoint. */
     sim_create(&sim, &a, &course);
+    if (a.dump_fixture != NULL && !dump_world(a.dump_fixture, sim.w, &sim.s, 1)) {
+        fprintf(stderr, "cannot write %s\n", a.dump_fixture);
+        return 2;
+    }
     if (step(&sim, a.warmup) != SU_OK) {
         return 1;
     }
@@ -788,6 +837,10 @@ int main(int argc, char **argv) {
     }
     state_digest(sim.w, final_state, NULL, NULL);
     event_digest(&sim.s, final_events, &events);
+    if (a.dump_final != NULL && !dump_world(a.dump_final, sim.w, &sim.s, 0)) {
+        fprintf(stderr, "cannot write %s\n", a.dump_final);
+        return 2;
+    }
     if (a.dump_racers) {
         /* Diagnostic (stderr): per racer position, speed, course parameter, next gate and its distance. */
         for (i = 0; i < a.n; i++) {
