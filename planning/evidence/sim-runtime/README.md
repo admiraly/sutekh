@@ -18,6 +18,7 @@ After a 120-tick warm-up the world is saved as canonical bytes; per K the state 
 Every one of the 3 x 3 x 2 x 3 x 200 resimulations reproduced its reference digest, and both VM tiers produced
 the same digests (the script exits 1 otherwise). Restore + resim, p50 of 200 iterations, worst of 3 processes:
 
+| N | VM tier | K | restore p50 us | resim p50 us (min..max of 3 runs) | per tick p50 us | total p50 / 8.33 ms | total p99 / 8.33 ms | save p50 us |
 |---|---|---|---|---|---|---|---|---|
 | 8 | reference | 1 | 25.9 | 176.6..177.6 | 177.6 | 2.4% | 5.0% | 2.8 |
 | 8 | reference | 6 | 28.4 | 1062.6..1069.3 | 178.2 | 13.2% | 24.7% | 2.8 |
@@ -46,6 +47,7 @@ column. The resimulation of K = 12 at N = 256 fits the 8.33 ms budget at p50 (46
 
 ## Per-tick timing (`racer-bench.json`, planned tier)
 
+| N | query | rows | p50 us (min..max of 3 runs) | p99 us | max us | worst p99 / 8.33 ms | gates | collision ticks | events | digests equal across runs | replay start/ckpt |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 8 | yes | 72 | 24.9..26.1 | 30.5..59.3 | 70.3..315.1 | 0.71% | 24 | 1 | 25 | True | True/True |
 | 8 | no | 72 | 16.0..16.4 | 17.8..23.1 | 52.9..85.2 | 0.28% | 0 | 0 | 0 | True | True/True |
