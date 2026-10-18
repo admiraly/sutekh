@@ -187,3 +187,43 @@ presentation on Linux (offscreen only there); text/HUD, culling, pipeline caches
 preparation, resource retirement beyond create/destroy (M5 items after this slice). The Windows CI runner has no
 Vulkan device, so `render_offscreen` skips there; the Linux CI job installs Mesa's lavapipe to run it on a CPU
 device.
+
+### Window and rollback exercises (added after the first item 3 commit)
+
+| Command | Result |
+|---|---|
+| `space_demo --script --frames 140 --exercise-window` (window over RDP: resize to 800 x 600, minimize, restore, resize back) | 3 swapchain recreations, 110 frames drawn, 30 paused while minimized (`SU_E_RESOURCE_LIMIT`), 0 failed; 18 ticks dropped by the clock's 8-tick clamp across the slow recreation frames (the intended stall behaviour) |
+| `space_demo --headless --script --frames 240 --rollback-check --expect-digest fa02b76e...defd` (ctest `demo_headless_rollback`) | 479 ticks; 59 drills (restore in place the state of 8 ticks ago, re-push the 8 recorded input records, step 8 ticks in one call), 0 differed, the gate event re-emitted with the same sequence number; final digest equals the pinned one |
+| `space_demo --offscreen ... --frames 240 --rollback-check --expect-digest ...` (ctest `demo_offscreen_rollback`, skips with exit 3 without Vulkan) | same digest, 59 drills, 0 differed, shadow world 0 differing tick digests |
+| `ctest --test-dir build-win -j 8` (Debug, all of the above) | 80 passed, 0 failed, 2 skipped (`path_fifo`, `containment`) of 82 |
+
+## Contract notes for the integrator and other streams
+
+- `host.h` grows additively (API version stays 1): events, in-place restore, fast digest. `SuHostEvent` mirrors
+  `SuEvent` (static asserts in `su_host.c`). The merge with numeric-3d's typed helpers was additive at the same
+  spot of `host.h` and `su_host.c`.
+- `src/world` gains allocation-free entry points (`su_ents_canonical_parse_into`, `su_ents_swap`,
+  `su_evlog_parse_into`, `su_evlog_swap`, `su_world_restore_canonical_check` / `_commit`); the existing parsers
+  now share their checks with them (behaviour unchanged; all existing tests pass). `SuHostWorld` holds two
+  scratch pointers.
+- Float presentation types are `SuVec3f`, `SuQuatf`, `SuMat4f` and functions `su_vec3f_*`, `su_quatf_*`,
+  `su_mat4f_*`: `SuQuat` and `su_quat_*` belong to the Q32.32 library (`src/ir/su_num.c`), and the first name
+  choice collided at link time.
+- Input records are Q16.16 in i32 cells; a 0.3 system converts with `i64_from_i32`, `shl_i64` by 16,
+  `q32_from_raw` (see `examples/presentation/flight.lir.json`). A typed i32/q32 input path in `su_input_record_writes`
+  (for example writing Q32.32 through `su_host_input_push_i64`) would remove that step if the downstream prefers it.
+- Build: everything of this stream is in `cmake/SutekhPresentation.cmake` (one include line after the host block)
+  plus the test registration of `host_rollback` in the host block. CI fetches Vulkan-Headers and builds with
+  `SUTEKH_RENDER=ON`; the Linux job installs `mesa-vulkan-drivers`.
+- `PACK_VALIDATION.json` must be regenerated on every merge (`tools/validate_pack.py --write-report`).
+
+## Next
+
+1. Run the validation layer over `render_offscreen`, the demo and the window exercise (`--validation`); see the
+   section below for the source-built layer, or install the SDK where elevation is available.
+2. A physical-console run on the Arc A770 machine: frame pacing, GPU timestamps and present modes there; over
+   RDP FIFO is paced by the remote display.
+3. Faster ticks for rollback (the re-simulated ticks dominate a rollback): VM throughput or native lowering of IR
+   0.3 (numeric-3d stream).
+4. Presentation next steps per M5: text/HUD, frustum culling, pipeline cache and asynchronous pipeline
+   preparation, resource retirement, Linux window presentation; GameInput as an optional input backend.

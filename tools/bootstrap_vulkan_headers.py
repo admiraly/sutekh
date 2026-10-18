@@ -31,7 +31,10 @@ LICENSE = "LICENSE.md"
 
 
 def git(args):
-    res = subprocess.run(["git", *args], shell=False, capture_output=True, text=True, check=False)
+    try:
+        res = subprocess.run(["git", *args], shell=False, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return 127, "", "git is not on PATH"
     return res.returncode, res.stdout.strip(), res.stderr.strip()
 
 
