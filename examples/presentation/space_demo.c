@@ -17,7 +17,8 @@
  *                                      against a shadow world that has no renderer (exit 1 on any difference);
  *                                      the camera is a fixed overview
  *   space_demo --headless              no renderer at all
- *   options: --no-vsync, --validation, --map file, --width W --height H
+ *   options: --no-vsync, --validation, --map file, --width W --height H, --exercise-window (resize, minimize,
+ *            restore and resize back during the run, to drive swapchain recreation)
  * Exit status: 0 success, 1 failure, 3 presentation unavailable (the simulation still ran headless). */
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
@@ -68,6 +69,9 @@ typedef struct Demo {
     int quit;
     int free_cam;
     int fixed_cam;            /* --offscreen: a fixed overview camera */
+    uint64_t frames_drawn;
+    uint64_t frames_paused;   /* su_render_frame returned SU_E_RESOURCE_LIMIT (minimized or out of date) */
+    uint64_t frames_failed;
     uint32_t last_buttons;
     double gate_flash;        /* seconds left */
     uint64_t gate_events;
@@ -412,7 +416,19 @@ static void draw(float alpha, double dt, SuChaseCamera *chase, SuFreeCamera *fre
     view.light_dir.y = -0.8f;
     view.light_dir.z = -0.45f;
     view.ambient = 0.3f;
-    (void)su_render_frame(g.r, &view, inst, g.n + 1u, lines, dl.count);
+    {
+        uint32_t st = su_render_frame(g.r, &view, inst, g.n + 1u, lines, dl.count);
+        if (st == SU_OK) {
+            g.frames_drawn++;
+        } else if (st == SU_E_RESOURCE_LIMIT) {
+            g.frames_paused++;
+        } else {
+            g.frames_failed++;
+            if (g.frames_failed <= 3u) {
+                fprintf(stderr, "frame failed: %s\n", su_render_last_error(g.r));
+            }
+        }
+    }
 }
 
 int main(int argc, char **argv) {
@@ -421,6 +437,7 @@ int main(int argc, char **argv) {
     uint64_t max_frames = 0;
     double seconds = 0.0;
     int script = 0;
+    int exercise = 0;
     int headless = 0;
     uint32_t flags = 0;
     uint32_t width = 1280;
@@ -449,6 +466,8 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--offscreen") == 0 && i + 1 < argc) {
             offscreen = argv[++i];
             script = 1;
+        } else if (strcmp(argv[i], "--exercise-window") == 0) {
+            exercise = 1;
         } else if (strcmp(argv[i], "--headless") == 0) {
             headless = 1;
         } else if (strcmp(argv[i], "--no-vsync") == 0) {
@@ -618,6 +637,18 @@ int main(int argc, char **argv) {
             Sleep(1);
         }
         frames++;
+        /* --exercise-window: resize, minimize, restore and resize back, to drive swapchain recreation. */
+        if (exercise && g.hwnd != NULL) {
+            if (frames == 20u) {
+                SetWindowPos(g.hwnd, NULL, 0, 0, 800, 600, SWP_NOMOVE | SWP_NOZORDER);
+            } else if (frames == 40u) {
+                ShowWindow(g.hwnd, SW_MINIMIZE);
+            } else if (frames == 70u) {
+                ShowWindow(g.hwnd, SW_RESTORE);
+            } else if (frames == 90u) {
+                SetWindowPos(g.hwnd, NULL, 0, 0, 1296, 759, SWP_NOMOVE | SWP_NOZORDER);
+            }
+        }
         ticks_report += ticks;
         frames_report++;
         if (now - t_report >= 1.0 && offscreen == NULL) {
@@ -666,7 +697,9 @@ int main(int argc, char **argv) {
                    "validation %s (%u errors), present mode %u\n",
                    (unsigned long long)rs.frame, rs.cpu_ms, rs.gpu_ms, rs.draws, rs.swapchain_recreations,
                    rs.validation_enabled ? "on" : "off", rs.validation_errors, rs.present_mode);
-            ok = rs.validation_errors == 0u;
+            printf("frames drawn %llu, paused %llu, failed %llu\n", (unsigned long long)g.frames_drawn,
+                   (unsigned long long)g.frames_paused, (unsigned long long)g.frames_failed);
+            ok = rs.validation_errors == 0u && g.frames_failed == 0u;
         }
         if (g.shadow != NULL) {
             printf("shadow world (no renderer): %llu tick digests differed\n", (unsigned long long)g.shadow_mismatch);
