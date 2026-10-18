@@ -18,7 +18,7 @@
 #include "platform/su_platform.h"
 #include "sutekh/host.h"
 
-#define OPS 8u
+#define OPS 9u
 
 static uint8_t *slurp(const char *path, size_t *len) {
     FILE *f = fopen(path, "rb");
@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
     static const uint64_t sizes[] = {64u, 1024u, 16384u};
     static const char *const names[OPS] = {"step_us", "snapshot_write_us", "snapshot_restore_us", "digest_us",
                                            "snapshot_restore_inplace_us", "digest_fast_us", "events_for_tick_us",
-                                           "rollback_8_ticks_us"};
+                                           "rollback_8_ticks_us", "rollback_8_ticks_batched_us"};
     uint32_t iters = argc > 1 ? (uint32_t)strtoul(argv[1], NULL, 10) : 1000u;
     SuHostCapsule cap;
     uint32_t si;
@@ -176,6 +176,29 @@ int main(int argc, char **argv) {
             }
             (void)su_host_digest_fast(w, &fast);
             t[7][i] = now_ns() - t0;
+            /* The same rollback with the 8 records queued first and one su_host_step call for all 8 ticks
+             * (same inputs, so the same final state as the loop above). */
+            {
+                uint64_t ref = fast;
+                uint64_t base;
+                t0 = now_ns();
+                (void)su_host_snapshot_restore_inplace(w, snap, snap_len, &e);
+                base = su_host_tick(w);
+                for (j = 0; j < 8u; j++) {
+                    uint32_t q;
+                    for (q = 0; q < 4u; q++) {
+                        in[q].value = i + j + q;
+                    }
+                    (void)su_host_input_push(w, base + j, in, 4, &e);
+                }
+                (void)su_host_step(w, 8, NULL, &e);
+                (void)su_host_digest_fast(w, &fast);
+                t[8][i] = now_ns() - t0;
+                if (fast != ref) {
+                    fprintf(stderr, "batched rollback reached a different state\n");
+                    return 1;
+                }
+            }
         }
         printf("%s{\"entities\":%llu,\"snapshot_bytes\":%zu", si > 0u ? "," : "", (unsigned long long)sizes[si],
                snap_len);
