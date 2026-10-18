@@ -65,3 +65,22 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME example_arena_generated COMMAND "${Python3_EXECUTABLE}" -I
              "${CMAKE_CURRENT_SOURCE_DIR}/examples/host_space3d/gen_arena.py" --check)
 endif()
+
+# Rollback through the public host API (bench/host/bench_host_rollback.c); run_host_rollback.py runs the matrix.
+# The ctest smoke run checks digests across tiers (N = 8, few iterations), not timing.
+add_executable(bench_host_rollback "${CMAKE_CURRENT_SOURCE_DIR}/bench/host/bench_host_rollback.c")
+target_include_directories(bench_host_rollback PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(bench_host_rollback PRIVATE su_host)
+sutekh_apply_warnings(bench_host_rollback)
+if(Python3_Interpreter_FOUND AND TARGET su_agent)
+    if(SUTEKH_NATIVE)
+        set(SU_HOST_ROLLBACK_TIERS "reference,planned,native")
+    else()
+        set(SU_HOST_ROLLBACK_TIERS "reference,planned")
+    endif()
+    add_test(NAME host_rollback_bench_smoke COMMAND "${Python3_EXECUTABLE}" -I
+             "${CMAKE_CURRENT_SOURCE_DIR}/bench/host/run_host_rollback.py" --bench $<TARGET_FILE:bench_host_rollback>
+             --racer $<TARGET_FILE:racer_microcosm> --work "${CMAKE_BINARY_DIR}/host_rollback_scratch" --n 8,16
+             --tiers ${SU_HOST_ROLLBACK_TIERS} --repeat 1 --iters 5)
+    set_tests_properties(host_rollback_bench_smoke PROPERTIES TIMEOUT 300)
+endif()

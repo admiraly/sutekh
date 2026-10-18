@@ -1,0 +1,3508 @@
+{
+ "format": "sutekh.bench.host_rollback/1",
+ "statement": "observation on one machine; not performance qualification (ENGINE_CONSTITUTION C10)",
+ "machine": {
+  "cpu": "12th Gen Intel(R) Core(TM) i5-12400F",
+  "logical_cpus": 12,
+  "os": "Windows-11-10.0.26200-SP0",
+  "python": "3.13.15"
+ },
+ "source": {
+  "git_head": "01c23a4a6d592b0b196935cf21f0804ee8dc68d6",
+  "worktree_dirty": true
+ },
+ "bench": {
+  "path": "bench_host_rollback.exe",
+  "sha256": "74e033e53d6a95d0b4967033cc6133b7fb8bbdc5ea2cec990f8026f61b2aedb8"
+ },
+ "measurement": "per K: restore = su_host_snapshot_restore_inplace of the anchor snapshot; resim = one su_host_step(K) call; digest_fast = su_host_digest_fast; total = the three; after a 120-tick warm-up; monotonic clock, single thread; one process per (repeat, N, tier), repeats interleaved; tier native = racer.move as a native kernel, racer.race on the planned VM (it emits events), space3d.query a host operator",
+ "repeats": 3,
+ "iterations": 200,
+ "records": [
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 8,
+   "rows": 72,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 23933,
+   "save_ns": {
+    "min": 2200,
+    "p50": 2300,
+    "p95": 2300,
+    "p99": 2300,
+    "max": 6300
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "431e000e0812b22abba609c89fb43f118f0d7bc26698948a41d986c7873ed387",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4400,
+      "p50": 4700,
+      "p95": 5800,
+      "p99": 6500,
+      "max": 7900
+     },
+     "resim_ns": {
+      "min": 953600,
+      "p50": 964200,
+      "p95": 1073300,
+      "p99": 1398400,
+      "max": 1675000
+     },
+     "digest_fast_ns": {
+      "min": 3600,
+      "p50": 3700,
+      "p95": 4700,
+      "p99": 5900,
+      "max": 9000
+     },
+     "total_ns": {
+      "min": 962000,
+      "p50": 972800,
+      "p95": 1082900,
+      "p99": 1411500,
+      "max": 1688600
+     },
+     "resim_per_tick_p50_ns": 160700,
+     "total_p50_fraction_of_budget": 0.1167,
+     "total_p99_fraction_of_budget": 0.1694
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "f3db85b3894840696f3aadfd2d8b666416852e27069049849d413b0bd89fe836",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4800,
+      "p50": 5200,
+      "p95": 7300,
+      "p99": 9200,
+      "max": 25000
+     },
+     "resim_ns": {
+      "min": 1922700,
+      "p50": 1952400,
+      "p95": 2995000,
+      "p99": 3479700,
+      "max": 4340000
+     },
+     "digest_fast_ns": {
+      "min": 3700,
+      "p50": 4000,
+      "p95": 6400,
+      "p99": 7800,
+      "max": 9900
+     },
+     "total_ns": {
+      "min": 1931700,
+      "p50": 1961800,
+      "p95": 3006300,
+      "p99": 3495300,
+      "max": 4352600
+     },
+     "resim_per_tick_p50_ns": 162700,
+     "total_p50_fraction_of_budget": 0.2354,
+     "total_p99_fraction_of_budget": 0.4194
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 8,
+   "rows": 72,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 23933,
+   "save_ns": {
+    "min": 2000,
+    "p50": 2000,
+    "p95": 2100,
+    "p99": 2100,
+    "max": 5600
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "431e000e0812b22abba609c89fb43f118f0d7bc26698948a41d986c7873ed387",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 3900,
+      "p50": 4100,
+      "p95": 6400,
+      "p99": 7500,
+      "max": 16700
+     },
+     "resim_ns": {
+      "min": 114400,
+      "p50": 115700,
+      "p95": 177500,
+      "p99": 301200,
+      "max": 365800
+     },
+     "digest_fast_ns": {
+      "min": 3500,
+      "p50": 3600,
+      "p95": 5700,
+      "p99": 7300,
+      "max": 12400
+     },
+     "total_ns": {
+      "min": 122100,
+      "p50": 123400,
+      "p95": 188900,
+      "p99": 316100,
+      "max": 376800
+     },
+     "resim_per_tick_p50_ns": 19283,
+     "total_p50_fraction_of_budget": 0.0148,
+     "total_p99_fraction_of_budget": 0.0379
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "f3db85b3894840696f3aadfd2d8b666416852e27069049849d413b0bd89fe836",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 3900,
+      "p50": 4200,
+      "p95": 5400,
+      "p99": 7800,
+      "max": 48400
+     },
+     "resim_ns": {
+      "min": 228200,
+      "p50": 231200,
+      "p95": 270500,
+      "p99": 375500,
+      "max": 410900
+     },
+     "digest_fast_ns": {
+      "min": 3500,
+      "p50": 3700,
+      "p95": 4700,
+      "p99": 6300,
+      "max": 35900
+     },
+     "total_ns": {
+      "min": 235800,
+      "p50": 239000,
+      "p95": 281000,
+      "p99": 383700,
+      "max": 425000
+     },
+     "resim_per_tick_p50_ns": 19266,
+     "total_p50_fraction_of_budget": 0.0287,
+     "total_p99_fraction_of_budget": 0.046
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 8,
+   "rows": 72,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 23933,
+   "save_ns": {
+    "min": 2000,
+    "p50": 2000,
+    "p95": 2100,
+    "p99": 2100,
+    "max": 5400
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "431e000e0812b22abba609c89fb43f118f0d7bc26698948a41d986c7873ed387",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 3800,
+      "p50": 4000,
+      "p95": 4400,
+      "p99": 5700,
+      "max": 6200
+     },
+     "resim_ns": {
+      "min": 84200,
+      "p50": 85000,
+      "p95": 87000,
+      "p99": 116900,
+      "max": 125300
+     },
+     "digest_fast_ns": {
+      "min": 3500,
+      "p50": 3600,
+      "p95": 3700,
+      "p99": 5100,
+      "max": 5500
+     },
+     "total_ns": {
+      "min": 91700,
+      "p50": 92700,
+      "p95": 94900,
+      "p99": 125500,
+      "max": 136500
+     },
+     "resim_per_tick_p50_ns": 14166,
+     "total_p50_fraction_of_budget": 0.0111,
+     "total_p99_fraction_of_budget": 0.0151
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "f3db85b3894840696f3aadfd2d8b666416852e27069049849d413b0bd89fe836",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 3800,
+      "p50": 4000,
+      "p95": 7400,
+      "p99": 8700,
+      "max": 10800
+     },
+     "resim_ns": {
+      "min": 168300,
+      "p50": 170200,
+      "p95": 272900,
+      "p99": 309900,
+      "max": 326300
+     },
+     "digest_fast_ns": {
+      "min": 3500,
+      "p50": 3700,
+      "p95": 6300,
+      "p99": 7200,
+      "max": 8700
+     },
+     "total_ns": {
+      "min": 176000,
+      "p50": 177900,
+      "p95": 286400,
+      "p99": 325000,
+      "max": 339800
+     },
+     "resim_per_tick_p50_ns": 14183,
+     "total_p50_fraction_of_budget": 0.0213,
+     "total_p99_fraction_of_budget": 0.039
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 16,
+   "rows": 80,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 26501,
+   "save_ns": {
+    "min": 2200,
+    "p50": 2200,
+    "p95": 2500,
+    "p99": 2500,
+    "max": 5800
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "13202bb69d38fa658b15bc6c010b3c6942b7d0c26f79d42ae1bf5a4458c90465",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5400,
+      "p50": 5700,
+      "p95": 6600,
+      "p99": 11100,
+      "max": 19200
+     },
+     "resim_ns": {
+      "min": 1081700,
+      "p50": 1110500,
+      "p95": 1211800,
+      "p99": 1375400,
+      "max": 1679100
+     },
+     "digest_fast_ns": {
+      "min": 4000,
+      "p50": 4100,
+      "p95": 5500,
+      "p99": 5900,
+      "max": 9800
+     },
+     "total_ns": {
+      "min": 1091300,
+      "p50": 1120500,
+      "p95": 1222600,
+      "p99": 1391100,
+      "max": 1690800
+     },
+     "resim_per_tick_p50_ns": 185083,
+     "total_p50_fraction_of_budget": 0.1345,
+     "total_p99_fraction_of_budget": 0.1669
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cf3978eaecd10bba2d6d7bc5dbbc381695ab1f79830ca9e27ecee31c813d73a1",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5700,
+      "p50": 6000,
+      "p95": 6700,
+      "p99": 10500,
+      "max": 17300
+     },
+     "resim_ns": {
+      "min": 2191500,
+      "p50": 2236900,
+      "p95": 2455300,
+      "p99": 3159000,
+      "max": 5224500
+     },
+     "digest_fast_ns": {
+      "min": 4000,
+      "p50": 4200,
+      "p95": 5800,
+      "p99": 9200,
+      "max": 27400
+     },
+     "total_ns": {
+      "min": 2201500,
+      "p50": 2246900,
+      "p95": 2466100,
+      "p99": 3173800,
+      "max": 5239300
+     },
+     "resim_per_tick_p50_ns": 186408,
+     "total_p50_fraction_of_budget": 0.2696,
+     "total_p99_fraction_of_budget": 0.3809
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 16,
+   "rows": 80,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 26501,
+   "save_ns": {
+    "min": 2100,
+    "p50": 2200,
+    "p95": 3600,
+    "p99": 3900,
+    "max": 6000
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "13202bb69d38fa658b15bc6c010b3c6942b7d0c26f79d42ae1bf5a4458c90465",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4600,
+      "p50": 8100,
+      "p95": 9600,
+      "p99": 14100,
+      "max": 23600
+     },
+     "resim_ns": {
+      "min": 153200,
+      "p50": 268000,
+      "p95": 303200,
+      "p99": 482000,
+      "max": 995600
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 6700,
+      "p95": 7900,
+      "p99": 10500,
+      "max": 32500
+     },
+     "total_ns": {
+      "min": 162000,
+      "p50": 284000,
+      "p95": 320300,
+      "p99": 497900,
+      "max": 1009900
+     },
+     "resim_per_tick_p50_ns": 44666,
+     "total_p50_fraction_of_budget": 0.0341,
+     "total_p99_fraction_of_budget": 0.0597
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cf3978eaecd10bba2d6d7bc5dbbc381695ab1f79830ca9e27ecee31c813d73a1",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4500,
+      "p50": 5100,
+      "p95": 9800,
+      "p99": 13600,
+      "max": 35600
+     },
+     "resim_ns": {
+      "min": 306000,
+      "p50": 320000,
+      "p95": 707200,
+      "p99": 1271700,
+      "max": 1323800
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 4300,
+      "p95": 8000,
+      "p99": 8900,
+      "max": 25700
+     },
+     "total_ns": {
+      "min": 314700,
+      "p50": 329300,
+      "p95": 721000,
+      "p99": 1285300,
+      "max": 1338400
+     },
+     "resim_per_tick_p50_ns": 26666,
+     "total_p50_fraction_of_budget": 0.0395,
+     "total_p99_fraction_of_budget": 0.1542
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 16,
+   "rows": 80,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 26501,
+   "save_ns": {
+    "min": 3000,
+    "p50": 3400,
+    "p95": 4000,
+    "p99": 4100,
+    "max": 8700
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "13202bb69d38fa658b15bc6c010b3c6942b7d0c26f79d42ae1bf5a4458c90465",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4500,
+      "p50": 6200,
+      "p95": 9500,
+      "p99": 15700,
+      "max": 19300
+     },
+     "resim_ns": {
+      "min": 108000,
+      "p50": 136400,
+      "p95": 206300,
+      "p99": 718400,
+      "max": 1126800
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 4900,
+      "p95": 7900,
+      "p99": 8800,
+      "max": 14800
+     },
+     "total_ns": {
+      "min": 116900,
+      "p50": 148300,
+      "p95": 222800,
+      "p99": 733500,
+      "max": 1143000
+     },
+     "resim_per_tick_p50_ns": 22733,
+     "total_p50_fraction_of_budget": 0.0178,
+     "total_p99_fraction_of_budget": 0.088
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cf3978eaecd10bba2d6d7bc5dbbc381695ab1f79830ca9e27ecee31c813d73a1",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4500,
+      "p50": 5200,
+      "p95": 9200,
+      "p99": 10600,
+      "max": 11400
+     },
+     "resim_ns": {
+      "min": 216000,
+      "p50": 233100,
+      "p95": 414300,
+      "p99": 423800,
+      "max": 491900
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 4500,
+      "p95": 8000,
+      "p99": 8600,
+      "max": 17000
+     },
+     "total_ns": {
+      "min": 225000,
+      "p50": 243400,
+      "p95": 429500,
+      "p99": 440000,
+      "max": 507100
+     },
+     "resim_per_tick_p50_ns": 19425,
+     "total_p50_fraction_of_budget": 0.0292,
+     "total_p99_fraction_of_budget": 0.0528
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 32,
+   "rows": 96,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 31637,
+   "save_ns": {
+    "min": 2500,
+    "p50": 2600,
+    "p95": 2800,
+    "p99": 2800,
+    "max": 7800
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "1b45e1aafea764dbe15c9edb3f0b98ed17aeb1ac2a39028057586035b0b9f89d",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 6500,
+      "p50": 6900,
+      "p95": 11500,
+      "p99": 12100,
+      "max": 12500
+     },
+     "resim_ns": {
+      "min": 1362100,
+      "p50": 1403500,
+      "p95": 2443500,
+      "p99": 2576100,
+      "max": 3468800
+     },
+     "digest_fast_ns": {
+      "min": 4700,
+      "p50": 4900,
+      "p95": 8800,
+      "p99": 9500,
+      "max": 21200
+     },
+     "total_ns": {
+      "min": 1373700,
+      "p50": 1415200,
+      "p95": 2459500,
+      "p99": 2597400,
+      "max": 3483000
+     },
+     "resim_per_tick_p50_ns": 233916,
+     "total_p50_fraction_of_budget": 0.1698,
+     "total_p99_fraction_of_budget": 0.3117
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "47e6547f4eabb67c29f1098588d154899c2d6830ddc857b9059e116564ab76e5",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 6700,
+      "p50": 7200,
+      "p95": 11100,
+      "p99": 13000,
+      "max": 22800
+     },
+     "resim_ns": {
+      "min": 2739800,
+      "p50": 2822900,
+      "p95": 4525600,
+      "p99": 5024900,
+      "max": 6367600
+     },
+     "digest_fast_ns": {
+      "min": 4700,
+      "p50": 5100,
+      "p95": 8200,
+      "p99": 10800,
+      "max": 14000
+     },
+     "total_ns": {
+      "min": 2751600,
+      "p50": 2835700,
+      "p95": 4540700,
+      "p99": 5039200,
+      "max": 6385600
+     },
+     "resim_per_tick_p50_ns": 235241,
+     "total_p50_fraction_of_budget": 0.3403,
+     "total_p99_fraction_of_budget": 0.6047
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 32,
+   "rows": 96,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 31637,
+   "save_ns": {
+    "min": 2600,
+    "p50": 2700,
+    "p95": 2800,
+    "p99": 3900,
+    "max": 8500
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "1b45e1aafea764dbe15c9edb3f0b98ed17aeb1ac2a39028057586035b0b9f89d",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5300,
+      "p50": 5900,
+      "p95": 10400,
+      "p99": 11600,
+      "max": 252200
+     },
+     "resim_ns": {
+      "min": 232300,
+      "p50": 247400,
+      "p95": 429500,
+      "p99": 526100,
+      "max": 1859900
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 5000,
+      "p95": 9200,
+      "p99": 10500,
+      "max": 17200
+     },
+     "total_ns": {
+      "min": 242800,
+      "p50": 258400,
+      "p95": 449800,
+      "p99": 551500,
+      "max": 1874600
+     },
+     "resim_per_tick_p50_ns": 41233,
+     "total_p50_fraction_of_budget": 0.031,
+     "total_p99_fraction_of_budget": 0.0662
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "47e6547f4eabb67c29f1098588d154899c2d6830ddc857b9059e116564ab76e5",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5300,
+      "p50": 5600,
+      "p95": 12200,
+      "p99": 13200,
+      "max": 13600
+     },
+     "resim_ns": {
+      "min": 460200,
+      "p50": 467400,
+      "p95": 923900,
+      "p99": 1019300,
+      "max": 1453300
+     },
+     "digest_fast_ns": {
+      "min": 4500,
+      "p50": 4700,
+      "p95": 10400,
+      "p99": 12400,
+      "max": 14600
+     },
+     "total_ns": {
+      "min": 470200,
+      "p50": 477500,
+      "p95": 944400,
+      "p99": 1037800,
+      "max": 1478400
+     },
+     "resim_per_tick_p50_ns": 38950,
+     "total_p50_fraction_of_budget": 0.0573,
+     "total_p99_fraction_of_budget": 0.1245
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 32,
+   "rows": 96,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 31637,
+   "save_ns": {
+    "min": 2500,
+    "p50": 2600,
+    "p95": 2700,
+    "p99": 2900,
+    "max": 7700
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "1b45e1aafea764dbe15c9edb3f0b98ed17aeb1ac2a39028057586035b0b9f89d",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5300,
+      "p50": 5400,
+      "p95": 5700,
+      "p99": 6000,
+      "max": 19800
+     },
+     "resim_ns": {
+      "min": 154800,
+      "p50": 156500,
+      "p95": 158200,
+      "p99": 167200,
+      "max": 185400
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 4700,
+      "p95": 4700,
+      "p99": 5400,
+      "max": 5400
+     },
+     "total_ns": {
+      "min": 164900,
+      "p50": 166600,
+      "p95": 168400,
+      "p99": 191700,
+      "max": 196000
+     },
+     "resim_per_tick_p50_ns": 26083,
+     "total_p50_fraction_of_budget": 0.02,
+     "total_p99_fraction_of_budget": 0.023
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "47e6547f4eabb67c29f1098588d154899c2d6830ddc857b9059e116564ab76e5",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5200,
+      "p50": 5400,
+      "p95": 5600,
+      "p99": 8500,
+      "max": 23300
+     },
+     "resim_ns": {
+      "min": 310500,
+      "p50": 313400,
+      "p95": 317600,
+      "p99": 354000,
+      "max": 396700
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 4700,
+      "p95": 4700,
+      "p99": 5200,
+      "max": 16200
+     },
+     "total_ns": {
+      "min": 320500,
+      "p50": 323500,
+      "p95": 329700,
+      "p99": 364500,
+      "max": 407400
+     },
+     "resim_per_tick_p50_ns": 26116,
+     "total_p50_fraction_of_budget": 0.0388,
+     "total_p99_fraction_of_budget": 0.0437
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 256,
+   "rows": 320,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 106581,
+   "save_ns": {
+    "min": 8300,
+    "p50": 8500,
+    "p95": 8600,
+    "p99": 8700,
+    "max": 24500
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "0c8fa6f0584a0f539fa7b89511fc2035b7cc26d6b820e6a95cee91b8314b5879",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 20100,
+      "p50": 20600,
+      "p95": 26200,
+      "p99": 36200,
+      "max": 413500
+     },
+     "resim_ns": {
+      "min": 4866200,
+      "p50": 4906600,
+      "p95": 5954900,
+      "p99": 6893900,
+      "max": 8259500
+     },
+     "digest_fast_ns": {
+      "min": 36500,
+      "p50": 40100,
+      "p95": 61400,
+      "p99": 77200,
+      "max": 675800
+     },
+     "total_ns": {
+      "min": 4925300,
+      "p50": 4967300,
+      "p95": 6029900,
+      "p99": 6977300,
+      "max": 8355900
+     },
+     "resim_per_tick_p50_ns": 817766,
+     "total_p50_fraction_of_budget": 0.5961,
+     "total_p99_fraction_of_budget": 0.8373
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cfee9f7d89fb8b6adb9f8648665c95cc792ad344d28e36f661ff69a363cbec46",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 20300,
+      "p50": 21200,
+      "p95": 26000,
+      "p99": 33100,
+      "max": 34700
+     },
+     "resim_ns": {
+      "min": 9757100,
+      "p50": 9920400,
+      "p95": 11494000,
+      "p99": 13345900,
+      "max": 16528600
+     },
+     "digest_fast_ns": {
+      "min": 38300,
+      "p50": 48300,
+      "p95": 64400,
+      "p99": 69200,
+      "max": 71800
+     },
+     "total_ns": {
+      "min": 9818900,
+      "p50": 9993500,
+      "p95": 11578500,
+      "p99": 13426900,
+      "max": 16619200
+     },
+     "resim_per_tick_p50_ns": 826700,
+     "total_p50_fraction_of_budget": 1.1992,
+     "total_p99_fraction_of_budget": 1.6112
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 256,
+   "rows": 320,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 106581,
+   "save_ns": {
+    "min": 8400,
+    "p50": 8600,
+    "p95": 10900,
+    "p99": 15800,
+    "max": 35800
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "0c8fa6f0584a0f539fa7b89511fc2035b7cc26d6b820e6a95cee91b8314b5879",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 17500,
+      "p50": 18100,
+      "p95": 20400,
+      "p99": 22700,
+      "max": 29000
+     },
+     "resim_ns": {
+      "min": 1303300,
+      "p50": 1319300,
+      "p95": 1434700,
+      "p99": 1656000,
+      "max": 2167400
+     },
+     "digest_fast_ns": {
+      "min": 14500,
+      "p50": 15000,
+      "p95": 16400,
+      "p99": 19000,
+      "max": 21500
+     },
+     "total_ns": {
+      "min": 1336900,
+      "p50": 1353100,
+      "p95": 1468600,
+      "p99": 1690500,
+      "max": 2206500
+     },
+     "resim_per_tick_p50_ns": 219883,
+     "total_p50_fraction_of_budget": 0.1624,
+     "total_p99_fraction_of_budget": 0.2029
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cfee9f7d89fb8b6adb9f8648665c95cc792ad344d28e36f661ff69a363cbec46",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 17800,
+      "p50": 18600,
+      "p95": 23100,
+      "p99": 33900,
+      "max": 63000
+     },
+     "resim_ns": {
+      "min": 2609800,
+      "p50": 2649500,
+      "p95": 3239500,
+      "p99": 3974800,
+      "max": 4335500
+     },
+     "digest_fast_ns": {
+      "min": 14600,
+      "p50": 15100,
+      "p95": 18000,
+      "p99": 22300,
+      "max": 24200
+     },
+     "total_ns": {
+      "min": 2642700,
+      "p50": 2682900,
+      "p95": 3282300,
+      "p99": 4015200,
+      "max": 4387500
+     },
+     "resim_per_tick_p50_ns": 220791,
+     "total_p50_fraction_of_budget": 0.3219,
+     "total_p99_fraction_of_budget": 0.4818
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 256,
+   "rows": 320,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 106581,
+   "save_ns": {
+    "min": 8200,
+    "p50": 8300,
+    "p95": 8400,
+    "p99": 8400,
+    "max": 20800
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "0c8fa6f0584a0f539fa7b89511fc2035b7cc26d6b820e6a95cee91b8314b5879",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 17500,
+      "p50": 18300,
+      "p95": 28000,
+      "p99": 36300,
+      "max": 701400
+     },
+     "resim_ns": {
+      "min": 810900,
+      "p50": 825300,
+      "p95": 1189000,
+      "p99": 1409300,
+      "max": 1707400
+     },
+     "digest_fast_ns": {
+      "min": 39100,
+      "p50": 41000,
+      "p95": 66400,
+      "p99": 86000,
+      "max": 146000
+     },
+     "total_ns": {
+      "min": 870200,
+      "p50": 884500,
+      "p95": 1272600,
+      "p99": 1544500,
+      "max": 2180900
+     },
+     "resim_per_tick_p50_ns": 137550,
+     "total_p50_fraction_of_budget": 0.1061,
+     "total_p99_fraction_of_budget": 0.1853
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cfee9f7d89fb8b6adb9f8648665c95cc792ad344d28e36f661ff69a363cbec46",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 18100,
+      "p50": 20700,
+      "p95": 35400,
+      "p99": 38100,
+      "max": 68500
+     },
+     "resim_ns": {
+      "min": 1645800,
+      "p50": 1775700,
+      "p95": 2910200,
+      "p99": 3080100,
+      "max": 3180100
+     },
+     "digest_fast_ns": {
+      "min": 40400,
+      "p50": 48900,
+      "p95": 70900,
+      "p99": 93400,
+      "max": 196000
+     },
+     "total_ns": {
+      "min": 1711100,
+      "p50": 1841900,
+      "p95": 3006400,
+      "p99": 3182100,
+      "max": 3278200
+     },
+     "resim_per_tick_p50_ns": 147975,
+     "total_p50_fraction_of_budget": 0.221,
+     "total_p99_fraction_of_budget": 0.3819
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 0
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 8,
+   "rows": 72,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 23933,
+   "save_ns": {
+    "min": 2100,
+    "p50": 2200,
+    "p95": 2200,
+    "p99": 3100,
+    "max": 8700
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "431e000e0812b22abba609c89fb43f118f0d7bc26698948a41d986c7873ed387",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4500,
+      "p50": 5100,
+      "p95": 7000,
+      "p99": 9800,
+      "max": 16900
+     },
+     "resim_ns": {
+      "min": 952700,
+      "p50": 1014700,
+      "p95": 1229900,
+      "p99": 1887300,
+      "max": 1934600
+     },
+     "digest_fast_ns": {
+      "min": 3600,
+      "p50": 4000,
+      "p95": 5500,
+      "p99": 8200,
+      "max": 9300
+     },
+     "total_ns": {
+      "min": 961100,
+      "p50": 1023800,
+      "p95": 1241500,
+      "p99": 1904900,
+      "max": 1953700
+     },
+     "resim_per_tick_p50_ns": 169116,
+     "total_p50_fraction_of_budget": 0.1229,
+     "total_p99_fraction_of_budget": 0.2286
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "f3db85b3894840696f3aadfd2d8b666416852e27069049849d413b0bd89fe836",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4900,
+      "p50": 5700,
+      "p95": 9100,
+      "p99": 9600,
+      "max": 19900
+     },
+     "resim_ns": {
+      "min": 1926400,
+      "p50": 2058900,
+      "p95": 3783300,
+      "p99": 3897500,
+      "max": 4917200
+     },
+     "digest_fast_ns": {
+      "min": 3700,
+      "p50": 4400,
+      "p95": 7800,
+      "p99": 8400,
+      "max": 9600
+     },
+     "total_ns": {
+      "min": 1935500,
+      "p50": 2069400,
+      "p95": 3799800,
+      "p99": 3915000,
+      "max": 4929500
+     },
+     "resim_per_tick_p50_ns": 171575,
+     "total_p50_fraction_of_budget": 0.2483,
+     "total_p99_fraction_of_budget": 0.4698
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 8,
+   "rows": 72,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 23933,
+   "save_ns": {
+    "min": 2000,
+    "p50": 2100,
+    "p95": 2100,
+    "p99": 2700,
+    "max": 5600
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "431e000e0812b22abba609c89fb43f118f0d7bc26698948a41d986c7873ed387",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 3900,
+      "p50": 4200,
+      "p95": 7000,
+      "p99": 8200,
+      "max": 11200
+     },
+     "resim_ns": {
+      "min": 115000,
+      "p50": 118000,
+      "p95": 193800,
+      "p99": 270800,
+      "max": 272900
+     },
+     "digest_fast_ns": {
+      "min": 3600,
+      "p50": 3700,
+      "p95": 6200,
+      "p99": 7300,
+      "max": 7900
+     },
+     "total_ns": {
+      "min": 122600,
+      "p50": 126500,
+      "p95": 206100,
+      "p99": 281800,
+      "max": 284500
+     },
+     "resim_per_tick_p50_ns": 19666,
+     "total_p50_fraction_of_budget": 0.0152,
+     "total_p99_fraction_of_budget": 0.0338
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "f3db85b3894840696f3aadfd2d8b666416852e27069049849d413b0bd89fe836",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4000,
+      "p50": 4300,
+      "p95": 7200,
+      "p99": 8500,
+      "max": 20100
+     },
+     "resim_ns": {
+      "min": 231500,
+      "p50": 243800,
+      "p95": 383500,
+      "p99": 421700,
+      "max": 494400
+     },
+     "digest_fast_ns": {
+      "min": 3600,
+      "p50": 3800,
+      "p95": 6200,
+      "p99": 7500,
+      "max": 15300
+     },
+     "total_ns": {
+      "min": 239500,
+      "p50": 251900,
+      "p95": 396300,
+      "p99": 435600,
+      "max": 510400
+     },
+     "resim_per_tick_p50_ns": 20316,
+     "total_p50_fraction_of_budget": 0.0302,
+     "total_p99_fraction_of_budget": 0.0523
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 8,
+   "rows": 72,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 23933,
+   "save_ns": {
+    "min": 2100,
+    "p50": 2900,
+    "p95": 3600,
+    "p99": 4400,
+    "max": 7400
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "431e000e0812b22abba609c89fb43f118f0d7bc26698948a41d986c7873ed387",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4100,
+      "p50": 5300,
+      "p95": 5900,
+      "p99": 6700,
+      "max": 7900
+     },
+     "resim_ns": {
+      "min": 85100,
+      "p50": 113000,
+      "p95": 119300,
+      "p99": 137500,
+      "max": 146500
+     },
+     "digest_fast_ns": {
+      "min": 3600,
+      "p50": 5000,
+      "p95": 5300,
+      "p99": 5800,
+      "max": 6400
+     },
+     "total_ns": {
+      "min": 92900,
+      "p50": 123300,
+      "p95": 130300,
+      "p99": 150700,
+      "max": 157700
+     },
+     "resim_per_tick_p50_ns": 18833,
+     "total_p50_fraction_of_budget": 0.0148,
+     "total_p99_fraction_of_budget": 0.0181
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "f3db85b3894840696f3aadfd2d8b666416852e27069049849d413b0bd89fe836",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4100,
+      "p50": 4200,
+      "p95": 7900,
+      "p99": 8800,
+      "max": 12200
+     },
+     "resim_ns": {
+      "min": 170600,
+      "p50": 179600,
+      "p95": 294500,
+      "p99": 338800,
+      "max": 495800
+     },
+     "digest_fast_ns": {
+      "min": 3600,
+      "p50": 3800,
+      "p95": 7100,
+      "p99": 7700,
+      "max": 8700
+     },
+     "total_ns": {
+      "min": 178300,
+      "p50": 187700,
+      "p95": 309100,
+      "p99": 351600,
+      "max": 511700
+     },
+     "resim_per_tick_p50_ns": 14966,
+     "total_p50_fraction_of_budget": 0.0225,
+     "total_p99_fraction_of_budget": 0.0422
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 16,
+   "rows": 80,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 26501,
+   "save_ns": {
+    "min": 2300,
+    "p50": 2300,
+    "p95": 2400,
+    "p99": 3100,
+    "max": 6200
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "13202bb69d38fa658b15bc6c010b3c6942b7d0c26f79d42ae1bf5a4458c90465",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5500,
+      "p50": 6200,
+      "p95": 10300,
+      "p99": 10700,
+      "max": 12300
+     },
+     "resim_ns": {
+      "min": 1084600,
+      "p50": 1180700,
+      "p95": 1925000,
+      "p99": 2025900,
+      "max": 2075100
+     },
+     "digest_fast_ns": {
+      "min": 4000,
+      "p50": 4500,
+      "p95": 8200,
+      "p99": 8800,
+      "max": 11400
+     },
+     "total_ns": {
+      "min": 1094200,
+      "p50": 1191600,
+      "p95": 1941500,
+      "p99": 2046900,
+      "max": 2095100
+     },
+     "resim_per_tick_p50_ns": 196783,
+     "total_p50_fraction_of_budget": 0.143,
+     "total_p99_fraction_of_budget": 0.2456
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cf3978eaecd10bba2d6d7bc5dbbc381695ab1f79830ca9e27ecee31c813d73a1",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5600,
+      "p50": 6000,
+      "p95": 7800,
+      "p99": 10500,
+      "max": 10900
+     },
+     "resim_ns": {
+      "min": 2192500,
+      "p50": 2235300,
+      "p95": 3030100,
+      "p99": 3868100,
+      "max": 4082700
+     },
+     "digest_fast_ns": {
+      "min": 4000,
+      "p50": 4200,
+      "p95": 6900,
+      "p99": 9300,
+      "max": 10600
+     },
+     "total_ns": {
+      "min": 2202500,
+      "p50": 2245300,
+      "p95": 3042200,
+      "p99": 3887200,
+      "max": 4100700
+     },
+     "resim_per_tick_p50_ns": 186275,
+     "total_p50_fraction_of_budget": 0.2694,
+     "total_p99_fraction_of_budget": 0.4665
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 16,
+   "rows": 80,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 26501,
+   "save_ns": {
+    "min": 2200,
+    "p50": 2200,
+    "p95": 2300,
+    "p99": 2500,
+    "max": 5900
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "13202bb69d38fa658b15bc6c010b3c6942b7d0c26f79d42ae1bf5a4458c90465",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4300,
+      "p50": 4400,
+      "p95": 4800,
+      "p99": 5200,
+      "max": 7000
+     },
+     "resim_ns": {
+      "min": 152700,
+      "p50": 154100,
+      "p95": 155900,
+      "p99": 162000,
+      "max": 178200
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 4000,
+      "p95": 4000,
+      "p99": 4300,
+      "max": 5900
+     },
+     "total_ns": {
+      "min": 161100,
+      "p50": 162500,
+      "p95": 164600,
+      "p99": 171700,
+      "max": 188400
+     },
+     "resim_per_tick_p50_ns": 25683,
+     "total_p50_fraction_of_budget": 0.0195,
+     "total_p99_fraction_of_budget": 0.0206
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cf3978eaecd10bba2d6d7bc5dbbc381695ab1f79830ca9e27ecee31c813d73a1",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4300,
+      "p50": 4500,
+      "p95": 4800,
+      "p99": 5500,
+      "max": 6600
+     },
+     "resim_ns": {
+      "min": 305800,
+      "p50": 308500,
+      "p95": 317000,
+      "p99": 396600,
+      "max": 427100
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 3900,
+      "p95": 4100,
+      "p99": 4500,
+      "max": 6000
+     },
+     "total_ns": {
+      "min": 314300,
+      "p50": 317000,
+      "p95": 325600,
+      "p99": 405400,
+      "max": 437300
+     },
+     "resim_per_tick_p50_ns": 25708,
+     "total_p50_fraction_of_budget": 0.038,
+     "total_p99_fraction_of_budget": 0.0486
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 16,
+   "rows": 80,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 26501,
+   "save_ns": {
+    "min": 2200,
+    "p50": 2200,
+    "p95": 2300,
+    "p99": 2600,
+    "max": 6600
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "13202bb69d38fa658b15bc6c010b3c6942b7d0c26f79d42ae1bf5a4458c90465",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4300,
+      "p50": 4500,
+      "p95": 4800,
+      "p99": 6600,
+      "max": 8900
+     },
+     "resim_ns": {
+      "min": 107100,
+      "p50": 108700,
+      "p95": 110200,
+      "p99": 148100,
+      "max": 186500
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 4000,
+      "p95": 4100,
+      "p99": 6000,
+      "max": 10200
+     },
+     "total_ns": {
+      "min": 115600,
+      "p50": 117200,
+      "p95": 119200,
+      "p99": 160800,
+      "max": 198800
+     },
+     "resim_per_tick_p50_ns": 18116,
+     "total_p50_fraction_of_budget": 0.0141,
+     "total_p99_fraction_of_budget": 0.0193
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cf3978eaecd10bba2d6d7bc5dbbc381695ab1f79830ca9e27ecee31c813d73a1",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4300,
+      "p50": 4900,
+      "p95": 8400,
+      "p99": 9500,
+      "max": 10200
+     },
+     "resim_ns": {
+      "min": 215000,
+      "p50": 222400,
+      "p95": 376400,
+      "p99": 525900,
+      "max": 666300
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 4100,
+      "p95": 7200,
+      "p99": 8500,
+      "max": 9800
+     },
+     "total_ns": {
+      "min": 223300,
+      "p50": 231200,
+      "p95": 389400,
+      "p99": 541400,
+      "max": 680600
+     },
+     "resim_per_tick_p50_ns": 18533,
+     "total_p50_fraction_of_budget": 0.0277,
+     "total_p99_fraction_of_budget": 0.065
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 32,
+   "rows": 96,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 31637,
+   "save_ns": {
+    "min": 2600,
+    "p50": 2700,
+    "p95": 4400,
+    "p99": 4700,
+    "max": 15700
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "1b45e1aafea764dbe15c9edb3f0b98ed17aeb1ac2a39028057586035b0b9f89d",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 6500,
+      "p50": 7400,
+      "p95": 12300,
+      "p99": 13200,
+      "max": 19200
+     },
+     "resim_ns": {
+      "min": 1376000,
+      "p50": 1497400,
+      "p95": 2557200,
+      "p99": 2723200,
+      "max": 3092800
+     },
+     "digest_fast_ns": {
+      "min": 4700,
+      "p50": 5600,
+      "p95": 11000,
+      "p99": 17700,
+      "max": 19100
+     },
+     "total_ns": {
+      "min": 1387500,
+      "p50": 1510000,
+      "p95": 2580800,
+      "p99": 2742200,
+      "max": 3111000
+     },
+     "resim_per_tick_p50_ns": 249566,
+     "total_p50_fraction_of_budget": 0.1812,
+     "total_p99_fraction_of_budget": 0.3291
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "47e6547f4eabb67c29f1098588d154899c2d6830ddc857b9059e116564ab76e5",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 6600,
+      "p50": 7000,
+      "p95": 9000,
+      "p99": 12000,
+      "max": 12300
+     },
+     "resim_ns": {
+      "min": 2744700,
+      "p50": 2829000,
+      "p95": 3557800,
+      "p99": 4840400,
+      "max": 5152700
+     },
+     "digest_fast_ns": {
+      "min": 4700,
+      "p50": 5000,
+      "p95": 8400,
+      "p99": 10600,
+      "max": 12300
+     },
+     "total_ns": {
+      "min": 2756200,
+      "p50": 2840800,
+      "p95": 3576500,
+      "p99": 4862800,
+      "max": 5174900
+     },
+     "resim_per_tick_p50_ns": 235750,
+     "total_p50_fraction_of_budget": 0.3409,
+     "total_p99_fraction_of_budget": 0.5835
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 32,
+   "rows": 96,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 31637,
+   "save_ns": {
+    "min": 2600,
+    "p50": 2700,
+    "p95": 2800,
+    "p99": 2800,
+    "max": 7900
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "1b45e1aafea764dbe15c9edb3f0b98ed17aeb1ac2a39028057586035b0b9f89d",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5300,
+      "p50": 5600,
+      "p95": 9800,
+      "p99": 11700,
+      "max": 88200
+     },
+     "resim_ns": {
+      "min": 231300,
+      "p50": 237000,
+      "p95": 402400,
+      "p99": 474100,
+      "max": 582000
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 4700,
+      "p95": 8200,
+      "p99": 11300,
+      "max": 21900
+     },
+     "total_ns": {
+      "min": 241500,
+      "p50": 247200,
+      "p95": 419100,
+      "p99": 504700,
+      "max": 604700
+     },
+     "resim_per_tick_p50_ns": 39500,
+     "total_p50_fraction_of_budget": 0.0297,
+     "total_p99_fraction_of_budget": 0.0606
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "47e6547f4eabb67c29f1098588d154899c2d6830ddc857b9059e116564ab76e5",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5200,
+      "p50": 5800,
+      "p95": 10800,
+      "p99": 13000,
+      "max": 18700
+     },
+     "resim_ns": {
+      "min": 463600,
+      "p50": 489000,
+      "p95": 823300,
+      "p99": 870800,
+      "max": 1007200
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 4900,
+      "p95": 8300,
+      "p99": 12200,
+      "max": 16100
+     },
+     "total_ns": {
+      "min": 473500,
+      "p50": 499900,
+      "p95": 840000,
+      "p99": 896900,
+      "max": 1024100
+     },
+     "resim_per_tick_p50_ns": 40750,
+     "total_p50_fraction_of_budget": 0.06,
+     "total_p99_fraction_of_budget": 0.1076
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 32,
+   "rows": 96,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 31637,
+   "save_ns": {
+    "min": 2500,
+    "p50": 2600,
+    "p95": 2600,
+    "p99": 2900,
+    "max": 7600
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "1b45e1aafea764dbe15c9edb3f0b98ed17aeb1ac2a39028057586035b0b9f89d",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5200,
+      "p50": 5400,
+      "p95": 5800,
+      "p99": 6500,
+      "max": 12100
+     },
+     "resim_ns": {
+      "min": 154900,
+      "p50": 156700,
+      "p95": 161000,
+      "p99": 168500,
+      "max": 217900
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 4700,
+      "p95": 4800,
+      "p99": 5000,
+      "max": 6900
+     },
+     "total_ns": {
+      "min": 164900,
+      "p50": 166800,
+      "p95": 171100,
+      "p99": 180300,
+      "max": 230100
+     },
+     "resim_per_tick_p50_ns": 26116,
+     "total_p50_fraction_of_budget": 0.02,
+     "total_p99_fraction_of_budget": 0.0216
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "47e6547f4eabb67c29f1098588d154899c2d6830ddc857b9059e116564ab76e5",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5300,
+      "p50": 6100,
+      "p95": 10200,
+      "p99": 11100,
+      "max": 11700
+     },
+     "resim_ns": {
+      "min": 310800,
+      "p50": 331100,
+      "p95": 587500,
+      "p99": 594500,
+      "max": 598300
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 5000,
+      "p95": 8800,
+      "p99": 11600,
+      "max": 17700
+     },
+     "total_ns": {
+      "min": 320900,
+      "p50": 343300,
+      "p95": 605300,
+      "p99": 611700,
+      "max": 616100
+     },
+     "resim_per_tick_p50_ns": 27591,
+     "total_p50_fraction_of_budget": 0.0412,
+     "total_p99_fraction_of_budget": 0.0734
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 256,
+   "rows": 320,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 106581,
+   "save_ns": {
+    "min": 8200,
+    "p50": 8300,
+    "p95": 8400,
+    "p99": 8600,
+    "max": 32500
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "0c8fa6f0584a0f539fa7b89511fc2035b7cc26d6b820e6a95cee91b8314b5879",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 20000,
+      "p50": 20700,
+      "p95": 30200,
+      "p99": 36700,
+      "max": 72900
+     },
+     "resim_ns": {
+      "min": 4870100,
+      "p50": 4921100,
+      "p95": 7100200,
+      "p99": 7760600,
+      "max": 8039900
+     },
+     "digest_fast_ns": {
+      "min": 37600,
+      "p50": 45700,
+      "p95": 65100,
+      "p99": 74000,
+      "max": 287100
+     },
+     "total_ns": {
+      "min": 4930900,
+      "p50": 4988700,
+      "p95": 7171300,
+      "p99": 7862400,
+      "max": 8137300
+     },
+     "resim_per_tick_p50_ns": 820183,
+     "total_p50_fraction_of_budget": 0.5986,
+     "total_p99_fraction_of_budget": 0.9435
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cfee9f7d89fb8b6adb9f8648665c95cc792ad344d28e36f661ff69a363cbec46",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 20200,
+      "p50": 21300,
+      "p95": 25000,
+      "p99": 44300,
+      "max": 75800
+     },
+     "resim_ns": {
+      "min": 9749000,
+      "p50": 9924600,
+      "p95": 13686300,
+      "p99": 18072600,
+      "max": 24983200
+     },
+     "digest_fast_ns": {
+      "min": 38000,
+      "p50": 48600,
+      "p95": 66700,
+      "p99": 84000,
+      "max": 91500
+     },
+     "total_ns": {
+      "min": 9810100,
+      "p50": 9995600,
+      "p95": 13787600,
+      "p99": 18165800,
+      "max": 25098300
+     },
+     "resim_per_tick_p50_ns": 827050,
+     "total_p50_fraction_of_budget": 1.1995,
+     "total_p99_fraction_of_budget": 2.1799
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 256,
+   "rows": 320,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 106581,
+   "save_ns": {
+    "min": 8200,
+    "p50": 8500,
+    "p95": 8500,
+    "p99": 8600,
+    "max": 25600
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "0c8fa6f0584a0f539fa7b89511fc2035b7cc26d6b820e6a95cee91b8314b5879",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 17500,
+      "p50": 18100,
+      "p95": 21000,
+      "p99": 21800,
+      "max": 32700
+     },
+     "resim_ns": {
+      "min": 1305100,
+      "p50": 1317100,
+      "p95": 1390800,
+      "p99": 1831700,
+      "max": 1856000
+     },
+     "digest_fast_ns": {
+      "min": 14600,
+      "p50": 15000,
+      "p95": 16400,
+      "p99": 19700,
+      "max": 25700
+     },
+     "total_ns": {
+      "min": 1338200,
+      "p50": 1350400,
+      "p95": 1425000,
+      "p99": 1869300,
+      "max": 1891000
+     },
+     "resim_per_tick_p50_ns": 219516,
+     "total_p50_fraction_of_budget": 0.162,
+     "total_p99_fraction_of_budget": 0.2243
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cfee9f7d89fb8b6adb9f8648665c95cc792ad344d28e36f661ff69a363cbec46",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 17800,
+      "p50": 18800,
+      "p95": 21300,
+      "p99": 29000,
+      "max": 31900
+     },
+     "resim_ns": {
+      "min": 2613300,
+      "p50": 2647800,
+      "p95": 3127000,
+      "p99": 3926000,
+      "max": 4391500
+     },
+     "digest_fast_ns": {
+      "min": 14600,
+      "p50": 15100,
+      "p95": 17400,
+      "p99": 22600,
+      "max": 30400
+     },
+     "total_ns": {
+      "min": 2646400,
+      "p50": 2683500,
+      "p95": 3161500,
+      "p99": 3971200,
+      "max": 4427100
+     },
+     "resim_per_tick_p50_ns": 220650,
+     "total_p50_fraction_of_budget": 0.322,
+     "total_p99_fraction_of_budget": 0.4765
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 256,
+   "rows": 320,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 106581,
+   "save_ns": {
+    "min": 8500,
+    "p50": 8500,
+    "p95": 8600,
+    "p99": 8600,
+    "max": 20700
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "0c8fa6f0584a0f539fa7b89511fc2035b7cc26d6b820e6a95cee91b8314b5879",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 17400,
+      "p50": 17900,
+      "p95": 19700,
+      "p99": 21200,
+      "max": 26600
+     },
+     "resim_ns": {
+      "min": 808700,
+      "p50": 822500,
+      "p95": 914900,
+      "p99": 1042100,
+      "max": 1373600
+     },
+     "digest_fast_ns": {
+      "min": 38300,
+      "p50": 40700,
+      "p95": 55200,
+      "p99": 66600,
+      "max": 71100
+     },
+     "total_ns": {
+      "min": 865700,
+      "p50": 882700,
+      "p95": 976400,
+      "p99": 1120400,
+      "max": 1438700
+     },
+     "resim_per_tick_p50_ns": 137083,
+     "total_p50_fraction_of_budget": 0.1059,
+     "total_p99_fraction_of_budget": 0.1344
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cfee9f7d89fb8b6adb9f8648665c95cc792ad344d28e36f661ff69a363cbec46",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 17700,
+      "p50": 18600,
+      "p95": 23100,
+      "p99": 32800,
+      "max": 37700
+     },
+     "resim_ns": {
+      "min": 1627100,
+      "p50": 1650500,
+      "p95": 2027100,
+      "p99": 2569800,
+      "max": 3135300
+     },
+     "digest_fast_ns": {
+      "min": 39400,
+      "p50": 42100,
+      "p95": 61800,
+      "p99": 70200,
+      "max": 139300
+     },
+     "total_ns": {
+      "min": 1687000,
+      "p50": 1714100,
+      "p95": 2104200,
+      "p99": 2657400,
+      "max": 3240600
+     },
+     "resim_per_tick_p50_ns": 137541,
+     "total_p50_fraction_of_budget": 0.2057,
+     "total_p99_fraction_of_budget": 0.3189
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 1
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 8,
+   "rows": 72,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 23933,
+   "save_ns": {
+    "min": 2000,
+    "p50": 2100,
+    "p95": 2300,
+    "p99": 2400,
+    "max": 6000
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "431e000e0812b22abba609c89fb43f118f0d7bc26698948a41d986c7873ed387",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4400,
+      "p50": 5100,
+      "p95": 9200,
+      "p99": 26200,
+      "max": 57900
+     },
+     "resim_ns": {
+      "min": 955700,
+      "p50": 979900,
+      "p95": 2412700,
+      "p99": 3730400,
+      "max": 7391700
+     },
+     "digest_fast_ns": {
+      "min": 3600,
+      "p50": 3900,
+      "p95": 9000,
+      "p99": 16300,
+      "max": 293100
+     },
+     "total_ns": {
+      "min": 964100,
+      "p50": 989300,
+      "p95": 2428900,
+      "p99": 3746600,
+      "max": 7411400
+     },
+     "resim_per_tick_p50_ns": 163316,
+     "total_p50_fraction_of_budget": 0.1187,
+     "total_p99_fraction_of_budget": 0.4496
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "f3db85b3894840696f3aadfd2d8b666416852e27069049849d413b0bd89fe836",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4900,
+      "p50": 5200,
+      "p95": 6100,
+      "p99": 7800,
+      "max": 9600
+     },
+     "resim_ns": {
+      "min": 1919500,
+      "p50": 1948400,
+      "p95": 2188400,
+      "p99": 2805200,
+      "max": 3068100
+     },
+     "digest_fast_ns": {
+      "min": 3600,
+      "p50": 4000,
+      "p95": 5500,
+      "p99": 7700,
+      "max": 10100
+     },
+     "total_ns": {
+      "min": 1928900,
+      "p50": 1957400,
+      "p95": 2197800,
+      "p99": 2815000,
+      "max": 3079800
+     },
+     "resim_per_tick_p50_ns": 162366,
+     "total_p50_fraction_of_budget": 0.2349,
+     "total_p99_fraction_of_budget": 0.3378
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 8,
+   "rows": 72,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 23933,
+   "save_ns": {
+    "min": 2000,
+    "p50": 2100,
+    "p95": 2100,
+    "p99": 2100,
+    "max": 5500
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "431e000e0812b22abba609c89fb43f118f0d7bc26698948a41d986c7873ed387",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 3900,
+      "p50": 4100,
+      "p95": 4600,
+      "p99": 5000,
+      "max": 5300
+     },
+     "resim_ns": {
+      "min": 114000,
+      "p50": 115200,
+      "p95": 116600,
+      "p99": 122300,
+      "max": 158000
+     },
+     "digest_fast_ns": {
+      "min": 3500,
+      "p50": 3600,
+      "p95": 3700,
+      "p99": 3800,
+      "max": 4200
+     },
+     "total_ns": {
+      "min": 121800,
+      "p50": 122900,
+      "p95": 124500,
+      "p99": 130000,
+      "max": 166200
+     },
+     "resim_per_tick_p50_ns": 19200,
+     "total_p50_fraction_of_budget": 0.0147,
+     "total_p99_fraction_of_budget": 0.0156
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "f3db85b3894840696f3aadfd2d8b666416852e27069049849d413b0bd89fe836",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 3900,
+      "p50": 4200,
+      "p95": 4800,
+      "p99": 5100,
+      "max": 6400
+     },
+     "resim_ns": {
+      "min": 227600,
+      "p50": 230000,
+      "p95": 236300,
+      "p99": 267100,
+      "max": 290300
+     },
+     "digest_fast_ns": {
+      "min": 3500,
+      "p50": 3600,
+      "p95": 3700,
+      "p99": 4800,
+      "max": 5600
+     },
+     "total_ns": {
+      "min": 235200,
+      "p50": 237900,
+      "p95": 244000,
+      "p99": 275000,
+      "max": 300100
+     },
+     "resim_per_tick_p50_ns": 19166,
+     "total_p50_fraction_of_budget": 0.0285,
+     "total_p99_fraction_of_budget": 0.033
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 8,
+   "rows": 72,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 23933,
+   "save_ns": {
+    "min": 2000,
+    "p50": 2000,
+    "p95": 2100,
+    "p99": 2100,
+    "max": 6000
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "431e000e0812b22abba609c89fb43f118f0d7bc26698948a41d986c7873ed387",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 3900,
+      "p50": 4000,
+      "p95": 4500,
+      "p99": 6000,
+      "max": 6900
+     },
+     "resim_ns": {
+      "min": 83800,
+      "p50": 84700,
+      "p95": 86600,
+      "p99": 92200,
+      "max": 120500
+     },
+     "digest_fast_ns": {
+      "min": 3600,
+      "p50": 3600,
+      "p95": 3800,
+      "p99": 5400,
+      "max": 8500
+     },
+     "total_ns": {
+      "min": 91500,
+      "p50": 92400,
+      "p95": 95100,
+      "p99": 101000,
+      "max": 133000
+     },
+     "resim_per_tick_p50_ns": 14116,
+     "total_p50_fraction_of_budget": 0.0111,
+     "total_p99_fraction_of_budget": 0.0121
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "f3db85b3894840696f3aadfd2d8b666416852e27069049849d413b0bd89fe836",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 3900,
+      "p50": 4100,
+      "p95": 5600,
+      "p99": 7200,
+      "max": 7500
+     },
+     "resim_ns": {
+      "min": 167800,
+      "p50": 169400,
+      "p95": 224200,
+      "p99": 258800,
+      "max": 282400
+     },
+     "digest_fast_ns": {
+      "min": 3500,
+      "p50": 3700,
+      "p95": 5600,
+      "p99": 6600,
+      "max": 7500
+     },
+     "total_ns": {
+      "min": 175400,
+      "p50": 177100,
+      "p95": 234200,
+      "p99": 272300,
+      "max": 296500
+     },
+     "resim_per_tick_p50_ns": 14116,
+     "total_p50_fraction_of_budget": 0.0213,
+     "total_p99_fraction_of_budget": 0.0327
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 16,
+   "rows": 80,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 26501,
+   "save_ns": {
+    "min": 2100,
+    "p50": 2200,
+    "p95": 2300,
+    "p99": 2500,
+    "max": 5600
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "13202bb69d38fa658b15bc6c010b3c6942b7d0c26f79d42ae1bf5a4458c90465",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5400,
+      "p50": 5800,
+      "p95": 6900,
+      "p99": 8500,
+      "max": 19700
+     },
+     "resim_ns": {
+      "min": 1089600,
+      "p50": 1113000,
+      "p95": 1541400,
+      "p99": 2223400,
+      "max": 2540300
+     },
+     "digest_fast_ns": {
+      "min": 4000,
+      "p50": 4200,
+      "p95": 6100,
+      "p99": 7800,
+      "max": 62700
+     },
+     "total_ns": {
+      "min": 1099400,
+      "p50": 1123200,
+      "p95": 1553100,
+      "p99": 2237700,
+      "max": 2553700
+     },
+     "resim_per_tick_p50_ns": 185500,
+     "total_p50_fraction_of_budget": 0.1348,
+     "total_p99_fraction_of_budget": 0.2685
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cf3978eaecd10bba2d6d7bc5dbbc381695ab1f79830ca9e27ecee31c813d73a1",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5800,
+      "p50": 6000,
+      "p95": 6900,
+      "p99": 10100,
+      "max": 16300
+     },
+     "resim_ns": {
+      "min": 2201600,
+      "p50": 2236900,
+      "p95": 2572900,
+      "p99": 4280100,
+      "max": 5189800
+     },
+     "digest_fast_ns": {
+      "min": 4000,
+      "p50": 4300,
+      "p95": 6000,
+      "p99": 8200,
+      "max": 53800
+     },
+     "total_ns": {
+      "min": 2212200,
+      "p50": 2247100,
+      "p95": 2584700,
+      "p99": 4304600,
+      "max": 5207100
+     },
+     "resim_per_tick_p50_ns": 186408,
+     "total_p50_fraction_of_budget": 0.2697,
+     "total_p99_fraction_of_budget": 0.5166
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 16,
+   "rows": 80,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 26501,
+   "save_ns": {
+    "min": 2200,
+    "p50": 2200,
+    "p95": 2300,
+    "p99": 2500,
+    "max": 5900
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "13202bb69d38fa658b15bc6c010b3c6942b7d0c26f79d42ae1bf5a4458c90465",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4400,
+      "p50": 4600,
+      "p95": 4800,
+      "p99": 5700,
+      "max": 7600
+     },
+     "resim_ns": {
+      "min": 152500,
+      "p50": 153900,
+      "p95": 156900,
+      "p99": 192700,
+      "max": 265100
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 4000,
+      "p95": 4100,
+      "p99": 4900,
+      "max": 7300
+     },
+     "total_ns": {
+      "min": 161000,
+      "p50": 162500,
+      "p95": 165500,
+      "p99": 203400,
+      "max": 274400
+     },
+     "resim_per_tick_p50_ns": 25650,
+     "total_p50_fraction_of_budget": 0.0195,
+     "total_p99_fraction_of_budget": 0.0244
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cf3978eaecd10bba2d6d7bc5dbbc381695ab1f79830ca9e27ecee31c813d73a1",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4400,
+      "p50": 4600,
+      "p95": 5400,
+      "p99": 6500,
+      "max": 8400
+     },
+     "resim_ns": {
+      "min": 304500,
+      "p50": 307400,
+      "p95": 332700,
+      "p99": 411200,
+      "max": 526400
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 4000,
+      "p95": 4200,
+      "p99": 5500,
+      "max": 8500
+     },
+     "total_ns": {
+      "min": 312900,
+      "p50": 316100,
+      "p95": 343300,
+      "p99": 420200,
+      "max": 539900
+     },
+     "resim_per_tick_p50_ns": 25616,
+     "total_p50_fraction_of_budget": 0.0379,
+     "total_p99_fraction_of_budget": 0.0504
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 16,
+   "rows": 80,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 26501,
+   "save_ns": {
+    "min": 2200,
+    "p50": 2200,
+    "p95": 2300,
+    "p99": 2500,
+    "max": 6700
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "13202bb69d38fa658b15bc6c010b3c6942b7d0c26f79d42ae1bf5a4458c90465",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4400,
+      "p50": 4900,
+      "p95": 7500,
+      "p99": 8800,
+      "max": 11600
+     },
+     "resim_ns": {
+      "min": 107800,
+      "p50": 108900,
+      "p95": 168400,
+      "p99": 215400,
+      "max": 231700
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 4000,
+      "p95": 6600,
+      "p99": 7900,
+      "max": 9200
+     },
+     "total_ns": {
+      "min": 116800,
+      "p50": 117900,
+      "p95": 182100,
+      "p99": 230800,
+      "max": 252500
+     },
+     "resim_per_tick_p50_ns": 18150,
+     "total_p50_fraction_of_budget": 0.0141,
+     "total_p99_fraction_of_budget": 0.0277
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cf3978eaecd10bba2d6d7bc5dbbc381695ab1f79830ca9e27ecee31c813d73a1",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 4300,
+      "p50": 4600,
+      "p95": 5000,
+      "p99": 7000,
+      "max": 8300
+     },
+     "resim_ns": {
+      "min": 216200,
+      "p50": 218100,
+      "p95": 230000,
+      "p99": 310200,
+      "max": 336600
+     },
+     "digest_fast_ns": {
+      "min": 3900,
+      "p50": 4000,
+      "p95": 4200,
+      "p99": 5600,
+      "max": 6400
+     },
+     "total_ns": {
+      "min": 224700,
+      "p50": 226700,
+      "p95": 240000,
+      "p99": 320200,
+      "max": 346500
+     },
+     "resim_per_tick_p50_ns": 18175,
+     "total_p50_fraction_of_budget": 0.0272,
+     "total_p99_fraction_of_budget": 0.0384
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 32,
+   "rows": 96,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 31637,
+   "save_ns": {
+    "min": 2500,
+    "p50": 2600,
+    "p95": 2700,
+    "p99": 2900,
+    "max": 7800
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "1b45e1aafea764dbe15c9edb3f0b98ed17aeb1ac2a39028057586035b0b9f89d",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 6500,
+      "p50": 6900,
+      "p95": 11500,
+      "p99": 12000,
+      "max": 13200
+     },
+     "resim_ns": {
+      "min": 1354000,
+      "p50": 1400800,
+      "p95": 2459700,
+      "p99": 2862800,
+      "max": 3245400
+     },
+     "digest_fast_ns": {
+      "min": 4700,
+      "p50": 5000,
+      "p95": 9200,
+      "p99": 9700,
+      "max": 9900
+     },
+     "total_ns": {
+      "min": 1366000,
+      "p50": 1412800,
+      "p95": 2480300,
+      "p99": 2883700,
+      "max": 3266700
+     },
+     "resim_per_tick_p50_ns": 233466,
+     "total_p50_fraction_of_budget": 0.1695,
+     "total_p99_fraction_of_budget": 0.346
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "47e6547f4eabb67c29f1098588d154899c2d6830ddc857b9059e116564ab76e5",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 6600,
+      "p50": 7100,
+      "p95": 11400,
+      "p99": 11800,
+      "max": 12500
+     },
+     "resim_ns": {
+      "min": 2751300,
+      "p50": 2846300,
+      "p95": 4874800,
+      "p99": 5149300,
+      "max": 6199000
+     },
+     "digest_fast_ns": {
+      "min": 4700,
+      "p50": 5300,
+      "p95": 9000,
+      "p99": 9800,
+      "max": 10100
+     },
+     "total_ns": {
+      "min": 2763200,
+      "p50": 2859300,
+      "p95": 4895100,
+      "p99": 5168700,
+      "max": 6217800
+     },
+     "resim_per_tick_p50_ns": 237191,
+     "total_p50_fraction_of_budget": 0.3431,
+     "total_p99_fraction_of_budget": 0.6202
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 32,
+   "rows": 96,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 31637,
+   "save_ns": {
+    "min": 2500,
+    "p50": 2600,
+    "p95": 2600,
+    "p99": 2700,
+    "max": 7800
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "1b45e1aafea764dbe15c9edb3f0b98ed17aeb1ac2a39028057586035b0b9f89d",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5300,
+      "p50": 5600,
+      "p95": 7500,
+      "p99": 8900,
+      "max": 9700
+     },
+     "resim_ns": {
+      "min": 230200,
+      "p50": 233400,
+      "p95": 285300,
+      "p99": 374200,
+      "max": 382700
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 4700,
+      "p95": 5900,
+      "p99": 8100,
+      "max": 8200
+     },
+     "total_ns": {
+      "min": 240200,
+      "p50": 243600,
+      "p95": 299700,
+      "p99": 389700,
+      "max": 397900
+     },
+     "resim_per_tick_p50_ns": 38900,
+     "total_p50_fraction_of_budget": 0.0292,
+     "total_p99_fraction_of_budget": 0.0468
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "47e6547f4eabb67c29f1098588d154899c2d6830ddc857b9059e116564ab76e5",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5300,
+      "p50": 5700,
+      "p95": 8300,
+      "p99": 10400,
+      "max": 11300
+     },
+     "resim_ns": {
+      "min": 461700,
+      "p50": 468200,
+      "p95": 642900,
+      "p99": 789800,
+      "max": 816000
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 4700,
+      "p95": 7000,
+      "p99": 8600,
+      "max": 9000
+     },
+     "total_ns": {
+      "min": 471800,
+      "p50": 478900,
+      "p95": 657100,
+      "p99": 808000,
+      "max": 835900
+     },
+     "resim_per_tick_p50_ns": 39016,
+     "total_p50_fraction_of_budget": 0.0575,
+     "total_p99_fraction_of_budget": 0.097
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 32,
+   "rows": 96,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 31637,
+   "save_ns": {
+    "min": 2500,
+    "p50": 2600,
+    "p95": 3700,
+    "p99": 4200,
+    "max": 7900
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "1b45e1aafea764dbe15c9edb3f0b98ed17aeb1ac2a39028057586035b0b9f89d",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5200,
+      "p50": 5700,
+      "p95": 10200,
+      "p99": 11900,
+      "max": 17700
+     },
+     "resim_ns": {
+      "min": 154900,
+      "p50": 160200,
+      "p95": 272300,
+      "p99": 343500,
+      "max": 586100
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 4800,
+      "p95": 8200,
+      "p99": 8800,
+      "max": 9400
+     },
+     "total_ns": {
+      "min": 164800,
+      "p50": 170900,
+      "p95": 290300,
+      "p99": 361500,
+      "max": 604700
+     },
+     "resim_per_tick_p50_ns": 26700,
+     "total_p50_fraction_of_budget": 0.0205,
+     "total_p99_fraction_of_budget": 0.0434
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "47e6547f4eabb67c29f1098588d154899c2d6830ddc857b9059e116564ab76e5",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 5200,
+      "p50": 5700,
+      "p95": 10000,
+      "p99": 11000,
+      "max": 19200
+     },
+     "resim_ns": {
+      "min": 311200,
+      "p50": 319000,
+      "p95": 528500,
+      "p99": 597400,
+      "max": 634300
+     },
+     "digest_fast_ns": {
+      "min": 4600,
+      "p50": 4800,
+      "p95": 8300,
+      "p99": 9000,
+      "max": 17000
+     },
+     "total_ns": {
+      "min": 321600,
+      "p50": 329400,
+      "p95": 545200,
+      "p99": 611800,
+      "max": 650200
+     },
+     "resim_per_tick_p50_ns": 26583,
+     "total_p50_fraction_of_budget": 0.0395,
+     "total_p99_fraction_of_budget": 0.0734
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 256,
+   "rows": 320,
+   "tier": "reference",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 106581,
+   "save_ns": {
+    "min": 8500,
+    "p50": 8900,
+    "p95": 13500,
+    "p99": 17700,
+    "max": 34800
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "0c8fa6f0584a0f539fa7b89511fc2035b7cc26d6b820e6a95cee91b8314b5879",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 20200,
+      "p50": 21400,
+      "p95": 33700,
+      "p99": 36800,
+      "max": 39900
+     },
+     "resim_ns": {
+      "min": 4893400,
+      "p50": 5059700,
+      "p95": 6642700,
+      "p99": 7445300,
+      "max": 7821500
+     },
+     "digest_fast_ns": {
+      "min": 39600,
+      "p50": 47900,
+      "p95": 66800,
+      "p99": 77900,
+      "max": 90800
+     },
+     "total_ns": {
+      "min": 4955100,
+      "p50": 5128200,
+      "p95": 6725000,
+      "p99": 7533400,
+      "max": 7910400
+     },
+     "resim_per_tick_p50_ns": 843283,
+     "total_p50_fraction_of_budget": 0.6154,
+     "total_p99_fraction_of_budget": 0.904
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cfee9f7d89fb8b6adb9f8648665c95cc792ad344d28e36f661ff69a363cbec46",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 20500,
+      "p50": 21900,
+      "p95": 32400,
+      "p99": 42000,
+      "max": 70000
+     },
+     "resim_ns": {
+      "min": 9791600,
+      "p50": 10315200,
+      "p95": 12940800,
+      "p99": 14851000,
+      "max": 16296000
+     },
+     "digest_fast_ns": {
+      "min": 39300,
+      "p50": 50200,
+      "p95": 71600,
+      "p99": 91600,
+      "max": 117700
+     },
+     "total_ns": {
+      "min": 9853600,
+      "p50": 10386100,
+      "p95": 13028300,
+      "p99": 14940900,
+      "max": 16417600
+     },
+     "resim_per_tick_p50_ns": 859600,
+     "total_p50_fraction_of_budget": 1.2463,
+     "total_p99_fraction_of_budget": 1.7929
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 256,
+   "rows": 320,
+   "tier": "planned",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 106581,
+   "save_ns": {
+    "min": 8300,
+    "p50": 8600,
+    "p95": 11500,
+    "p99": 13800,
+    "max": 25900
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "0c8fa6f0584a0f539fa7b89511fc2035b7cc26d6b820e6a95cee91b8314b5879",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 17400,
+      "p50": 18300,
+      "p95": 28000,
+      "p99": 36000,
+      "max": 40900
+     },
+     "resim_ns": {
+      "min": 1316000,
+      "p50": 1372700,
+      "p95": 2090700,
+      "p99": 2520900,
+      "max": 2717600
+     },
+     "digest_fast_ns": {
+      "min": 14800,
+      "p50": 15700,
+      "p95": 22200,
+      "p99": 26700,
+      "max": 36700
+     },
+     "total_ns": {
+      "min": 1349000,
+      "p50": 1406900,
+      "p95": 2136400,
+      "p99": 2583600,
+      "max": 2779200
+     },
+     "resim_per_tick_p50_ns": 228783,
+     "total_p50_fraction_of_budget": 0.1688,
+     "total_p99_fraction_of_budget": 0.31
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cfee9f7d89fb8b6adb9f8648665c95cc792ad344d28e36f661ff69a363cbec46",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 18200,
+      "p50": 19800,
+      "p95": 31100,
+      "p99": 36800,
+      "max": 55700
+     },
+     "resim_ns": {
+      "min": 2636000,
+      "p50": 2780700,
+      "p95": 3758400,
+      "p99": 4867200,
+      "max": 6881600
+     },
+     "digest_fast_ns": {
+      "min": 14800,
+      "p50": 16100,
+      "p95": 23400,
+      "p99": 26600,
+      "max": 54200
+     },
+     "total_ns": {
+      "min": 2670800,
+      "p50": 2817800,
+      "p95": 3804700,
+      "p99": 4924600,
+      "max": 6942900
+     },
+     "resim_per_tick_p50_ns": 231725,
+     "total_p50_fraction_of_budget": 0.3381,
+     "total_p99_fraction_of_budget": 0.591
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  },
+  {
+   "workload": "6dof_racer_rollback_host_api",
+   "n": 256,
+   "rows": 320,
+   "tier": "native",
+   "warmup_ticks": 120,
+   "anchor_tick": 120,
+   "iterations": 200,
+   "snapshot_bytes": 106581,
+   "save_ns": {
+    "min": 8700,
+    "p50": 9000,
+    "p95": 9800,
+    "p99": 11900,
+    "max": 21800
+   },
+   "k": [
+    {
+     "k": 6,
+     "snapshot_sha256": "0c8fa6f0584a0f539fa7b89511fc2035b7cc26d6b820e6a95cee91b8314b5879",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 17600,
+      "p50": 18900,
+      "p95": 31100,
+      "p99": 34600,
+      "max": 35200
+     },
+     "resim_ns": {
+      "min": 816300,
+      "p50": 862100,
+      "p95": 1399800,
+      "p99": 1474200,
+      "max": 1664000
+     },
+     "digest_fast_ns": {
+      "min": 40000,
+      "p50": 44900,
+      "p95": 70400,
+      "p99": 100600,
+      "max": 143800
+     },
+     "total_ns": {
+      "min": 877600,
+      "p50": 925800,
+      "p95": 1491500,
+      "p99": 1577200,
+      "max": 1767400
+     },
+     "resim_per_tick_p50_ns": 143683,
+     "total_p50_fraction_of_budget": 0.1111,
+     "total_p99_fraction_of_budget": 0.1893
+    },
+    {
+     "k": 12,
+     "snapshot_sha256": "cfee9f7d89fb8b6adb9f8648665c95cc792ad344d28e36f661ff69a363cbec46",
+     "mismatches": 0,
+     "restore_ns": {
+      "min": 17800,
+      "p50": 18800,
+      "p95": 30500,
+      "p99": 33700,
+      "max": 37000
+     },
+     "resim_ns": {
+      "min": 1631600,
+      "p50": 1667900,
+      "p95": 2450900,
+      "p99": 2730800,
+      "max": 2824300
+     },
+     "digest_fast_ns": {
+      "min": 40900,
+      "p50": 44400,
+      "p95": 68700,
+      "p99": 81400,
+      "max": 100700
+     },
+     "total_ns": {
+      "min": 1693800,
+      "p50": 1733300,
+      "p95": 2536800,
+      "p99": 2816700,
+      "max": 2918800
+     },
+     "resim_per_tick_p50_ns": 138991,
+     "total_p50_fraction_of_budget": 0.208,
+     "total_p99_fraction_of_budget": 0.338
+    }
+   ],
+   "budget_ns_120hz": 8333333,
+   "digests_identical": true,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "repeat": 2
+  }
+ ],
+ "table": [
+  "| N | rows | tier | K | restore p50 us | resim p50 us (min..max of 3 runs) | per tick p50 us | digest_fast p50 us | total p50 / 8.33 ms | total p99 / 8.33 ms |",
+  "|---|---|---|---|---|---|---|---|---|---|",
+  "| 8 | 72 | reference | 6 | 5.1 | 964.2..1014.7 | 169.1 | 4.0 | 12.29% | 44.96% |",
+  "| 8 | 72 | reference | 12 | 5.7 | 1948.4..2058.9 | 171.6 | 4.4 | 24.83% | 46.98% |",
+  "| 8 | 72 | planned | 6 | 4.2 | 115.2..118.0 | 19.7 | 3.7 | 1.52% | 3.79% |",
+  "| 8 | 72 | planned | 12 | 4.3 | 230.0..243.8 | 20.3 | 3.8 | 3.02% | 5.23% |",
+  "| 8 | 72 | native | 6 | 5.3 | 84.7..113.0 | 18.8 | 5.0 | 1.48% | 1.81% |",
+  "| 8 | 72 | native | 12 | 4.2 | 169.4..179.6 | 15.0 | 3.8 | 2.25% | 4.22% |",
+  "| 16 | 80 | reference | 6 | 6.2 | 1110.5..1180.7 | 196.8 | 4.5 | 14.30% | 26.85% |",
+  "| 16 | 80 | reference | 12 | 6.0 | 2235.3..2236.9 | 186.4 | 4.3 | 26.97% | 51.66% |",
+  "| 16 | 80 | planned | 6 | 8.1 | 153.9..268.0 | 44.7 | 6.7 | 3.41% | 5.97% |",
+  "| 16 | 80 | planned | 12 | 5.1 | 307.4..320.0 | 26.7 | 4.3 | 3.95% | 15.42% |",
+  "| 16 | 80 | native | 6 | 6.2 | 108.7..136.4 | 22.7 | 4.9 | 1.78% | 8.80% |",
+  "| 16 | 80 | native | 12 | 5.2 | 218.1..233.1 | 19.4 | 4.5 | 2.92% | 6.50% |",
+  "| 32 | 96 | reference | 6 | 7.4 | 1400.8..1497.4 | 249.6 | 5.6 | 18.12% | 34.60% |",
+  "| 32 | 96 | reference | 12 | 7.2 | 2822.9..2846.3 | 237.2 | 5.3 | 34.31% | 62.02% |",
+  "| 32 | 96 | planned | 6 | 5.9 | 233.4..247.4 | 41.2 | 5.0 | 3.10% | 6.62% |",
+  "| 32 | 96 | planned | 12 | 5.8 | 467.4..489.0 | 40.8 | 4.9 | 6.00% | 12.45% |",
+  "| 32 | 96 | native | 6 | 5.7 | 156.5..160.2 | 26.7 | 4.8 | 2.05% | 4.34% |",
+  "| 32 | 96 | native | 12 | 6.1 | 313.4..331.1 | 27.6 | 5.0 | 4.12% | 7.34% |",
+  "| 256 | 320 | reference | 6 | 21.4 | 4906.6..5059.7 | 843.3 | 47.9 | 61.54% | 94.35% |",
+  "| 256 | 320 | reference | 12 | 21.9 | 9920.4..10315.2 | 859.6 | 50.2 | 124.63% | 217.99% |",
+  "| 256 | 320 | planned | 6 | 18.3 | 1317.1..1372.7 | 228.8 | 15.7 | 16.88% | 31.00% |",
+  "| 256 | 320 | planned | 12 | 19.8 | 2647.8..2780.7 | 231.7 | 16.1 | 33.81% | 59.10% |",
+  "| 256 | 320 | native | 6 | 18.9 | 822.5..862.1 | 143.7 | 44.9 | 11.11% | 18.93% |",
+  "| 256 | 320 | native | 12 | 20.7 | 1650.5..1775.7 | 148.0 | 48.9 | 22.10% | 38.19% |"
+ ],
+ "failures": []
+}
