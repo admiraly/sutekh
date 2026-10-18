@@ -88,6 +88,7 @@ the DLL in another process). Cross-compiler and cross-platform bit identity is n
 | `python -I tests/harness/run_m0.py --binary build-platform/win64-native/sutekh.exe --report-dir planning/evidence/windows-host/m0-harness-release` (Release, defaults) | 21 passed, 0 failed, 3 not_run, 3 unavailable |
 | same, Debug binary, `--no-build --reload-iterations 60 --latency-samples 5` | 21 passed, 0 failed, 3 not_run (T00 skipped by flag, T12, TX6), 3 unavailable; T10 passed (17 checks) |
 | Linux CI, PR #29, commit `768a7ba` (GCC 13.3.0, Debug) | 60 of 60 passed |
+| Linux CI, PR #29, commit `9ec0653` merged onto `01aaf27` (GCC 13.3.0, Debug; host API, clock, replay and the shared library included) | 63 of 63 passed; `validate` jobs (ubuntu, windows) passed |
 | `test_host` / `test_host_dll` | 139 checks, 0 failures each |
 | `test_clock` | 42,036 checks, 0 failures |
 | `test_replay`; `host_replay_record` then `host_replay_verify_dll` | 1,292 checks, 0 failures; cross-process verify passed |
@@ -111,8 +112,7 @@ The digest is the reference SHA-256 over the snapshot bytes and dominates; resto
 
 ## Unrun, failing or open
 
-- POSIX was not built on this machine; it is covered by the Linux CI job of PR #29 only (60/60 at `768a7ba`;
-  later commits need that job to pass again before integration).
+- POSIX was not built on this machine; it is covered by the Linux CI job of PR #29 only (63/63 at `9ec0653`).
 - The native AsmJit tier (`SUTEKH_NATIVE=ON`) is not built or tested on Windows; the native ABI probe is
   unavailable there. Sanitizer lanes were not run on Windows.
 - `tests/broker` stays Linux-only (fcntl, resource, process groups), as the CI workflow already notes.
