@@ -7,9 +7,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/prctl.h>
-#include <sys/syscall.h>
-#include <unistd.h>
+#if defined(_WIN32)
+#  include <windows.h>
+#else
+#  include <sys/prctl.h>
+#  include <sys/syscall.h>
+#  include <unistd.h>
+#endif
 
 #if defined(__linux__) && defined(__x86_64__)
 #  include <linux/audit.h>
@@ -110,6 +114,35 @@ void su_sandbox_worker_install(SuSandboxState *st) {
     memset(st, 0, sizeof *st);
     st->state = SU_SANDBOX_UNAVAILABLE;
     snprintf(st->reason, sizeof st->reason, "not installed: x86-64 Linux only");
+#if defined(_WIN32)
+    /* Windows has no exec and no self-installed syscall filter. The equivalent denial of process creation
+     * is the supervisor's job object with an active-process limit of 1 (su_proc_spawn): CreateProcess in
+     * the worker then fails. The worker verifies that it runs inside such a job; it cannot install it. */
+    {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION li;
+        BOOL in_job = FALSE;
+        memset(&li, 0, sizeof li);
+        if (!IsProcessInJob(GetCurrentProcess(), NULL, &in_job) || !in_job) {
+            snprintf(st->reason, sizeof st->reason, "not installed: worker is not in a job object (Windows)");
+            return;
+        }
+        if (!QueryInformationJobObject(NULL, JobObjectExtendedLimitInformation, &li, sizeof li, NULL)) {
+            st->errno_value = (int32_t)GetLastError();
+            snprintf(st->reason, sizeof st->reason, "not verified: job limits cannot be read (Windows error %lu)",
+                     (unsigned long)GetLastError());
+            return;
+        }
+        if ((li.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS) == 0u ||
+            li.BasicLimitInformation.ActiveProcessLimit != 1u) {
+            snprintf(st->reason, sizeof st->reason, "not installed: the job has no active-process limit of 1");
+            return;
+        }
+        st->state = SU_SANDBOX_ON;
+        st->filters = 1u;
+        snprintf(st->reason, sizeof st->reason,
+                 "job object active-process limit 1; CreateProcess fails (Windows; no syscall filter)");
+    }
+#endif
 #ifdef SU_SANDBOX_X64
     {
         const char *env = getenv("SUTEKH_WORKER_SANDBOX");

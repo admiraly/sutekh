@@ -24,7 +24,7 @@ def main():
             for f in selected:
                 test=json.loads((hidden/f['test']).read_text());test['capsule']=cap
                 shutil.copyfile(hidden/f['world'],scratch/f['world'])
-                name=label+'_'+f['test'];(scratch/name).write_text(json.dumps(test))
+                name=label+'_'+f['test'];(scratch/name).write_text(json.dumps(test), newline="\n")
                 answer=s.call('candidate.evaluate',{'candidate_id':submitted['candidate_id'],'test_path':name})
                 outcomes.append({'fixture_id':f['id'],'result':answer})
                 expected='passed' if label=='candidate' or (label=='predecessor' and f['id'].startswith('b3_')) else 'failed'
@@ -35,6 +35,6 @@ def main():
                 'manifest_sha256':hashlib.sha256((hidden/'manifest.json').read_bytes()).hexdigest(),
                 'binary_sha256':hashlib.sha256(Path(a.binary).read_bytes()).hexdigest(),'results':results,
                 'limitations':['phase fixtures only; full schedule/install and independent source review are separate gates']}
-        Path(a.out).write_text(json.dumps(record,indent=2)+'\n');print(record['status'])
+        Path(a.out).write_text(json.dumps(record,indent=2)+'\n', newline="\n");print(record['status'])
     finally:s.close()
 if __name__=='__main__':main()

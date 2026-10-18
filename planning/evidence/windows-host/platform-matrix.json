@@ -1,0 +1,107 @@
+{
+  "checks": [
+    {
+      "id": "linux.configure",
+      "lane": "linux-native",
+      "reason": "host is Windows, not Linux",
+      "status": "unavailable"
+    },
+    {
+      "id": "linux.unit_tests",
+      "lane": "linux-native",
+      "reason": "host is Windows, not Linux",
+      "status": "unavailable"
+    },
+    {
+      "id": "linux.native_abi_probe",
+      "lane": "linux-native",
+      "reason": "host is Windows, not Linux",
+      "status": "unavailable"
+    },
+    {
+      "id": "win64native.build",
+      "lane": "win64-native",
+      "reason": "configured and built the default graph (Release)",
+      "status": "passed"
+    },
+    {
+      "id": "win64native.unit.test_ir",
+      "lane": "win64-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64native.unit.test_world",
+      "lane": "win64-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64native.unit.test_vm",
+      "lane": "win64-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64native.unit.test_snapshot",
+      "lane": "win64-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64native.sutekh_version",
+      "lane": "win64-native",
+      "reason": "sutekh 0.1.0",
+      "status": "passed"
+    },
+    {
+      "id": "win64native.ctest",
+      "lane": "win64-native",
+      "reason": "62 passed, 0 failed, 2 skipped (path_fifo, containment) of 64",
+      "status": "passed"
+    },
+    {
+      "id": "win64native.native_abi_probe",
+      "lane": "win64-native",
+      "reason": "AsmJit checkout missing; the probe needs su_native (SUTEKH_NATIVE=ON is not built on Windows yet)",
+      "status": "unavailable"
+    },
+    {
+      "id": "macos.build",
+      "lane": "macos",
+      "reason": "macOS is not a supported platform: no Mach-O code-publication path, not built or tested",
+      "status": "unavailable"
+    },
+    {
+      "id": "arm64.native_backend",
+      "lane": "arm64",
+      "reason": "no ARM64 native backend; AsmJit ARM support is compiled out (ASMJIT_NO_AARCH64); this host is AMD64",
+      "status": "unavailable"
+    }
+  ],
+  "counts": {
+    "failed": 0,
+    "not_run": 0,
+    "passed": 7,
+    "unavailable": 6
+  },
+  "generated_utc": "2026-10-18T09:51:18Z",
+  "host": {
+    "generated_utc": "2026-10-18T09:51:04Z",
+    "machine": "AMD64",
+    "python": "3.13.15",
+    "release": "11",
+    "system": "Windows"
+  },
+  "lanes": [
+    "win64-native",
+    "linux-native",
+    "macos",
+    "arm64"
+  ],
+  "schema": "sutekh.platform_run.v1"
+}

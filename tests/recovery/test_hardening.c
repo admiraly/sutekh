@@ -11,9 +11,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
+
+#include "platform/su_posix.h"
 
 #include "agent/su_agent.h"
 #include "agent/su_spool.h"
@@ -49,7 +48,24 @@ static void digest_cases(void) {
     CHECK(su_agent_digest_fields_match("r8", "r7", 42u, 42u, g_sha_a, NULL) == 0);
 }
 
-/* A directory the spool must refuse: mode 0755 (world-readable). Mode 0700 must be accepted. */
+/* A directory the spool must refuse: mode 0755 (world-readable). Mode 0700 must be accepted. Windows has no
+ * mode bits (access is the directory ACL), so there only the acceptance of a private directory is checked
+ * and the refusal cases are reported as not run. */
+#if defined(_WIN32)
+static void spool_cases(const char *scratch) {
+    char dir[512];
+    SuSpool *sp = NULL;
+    snprintf(dir, sizeof dir, "%s/spool-loose", scratch);
+    (void)rmdir(dir);
+    CHECK(mkdir(dir, 0700) == 0);
+    CHECK(su_spool_open(dir, 1u << 20, &sp) == SU_OK);
+    if (sp != NULL) {
+        su_spool_close(sp);
+    }
+    (void)rmdir(dir);
+    fprintf(stderr, "test_hardening: spool mode refusal (M-SPOOL-MODE) NOT RUN: no POSIX mode bits on Windows\n");
+}
+#else
 static void spool_cases(const char *scratch) {
     char dir[512];
     SuSpool *sp = NULL;
@@ -75,6 +91,7 @@ static void spool_cases(const char *scratch) {
     }
     (void)rmdir(dir);
 }
+#endif
 
 int main(int argc, char **argv) {
     if (argc != 2) {

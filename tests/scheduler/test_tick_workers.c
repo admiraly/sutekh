@@ -26,6 +26,7 @@
 #include <time.h>
 
 #include "ir/su_json.h"
+#include "platform/su_platform.h"
 #include "ir/su_lir.h"
 #include "runtime/jobs/su_jobs.h"
 #include "runtime/schedule.h"
@@ -578,9 +579,9 @@ static void test_threshold(void) {
 /* Observation, not a gate: ticks per second of movement on 1,000,000 rows for workers 1, 2 and 4.
  * Run with --bench. Shared hosts make these numbers indicative only. */
 static double now_s(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+    uint64_t ns = 0;
+    (void)su_platform_monotonic_ns(&ns);
+    return (double)ns * 1e-9;
 }
 
 static void run_bench(void) {

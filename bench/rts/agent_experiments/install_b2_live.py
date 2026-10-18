@@ -24,7 +24,7 @@ def main():
             if not fixture['id'].startswith(('b3_','b2_')):continue
             for name,sha in fixture['files'].items():assert hashlib.sha256((hidden/name).read_bytes()).hexdigest()==sha
             test=json.loads((hidden/fixture['test']).read_text());test['capsule']='move_b2.capsule.json'
-            (scratch/fixture['test']).write_text(json.dumps(test));shutil.copyfile(hidden/fixture['world'],scratch/fixture['world'])
+            (scratch/fixture['test']).write_text(json.dumps(test), newline="\n");shutil.copyfile(hidden/fixture['world'],scratch/fixture['world'])
             ev=s.call('candidate.evaluate',{'candidate_id':sub['candidate_id'],'test_path':fixture['test']});assert ev['status']=='passed';evaluations.append(ev)
         install=s.call('candidate.install',{'world_id':wid,'candidate_id':sub['candidate_id'],'expected_world_revision':rev,'allowed_effective_tick':0})
         step=s.call('world.step',{'world_id':wid,'expected_world_revision':install['world_revision'],'ticks':1})
@@ -38,6 +38,6 @@ def main():
                 'fixture_author':manifest['author_agent'],'implementation_author':'/root',
                 'model':'gpt-6.1-sol','token_usage':None,'token_usage_reason':'not available per experiment',
                 'limitations':['No performance qualification; wider earlier-suite checks are recorded separately.']}
-        Path(a.out).write_text(json.dumps(record,indent=2)+'\n');print(record['status'])
+        Path(a.out).write_text(json.dumps(record,indent=2)+'\n', newline="\n");print(record['status'])
     finally:s.close()
 if __name__=='__main__':main()

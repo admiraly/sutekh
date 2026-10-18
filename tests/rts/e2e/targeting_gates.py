@@ -69,7 +69,7 @@ def main():
         environment=dict(os=platform.platform(), machine=platform.machine(), python=platform.python_version(),
                          cpu=os.cpu_count(), toolchain=subprocess.check_output(["cc", "--version"],text=True).splitlines()[0]),
         elapsed_seconds=time.monotonic()-start, performance_qualification=False, records=records)
-    Path(args.out).write_text(json.dumps(result, indent=2, allow_nan=False)+"\n")
+    Path(args.out).write_text(json.dumps(result, indent=2, allow_nan=False)+"\n", newline="\n")
     print(json.dumps(result, allow_nan=False))
     return 0 if all(m["gates"]["pass"] and m["sample_count_met"] for m in records) else 1
 

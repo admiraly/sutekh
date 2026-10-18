@@ -5,7 +5,7 @@
  * Run from any directory (no fixtures are read). Exit status 0 when every check passes. */
 #define _POSIX_C_SOURCE 200809L
 
-#include <pthread.h>
+#include "platform/su_thread.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -319,8 +319,8 @@ typedef struct Run {
     uint32_t ntasks;
     const uint32_t *perm;
     int gated;
-    pthread_mutex_t mu;
-    pthread_cond_t cv;
+    SuMutex mu;
+    SuCond cv;
     uint32_t next_claim;
     uint32_t fill_turn;
     uint32_t done_turn;
@@ -337,13 +337,13 @@ static void *writer_main(void *arg) {
         uint64_t end;
         uint64_t s;
 
-        pthread_mutex_lock(&r->mu);
+        su_mutex_lock(&r->mu);
         if (r->next_claim >= r->ntasks) {
-            pthread_mutex_unlock(&r->mu);
+            su_mutex_unlock(&r->mu);
             break;
         }
         pos = r->next_claim++;
-        pthread_mutex_unlock(&r->mu);
+        su_mutex_unlock(&r->mu);
         t = r->perm[pos];
         sys = t / r->nchunks;
         chunk = t % r->nchunks;
@@ -351,30 +351,30 @@ static void *writer_main(void *arg) {
         end = begin + r->cs < NROWS ? begin + r->cs : NROWS;
 
         if (r->gated) {
-            pthread_mutex_lock(&r->mu);
+            su_mutex_lock(&r->mu);
             while (r->fill_turn != pos) {
-                pthread_cond_wait(&r->cv, &r->mu);
+                su_cond_wait(&r->cv, &r->mu);
             }
-            pthread_mutex_unlock(&r->mu);
+            su_mutex_unlock(&r->mu);
         }
         emit_row(r->q, r->cs, sys, (uint32_t)begin);
         if (r->gated) {
-            pthread_mutex_lock(&r->mu);
+            su_mutex_lock(&r->mu);
             r->fill_turn++;
-            pthread_cond_broadcast(&r->cv);
-            pthread_mutex_unlock(&r->mu);
+            su_cond_broadcast(&r->cv);
+            su_mutex_unlock(&r->mu);
         }
         for (s = begin + 1u; s < end; s++) {
             emit_row(r->q, r->cs, sys, (uint32_t)s);
         }
         if (r->gated) {
-            pthread_mutex_lock(&r->mu);
+            su_mutex_lock(&r->mu);
             while (r->done_turn != pos) {
-                pthread_cond_wait(&r->cv, &r->mu);
+                su_cond_wait(&r->cv, &r->mu);
             }
             r->done_turn++;
-            pthread_cond_broadcast(&r->cv);
-            pthread_mutex_unlock(&r->mu);
+            su_cond_broadcast(&r->cv);
+            su_mutex_unlock(&r->mu);
         }
     }
     return NULL;
@@ -398,7 +398,7 @@ static uint64_t run_tick(uint32_t T, uint64_t seed, uint64_t cs, int gated) {
     uint32_t nchunks = (uint32_t)((NROWS + cs - 1u) / cs);
     uint32_t ntasks = NSYS * nchunks;
     uint32_t *perm = calloc(ntasks, sizeof *perm);
-    pthread_t *th = calloc(T, sizeof *th);
+    SuThread *th = calloc(T, sizeof *th);
     Run r;
     uint32_t i;
     uint64_t h = UINT64_C(0xCBF29CE484222325);
@@ -450,19 +450,19 @@ static uint64_t run_tick(uint32_t T, uint64_t seed, uint64_t cs, int gated) {
     r.ntasks = ntasks;
     r.perm = perm;
     r.gated = gated;
-    pthread_mutex_init(&r.mu, NULL);
-    pthread_cond_init(&r.cv, NULL);
+    (void)su_mutex_init(&r.mu);
+    (void)su_cond_init(&r.cv);
     for (i = 0; i < T; i++) {
-        if (pthread_create(&th[i], NULL, writer_main, &r) != 0) {
+        if (su_thread_create(&th[i], writer_main, &r) != 0) {
             CHECK(0);
             goto done;
         }
     }
     for (i = 0; i < T; i++) {
-        pthread_join(th[i], NULL);
+        (void)su_thread_join(th[i]);
     }
-    pthread_mutex_destroy(&r.mu);
-    pthread_cond_destroy(&r.cv);
+    su_mutex_destroy(&r.mu);
+    su_cond_destroy(&r.cv);
     CHECK(__atomic_load_n(&g_emit_bad, __ATOMIC_RELAXED) == 0u);
 
     CHECK(!su_cmdq_overflowed(q));
@@ -655,7 +655,7 @@ static void test_overflow(void) {
     {
         uint64_t run;
         for (run = 0; run < 50u; run++) {
-            pthread_t th[8];
+            SuThread th[8];
             OverflowArg oa[8];
             uint32_t w;
             CHECK(su_cmdq_create(8, 1024, 1024, 20, 1, 100, 100, &q) == SU_OK);
@@ -664,10 +664,10 @@ static void test_overflow(void) {
                 oa[w].sys = w;
             }
             for (w = 0; w < 8u; w++) {
-                CHECK(pthread_create(&th[w], NULL, overflow_writer, &oa[w]) == 0);
+                CHECK(su_thread_create(&th[w], overflow_writer, &oa[w]) == 0);
             }
             for (w = 0; w < 8u; w++) {
-                pthread_join(th[w], NULL);
+                (void)su_thread_join(th[w]);
             }
             CHECK(su_cmdq_overflowed(q) == 1);
             su_cmdq_counts(q, &ns, &ne);

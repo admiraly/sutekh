@@ -1,0 +1,29 @@
+diff --git a/.github/workflows/repository-checks.yml b/.github/workflows/repository-checks.yml
+index 10aa789..ead83c7 100644
+--- a/.github/workflows/repository-checks.yml
++++ b/.github/workflows/repository-checks.yml
+@@ -64,3 +64,24 @@ jobs:
+         run: cmake --build build -j 2
+       - name: Run runtime regression suite
+         run: ctest --test-dir build --output-on-failure -j 2
++
++  runtime-windows:
++    name: Windows checked runtime
++    runs-on: windows-latest
++    steps:
++      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
++        with:
++          persist-credentials: false
++      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
++        with:
++          python-version: '3.12'
++      - name: Install pinned test dependencies
++        run: python -m pip install -r tools/requirements-dev.txt
++      # The runner's LLVM clang targets x86_64-pc-windows-msvc and finds the installed MSVC libraries and
++      # Windows SDK itself; cmake and ninja come from the pinned requirements.
++      - name: Configure checked reference runtime
++        run: cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF
++      - name: Build runtime and test executables
++        run: cmake --build build -j 2
++      - name: Run runtime regression suite
++        run: ctest --test-dir build --output-on-failure -j 2

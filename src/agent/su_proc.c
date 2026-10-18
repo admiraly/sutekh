@@ -5,20 +5,24 @@
 
 #include <errno.h>
 #include <stdint.h>
-#include <fcntl.h>
-#include <sched.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/prctl.h>
-#include <sys/resource.h>
-#include <sys/syscall.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <time.h>
-#include <unistd.h>
+#if defined(_WIN32)
+#  include <windows.h>
+#else
+#  include <fcntl.h>
+#  include <sched.h>
+#  include <signal.h>
+#  include <sys/prctl.h>
+#  include <sys/resource.h>
+#  include <sys/syscall.h>
+#  include <sys/socket.h>
+#  include <sys/types.h>
+#  include <sys/wait.h>
+#  include <time.h>
+#  include <unistd.h>
+#endif
 #if defined(__linux__) && defined(__x86_64__)
 #  include <linux/audit.h>
 #  include <linux/filter.h>
@@ -27,6 +31,10 @@
 #endif
 
 #include "sutekh/status.h"
+
+#if defined(_WIN32)
+#include "agent/su_proc_win.inc"
+#else
 
 static void close_fd(int *fd) {
     if (*fd >= 0) {
@@ -653,6 +661,7 @@ uint32_t su_proc_spawn(SuProc *p, const char *const *argv, const SuProcLimits *l
     su_line_reader_init(&p->reader, p->out_fd, -1);
     return SU_OK;
 }
+#endif /* !_WIN32 */
 
 uint32_t su_proc_request(SuProc *p, const uint8_t *req, size_t req_len, int64_t deadline_ms,
                          const uint8_t **resp, size_t *resp_len) {
@@ -701,6 +710,7 @@ uint32_t su_proc_request(SuProc *p, const uint8_t *req, size_t req_len, int64_t 
     return SU_OK;
 }
 
+#if !defined(_WIN32)
 void su_proc_finish(SuProc *p, int64_t grace_ms) {
     int64_t until;
     if (p->pid <= 0) {
@@ -731,3 +741,4 @@ void su_proc_finish(SuProc *p, int64_t grace_ms) {
     }
     su_proc_kill(p);
 }
+#endif

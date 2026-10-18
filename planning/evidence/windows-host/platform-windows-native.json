@@ -1,0 +1,213 @@
+{
+  "artifacts_sha256": {
+    "build-platform/win64-native/sutekh.exe": "30faf926d78a16fb4d85ef4bd79a1be0d8995cd0aa7ce24e6b34985466aa1314",
+    "build-platform/win64-native/test_ir.exe": "399b1dc7c0825945efef0771192b4434095651467868609900f1c134a191ffad",
+    "build-platform/win64-native/test_snapshot.exe": "c6942fba56d6bbfd6f4181ad2512594b4b4f4bf45f6ed39da6bcc9886efcb074",
+    "build-platform/win64-native/test_vm.exe": "f2b82b29cb8596832bb9786a59cb50530194ab1eabc06eae382122fcd5ed8e68",
+    "build-platform/win64-native/test_world.exe": "8545d79a050b30d0fe5d7c78edd3a201014571dd92eafb4de5175e14dcbd33d1"
+  },
+  "checks": [
+    {
+      "id": "win64native.build",
+      "lane": "win64-native",
+      "reason": "configured and built the default graph (Release)",
+      "status": "passed"
+    },
+    {
+      "id": "win64native.unit.test_ir",
+      "lane": "win64-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64native.unit.test_world",
+      "lane": "win64-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64native.unit.test_vm",
+      "lane": "win64-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64native.unit.test_snapshot",
+      "lane": "win64-native",
+      "reason": "exit 0",
+      "returncode": 0,
+      "status": "passed"
+    },
+    {
+      "id": "win64native.sutekh_version",
+      "lane": "win64-native",
+      "reason": "sutekh 0.1.0",
+      "status": "passed"
+    },
+    {
+      "id": "win64native.ctest",
+      "lane": "win64-native",
+      "reason": "62 passed, 0 failed, 2 skipped (path_fifo, containment) of 64",
+      "status": "passed"
+    },
+    {
+      "id": "win64native.native_abi_probe",
+      "lane": "win64-native",
+      "reason": "AsmJit checkout missing; the probe needs su_native (SUTEKH_NATIVE=ON is not built on Windows yet)",
+      "status": "unavailable"
+    }
+  ],
+  "commands": [
+    {
+      "argv": [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build-platform\\win64-native",
+        "-G",
+        "Ninja",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_C_COMPILER=C:\\Users\\dev\\Documents\\trinity\\engines\\sutekh-worktrees\\windows-host\\local\\toolchains\\llvm-23.1.3\\LLVM\\bin\\clang.exe"
+      ],
+      "check": "win64native.configure",
+      "cwd": ".",
+      "duration_s": 1.153,
+      "log": "build-platform\\win64native_configure.log",
+      "log_sha256": "ee05702fd871fd64e99ae2994a3e572da241c8143769e6616d0c9cbfb810d320",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        ".venv\\Scripts\\cmake.EXE",
+        "--build",
+        "build-platform\\win64-native"
+      ],
+      "check": "win64native.build",
+      "cwd": ".",
+      "duration_s": 3.649,
+      "log": "build-platform\\win64native_build.log",
+      "log_sha256": "91a3e7afd544f27d0be5289318dc0e910ad8f5ec6a34c0fdb54d5f7dbb7f1ac8",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "build-platform\\win64-native\\test_ir.exe"
+      ],
+      "check": "win64native.unit.test_ir",
+      "cwd": ".",
+      "duration_s": 0.016,
+      "log": "build-platform\\win64native_unit_test_ir.log",
+      "log_sha256": "45eb4cfe61cef50f2c4b5dcd49f2e59c77a8ce86b6166ea7123a45ae29344a1f",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "build-platform\\win64-native\\test_world.exe"
+      ],
+      "check": "win64native.unit.test_world",
+      "cwd": ".",
+      "duration_s": 0.046,
+      "log": "build-platform\\win64native_unit_test_world.log",
+      "log_sha256": "3a72ada51c7f51ab710f6c4d89d6956d3cb41b835e9e0306e6496554db454506",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "build-platform\\win64-native\\test_vm.exe"
+      ],
+      "check": "win64native.unit.test_vm",
+      "cwd": ".",
+      "duration_s": 0.011,
+      "log": "build-platform\\win64native_unit_test_vm.log",
+      "log_sha256": "dc19f8a2da8931b19a05ddd16f9a71ef78e61e05404c18436a766b49d3f09bde",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "build-platform\\win64-native\\test_snapshot.exe"
+      ],
+      "check": "win64native.unit.test_snapshot",
+      "cwd": ".",
+      "duration_s": 0.008,
+      "log": "build-platform\\win64native_unit_test_snapshot.log",
+      "log_sha256": "983839bbc86b65f5396d995dde1dab653801e7186eae0fe4b204376e5bcf3c89",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "build-platform\\win64-native\\sutekh.exe",
+        "--version"
+      ],
+      "check": "win64native.sutekh_version",
+      "cwd": ".",
+      "duration_s": 0.007,
+      "log": "build-platform\\win64native_sutekh_version.log",
+      "log_sha256": "3d7b20e1b79149bafcba3497c39f57cd9f9f6a068dbc279834e8c00f60927001",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        ".venv\\Scripts\\ctest.EXE",
+        "--test-dir",
+        "build-platform\\win64-native",
+        "-j",
+        "8",
+        "--timeout",
+        "900"
+      ],
+      "check": "win64native.ctest",
+      "cwd": ".",
+      "duration_s": 9.003,
+      "log": "build-platform\\win64native_ctest.log",
+      "log_sha256": "3c687fea9705d92293d7ebf54e39ca72aa841d3e65b7b4a99f6a861f199f8480",
+      "returncode": 0
+    }
+  ],
+  "generated_utc": "2026-10-18T09:51:18Z",
+  "host": {
+    "generated_utc": "2026-10-18T09:51:04Z",
+    "machine": "AMD64",
+    "python": "3.13.15",
+    "release": "11",
+    "system": "Windows"
+  },
+  "inputs_sha256": {
+    "tests\\platform\\capabilities.py": "887e588f74b6922c75733d6dea790615c91c688b4c79e5092a0f67ade398bfdc",
+    "tests\\platform\\run_platform.py": "99c667dcb057ded9b305257aa22815dbcb4edfe8a5fec35407823d33d555b90b",
+    "tools\\env-windows.ps1": "79d822899b9a8e99e64a4e21049661947598b4b2496b054b34011a7c236aaf56"
+  },
+  "lane": "win64-native",
+  "notes": {
+    "compiler": {
+      "path": "C:\\Users\\dev\\Documents\\trinity\\engines\\sutekh-worktrees\\windows-host\\local\\toolchains\\llvm-23.1.3\\LLVM\\bin\\clang.exe",
+      "version": "clang version 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)"
+    },
+    "ctest": {
+      "failed": 0,
+      "skipped": [
+        "path_fifo",
+        "containment"
+      ],
+      "total": 64
+    }
+  },
+  "schema": "sutekh.platform_run.v1",
+  "tools": {
+    "clang": {
+      "path": "C:\\Users\\dev\\Documents\\trinity\\engines\\sutekh-worktrees\\windows-host\\local\\toolchains\\llvm-23.1.3\\LLVM\\bin\\clang.EXE",
+      "version": "clang version 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)"
+    },
+    "cmake": {
+      "path": "C:\\Users\\dev\\Documents\\trinity\\engines\\sutekh-worktrees\\windows-host\\.venv\\Scripts\\cmake.EXE",
+      "version": "cmake version 4.3.4"
+    },
+    "ninja": {
+      "path": "C:\\Users\\dev\\Documents\\trinity\\engines\\sutekh-worktrees\\windows-host\\.venv\\Scripts\\ninja.EXE",
+      "version": "1.13.0.git.kitware.jobserver-pipe-1"
+    }
+  }
+}
