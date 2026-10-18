@@ -20,7 +20,11 @@ static int cmp_items(const void *a, const void *b) {
         return xb - yb;
     }
     if (xb) {
-        return x->dist2 > y->dist2 ? -1 : x->dist2 < y->dist2; /* far first */
+        if (x->dist2 != y->dist2) {
+            return x->dist2 > y->dist2 ? -1 : 1; /* far first */
+        }
+        /* equal distance: keep submission order, so the result never depends on qsort's tie handling */
+        return *(const uint32_t *)a < *(const uint32_t *)b ? -1 : *(const uint32_t *)a > *(const uint32_t *)b;
     }
     return x->key < y->key ? -1 : x->key > y->key;
 }
@@ -51,7 +55,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
         float s = obj->scale > 0.0f ? obj->scale : 1.0f;
         SuVec3f c;
         int k;
-        if (ms == NULL) {
+        if (ms == NULL || !(obj->tint[3] > 0.0f)) { /* unknown model, or fully transparent (or NaN) */
             r->stats.objects_culled++;
             continue;
         }
@@ -144,6 +148,12 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
                 }
                 it = &r->items[n];
                 it->pipe = mat != NULL ? mat->u.mat.pipeline : PIPE_OPAQUE;
+                it->forced = 0;
+                if (obj->tint[3] < 1.0f && it->pipe < PIPE_BLEND) {
+                    /* translucent instance of an opaque or masked material: the blend pass, same face culling */
+                    it->pipe = (it->pipe & 1u) != 0u ? PIPE_BLEND_2S : PIPE_BLEND;
+                    it->forced = 1;
+                }
                 it->mat = mat_index;
                 it->mesh = mesh_index;
                 it->sub = sub;
@@ -171,7 +181,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
     *item_count = n;
 }
 
-static void mat_push(SuRenderer *r, uint32_t mat_index, MatPush *p) {
+static void mat_push(SuRenderer *r, uint32_t mat_index, uint32_t forced, MatPush *p) {
     memset(p, 0, sizeof *p);
     if (mat_index < r->res_cap && r->res[mat_index].type == RES_MATERIAL) {
         const MatRes *m = &r->res[mat_index].u.mat;
@@ -202,12 +212,16 @@ static void mat_push(SuRenderer *r, uint32_t mat_index, MatPush *p) {
         p->mr[3] = 1.0f;
         p->misc[0] = 0.5f;
     }
+    if (forced != 0u) {
+        p->misc[1] = 2.0f; /* the shader returns base alpha (material alpha x texture alpha x instance tint) */
+    }
 }
 
 void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t item_count, int blend_pass) {
     uint32_t i = 0;
     uint32_t bound_pipe = UINT32_MAX;
     uint32_t bound_mat = UINT32_MAX - 1u;
+    uint32_t bound_forced = 0;
     uint32_t bound_mesh = UINT32_MAX;
     while (i < item_count) {
         const DrawItem *it = &r->items[r->order[i]];
@@ -219,7 +233,7 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
         }
         while (i + run < item_count) {
             const DrawItem *nx = &r->items[r->order[i + run]];
-            if (nx->pipe != it->pipe || nx->mat != it->mat || nx->mesh != it->mesh || nx->sub != it->sub) {
+            if (nx->pipe != it->pipe || nx->mat != it->mat || nx->forced != it->forced || nx->mesh != it->mesh || nx->sub != it->sub) {
                 break;
             }
             run++;
@@ -228,14 +242,15 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
             r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pbr_pipe[it->pipe]);
             bound_pipe = it->pipe;
         }
-        if (it->mat != bound_mat) {
+        if (it->mat != bound_mat || it->forced != bound_forced) {
             VkDescriptorSet set = su_rvk_material_set(r, it->mat);
             MatPush mp;
-            mat_push(r, it->mat, &mp);
+            mat_push(r, it->mat, it->forced, &mp);
             r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->scene_layout, 1, 1, &set, 0, NULL);
             r->f.vkCmdPushConstants(cmd, r->scene_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                     sizeof mp, &mp);
             bound_mat = it->mat;
+            bound_forced = it->forced;
         }
         if (it->mesh != bound_mesh) {
             const MeshRes *m = &r->res[it->mesh].u.mesh;

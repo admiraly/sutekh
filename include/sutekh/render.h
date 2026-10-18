@@ -442,7 +442,7 @@ typedef struct SuRenderObject {
     SuWorldPos pos;                    /* Q32.32 */
     SuQuatf rot;
     float scale;                       /* uniform, > 0 */
-    float tint[4];                     /* multiplies base colour and alpha */
+    float tint[4];                     /* multiplies base colour and alpha. tint[3] < 1 draws the object translucent\n                                        * whatever its material's alpha mode: in the blended pass (depth-tested, no\n                                        * depth write, back to front by node distance, after opaque and masked), with\n                                        * a masked material's cutoff not applied. tint[3] <= 0 or NaN: not drawn\n                                        * (counted in objects_culled). 1 = unchanged behaviour. */
     float emissive;                    /* multiplies emission; 1 = as authored */
     SuRenderHandle model;
     uint32_t reserved[2];
