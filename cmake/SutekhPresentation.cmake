@@ -67,8 +67,8 @@ if(NOT SUTEKH_RENDER STREQUAL "OFF" AND NOT SUTEKH_VULKAN_INCLUDE STREQUAL "")
     add_test(NAME render_offscreen COMMAND test_render_offscreen "${CMAKE_BINARY_DIR}/render_offscreen.ppm")
     set_tests_properties(render_offscreen PROPERTIES SKIP_RETURN_CODE 77)
     if(WIN32)
-        add_executable(space_demo examples/presentation/space_demo.c)
-        target_link_libraries(space_demo PRIVATE su_render su_input su_host user32)
+        add_executable(space_demo examples/presentation/space_demo.c examples/presentation/demo_content.c)
+        target_link_libraries(space_demo PRIVATE su_render su_input su_host su_asset_import su_audio user32)
         sutekh_apply_warnings(space_demo)
         # The demo's world, scripted input and rollback drills, headless and offscreen: both runs must reach the
         # same pinned digest (480 ticks of IR 0.3 at a fixed 60 Hz frame time). Exit 3 (no Vulkan) skips the
