@@ -1,0 +1,11 @@
+{
+  "commit": "c46850864f4661461b0f6cb9922c058ffea4915e",
+  "license": "Apache-2.0 OR MIT",
+  "license_file": "LICENSE.md",
+  "license_sha256": "a2d4407962c909f84807774cbfe9fad05a1ebe972472c08ed5ad43d482afd288",
+  "name": "Vulkan-Headers",
+  "origin": "https://github.com/KhronosGroup/Vulkan-Headers.git",
+  "pinned_by": "tools/bootstrap_vulkan_headers.py",
+  "tag": "v1.4.365",
+  "use": "build-time headers of the optional renderer (src/render); not redistributed"
+}

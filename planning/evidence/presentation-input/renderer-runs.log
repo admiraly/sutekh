@@ -1,0 +1,52 @@
+source 91e9baaa661e4e6915adb4ac18512c0f6b915727; Release build-rel; 2026-10-18T13:10:29
+
+$ build-rel\test_render_offscreen.exe build-rel\render_offscreen.ppm
+device 0: Quadro P600 (discrete, Vulkan 1.4.312, vendor 0x10de, 1966 MiB device-local, timestamps yes)
+rendering on: Quadro P600 (discrete)
+stats: frames 2, draws 4, instances 3, line vertices 2, cpu 0.026 ms, gpu 0.028 ms, validation not available (0 errors)
+wrote build-rel\render_offscreen.ppm
+corner 89 89 108
+centre 255 0 0
+sphere 0 238 0
+ship at 201,62: 110 152 229
+line near 17,194: yellow
+test_render_offscreen: 17 checks, 0 failures
+exit 0
+
+$ build-rel\space_demo.exe --offscreen build-rel\space_demo.ppm --frames 240
+renderer: Quadro P600, offscreen target 1280x720
+tick 187: ship 0 crossed the gate
+frames 240, ticks 479, dropped ticks 0, gate events 1, mean step 0.193 ms
+digest fa02b76e1269693a5f4daa5c7139818c0fff106bd5f57c656556e1336aa1defd fast d774a0751dd23248
+render: frames 240, last cpu 0.014 ms, last gpu 0.312 ms, draws 3, swapchain recreations 0, validation off (0 errors), present mode 4294967295
+shadow world (no renderer): 0 tick digests differed
+wrote build-rel\space_demo.ppm
+exit 0
+
+$ build-rel\space_demo.exe --script --seconds 5
+renderer: Quadro P600, window target 1280x720
+39.3 fps | 119.9 ticks/s | render cpu 0.121 ms wait 30.493 present 0.036 gpu 0.035 ms | step 0.072 ms | gates 0 | chase camera
+tick 187: ship 0 crossed the gate
+32.0 fps | 119.3 ticks/s | render cpu 0.110 ms wait 31.246 present 0.034 gpu 0.032 ms | step 0.070 ms | gates 1 | chase camera
+32.0 fps | 119.9 ticks/s | render cpu 0.102 ms wait 30.732 present 0.035 gpu 0.058 ms | step 0.069 ms | gates 1 | chase camera
+32.0 fps | 120.3 ticks/s | render cpu 0.111 ms wait 31.230 present 0.033 gpu 0.057 ms | step 0.070 ms | gates 1 | chase camera
+frames 168, ticks 602, dropped ticks 0, gate events 1, mean step 0.069 ms
+digest 2f4ed5993d3affb13e2be30268e0d861f1329b151d78aed5568953232f4da3a6 fast 976d9ed4051dd4c0
+render: frames 168, last cpu 0.085 ms, last gpu 0.057 ms, draws 3, swapchain recreations 0, validation off (0 errors), present mode 2
+exit 0
+
+$ build-rel\space_demo.exe --script --seconds 5 --no-vsync
+renderer: Quadro P600, window target 1280x720
+7742.7 fps | 120.0 ticks/s | render cpu 0.032 ms wait 0.002 present 0.066 gpu 0.028 ms | step 0.299 ms | gates 0 | chase camera
+tick 187: ship 0 crossed the gate
+7810.2 fps | 120.0 ticks/s | render cpu 0.019 ms wait 0.001 present 0.041 gpu 0.025 ms | step 0.288 ms | gates 1 | chase camera
+8089.7 fps | 120.0 ticks/s | render cpu 0.016 ms wait 0.001 present 0.038 gpu 0.025 ms | step 0.284 ms | gates 1 | chase camera
+8348.6 fps | 120.0 ticks/s | render cpu 0.017 ms wait 0.048 present 0.039 gpu 0.024 ms | step 0.287 ms | gates 1 | chase camera
+frames 40576, ticks 600, dropped ticks 0, gate events 1, mean step 0.284 ms
+digest b53fedc2088d2e478d79240b1f584037c3436d33c8c11352621222d15905a600 fast 2de092b81255c17b
+render: frames 40576, last cpu 0.043 ms, last gpu 0.024 ms, draws 3, swapchain recreations 0, validation off (0 errors), present mode 1
+exit 0
+
+$ build-rel\input_probe.exe --inject
+inject: right Ctrl seen; mouse dx after +40: 40 (absolute mouse reports: no); right Ctrl released: yes
+exit 0

@@ -1026,22 +1026,10 @@ uint32_t su_evlog_dump(const SuEventLog *log, uint8_t *buf, uint64_t cap, uint64
     return SU_OK;
 }
 
-uint32_t su_evlog_parse(const uint8_t *buf, uint64_t len, SuEventLog **out) {
-    uint64_t capacity;
-    uint64_t base;
-    uint64_t dropped;
-    uint64_t count;
+/* Header and sequence checks shared by both parsers. On SU_OK the fields are consistent and len is exact. */
+static uint32_t evlog_check(const uint8_t *buf, uint64_t len, uint64_t *capacity, uint64_t *base, uint64_t *dropped,
+                            uint64_t *count) {
     uint64_t i;
-    SuEventLog *log;
-    uint32_t st;
-
-    if (out == NULL) {
-        return SU_E_INVALID_ARGUMENT;
-    }
-    *out = NULL;
-    if (buf == NULL && len != 0u) {
-        return SU_E_INVALID_ARGUMENT;
-    }
     if (len < SU_CMDQ_LOG_HEADER_BYTES) {
         return SU_E_PARSE;
     }
@@ -1053,32 +1041,35 @@ uint32_t su_evlog_parse(const uint8_t *buf, uint64_t len, SuEventLog **out) {
         get_u32(buf + 8) != 0u) {
         return SU_E_PARSE;
     }
-    capacity = get_u64(buf + 12);
-    base = get_u64(buf + 20);
-    dropped = get_u64(buf + 28);
-    count = get_u64(buf + 36);
-    if (capacity == 0u || base > LOG_SEQ_LIMIT) {
-        return capacity > SU_CMDQ_MAX_LOG_CAPACITY ? SU_E_RESOURCE_LIMIT : SU_E_PARSE;
+    *capacity = get_u64(buf + 12);
+    *base = get_u64(buf + 20);
+    *dropped = get_u64(buf + 28);
+    *count = get_u64(buf + 36);
+    if (*capacity == 0u || *base > LOG_SEQ_LIMIT) {
+        return *capacity > SU_CMDQ_MAX_LOG_CAPACITY ? SU_E_RESOURCE_LIMIT : SU_E_PARSE;
     }
-    if (capacity > SU_CMDQ_MAX_LOG_CAPACITY) {
+    if (*capacity > SU_CMDQ_MAX_LOG_CAPACITY) {
         return SU_E_RESOURCE_LIMIT;
     }
-    if (count > capacity || dropped > LOG_SEQ_LIMIT || (dropped > 0u && count != capacity)) {
+    if (*count > *capacity || *dropped > LOG_SEQ_LIMIT || (*dropped > 0u && *count != *capacity)) {
         return SU_E_PARSE;
     }
-    if (len != SU_CMDQ_LOG_HEADER_BYTES + SU_CMDQ_LOG_ENTRY_BYTES * count) {
+    if (len != SU_CMDQ_LOG_HEADER_BYTES + SU_CMDQ_LOG_ENTRY_BYTES * *count) {
         return SU_E_PARSE;
     }
-    for (i = 0u; i < count; i++) {
+    for (i = 0u; i < *count; i++) {
         const uint8_t *p = buf + SU_CMDQ_LOG_HEADER_BYTES + SU_CMDQ_LOG_ENTRY_BYTES * i;
-        if (get_u64(p) != base + dropped + i) {
+        if (get_u64(p) != *base + *dropped + i) {
             return SU_E_PARSE;
         }
     }
-    st = su_evlog_create(capacity, base, &log);
-    if (st != SU_OK) {
-        return st;
-    }
+    return SU_OK;
+}
+
+/* Fills a log of the checked capacity from checked bytes. */
+static void evlog_fill(SuEventLog *log, const uint8_t *buf, uint64_t base, uint64_t dropped, uint64_t count) {
+    uint64_t i;
+    log->base_seq = base;
     log->dropped = dropped;
     log->count = count;
     log->head = 0u;
@@ -1094,7 +1085,64 @@ uint32_t su_evlog_parse(const uint8_t *buf, uint64_t len, SuEventLog **out) {
         e->a = get_u32(p + 32);
         e->b = get_u32(p + 36);
     }
+}
+
+uint32_t su_evlog_parse(const uint8_t *buf, uint64_t len, SuEventLog **out) {
+    uint64_t capacity = 0;
+    uint64_t base = 0;
+    uint64_t dropped = 0;
+    uint64_t count = 0;
+    SuEventLog *log;
+    uint32_t st;
+
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    if (buf == NULL && len != 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    st = evlog_check(buf, len, &capacity, &base, &dropped, &count);
+    if (st != SU_OK) {
+        return st;
+    }
+    st = su_evlog_create(capacity, base, &log);
+    if (st != SU_OK) {
+        return st;
+    }
+    evlog_fill(log, buf, base, dropped, count);
     *out = log;
+    return SU_OK;
+}
+
+uint32_t su_evlog_parse_into(SuEventLog *log, const uint8_t *buf, uint64_t len) {
+    uint64_t capacity = 0;
+    uint64_t base = 0;
+    uint64_t dropped = 0;
+    uint64_t count = 0;
+    uint32_t st;
+    if (log == NULL || (buf == NULL && len != 0u)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    st = evlog_check(buf, len, &capacity, &base, &dropped, &count);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (capacity != log->capacity) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    evlog_fill(log, buf, base, dropped, count);
+    return SU_OK;
+}
+
+uint32_t su_evlog_swap(SuEventLog *a, SuEventLog *b) {
+    SuEventLog t;
+    if (a == NULL || b == NULL || a->capacity != b->capacity) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    t = *a;
+    *a = *b;
+    *b = t;
     return SU_OK;
 }
 

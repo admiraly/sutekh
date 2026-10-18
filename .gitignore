@@ -20,3 +20,5 @@ __pycache__/
 
 # AsmJit checkout fetched by tools/bootstrap_asmjit.py (third_party/asmjit.lock.json is tracked)
 /third_party/asmjit/
+# Vulkan-Headers checkout fetched by tools/bootstrap_vulkan_headers.py (third_party/vulkan-headers.lock.json is tracked)
+/third_party/vulkan-headers/

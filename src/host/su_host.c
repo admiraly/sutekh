@@ -8,12 +8,14 @@
 #include "host/su_host_internal.h"
 
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "ir/su_json.h"
 #include "ir/su_lir.h"
+#include "host/su_xxh64.h"
 #include "ir/su_sha256.h"
 #include "runtime/entity_tick.h"
 #include "runtime/jobs/su_effects.h"
@@ -508,6 +510,8 @@ void su_host_world_destroy(SuHostWorld *w) {
         free(w->recs[i].writes);
     }
     free(w->recs);
+    su_ents_destroy(w->rb_ents);
+    su_evlog_destroy(w->rb_log);
     su_world_destroy(w->w);
     su_sched_free(&w->sched);
     free(w);
@@ -1316,6 +1320,213 @@ uint32_t su_host_digest(const SuHostWorld *w, uint8_t out[32]) {
 
 void su_host_hex(const uint8_t digest[32], char out[65]) {
     su_sha256_hex(digest, out);
+}
+
+/* ---------- events ---------- */
+
+_Static_assert(sizeof(SuHostEvent) == sizeof(SuEvent), "SuHostEvent mirrors SuEvent");
+_Static_assert(offsetof(SuHostEvent, kind) == offsetof(SuEvent, kind), "SuHostEvent.kind");
+_Static_assert(offsetof(SuHostEvent, b) == offsetof(SuEvent, b), "SuHostEvent.b");
+_Static_assert(SU_HOST_EVENT_SYSTEM_HOST == SU_SYSTEM_INDEX_HOST, "host system index");
+_Static_assert(SU_HOST_EVENT_REJECTED == SU_EVENT_REJECTED, "rejected kind");
+_Static_assert(SU_HOST_EVENT_SPAWNED == SU_EVENT_SPAWNED, "spawned kind");
+_Static_assert(SU_HOST_EVENT_DESPAWNED == SU_EVENT_DESPAWNED, "despawned kind");
+
+static void copy_event(SuHostEvent *dst, const SuEvent *src) {
+    dst->event_seq = src->event_seq;
+    dst->tick = src->tick;
+    dst->kind = src->kind;
+    dst->system_index = src->system_index;
+    dst->slot = src->slot;
+    dst->seq = src->seq;
+    dst->a = src->a;
+    dst->b = src->b;
+}
+
+/* One retained event by sequence number (oldest_seq <= seq < next_seq). */
+static int event_at(const SuEventLog *log, uint64_t seq, SuEvent *ev) {
+    uint64_t one = 0;
+    uint64_t next = 0;
+    uint64_t skipped = 0;
+    uint64_t dropped = 0;
+    return su_evlog_read(log, seq, 1u, ev, &one, &next, &skipped, &dropped) == SU_OK && one == 1u && skipped == 0u;
+}
+
+uint64_t su_host_event_next_seq(const SuHostWorld *w) {
+    return w != NULL ? su_evlog_next_seq(su_ent_rt_log(w->sched.ent)) : 0u;
+}
+
+uint32_t su_host_events_read(const SuHostWorld *w, uint64_t cursor, SuHostEvent *out, uint32_t max,
+                             uint32_t *count, uint64_t *next_cursor, uint64_t *skipped) {
+    const SuEventLog *log;
+    uint64_t oldest;
+    uint64_t next;
+    uint64_t pos;
+    uint32_t n = 0;
+
+    if (w == NULL || count == NULL || next_cursor == NULL || (out == NULL && max > 0u)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    log = su_ent_rt_log(w->sched.ent);
+    oldest = su_evlog_oldest_seq(log);
+    next = su_evlog_next_seq(log);
+    if (cursor > next) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    pos = cursor < oldest ? oldest : cursor;
+    if (skipped != NULL) {
+        *skipped = pos - cursor;
+    }
+    while (n < max && pos < next) {
+        SuEvent ev;
+        if (!event_at(log, pos, &ev)) {
+            return SU_E_INTERNAL;
+        }
+        copy_event(&out[n++], &ev);
+        pos++;
+    }
+    *count = n;
+    *next_cursor = pos;
+    return SU_OK;
+}
+
+uint32_t su_host_events_for_tick(const SuHostWorld *w, uint64_t tick, SuHostEvent *out, uint32_t max,
+                                 uint32_t *count, uint32_t *total, uint32_t *complete) {
+    const SuEventLog *log;
+    uint64_t oldest;
+    uint64_t next;
+    uint64_t seq;
+    uint32_t n = 0;
+    uint32_t matched = 0;
+    int earlier = 0;
+
+    if (w == NULL || count == NULL || (out == NULL && max > 0u)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    log = su_ent_rt_log(w->sched.ent);
+    oldest = su_evlog_oldest_seq(log);
+    next = su_evlog_next_seq(log);
+    for (seq = oldest; seq < next; seq++) {
+        SuEvent ev;
+        if (!event_at(log, seq, &ev)) {
+            return SU_E_INTERNAL;
+        }
+        if (seq == oldest) {
+            earlier = ev.tick < tick;
+        }
+        if (ev.tick == tick) {
+            if (n < max) {
+                copy_event(&out[n++], &ev);
+            }
+            if (matched < UINT32_MAX) {
+                matched++;
+            }
+        }
+    }
+    *count = n;
+    if (total != NULL) {
+        *total = matched;
+    }
+    if (complete != NULL) {
+        *complete = (su_evlog_dropped(log) == 0u || earlier) ? 1u : 0u;
+    }
+    return SU_OK;
+}
+
+/* ---------- rollback-grade state operations ---------- */
+
+static uint32_t rollback_scratch(SuHostWorld *w) {
+    uint64_t ms = 0;
+    uint64_t me = 0;
+    uint64_t lm = 0;
+    if (w->rb_ents == NULL) {
+        SuEntsDesc d;
+        memset(&d, 0, sizeof d);
+        d.max_entities = su_world_row_count(w->w);
+        if (su_ents_create(&d, &w->rb_ents) != SU_OK) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+    }
+    if (w->rb_log == NULL) {
+        (void)su_ent_rt_caps(w->sched.ent, &ms, &me, &lm);
+        if (su_evlog_create(lm, 0u, &w->rb_log) != SU_OK) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+    }
+    return SU_OK;
+}
+
+uint32_t su_host_snapshot_restore_inplace(SuHostWorld *w, const uint8_t *buf, size_t len, SuHostError *err) {
+    uint64_t state_len;
+    uint64_t log_len;
+    uint32_t st;
+
+    clear_err(err);
+    if (w == NULL || buf == NULL) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "invalid arguments");
+    }
+    if (len < HOST_SNAP_HEADER + 8u || memcmp(buf, HOST_SNAP_MAGIC, 8u) != 0 ||
+        rd_u32(buf + 8) != HOST_SNAP_VERSION) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "not a host snapshot (magic or version)");
+    }
+    if (memcmp(buf + 12, w->identity, 32u) != 0) {
+        return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
+                       "snapshot belongs to a different world identity (schema, systems, capacity or caps)");
+    }
+    state_len = rd_u64(buf + 52);
+    if (state_len > len - HOST_SNAP_HEADER - 8u) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot state length is out of range");
+    }
+    log_len = rd_u64(buf + HOST_SNAP_HEADER + state_len);
+    if (log_len != len - HOST_SNAP_HEADER - 8u - state_len) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+    }
+    st = rollback_scratch(w);
+    if (st != SU_OK) {
+        return set_err(err, st, UINT32_MAX, UINT64_MAX, "allocation of the rollback scratch failed");
+    }
+    /* 1. Validate the world state into the scratch entity table (the world is untouched). */
+    st = su_world_restore_canonical_check(w->w, buf + HOST_SNAP_HEADER, (size_t)state_len, w->rb_ents);
+    if (st != SU_OK) {
+        return set_err(err, st, UINT32_MAX, UINT64_MAX, "world state does not restore");
+    }
+    if (rd_u64(buf + HOST_SNAP_HEADER + 13u) != rd_u64(buf + 44)) {
+        return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX, "snapshot capacity or tick disagrees");
+    }
+    /* 2. Event log into the scratch log (validated, then filled; the live log is untouched). */
+    st = su_evlog_parse_into(w->rb_log, buf + HOST_SNAP_HEADER + state_len + 8u, log_len);
+    if (st != SU_OK) {
+        return set_err(err, st, UINT32_MAX, UINT64_MAX,
+                       st == SU_E_SCHEMA_MISMATCH ? "event log capacity disagrees" : "event log does not parse");
+    }
+    /* 3. Commit: neither step can fail after the checks above. */
+    su_world_restore_canonical_commit(w->w, buf + HOST_SNAP_HEADER, w->rb_ents);
+    (void)su_evlog_swap(su_ent_rt_log(w->sched.ent), w->rb_log);
+    return SU_OK;
+}
+
+uint32_t su_host_digest_fast(const SuHostWorld *w, uint64_t *out) {
+    size_t size = 0;
+    size_t got = 0;
+    uint8_t *buf;
+    uint32_t st;
+    if (w == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    st = su_host_snapshot_size(w, &size);
+    if (st != SU_OK) {
+        return st;
+    }
+    buf = malloc(size);
+    if (buf == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    st = su_host_snapshot_write(w, buf, size, &got);
+    if (st == SU_OK) {
+        *out = su_xxh64(buf, got, 0u);
+    }
+    free(buf);
+    return st;
 }
 
 /* ---------- IR 0.3 typed lanes (numeric-3d) ---------- */

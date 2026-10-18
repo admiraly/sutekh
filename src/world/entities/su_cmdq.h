@@ -185,6 +185,12 @@ uint32_t su_evlog_dump(const SuEventLog *log, uint8_t *buf, uint64_t cap, uint64
  * (SU_E_RESOURCE_LIMIT). Malformed, non-monotonic, inconsistent or trailing-byte input is
  * SU_E_PARSE. */
 uint32_t su_evlog_parse(const uint8_t *buf, uint64_t len, SuEventLog **out);
+/* Strict parse into an existing log of the same capacity, without allocating (rollback restore). Same
+ * checks and codes as su_evlog_parse, plus SU_E_SCHEMA_MISMATCH when the encoded capacity differs. On
+ * failure the log is unchanged; on SU_OK it holds exactly the parsed state. */
+uint32_t su_evlog_parse_into(SuEventLog *log, const uint8_t *buf, uint64_t len);
+/* Exchanges the contents of two logs of the same capacity (O(1)). SU_E_INVALID_ARGUMENT otherwise. */
+uint32_t su_evlog_swap(SuEventLog *a, SuEventLog *b);
 /* Compares configuration, counters and retained events. */
 int su_evlog_equal(const SuEventLog *a, const SuEventLog *b);
 

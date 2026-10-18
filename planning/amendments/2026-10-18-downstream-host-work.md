@@ -33,3 +33,27 @@ it does not rewrite the root specifications, the IR contract or the milestone ta
 - Windows containment differs from Linux and is reported as such (see `src/agent/su_proc.h`): a job object (no process
   creation, commit limit, user-time limit, kill on supervisor exit, no crash dialogs) and a low-integrity token for
   read-only disposable workers; there is no network denial and no file-size or handle-count limit on Windows.
+
+## Extension, 18 October 2026: host events, rollback-grade state operations, native input, first presentation slice
+
+Same authorization and boundaries as above (owner-authorized downstream work; no M3 gate is closed by it). The
+downstream workload adds keyboard/mouse and gamepad control, presentation at 60-120 FPS with interpolation over
+the 120 Hz simulation, and later prediction with rollback/reconciliation. Scope, in priority order:
+
+5. Host access to the events systems emit (bounded, ordered, per tick and by cursor), consistent with the event
+   log that is already part of snapshots and digests; snapshot restore into the existing world storage without
+   reallocation; a fast state digest that is a separately named, non-canonical function, with the SHA-256
+   digest kept as the reference; observations of both.
+6. A native input layer (`include/sutekh/input.h`, Win32 Raw Input for keyboard and mouse, XInput for
+   gamepads): timestamped device state, and a data-driven mapping from device state to a fixed-layout per-tick
+   record of integer axes and buttons (dead zones, curves and the mouse virtual stick live in the mapping, not
+   in the simulation). Replays store the mapped record, never raw device events.
+7. The first M5 slice: a Win32 window and a Vulkan 1.2+ swapchain, presentation decoupled from the simulation
+   tick with the clock's interpolation factor, instanced procedural meshes, debug lines and primitives, a
+   chase/free camera, CPU and GPU frame-time telemetry, device-capability handling, graceful failure without
+   Vulkan, and offscreen rendering with readback as evidence where a presentable surface is unavailable. The
+   renderer reads committed state through `host.h` and never writes simulation state. Procedural geometry
+   only; no third-party or copyrighted assets.
+
+Rendering here is a first diagnostic slice of M5 (`docs/RENDERING_AND_ASSETS.md` section 2); it does not
+close M5 and makes no frame-rate claim beyond recorded observations. Headless builds keep no Vulkan dependency.

@@ -232,6 +232,16 @@ uint32_t su_world_canonical_write(const SuWorld *w, uint8_t *buf, size_t cap, si
  * SU_E_PARSE: bad magic, version, length, or entity table. SU_E_SCHEMA_MISMATCH: field or row
  * identity does not match desc. SU_E_TYPE: nonzero dead row. */
 uint32_t su_world_restore_canonical(const SuWorldDesc *desc, const uint8_t *buf, size_t len, SuWorld **out);
+/* In-place restore of version 2 bytes into an existing world of the same schema and capacity, with no
+ * allocation (rollback), in two steps. su_world_restore_canonical_check validates every byte with the
+ * checks of su_world_restore_canonical, in the same order and with the same codes (SU_E_SCHEMA_MISMATCH
+ * also when the encoded capacity differs from the world's), parsing the entity table into scratch: a
+ * caller-owned table of the world's capacity, distinct from the world's own. It does not change w. After
+ * SU_OK, and with no change to w or scratch in between, su_world_restore_canonical_commit installs the same
+ * bytes: it swaps scratch with the committed table (scratch then holds the previous one) and writes the
+ * columns and the tick. It cannot fail. Only between ticks. */
+uint32_t su_world_restore_canonical_check(const SuWorld *w, const uint8_t *buf, size_t len, SuEnts *scratch);
+void su_world_restore_canonical_commit(SuWorld *w, const uint8_t *buf, SuEnts *scratch);
 /* Compares canonical encodings of two committed roots. *equal is 1 or 0. */
 uint32_t su_world_state_equal(const SuWorld *a, const SuWorld *b, int *equal);
 

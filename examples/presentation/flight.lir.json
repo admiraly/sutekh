@@ -1,0 +1,430 @@
+{
+ "ir_version": "0.3",
+ "system_id": "demo.flight",
+ "numeric_profile": "fixed_q32_v1",
+ "query": "demo.flight",
+ "instructions": [
+  {
+   "op": "const_q32",
+   "dst": "dt",
+   "num": 1,
+   "den": 120
+  },
+  {
+   "op": "const_q32",
+   "dst": "zero",
+   "num": 0,
+   "den": 1
+  },
+  {
+   "op": "const_q32",
+   "dst": "neg1",
+   "num": -1,
+   "den": 1
+  },
+  {
+   "op": "const_q32",
+   "dst": "rate",
+   "num": 2,
+   "den": 1
+  },
+  {
+   "op": "const_q32",
+   "dst": "accel",
+   "num": 30,
+   "den": 1
+  },
+  {
+   "op": "const_q32",
+   "dst": "gate_r2",
+   "num": 36,
+   "den": 1
+  },
+  {
+   "op": "const_u32",
+   "dst": "sixteen",
+   "value": 16
+  },
+  {
+   "op": "load_v3",
+   "dst": "p",
+   "x": "pos_x",
+   "y": "pos_y",
+   "z": "pos_z"
+  },
+  {
+   "op": "load_v3",
+   "dst": "v",
+   "x": "vel_x",
+   "y": "vel_y",
+   "z": "vel_z"
+  },
+  {
+   "op": "load_q32",
+   "dst": "qw",
+   "field": "rot_w"
+  },
+  {
+   "op": "load_v3",
+   "dst": "qv",
+   "x": "rot_x",
+   "y": "rot_y",
+   "z": "rot_z"
+  },
+  {
+   "op": "make_quat",
+   "dst": "q",
+   "w": "qw",
+   "v": "qv"
+  },
+  {
+   "op": "load_q32",
+   "dst": "drag",
+   "field": "drag"
+  },
+  {
+   "op": "load_q32",
+   "dst": "k",
+   "field": "spring"
+  },
+  {
+   "op": "load_i32",
+   "dst": "i_pitch",
+   "field": "in_pitch"
+  },
+  {
+   "op": "i64_from_i32",
+   "dst": "w_pitch",
+   "a": "i_pitch"
+  },
+  {
+   "op": "shl_i64",
+   "dst": "s_pitch",
+   "a": "w_pitch",
+   "n": "sixteen"
+  },
+  {
+   "op": "q32_from_raw",
+   "dst": "pitch",
+   "a": "s_pitch"
+  },
+  {
+   "op": "load_i32",
+   "dst": "i_yaw",
+   "field": "in_yaw"
+  },
+  {
+   "op": "i64_from_i32",
+   "dst": "w_yaw",
+   "a": "i_yaw"
+  },
+  {
+   "op": "shl_i64",
+   "dst": "s_yaw",
+   "a": "w_yaw",
+   "n": "sixteen"
+  },
+  {
+   "op": "q32_from_raw",
+   "dst": "yaw",
+   "a": "s_yaw"
+  },
+  {
+   "op": "load_i32",
+   "dst": "i_roll",
+   "field": "in_roll"
+  },
+  {
+   "op": "i64_from_i32",
+   "dst": "w_roll",
+   "a": "i_roll"
+  },
+  {
+   "op": "shl_i64",
+   "dst": "s_roll",
+   "a": "w_roll",
+   "n": "sixteen"
+  },
+  {
+   "op": "q32_from_raw",
+   "dst": "roll",
+   "a": "s_roll"
+  },
+  {
+   "op": "load_i32",
+   "dst": "i_thrust",
+   "field": "in_thrust"
+  },
+  {
+   "op": "i64_from_i32",
+   "dst": "w_thrust",
+   "a": "i_thrust"
+  },
+  {
+   "op": "shl_i64",
+   "dst": "s_thrust",
+   "a": "w_thrust",
+   "n": "sixteen"
+  },
+  {
+   "op": "q32_from_raw",
+   "dst": "thrust",
+   "a": "s_thrust"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "wx",
+   "a": "pitch",
+   "b": "rate"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "wy0",
+   "a": "yaw",
+   "b": "rate"
+  },
+  {
+   "op": "neg_q32",
+   "dst": "wy",
+   "a": "wy0"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "wz0",
+   "a": "roll",
+   "b": "rate"
+  },
+  {
+   "op": "neg_q32",
+   "dst": "wz",
+   "a": "wz0"
+  },
+  {
+   "op": "make_v3",
+   "dst": "w",
+   "x": "wx",
+   "y": "wy",
+   "z": "wz"
+  },
+  {
+   "op": "quat_integrate",
+   "dst": "q2",
+   "q": "q",
+   "w": "w",
+   "dt": "dt"
+  },
+  {
+   "op": "make_v3",
+   "dst": "nose",
+   "x": "zero",
+   "y": "zero",
+   "z": "neg1"
+  },
+  {
+   "op": "quat_rotate",
+   "dst": "fwd",
+   "q": "q2",
+   "v": "nose"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "thr",
+   "a": "thrust",
+   "b": "accel"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "a_thr",
+   "v": "fwd",
+   "s": "thr"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "a_spr",
+   "v": "p",
+   "s": "k"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "a_drg",
+   "v": "v",
+   "s": "drag"
+  },
+  {
+   "op": "v3_sub",
+   "dst": "a1",
+   "a": "a_thr",
+   "b": "a_spr"
+  },
+  {
+   "op": "v3_sub",
+   "dst": "acc",
+   "a": "a1",
+   "b": "a_drg"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "dv",
+   "v": "acc",
+   "s": "dt"
+  },
+  {
+   "op": "v3_add",
+   "dst": "v2",
+   "a": "v",
+   "b": "dv"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "dp",
+   "v": "v2",
+   "s": "dt"
+  },
+  {
+   "op": "v3_add",
+   "dst": "p2",
+   "a": "p",
+   "b": "dp"
+  },
+  {
+   "op": "v3_get",
+   "dst": "z0",
+   "v": "p",
+   "axis": 2
+  },
+  {
+   "op": "v3_get",
+   "dst": "z1",
+   "v": "p2",
+   "axis": 2
+  },
+  {
+   "op": "v3_get",
+   "dst": "x1",
+   "v": "p2",
+   "axis": 0
+  },
+  {
+   "op": "v3_get",
+   "dst": "y1",
+   "v": "p2",
+   "axis": 1
+  },
+  {
+   "op": "lt_q32",
+   "dst": "above",
+   "a": "zero",
+   "b": "z0"
+  },
+  {
+   "op": "le_q32",
+   "dst": "below",
+   "a": "z1",
+   "b": "zero"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "xx",
+   "a": "x1",
+   "b": "x1"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "yy",
+   "a": "y1",
+   "b": "y1"
+  },
+  {
+   "op": "add_q32",
+   "dst": "rr",
+   "a": "xx",
+   "b": "yy"
+  },
+  {
+   "op": "lt_q32",
+   "dst": "inside",
+   "a": "rr",
+   "b": "gate_r2"
+  },
+  {
+   "op": "and_bool",
+   "dst": "c1",
+   "a": "above",
+   "b": "below"
+  },
+  {
+   "op": "and_bool",
+   "dst": "crossed",
+   "a": "c1",
+   "b": "inside"
+  },
+  {
+   "op": "slot_u32",
+   "dst": "slot"
+  },
+  {
+   "op": "emit_event",
+   "cond": "crossed",
+   "kind": 1,
+   "a": "slot",
+   "b": "slot"
+  },
+  {
+   "op": "store_v3",
+   "src": "p2",
+   "x": "pos_x",
+   "y": "pos_y",
+   "z": "pos_z"
+  },
+  {
+   "op": "store_v3",
+   "src": "v2",
+   "x": "vel_x",
+   "y": "vel_y",
+   "z": "vel_z"
+  },
+  {
+   "op": "quat_get",
+   "dst": "nw",
+   "q": "q2",
+   "axis": 0
+  },
+  {
+   "op": "quat_get",
+   "dst": "nx",
+   "q": "q2",
+   "axis": 1
+  },
+  {
+   "op": "quat_get",
+   "dst": "ny",
+   "q": "q2",
+   "axis": 2
+  },
+  {
+   "op": "quat_get",
+   "dst": "nz",
+   "q": "q2",
+   "axis": 3
+  },
+  {
+   "op": "make_v3",
+   "dst": "nv",
+   "x": "nx",
+   "y": "ny",
+   "z": "nz"
+  },
+  {
+   "op": "store_q32",
+   "field": "rot_w",
+   "src": "nw"
+  },
+  {
+   "op": "store_v3",
+   "src": "nv",
+   "x": "rot_x",
+   "y": "rot_y",
+   "z": "rot_z"
+  }
+ ]
+}

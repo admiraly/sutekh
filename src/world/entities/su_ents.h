@@ -111,6 +111,14 @@ uint32_t su_ents_canonical_write(const SuEnts *e, uint8_t *buf, size_t cap, size
  *   generation 0 on a dead slot, nonzero external id on a dead slot, slot high_water-1 that was never
  *   allocated (dead with generation 1), counts that disagree with the records, or allocation failure. */
 uint32_t su_ents_canonical_parse(const uint8_t *buf, size_t len, SuEnts **out);
+/* Strict parse into an existing table of the same capacity, without allocating (rollback restore).
+ * Same checks and codes as su_ents_canonical_parse, plus SU_E_SCHEMA_MISMATCH when the encoded
+ * capacity differs from e's. On failure e holds unspecified (memory-safe) contents: callers parse
+ * into a scratch table and swap it in only on SU_OK. */
+uint32_t su_ents_canonical_parse_into(SuEnts *e, const uint8_t *buf, size_t len);
+/* Exchanges the contents of two tables of the same capacity (O(1), no allocation).
+ * SU_E_INVALID_ARGUMENT on NULL or capacity mismatch. */
+uint32_t su_ents_swap(SuEnts *a, SuEnts *b);
 /* Compares logical state. *equal is 1 or 0. */
 uint32_t su_ents_state_equal(const SuEnts *a, const SuEnts *b, int *equal);
 

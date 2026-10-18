@@ -1,0 +1,142 @@
+{
+ "capsule_format": "0.1",
+ "ir_version": "0.3",
+ "system_id": "demo.flight",
+ "source": "flight.lir.json",
+ "schema": {
+  "id": "demo.flight",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "fields": [
+  {
+   "id": 1,
+   "name": "pos_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 3,
+   "name": "pos_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 5,
+   "name": "pos_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 7,
+   "name": "vel_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 9,
+   "name": "vel_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 11,
+   "name": "vel_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 13,
+   "name": "rot_w",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 15,
+   "name": "rot_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 17,
+   "name": "rot_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 19,
+   "name": "rot_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 21,
+   "name": "drag",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 23,
+   "name": "spring",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 25,
+   "name": "in_pitch",
+   "type": "i32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 26,
+   "name": "in_yaw",
+   "type": "i32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 27,
+   "name": "in_roll",
+   "type": "i32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 28,
+   "name": "in_thrust",
+   "type": "i32",
+   "read": true,
+   "write": false
+  }
+ ],
+ "schedule": {
+  "phase": "simulate",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 65536,
+  "allocation": "forbidden",
+  "max_struct_per_row": 1,
+  "max_events_per_row": 1
+ },
+ "tests": [
+  "examples/presentation/space_demo.c"
+ ]
+}
