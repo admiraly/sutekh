@@ -197,6 +197,11 @@ typedef struct SuFxBuffer {
 SU_RENDER_API void su_fx_billboard(SuFxBuffer *b, SuVec3f pos, float size, float rotation, const float color[4], SuMat4f view);
 /* A beam from a to b (camera-relative) of the given width, facing the camera. */
 SU_RENDER_API void su_fx_beam(SuFxBuffer *b, SuVec3f a, SuVec3f c, float width, const float color[4]);
+/* Optional cheap glare for very bright points (a sun, an engine core): a soft core billboard of half-size size plus
+ * a horizontal and a vertical streak of half-length streak (in the camera plane; 0 = 8 * size) and a faint halo
+ * billboard. About a dozen triangles; the host decides which sources get it (the flag is whether it calls this).
+ * color is the core's linear colour; streaks and halo use fractions of it. view as for su_fx_billboard. */
+SU_RENDER_API void su_fx_glare(SuFxBuffer *b, SuVec3f pos, float size, float streak, const float color[4], SuMat4f view);
 
 typedef struct SuTrailPoint {
     SuWorldPos pos;
@@ -289,6 +294,8 @@ typedef struct SuRenderDeviceInfo {
     float timestamp_period_ns;
     uint64_t device_local_bytes;   /* largest device-local heap */
     char why_not[160];             /* reason when meets_baseline is 0 */
+    uint32_t bloom;                /* 1: the HDR format can be sampled with linear filtering, which bloom and auto
+                                    * exposure need. 0: SuRenderPost requests are ignored (plain tonemap). */
 } SuRenderDeviceInfo;
 
 /* Lists the Vulkan physical devices. *count receives the number found (all of them, even beyond cap).
@@ -448,8 +455,35 @@ typedef struct SuRenderObject {
     uint32_t reserved[2];
 } SuRenderObject;
 
+/* Post processing on the HDR scene (RGBA16F), before the tonemap. Zero-initialised = everything off, so existing
+ * frames render exactly as before.
+ *
+ * Bloom: the scene is downsampled through a mip chain (13-tap filter, the first level thresholded with a soft knee
+ * and Karis-weighted), then upsampled with a tent filter, and the result is added to the scene before exposure.
+ * Threshold is in scene-linear units (before exposure). The chain is energy preserving: intensity 1 adds back about
+ * the energy that passed the threshold, spread by the radius. Intensity 0 gives exactly the no-bloom image.
+ *
+ * Auto exposure is stateless and therefore deterministic: the log-average luminance of the frame (read from the
+ * smallest level of the same chain) sets exposure = key / average, clamped to [exposure_min, exposure_max], times
+ * light.exposure. There is no temporal adaptation (nothing is carried between frames); smooth the manual
+ * light.exposure from the host if a slow adaptation is wanted. */
+#define SU_POST_BLOOM 0x1u              /* run the bloom chain */
+#define SU_POST_AUTO_EXPOSURE 0x2u      /* exposure from the frame's average luminance */
+
+typedef struct SuRenderPost {
+    uint32_t flags;                    /* SU_POST_* */
+    float bloom_threshold;             /* scene-linear brightness (max of r, g, b) where bloom starts; 0 = 1.0 */
+    float bloom_knee;                  /* soft knee width as a fraction of the threshold, 0..1 (0 = hard) */
+    float bloom_intensity;             /* multiplier of the bloom added back; 0 = no bloom contribution (not "default") */
+    float bloom_radius;                /* tent filter tap spacing in texels of each level; 0 = 1.0, larger = wider glow */
+    uint32_t bloom_levels;             /* mip levels used for the glow, 2..8; 0 = 6 (fewer on small targets) */
+    float auto_key;                    /* target average luminance; 0 = 0.18 */
+    float exposure_min;                /* auto exposure clamp; 0 = 1/32 */
+    float exposure_max;                /* 0 = 32 */
+} SuRenderPost;
+
 typedef struct SuRenderFrameDesc {
-    uint32_t struct_size;              /* sizeof(SuRenderFrameDesc) */
+    uint32_t struct_size;            /* sizeof(SuRenderFrameDesc) */
     SuRenderCamera camera;
     SuRenderLighting light;
     const SuRenderObject *objects;     /* culled per object and per node; LOD per node */
@@ -463,6 +497,7 @@ typedef struct SuRenderFrameDesc {
     uint32_t fx_vertex_count;
     const SuHudVertex *hud;            /* screen-space triangles (su_hud_*) */
     uint32_t hud_vertex_count;
+    SuRenderPost post;                 /* all zero: no bloom, no auto exposure (the plain tonemap of before) */
 } SuRenderFrameDesc;
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object
@@ -510,6 +545,9 @@ typedef struct SuRenderStats {
     uint32_t pipeline_cache;       /* 0 none, 1 loaded and used, 2 file present but rejected (other device or
                                     * driver, or corrupt; started empty), 3 no file yet (started empty) */
     double pipeline_create_ms;     /* time to create every pipeline at su_render_create */
+    /* ---- post processing ---- */
+    uint32_t bloom_levels_active;  /* levels of the last frame's bloom chain, 0 when the chain did not run */
+    uint32_t post_passes;          /* bloom render passes of the last frame (downsample + upsample) */
 } SuRenderStats;
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given

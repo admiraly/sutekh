@@ -31,6 +31,9 @@
  *   --world-offset KM                  shift the whole presentation KM kilometres along +x (camera-relative
  *                                      rendering keeps it stable; the simulation is unchanged)
  *   --no-audio                         no mixer (default: device in a window, offline mixer otherwise)
+ *   --no-bloom, --no-glare             turn off the HDR bloom (default on: emissive gates, engine trails, flares) or the
+ *                                      sun's glare streaks
+ *   --auto-exposure                    stateless automatic exposure (SU_POST_AUTO_EXPOSURE)
  *   --legacy                           draw with the first-slice debug renderer (su_render_frame)
  *   --pipeline-cache FILE              persist the pipeline cache there
  *   options: --no-vsync, --validation, --map file, --width W --height H, --exercise-window (resize, minimize,
@@ -98,6 +101,9 @@ typedef struct Demo {
     int free_cam;
     int fixed_cam;            /* --offscreen: a fixed overview camera */
     int legacy;
+    int no_bloom;
+    int auto_exposure;
+    int no_glare;
     uint64_t frames_drawn;
     uint64_t frames_paused;   /* the frame call returned SU_E_RESOURCE_LIMIT (minimized or out of date) */
     uint64_t frames_failed;
@@ -869,8 +875,27 @@ static void draw(float alpha, double dt, SuChaseCamera *chase, SuFreeCamera *fre
                             1.5f, a, c, view_rot);
         }
     }
+    /* the sun: a very bright core with glare streaks, when it is in front of the camera */
+    if (!g.no_glare) {
+        SuVec3f toward_sun = v3(0.4f, 0.8f, 0.45f); /* opposite of the light direction */
+        SuVec3f cam_fwd = su_quatf_rotate(f.camera.rot, v3(0.0f, 0.0f, -1.0f));
+        if (cam_fwd.x * toward_sun.x + cam_fwd.y * toward_sun.y + cam_fwd.z * toward_sun.z > 0.3f) {
+            float sun[4] = {60.0f, 56.0f, 48.0f, 1.0f};
+            SuVec3f p = v3(toward_sun.x * 4000.0f, toward_sun.y * 4000.0f, toward_sun.z * 4000.0f);
+            su_fx_glare(&fb, p, 60.0f, 700.0f, sun, view_rot);
+        }
+    }
     f.fx = fx;
     f.fx_vertex_count = fb.count;
+    /* HDR bloom on emissive surfaces, engine trails and flares (additive values above 1) */
+    if (!g.no_bloom || g.auto_exposure) {
+        f.post.flags = (g.no_bloom ? 0u : SU_POST_BLOOM) | (g.auto_exposure ? SU_POST_AUTO_EXPOSURE : 0u);
+        f.post.bloom_threshold = 1.0f;
+        f.post.bloom_knee = 0.5f;
+        f.post.bloom_intensity = 0.9f;
+        f.post.bloom_radius = 1.0f;
+        f.post.auto_key = 0.12f;
+    }
 
     /* HUD */
     speed = sqrtf(s[0].vel.x * s[0].vel.x + s[0].vel.y * s[0].vel.y + s[0].vel.z * s[0].vel.z);
@@ -1064,6 +1089,12 @@ int main(int argc, char **argv) {
             offset_km = atof(argv[++i]);
         } else if (strcmp(argv[i], "--no-audio") == 0) {
             no_audio = 1;
+        } else if (strcmp(argv[i], "--no-bloom") == 0) {
+            g.no_bloom = 1;
+        } else if (strcmp(argv[i], "--no-glare") == 0) {
+            g.no_glare = 1;
+        } else if (strcmp(argv[i], "--auto-exposure") == 0) {
+            g.auto_exposure = 1;
         } else if (strcmp(argv[i], "--legacy") == 0) {
             g.legacy = 1;
         } else if (strcmp(argv[i], "--pipeline-cache") == 0 && i + 1 < argc) {

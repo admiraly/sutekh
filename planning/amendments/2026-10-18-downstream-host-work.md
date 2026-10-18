@@ -144,3 +144,18 @@ contacts fire up to 22.6 m from the surface, 4.35x the box volume; a capsule alo
     bit; `space3d.query` and `space3d.query_prox` (descriptors, hashes, results, digests) are unchanged.
 
 The IR/opcode contract is not changed: the new lanes are an operator declaration, bound like the existing ones.
+
+## Extension, 18 October 2026: HDR bloom, exposure, glare
+
+Same authorization and boundaries. Request from the same downstream project: engine glows, running lights and
+emissive surfaces should bleed light like a camera.
+
+18. Presentation only (`su_render`; nothing in the simulation, IR or host contracts changes): `SuRenderPost` on
+    `SuRenderFrameDesc` (zero = off, existing frames unchanged): thresholded soft-knee bloom over the existing
+    RGBA16F scene target (13-tap down, tent up, half resolution; threshold, knee, intensity, radius, levels), a
+    stateless deterministic optional auto exposure (key, clamp), `SuRenderDeviceInfo.bloom` and a plain-tonemap
+    fallback when the HDR format cannot be filtered, `su_fx_glare` (optional cheap streaks, host-called), and
+    stats (`bloom_levels_active`, `post_passes`). Per-material (`emissive_strength`) and per-instance
+    (`SuRenderObject.emissive`) emissive multipliers already existed and feed it. `examples/presentation` shows it
+    (`--no-bloom`, `--no-glare`, `--auto-exposure`). Tests: `test_render_bloom`. Not done: temporal exposure
+    adaptation, a lens-dirt or anamorphic flare, a compute-based chain.
