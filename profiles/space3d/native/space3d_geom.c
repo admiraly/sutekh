@@ -322,6 +322,270 @@ S3Hit s3_sweep_sphere_obb(SuV3 c0, SuV3 v, int64_t r, SuV3 center, SuQuat q, SuV
     return h;
 }
 
+/* ---------- capsule movers (2026-10-18) ----------
+ * Parallelogram P = {p00 + alpha d1 + beta e : alpha, beta in [0, 1]} with p00 = a - e0, d1 = b - a, e = e0 - e1:
+ * the set of offsets (obstacle core point) - (mover core offset). The mover's reference point is within R of the
+ * obstacle core exactly when it is within R of P. Edges in fixed order: (p00, +d1), (p00 + e, +d1), (p00, +e),
+ * (p00 + d1, +e). The face is used when d1 x e is nonzero. */
+typedef struct Para {
+    SuV3 p00, d1, e, n;
+    int64_t den; /* |d1 x e| as dot(d1 x e, n) */
+    int face;
+} Para;
+
+static Para para_make(SuV3 a, SuV3 b, SuV3 e0, SuV3 e1) {
+    Para p;
+    SuV3 nn;
+    p.p00 = su_v3_subf(a, e0);
+    p.d1 = su_v3_subf(b, a);
+    p.e = su_v3_subf(e0, e1);
+    nn = su_v3_crossf(p.d1, p.e);
+    p.n = su_v3_normalizef(nn);
+    p.den = su_v3_dotf(nn, p.n);
+    p.face = !v3_is_zero(p.n) && p.den > 0;
+    return p;
+}
+
+static void para_edge(const Para *p, int k, SuV3 *pa, SuV3 *pb) {
+    SuV3 o = k == 1 ? su_v3_addf(p->p00, p->e) : (k == 3 ? su_v3_addf(p->p00, p->d1) : p->p00);
+    *pa = o;
+    *pb = su_v3_addf(o, k < 2 ? p->d1 : p->e);
+}
+
+/* w = point - p00: inside the parallelogram's prism (alpha, beta in [0, ONE]). */
+static int para_inside(const Para *p, SuV3 w) {
+    int64_t al = su_q32_divf(su_v3_dotf(su_v3_crossf(w, p->e), p->n), p->den);
+    int64_t be = su_q32_divf(su_v3_dotf(su_v3_crossf(p->d1, w), p->n), p->den);
+    return al >= 0 && al <= ONE && be >= 0 && be <= ONE;
+}
+
+/* Earliest s in [0, len] at which c0 + s u is within R of the segment pa-pb. */
+static int ray_seg(SuV3 c0, SuV3 u, int64_t len, SuV3 pa, SuV3 pb, int64_t R, int64_t *s) {
+    SuV3 d = su_v3_subf(pb, pa);
+    int64_t H = su_v3_lenf(d);
+    if (H == 0) {
+        return ray_sphere(su_v3_subf(c0, pa), u, len, R, s);
+    }
+    return ray_capsule(su_v3_subf(c0, pa), su_v3_subf(c0, pb), u, len, su_v3_normalizef(d), H, R, s);
+}
+
+/* Earliest s in [0, len] at which c0 + s u is within R of the parallelogram: face slab first, then the four edges;
+ * the smallest s wins (equal s keeps the earlier feature). */
+static int ray_para(const Para *p, SuV3 c0, SuV3 u, int64_t len, int64_t R, int64_t *s_out) {
+    int found = 0, k;
+    int64_t best = 0, s = 0;
+    if (p->face) {
+        SuV3 w0 = su_v3_subf(c0, p->p00);
+        int64_t h0 = su_v3_dotf(w0, p->n), dn = su_v3_dotf(u, p->n);
+        int64_t nR = su_q32_neg(R);
+        if (h0 >= nR && h0 <= R) {
+            if (para_inside(p, w0)) {
+                *s_out = 0;
+                return 1;
+            }
+        } else if (len > 0 && ((h0 > R && dn < 0) || (h0 < nR && dn > 0))) {
+            s = h0 > R ? su_q32_divf(su_q32_subf(h0, R), su_q32_neg(dn)) : su_q32_divf(su_q32_subf(nR, h0), dn);
+            if (s < 0) {
+                s = 0;
+            }
+            if (s <= len && para_inside(p, su_v3_addf(w0, su_v3_scalef(u, s)))) {
+                best = s;
+                found = 1;
+            }
+        }
+    }
+    for (k = 0; k < 4; k++) {
+        SuV3 pa, pb;
+        para_edge(p, k, &pa, &pb);
+        if (ray_seg(c0, u, len, pa, pb, R, &s) && (!found || s < best)) {
+            best = s;
+            found = 1;
+        }
+    }
+    if (found) {
+        *s_out = best;
+    }
+    return found;
+}
+
+/* P minus its closest point on the parallelogram (face first, then the edges; the smallest squared length wins,
+ * ties to the earlier feature). */
+static SuV3 para_offset(const Para *p, SuV3 P) {
+    SuV3 best = v3(0, 0, 0);
+    int64_t bd = 0;
+    int found = 0, k;
+    if (p->face) {
+        SuV3 w = su_v3_subf(P, p->p00);
+        if (para_inside(p, w)) {
+            best = su_v3_scalef(p->n, su_v3_dotf(w, p->n));
+            bd = su_v3_dotf(best, best);
+            found = 1;
+        }
+    }
+    for (k = 0; k < 4; k++) {
+        SuV3 pa, pb, d, off;
+        int64_t H, dd;
+        para_edge(p, k, &pa, &pb);
+        d = su_v3_subf(pb, pa);
+        H = su_v3_lenf(d);
+        if (H == 0) {
+            off = su_v3_subf(P, pa);
+        } else {
+            SuV3 ax = su_v3_normalizef(d);
+            int64_t t = clamp_q(su_v3_dotf(su_v3_subf(P, pa), ax), 0, H);
+            off = su_v3_subf(P, su_v3_addf(pa, su_v3_scalef(ax, t)));
+        }
+        dd = su_v3_dotf(off, off);
+        if (!found || dd < bd) {
+            best = off;
+            bd = dd;
+            found = 1;
+        }
+    }
+    return best;
+}
+
+S3Hit s3_sweep_capsule_capsule(SuV3 c0, SuV3 v, int64_t r, SuV3 e0, SuV3 e1, SuV3 a, SuV3 b, int64_t rc) {
+    S3Hit h;
+    Para p = para_make(a, b, e0, e1);
+    int64_t len = su_v3_lenf(v), s = 0;
+    SuV3 u = su_v3_normalizef(v);
+    h.hit = 0;
+    h.toi = 0;
+    h.n = v3(0, 0, 0);
+    if (!ray_para(&p, c0, u, len, su_q32_addf(r, rc), &s)) {
+        return h;
+    }
+    h.hit = 1;
+    h.toi = toi_of(s, len);
+    h.n = unit_or_up(para_offset(&p, su_v3_addf(c0, su_v3_scalef(u, s))));
+    return h;
+}
+
+S3Hit s3_sweep_capsule_sphere(SuV3 c0, SuV3 v, int64_t r, SuV3 e0, SuV3 e1, SuV3 s, int64_t rs) {
+    return s3_sweep_capsule_capsule(c0, v, r, e0, e1, s, s, rs);
+}
+
+/* Box corner (sx, sy, sz in {-1, +1}) in world space. */
+static SuV3 box_corner(SuV3 center, SuQuat q, SuV3 half, int sx, int sy, int sz) {
+    return su_v3_addf(center, su_quat_rotatef(q, v3(sx * half.x, sy * half.y, sz * half.z)));
+}
+
+/* Edge j (0..11) of the box: axis j / 4, the other two signs from j % 4. */
+static void box_edge(SuV3 center, SuQuat q, SuV3 half, int j, SuV3 *pa, SuV3 *pb) {
+    int ax = j / 4, s1 = (j & 1) ? 1 : -1, s2 = (j & 2) ? 1 : -1;
+    int sg[3];
+    sg[ax] = -1;
+    sg[(ax + 1) % 3] = s1;
+    sg[(ax + 2) % 3] = s2;
+    *pa = box_corner(center, q, half, sg[0], sg[1], sg[2]);
+    sg[ax] = 1;
+    *pb = box_corner(center, q, half, sg[0], sg[1], sg[2]);
+}
+
+/* Slab clip of the segment A-B against the box (box frame). Returns 1 when they intersect and the chord's mid
+ * parameter in *tm (q32 in [0, ONE]). */
+static int seg_box_clip(SuV3 A, SuV3 B, SuV3 center, SuQuat q, SuV3 half, int64_t *tm) {
+    SuQuat qc = su_quat_conjf(q);
+    SuV3 pa = su_quat_rotatef(qc, su_v3_subf(A, center));
+    SuV3 d = su_quat_rotatef(qc, su_v3_subf(B, A));
+    int64_t t0 = 0, t1 = ONE;
+    int i;
+    for (i = 0; i < 3; i++) {
+        int64_t p = v3_comp(pa, i), di = v3_comp(d, i), hh = v3_comp(half, i);
+        int64_t ta, tb;
+        if (di == 0) {
+            if (p < su_q32_neg(hh) || p > hh) {
+                return 0;
+            }
+            continue;
+        }
+        ta = su_q32_divf(su_q32_subf(su_q32_neg(hh), p), di);
+        tb = su_q32_divf(su_q32_subf(hh, p), di);
+        if (ta > tb) {
+            int64_t t = ta;
+            ta = tb;
+            tb = t;
+        }
+        t0 = ta > t0 ? ta : t0;
+        t1 = tb < t1 ? tb : t1;
+        if (t0 > t1) {
+            return 0;
+        }
+    }
+    *tm = su_q32_addf(t0, su_q32_subf(t1, t0) / 2);
+    return 1;
+}
+
+S3Hit s3_sweep_capsule_obb(SuV3 c0, SuV3 v, int64_t r, SuV3 e0, SuV3 e1, SuV3 center, SuQuat q, SuV3 half) {
+    S3Hit h, hk;
+    SuV3 A = su_v3_addf(c0, e0), B = su_v3_addf(c0, e1), u;
+    int64_t tm = 0, len, s = 0;
+    int j;
+    if (seg_box_clip(A, B, center, q, half, &tm)) {
+        SuV3 mid = su_v3_addf(A, su_v3_scalef(su_v3_subf(B, A), tm));
+        h = s3_sweep_sphere_obb(mid, v3(0, 0, 0), r, center, q, half);
+        h.hit = 1;
+        h.toi = 0;
+        return h;
+    }
+    h = s3_sweep_sphere_obb(A, v, r, center, q, half);
+    hk = s3_sweep_sphere_obb(B, v, r, center, q, half);
+    if (hk.hit && (!h.hit || hk.toi < h.toi)) {
+        h = hk;
+    }
+    len = su_v3_lenf(v);
+    u = su_v3_normalizef(v);
+    for (j = 0; j < 12; j++) {
+        SuV3 pa, pb;
+        Para p;
+        int64_t toi;
+        box_edge(center, q, half, j, &pa, &pb);
+        p = para_make(pa, pb, e0, e1);
+        if (!ray_para(&p, c0, u, len, r, &s)) {
+            continue;
+        }
+        toi = toi_of(s, len);
+        if (!h.hit || toi < h.toi) {
+            h.hit = 1;
+            h.toi = toi;
+            h.n = unit_or_up(para_offset(&p, su_v3_addf(c0, su_v3_scalef(u, s))));
+        }
+    }
+    return h;
+}
+
+int64_t s3_dist_seg_seg(SuV3 p, SuV3 e0, SuV3 e1, SuV3 a, SuV3 b) {
+    Para pp = para_make(a, b, e0, e1);
+    return su_v3_lenf(para_offset(&pp, p));
+}
+
+static int64_t box_point_dist(SuV3 P, SuV3 center, SuQuat q, SuV3 half) {
+    SuV3 l = su_quat_rotatef(su_quat_conjf(q), su_v3_subf(P, center));
+    SuV3 cl = v3(clamp_q(l.x, su_q32_neg(half.x), half.x), clamp_q(l.y, su_q32_neg(half.y), half.y),
+                 clamp_q(l.z, su_q32_neg(half.z), half.z));
+    return su_v3_lenf(su_v3_subf(l, cl));
+}
+
+int64_t s3_dist_seg_obb(SuV3 p, SuV3 e0, SuV3 e1, SuV3 center, SuQuat q, SuV3 half) {
+    SuV3 A = su_v3_addf(p, e0), B = su_v3_addf(p, e1);
+    int64_t tm = 0, d, dk;
+    int j;
+    if (seg_box_clip(A, B, center, q, half, &tm)) {
+        return 0;
+    }
+    d = box_point_dist(A, center, q, half);
+    dk = box_point_dist(B, center, q, half);
+    d = dk < d ? dk : d;
+    for (j = 0; j < 12; j++) {
+        SuV3 pa, pb;
+        box_edge(center, q, half, j, &pa, &pb);
+        dk = s3_dist_seg_seg(p, e0, e1, pa, pb);
+        d = dk < d ? dk : d;
+    }
+    return d;
+}
+
 int s3_segment_gate(SuV3 p0, SuV3 p1, SuV3 c, SuQuat q, int64_t half_x, int64_t half_y, int64_t radius, int shape,
                     S3GateHit *out) {
     /* The in-plane axes are needed only after a side change: computed below (pure, so the order is free). */

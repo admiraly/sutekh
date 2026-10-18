@@ -49,6 +49,24 @@ S3Hit s3_sweep_sphere_obb(SuV3 c0, SuV3 v, int64_t r, SuV3 center, SuQuat q, SuV
 int s3_segment_gate(SuV3 p0, SuV3 p1, SuV3 c, SuQuat q, int64_t half_x, int64_t half_y, int64_t radius, int shape,
                     S3GateHit *out);
 
+/* Capsule movers (2026-10-18). The moving shape is the capsule whose core segment runs from c + e0 to c + e1 (world
+ * offsets from the reference point c, constant during the sweep: translation only) with radius r; c moves from c0 to
+ * c0 + v. Same toi / normal contract as the sphere sweeps (normal from the obstacle towards the mover, from the
+ * closest pair of core points at the contact). The operator uses these only when a capsule mover is involved; a
+ * sphere mover keeps the sphere functions bit for bit. The problem is the point c against the Minkowski sum of the
+ * obstacle core and the reversed segment (a rounded parallelogram for two segments): its four edge capsules and its
+ * face slab. */
+S3Hit s3_sweep_capsule_capsule(SuV3 c0, SuV3 v, int64_t r, SuV3 e0, SuV3 e1, SuV3 a, SuV3 b, int64_t rc);
+/* A sphere obstacle is the capsule with a == b. */
+S3Hit s3_sweep_capsule_sphere(SuV3 c0, SuV3 v, int64_t r, SuV3 e0, SuV3 e1, SuV3 s, int64_t rs);
+/* Oriented box: the earliest of the two end-sphere sweeps (s3_sweep_sphere_obb, in that order) and the twelve
+ * box-edge segment sweeps (edges along x, then y, then z); a core segment that crosses the box at the start reports
+ * toi 0 with the box normal at the middle of the crossing chord. Equal toi keeps the earlier feature. */
+S3Hit s3_sweep_capsule_obb(SuV3 c0, SuV3 v, int64_t r, SuV3 e0, SuV3 e1, SuV3 center, SuQuat q, SuV3 half);
+/* Core distances (no radii) from the segment p + e0 .. p + e1 to a segment a-b / an oriented box. */
+int64_t s3_dist_seg_seg(SuV3 p, SuV3 e0, SuV3 e1, SuV3 a, SuV3 b);
+int64_t s3_dist_seg_obb(SuV3 p, SuV3 e0, SuV3 e1, SuV3 center, SuQuat q, SuV3 half);
+
 /* World-space axis-aligned bounds of the shapes (inclusive; used by the broadphase). */
 void s3_bounds_sphere(SuV3 c, int64_t r, SuV3 *lo, SuV3 *hi);
 void s3_bounds_obb(SuV3 c, SuQuat q, SuV3 half, SuV3 *lo, SuV3 *hi);

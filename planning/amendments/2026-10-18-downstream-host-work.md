@@ -126,3 +126,21 @@ tick), so it needs no engine support and no change to the operator or the IR con
 
 Audio and the renderer still read committed state only; neither writes a world, and the demo's pinned digest is
 unchanged.
+
+## Extension, 18 October 2026: capsule movers
+
+Same authorization and boundaries (owner-authorized downstream work; no M3 gate is closed by it). Request from a
+downstream 6DOF racing project, stated generically: a mover is a sphere of `radius` about its position, which fits
+long or flat craft poorly (one measured hull: bounding sphere 40.9 m for half extents 18.3 x 13.7 x 32.8 m, so side
+contacts fire up to 22.6 m from the surface, 4.35x the box volume; a capsule along local z fits it at r 24.3 m,
+1.45x the box volume).
+
+17. An optional capsule shape for space3d movers, as a fourth descriptor and record (`space3d.query_shape`: the
+    `space3d.query_prox` lanes plus q32 read lanes `z0` (72) and `z1` (74), the core segment on the mover's local +z
+    axis rotated by its `rot` lanes). Sweeps against spheres, boxes, capsules and other movers with the same
+    toi/normal/contact contract and accuracy domain; broadphase bounds and proximity cover the capsule. Rotation
+    during the tick is handled by holding the end-of-tick orientation for the whole tick (translation-only sweep),
+    documented with its error bound in `docs/SPACE3D.md`. A mover with `z0 = z1 = 0` takes the sphere path bit for
+    bit; `space3d.query` and `space3d.query_prox` (descriptors, hashes, results, digests) are unchanged.
+
+The IR/opcode contract is not changed: the new lanes are an operator declaration, bound like the existing ones.
