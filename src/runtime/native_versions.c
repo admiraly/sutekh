@@ -10,6 +10,21 @@
 #include <signal.h>
 
 #include "platform/su_platform.h"
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
+/* Test seam: the worker dies of a segmentation fault. POSIX: SIGSEGV with the default action. Windows: an
+ * access-violation exception (raise(SIGSEGV) would only end the process with exit code 3); the supervisor reports
+ * it as signal 11 (su_proc_win.inc), as for a real fault in a kernel. */
+static void nv_test_crash(void) {
+#if defined(_WIN32)
+    RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, NULL);
+#else
+    signal(SIGSEGV, SIG_DFL);
+    raise(SIGSEGV);
+#endif
+}
 #endif
 
 #include "backends/native/su_native.h"
@@ -72,8 +87,7 @@ void su_nv_test_arm(uint32_t mode, uint32_t delay_ms) {
 /* Runs before every kernel call on the admission and world paths. */
 static void fault_before_kernel(void) {
     if (g_fault_mode == SU_NV_FAULT_CRASH) {
-        signal(SIGSEGV, SIG_DFL);
-        raise(SIGSEGV);
+        nv_test_crash();
     } else if (g_fault_mode == SU_NV_FAULT_HANG) {
         for (;;) {
             su_platform_sleep_ms(1000u);
@@ -610,8 +624,7 @@ uint32_t su_nv_run_system(uint64_t seq, SuWorld *w) {
 #ifdef SU_TEST_FAULT_HOOKS
     if (g_native_crash_tick != 0u && su_world_tick(w) + 1u == g_native_crash_tick &&
         (g_native_crash_backend == 0u || g_native_crash_backend == a->backend_id)) {
-        signal(SIGSEGV, SIG_DFL);
-        raise(SIGSEGV);
+        nv_test_crash();
     }
 #endif
     a->inflight++;
@@ -718,8 +731,7 @@ uint32_t su_nv_run_system_chunked(uint64_t seq, SuWorld *w, uint32_t workers, Su
 #ifdef SU_TEST_FAULT_HOOKS
     if (g_native_crash_tick != 0u && su_world_tick(w) + 1u == g_native_crash_tick &&
         (g_native_crash_backend == 0u || g_native_crash_backend == a->backend_id)) {
-        signal(SIGSEGV, SIG_DFL);
-        raise(SIGSEGV);
+        nv_test_crash();
     }
 #endif
     st = su_world_build_invocation(w, &wi);

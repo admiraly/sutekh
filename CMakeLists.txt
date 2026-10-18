@@ -376,17 +376,13 @@ if(SUTEKH_NATIVE)
     target_link_libraries(native_test_worker PRIVATE su_agent)
     target_compile_definitions(native_test_worker PRIVATE _POSIX_C_SOURCE=200809L SU_TEST_FAULT_HOOKS)
     sutekh_apply_warnings(native_test_worker)
-    if(WIN32)
-        sutekh_unsupported_test(specialize_admission "POSIX process inspection in the driver (fork, pipes, /proc); not yet ported to Windows (the native tier itself is covered by native_scalar, native_avx2, safe_retire and native_chunked)")
-    else()
-        add_executable(test_specialize_admission tests/native/qualification/test_specialize_admission.c)
-        target_link_libraries(test_specialize_admission PRIVATE su_agent su_native su_ir)
-        sutekh_apply_warnings(test_specialize_admission)
-        add_dependencies(test_specialize_admission native_test_worker)
-        add_test(NAME specialize_admission COMMAND test_specialize_admission $<TARGET_FILE:native_test_worker>
-                 "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/specialize_admission_scratch"
-                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    endif()
+    add_executable(test_specialize_admission tests/native/qualification/test_specialize_admission.c)
+    target_link_libraries(test_specialize_admission PRIVATE su_agent su_native su_ir)
+    sutekh_apply_warnings(test_specialize_admission)
+    add_dependencies(test_specialize_admission native_test_worker)
+    add_test(NAME specialize_admission COMMAND test_specialize_admission $<TARGET_FILE:native_test_worker>
+             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/specialize_admission_scratch"
+             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     # The production engine binary must carry none of the fault seams.
     # M1-02c-2: native kernel crash, quarantine and respecialization (test worker only).
     if(WIN32)
