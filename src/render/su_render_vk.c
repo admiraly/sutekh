@@ -2549,6 +2549,9 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         if (n_hud > 0u) {
             r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->hud_pipe);
             r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->post_layout, 0, 1, &r->font_set, 0, NULL);
+            /* the HUD shaders read the output size from the post push constants, whichever pass drew the tonemap */
+            r->f.vkCmdPushConstants(cmd, r->post_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                    sizeof pp, &pp);
             r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->hud.buf, &zero);
             r->f.vkCmdDraw(cmd, n_hud, 1, 0, 0);
             r->stats.draws++;

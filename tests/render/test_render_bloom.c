@@ -79,6 +79,8 @@ typedef struct Scene {
     uint32_t fx_count;
     const SuRenderObject *objs;
     uint32_t obj_count;
+    const SuHudVertex *hud;
+    uint32_t hud_count;
 } Scene;
 
 static void scene_init(Scene *s) {
@@ -106,6 +108,8 @@ static int render(const Scene *s, uint8_t *out) {
     f.objects = s->objs;
     f.object_count = s->obj_count;
     f.post = s->post;
+    f.hud = s->hud;
+    f.hud_vertex_count = s->hud_count;
     for (k = 0; k < 3; k++) {
         uint32_t st = su_render_frame_ex(g_r, &f);
         CHECK(st == SU_OK);
@@ -413,6 +417,24 @@ int main(int argc, char **argv) {
         sc.exposure = 2.0f;
         CHECK(render(&sc, g_img));
         CHECK(near_i(px(g_img, 100, 100)[1], srgb8(0.18), 2));
+    }
+
+    /* ---------- the HUD is drawn after the bloom output pass, untouched by exposure ---------- */
+    {
+        SuHudVertex hv[64];
+        SuHud hud;
+        scene_init(&sc);
+        sc.clear[0] = sc.clear[1] = sc.clear[2] = 0.02f;
+        sc.post = bloom_post(1.0f, 0.5f, 1.0f, 1.0f);
+        sc.post.flags |= SU_POST_AUTO_EXPOSURE;
+        su_hud_begin(&hud, hv, 64, W, H);
+        su_hud_rect(&hud, 100.0f, 100.0f, 20.0f, 20.0f, 0xFF0000FFu);
+        sc.hud = hv;
+        sc.hud_count = hud.count;
+        CHECK(hud.count == 6u);
+        CHECK(render(&sc, g_img));
+        CHECK(px(g_img, 110, 110)[0] == 255 && px(g_img, 110, 110)[1] == 0 && px(g_img, 110, 110)[2] == 0);
+        CHECK(px(g_img, 50, 50)[0] == px(g_img, 200, 200)[0] && px(g_img, 50, 50)[0] > 0);
     }
 
     /* ---------- ribbon trail ---------- */
