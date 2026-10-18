@@ -75,7 +75,7 @@ target_link_libraries(test_ir PRIVATE su_ir su_vm)
 sutekh_apply_warnings(test_ir)
 add_test(NAME ir COMMAND test_ir WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
-add_library(su_vm STATIC src/vm/su_vm.c)
+add_library(su_vm STATIC src/vm/su_vm.c src/vm/su_vm_plan.c)
 target_include_directories(su_vm PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 target_link_libraries(su_vm PUBLIC su_world su_ir)
 sutekh_apply_warnings(su_vm)
@@ -84,6 +84,24 @@ add_executable(test_vm tests/vm/test_vm.c)
 target_link_libraries(test_vm PRIVATE su_vm)
 sutekh_apply_warnings(test_vm)
 add_test(NAME vm COMMAND test_vm WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# VM tiers (su_vm.h): planned against reference on hand-built edge cases and the racer capsule.
+add_executable(test_vm_tiers tests/vm/test_vm_tiers.c)
+target_link_libraries(test_vm_tiers PRIVATE su_vm)
+sutekh_apply_warnings(test_vm_tiers)
+add_test(NAME vm_tiers COMMAND test_vm_tiers WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+if(UNIX)
+    target_link_libraries(su_vm PUBLIC m) # sqrt: the estimate of su_num_fast.h
+endif()
+# su_num_fast.h (planned VM tier) against the reference su_num.c, with and without compiler intrinsics.
+add_executable(test_num_fast tests/num/test_num_fast.c)
+target_link_libraries(test_num_fast PRIVATE su_vm)
+sutekh_apply_warnings(test_num_fast)
+add_test(NAME num_fast COMMAND test_num_fast 200000 1)
+add_executable(test_num_fast_portable tests/num/test_num_fast.c)
+target_compile_definitions(test_num_fast_portable PRIVATE SU_NUM_FAST_PORTABLE)
+target_link_libraries(test_num_fast_portable PRIVATE su_vm)
+sutekh_apply_warnings(test_num_fast_portable)
+add_test(NAME num_fast_portable COMMAND test_num_fast_portable 100000 2)
 # numeric-3d stream (IR 0.3, fixed_q32_v1, space3d): every target lives in the included file.
 include(cmake/SutekhNumeric3D.cmake)
 

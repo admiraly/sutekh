@@ -9,6 +9,13 @@ loads/stores, register typing) is re-implemented here, so a bug in the verifier 
 lane plumbing shows up as a mismatch.
 
     ir03_diff.py --driver build/ir03_driver --work <dir> --programs 300 --rows 48 --seed 1
+
+Every program also runs on both VM tiers (su_vm.h): the driver reports whether the planned and reference tiers
+committed identical lanes, and that must hold for every program. Every third program is "guarded": its stores
+select between a computed value and the field's own loaded value under conditions on a u32 "gate" field
+(identity on the false side, on the true side, nested, or a decoy that stores another field's value), which is
+the shape the planned tier's identity-row guard proves and skips. "Clean" guarded programs must get a guard and
+skip rows, so the proof is exercised, not only tolerated.
 """
 import argparse
 import hashlib
@@ -280,7 +287,8 @@ def run_program(fields, insns, lane_in):
 
 # ---------- generator ----------
 
-def gen_program(rng, idx):
+def gen_program(rng, idx, guard_policy=None):
+    """guard_policy: None (plain), "clean" (every store identity when the gate condition is false) or "mixed"."""
     nfields = {"q32": rng.randint(3, 6), "i32": rng.randint(1, 3), "i64": rng.randint(1, 2), "u32": rng.randint(1, 3)}
     ids = rng.sample(range(1, 400, 2), sum(nfields.values()))
     fields = []
@@ -288,8 +296,10 @@ def gen_program(rng, idx):
     for t, n in nfields.items():
         for i in range(n):
             fields.append({"id": ids[k], "name": "%s_%d" % (t, i), "type": t, "read": True,
-                           "write": rng.random() < 0.5})
+                           "write": rng.random() < (0.7 if guard_policy else 0.5)})
             k += 1
+    if guard_policy:
+        fields.append({"id": 401, "name": "gate", "type": "u32", "read": True, "write": False})
     rng.shuffle(fields)
     insns = []
     pool = {}
@@ -337,10 +347,12 @@ def gen_program(rng, idx):
         a, b, c = rng.sample(qf, 3)
         d = new_reg("v3")
         insns.append({"op": "load_v3", "dst": d, "x": a["name"], "y": b["name"], "z": c["name"]})
+    loaded = {}
     for f in fields:
-        if rng.random() < 0.9:
+        if guard_policy or rng.random() < 0.9:
             d = new_reg(f["type"])
             insns.append({"op": "load_" + f["type"], "dst": d, "field": f["name"]})
+            loaded[f["name"]] = d
     for _ in range(rng.randint(15, 60)):
         name = rng.choice(COMPUTE)
         dst_t, operands = OPS[name]
@@ -352,6 +364,8 @@ def gen_program(rng, idx):
                 ins[key] = rng.randrange(t)
         ins["dst"] = new_reg(dst_t)
         insns.append(ins)
+    if guard_policy:
+        return guarded_stores(rng, idx, fields, insns, loaded, get, new_reg, guard_policy)
     # Stores: one per writable field (a store_v3 for three writable q32 fields when possible).
     wf = [f for f in fields if f["write"]]
     wq = [f for f in wf if f["type"] == "q32"]
@@ -363,6 +377,69 @@ def gen_program(rng, idx):
     for f in wf:
         if f["name"] not in stored:
             insns.append({"op": "store_" + f["type"], "field": f["name"], "src": get(f["type"])})
+    capsule = {
+        "capsule_format": "0.1", "ir_version": "0.3", "system_id": "diff.p%d" % idx, "source": "p.lir.json",
+        "schema": {"id": "diff.table", "version": 1, "layout_generation": 1}, "numeric_profile": "fixed_q32_v1",
+        "fields": fields,
+        "schedule": {"phase": "simulate", "after": [], "before": [], "parallel": "serial"},
+        "limits": {"max_instructions": 4096, "max_rows": 1000000, "allocation": "forbidden"},
+        "tests": ["p.test.json"],
+    }
+    lir = {"ir_version": "0.3", "system_id": "diff.p%d" % idx, "numeric_profile": "fixed_q32_v1",
+           "query": "diff.table", "instructions": insns}
+    return capsule, lir
+
+
+def guarded_stores(rng, idx, fields, insns, loaded, get, new_reg, policy):
+    """Stores of a guarded program; see the module docstring."""
+    c35 = new_reg("u32")
+    insns.append({"op": "const_u32", "dst": c35, "value": rng.choice([10, 35, 60])})
+    c1 = new_reg("bool")
+    insns.append({"op": "lt_u32", "dst": c1, "a": loaded["gate"], "b": c35})
+    other = get("bool")  # before new_reg: the operand must not be the register being defined
+    c2 = new_reg("bool")
+    insns.append({"op": "and_bool", "dst": c2, "a": c1, "b": other})
+
+    def sel(t, cond, on_true, on_false):
+        d = new_reg(t)
+        insns.append({"op": "select_" + t, "dst": d, "cond": cond, "on_true": on_true, "on_false": on_false})
+        return d
+
+    def value_for(f):
+        t = f["type"]
+        own = loaded[f["name"]]
+        if policy == "clean":
+            return sel(t, c1, get(t), own)
+        mode = rng.choice(["false_side", "true_side", "nested", "decoy", "plain"])
+        if mode == "false_side":
+            return sel(t, c1, get(t), own)
+        if mode == "true_side":
+            return sel(t, c1, own, get(t))
+        if mode == "nested":
+            return sel(t, c2, get(t), sel(t, c1, get(t), own))
+        if mode == "decoy":
+            others = [x for x in fields if x["type"] == t and x["name"] != f["name"]]
+            return sel(t, c1, get(t), loaded[others[0]["name"]] if others else get(t))
+        return get(t)
+
+    wf = [f for f in fields if f["write"]]
+    wq = [f for f in wf if f["type"] == "q32"]
+    stored = set()
+    if len(wq) >= 3 and rng.random() < 0.6:
+        a, b, c = rng.sample(wq, 3)
+        if rng.random() < 0.5:
+            own = new_reg("v3")
+            insns.append({"op": "load_v3", "dst": own, "x": a["name"], "y": b["name"], "z": c["name"]})
+        else:
+            own = new_reg("v3")
+            insns.append({"op": "make_v3", "dst": own, "x": loaded[a["name"]], "y": loaded[b["name"]],
+                          "z": loaded[c["name"]]})
+        src = sel("v3", c1, get("v3"), own)
+        insns.append({"op": "store_v3", "x": a["name"], "y": b["name"], "z": c["name"], "src": src})
+        stored |= {a["name"], b["name"], c["name"]}
+    for f in wf:
+        if f["name"] not in stored:
+            insns.append({"op": "store_" + f["type"], "field": f["name"], "src": value_for(f)})
     capsule = {
         "capsule_format": "0.1", "ir_version": "0.3", "system_id": "diff.p%d" % idx, "source": "p.lir.json",
         "schema": {"id": "diff.table", "version": 1, "layout_generation": 1}, "numeric_profile": "fixed_q32_v1",
@@ -390,8 +467,11 @@ def main():
     mismatches = []
     ops_seen = set()
     checked = 0
+    tier_stats = {"plans": 0, "guards": 0, "clean": 0, "clean_guards": 0, "skipped_rows": 0, "body_rows": 0,
+                  "hoisted": 0}
     for p in range(args.programs):
-        capsule, lir = gen_program(rng, p)
+        policy = None if p % 3 != 1 else ("clean" if p % 6 == 1 else "mixed")
+        capsule, lir = gen_program(rng, p, policy)
         cap_text = json.dumps(capsule, sort_keys=True)
         lir_text = json.dumps(lir, sort_keys=True)
         corpus.update(cap_text.encode() + b"\0" + lir_text.encode() + b"\0")
@@ -411,7 +491,20 @@ def main():
             continue
         lane_in = {}
         lane_out = {}
-        for line in out[1:]:
+        tiers = out[1].split()
+        if tiers[0] != "TIERS" or tiers[1] != "1":
+            mismatches.append("program %d: planned and reference VM tiers differ (%s)" % (p, out[1]))
+            continue
+        has_plan, has_guard, body_rows, skipped, hoisted = (int(x) for x in tiers[2:7])
+        tier_stats["plans"] += has_plan
+        tier_stats["guards"] += has_guard
+        tier_stats["body_rows"] += body_rows
+        tier_stats["skipped_rows"] += skipped
+        tier_stats["hoisted"] += hoisted
+        if policy == "clean":
+            tier_stats["clean"] += 1
+            tier_stats["clean_guards"] += 1 if (has_guard and skipped > 0) else 0
+        for line in out[2:]:
             kind, row, lane, val = line.split()
             (lane_in if kind == "IN" else lane_out).setdefault(int(row), {})[lane] = int(val)
         for r in range(args.rows):
@@ -423,8 +516,15 @@ def main():
                 mismatches.append("program %d row %d: %s" % (p, r, diff))
                 break
     missing = sorted(set(OPS) - ops_seen - {"const_u32", "const_i32", "const_i64", "const_q32"})
+    if tier_stats["clean"] > 0 and tier_stats["clean_guards"] != tier_stats["clean"]:
+        mismatches.append("guard not exercised: %d of %d clean guarded programs got a guard that skipped rows"
+                          % (tier_stats["clean_guards"], tier_stats["clean"]))
     for m in mismatches[:20]:
         print("MISMATCH", m)
+    print("ir03_diff tiers: %d programs with a plan, %d with a guard (%d of %d clean guarded programs), "
+          "%d rows executed, %d rows skipped by guards, %d hoisted instructions"
+          % (tier_stats["plans"], tier_stats["guards"], tier_stats["clean_guards"], tier_stats["clean"],
+             tier_stats["body_rows"], tier_stats["skipped_rows"], tier_stats["hoisted"]))
     print("ir03_diff: %d programs x %d rows, %d lane values compared, %d ops covered (%d not drawn: %s), "
           "corpus sha256 %s, %d mismatches"
           % (args.programs, args.rows, checked, len(ops_seen), len(missing), missing, corpus.hexdigest(),

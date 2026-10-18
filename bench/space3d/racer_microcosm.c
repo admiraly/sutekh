@@ -12,7 +12,7 @@
  * along a generated 41 km course (bench/space3d/course.json), seeded; no external assets.
  *
  *   racer_microcosm --root <repo> --n 32 [--ticks 1200] [--warmup 120] [--obstacles 48] [--seed 1]
- *                   [--no-query] [--replay] [--digest-every 120]
+ *                   [--no-query] [--replay] [--digest-every 120] [--vm-tier reference|planned]
  *   racer_microcosm --root <repo> --n 32 --rollback 1,6,12 [--rollback-iters 200] [--warmup 120]
  * Prints one JSON object: identities, per-tick wall time distribution, digests, event counts, race totals.
  * --replay additionally runs the scene again from scratch and from a mid-run canonical checkpoint and reports
@@ -37,12 +37,13 @@
 #include "runtime/schedule.h"
 #include "space3d_ops.h"
 #include "sutekh/status.h"
+#include "vm/su_vm.h"
 #include "world/su_world.h"
 
 #define ONE SU_Q32_ONE
 #define GATES 16u
 #define MAX_TICKS 200000u
-#define VM_TIER_NAME "reference"
+#define VM_TIER_NAME (su_vm_default_tier() == SU_VM_TIER_REFERENCE ? "reference" : "planned")
 
 typedef struct Args {
     const char *root;
@@ -690,6 +691,12 @@ int main(int argc, char **argv) {
             }
             i++;
         }
+        else if (strcmp(k, "--vm-tier") == 0) {
+            if (strcmp(v, "reference") == 0) su_vm_set_default_tier(SU_VM_TIER_REFERENCE);
+            else if (strcmp(v, "planned") == 0) su_vm_set_default_tier(SU_VM_TIER_PLANNED);
+            else { fprintf(stderr, "bad --vm-tier\n"); return 2; }
+            i++;
+        }
         else if (strcmp(k, "--rollback-iters") == 0) { a.rollback_iters = (uint32_t)strtoul(v, NULL, 10); i++; }
         else { fprintf(stderr, "unknown argument %s\n", k); return 2; }
     }
@@ -866,6 +873,7 @@ int main(int argc, char **argv) {
                ",\"candidates\":%" PRIu64 ",\"narrow_tests\":%" PRIu64 ",\"contacts\":%" PRIu64 "},",
                qs->movers, qs->collidables, qs->sweep_axis, qs->sweep_pairs, qs->candidates, qs->narrow_tests,
                qs->contacts);
+        printf("\"vm\":\"%s\",", VM_TIER_NAME);
         printf("\"replay_from_start_identical\":%s,\"replay_from_checkpoint_identical\":%s,\"checkpoint_tick\":%u,",
                replay_ok < 0 ? "null" : (replay_ok ? "true" : "false"), ckpt_ok < 0 ? "null" : (ckpt_ok ? "true" : "false"),
                a.replay ? ckpt_tick : 0u);

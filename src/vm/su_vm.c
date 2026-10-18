@@ -18,6 +18,7 @@
 #include "ir/su_num.h"
 #include "ir/su_ops03.h"
 #include "sutekh/entities.h"
+#include "vm/su_vm_plan.h"
 
 #define SU_VM_ACCESS_MASK (SU_ACCESS_READ | SU_ACCESS_WRITE)
 #define SU_VM_NO_FAILED_INSN UINT32_MAX
@@ -53,7 +54,33 @@ struct SuExecContext {
     /* Scratch binding arrays for su_vm_run_system. */
     SuColumnBinding *scr_in;
     SuColumnBinding *scr_out;
+    /* Execution tier (su_vm.h "VM tiers"). plan is NULL when the module has none (plan_reason says why). */
+    uint32_t tier;
+    SuVmPlan *plan;
+    uint32_t plan_reason;
+    uint32_t last_tier;
+    uint64_t last_rows_body;
+    uint64_t last_rows_skipped;
 };
+
+/* Process default tier for new contexts: 0 = not set (environment SUTEKH_VM_TIER, else planned). */
+static uint32_t g_default_tier = 0u;
+
+void su_vm_set_default_tier(uint32_t tier) {
+    g_default_tier = (tier == SU_VM_TIER_REFERENCE || tier == SU_VM_TIER_PLANNED) ? tier : 0u;
+}
+
+uint32_t su_vm_default_tier(void) {
+    const char *e;
+    if (g_default_tier != 0u) {
+        return g_default_tier;
+    }
+    e = getenv("SUTEKH_VM_TIER");
+    if (e != NULL && strcmp(e, "reference") == 0) {
+        return SU_VM_TIER_REFERENCE;
+    }
+    return SU_VM_TIER_PLANNED;
+}
 
 /* ---- helpers ---------------------------------------------------------- */
 
@@ -678,6 +705,7 @@ void su_vm_context_destroy(SuExecContext *ctx) {
     free(ctx->write_ids);
     free(ctx->scr_in);
     free(ctx->scr_out);
+    su_vm_plan_free(ctx->plan);
     free(ctx);
 }
 
@@ -770,6 +798,12 @@ uint32_t su_vm_context_create(const SuLirModule *m, uint32_t layout_generation,
         su_vm_context_destroy(c);
         return SU_E_RESOURCE_LIMIT;
     }
+    c->tier = su_vm_default_tier();
+    c->plan_reason = su_vm_plan_build(m, &c->plan);
+    if (c->plan_reason == SU_VM_PLAN_NO_MEMORY) {
+        su_vm_context_destroy(c);
+        return SU_E_RESOURCE_LIMIT;
+    }
 
     *out = c;
     return SU_OK;
@@ -807,6 +841,36 @@ uint32_t su_vm_context_set_row_limit(SuExecContext *ctx, uint64_t limit) {
 
 uint32_t su_vm_context_last_failed_insn(const SuExecContext *ctx) {
     return ctx != NULL ? ctx->last_failed_insn : SU_VM_NO_FAILED_INSN;
+}
+
+uint32_t su_vm_context_set_tier(SuExecContext *ctx, uint32_t tier) {
+    if (ctx == NULL || (tier != SU_VM_TIER_REFERENCE && tier != SU_VM_TIER_PLANNED)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    ctx->tier = tier;
+    return SU_OK;
+}
+
+uint32_t su_vm_context_tier_info(const SuExecContext *ctx, SuVmTierInfo *info) {
+    if (ctx == NULL || info == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memset(info, 0, sizeof *info);
+    info->tier = ctx->tier;
+    info->plan_reason = ctx->plan_reason;
+    info->insns = ctx->module->insn_count;
+    if (ctx->plan != NULL) {
+        info->has_plan = 1u;
+        info->body_insns = ctx->plan->n_body;
+        info->hoisted_insns = ctx->plan->hoisted;
+        info->guard_insns = ctx->plan->has_guard ? ctx->plan->n_guard : 0u;
+        info->guard_requirements = ctx->plan->guard_requirements;
+        info->has_guard = ctx->plan->has_guard;
+    }
+    info->last_tier = ctx->last_tier;
+    info->last_rows_body = ctx->last_rows_body;
+    info->last_rows_skipped = ctx->last_rows_skipped;
+    return SU_OK;
 }
 
 /* ---- wrapper checks --------------------------------------------------- */
@@ -1041,6 +1105,38 @@ static uint32_t su_exec_insn(SuExecContext *ctx, const SuInsn *ins, size_t r) {
     }
 }
 
+/* Planned tier (su_vm_plan.h): used when the context's tier is planned, the module has a plan and every lane
+ * the plan touches is bound; otherwise the reference loop below runs. Both give the same results. */
+static int su_exec_rows_planned(SuExecContext *ctx, uint64_t rows, SuOutputs *out, uint32_t *st) {
+    SuVmPlanRun run;
+    uint32_t failed = SU_VM_NO_FAILED_INSN;
+    if (ctx->tier != SU_VM_TIER_PLANNED || ctx->plan == NULL || !su_vm_plan_bound(ctx->plan, ctx->in_cols, ctx->out_cols)) {
+        return 0;
+    }
+    memset(&run, 0, sizeof run);
+    run.in_cols = ctx->in_cols;
+    run.out_cols = ctx->out_cols;
+    run.alive = ctx->alive;
+    run.generations = ctx->generations;
+    run.base_slot = ctx->base_slot;
+    run.tick_low = ctx->tick_low;
+    run.emits = ctx->needs_emitter;
+    if (ctx->has_emitter) {
+        run.emit_user = ctx->emitter.user;
+        run.emit_despawn = ctx->emitter.emit_despawn;
+        run.emit_event = ctx->emitter.emit_event;
+    }
+    *st = su_vm_plan_run(ctx->plan, &run, rows, &failed);
+    ctx->last_tier = SU_VM_TIER_PLANNED;
+    ctx->last_rows_body = run.rows_body;
+    ctx->last_rows_skipped = run.rows_skipped;
+    if (*st != SU_OK) {
+        ctx->last_failed_insn = failed;
+        out->failed_insn = failed;
+    }
+    return 1;
+}
+
 static uint32_t su_exec_rows(SuExecContext *ctx, uint64_t rows, SuOutputs *out) {
     const SuLirModule *m = ctx->module;
     /* NULL alive view (every M0 world): the dead-row test is skipped without a per-row load. row_seq is read only
@@ -1048,6 +1144,13 @@ static uint32_t su_exec_rows(SuExecContext *ctx, uint64_t rows, SuOutputs *out) 
     const uint8_t *alive = ctx->alive;
     const int emits = ctx->needs_emitter;
     uint64_t r;
+    uint32_t pst = SU_OK;
+    if (su_exec_rows_planned(ctx, rows, out, &pst)) {
+        return pst;
+    }
+    ctx->last_tier = SU_VM_TIER_REFERENCE;
+    ctx->last_rows_body = 0u;
+    ctx->last_rows_skipped = 0u;
     for (r = 0; r < rows; r++) {
         uint32_t i;
         uint32_t k;
