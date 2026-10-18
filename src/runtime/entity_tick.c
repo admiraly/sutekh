@@ -398,7 +398,7 @@ fail:
  * su_vm_run_system does). */
 static uint32_t ent_sys_bind(EntSys *e) {
     SuInvocation wi;
-    SuOutputs wo;
+    SuOutputs wo = {0};
     uint32_t st;
     uint32_t i;
     uint32_t nin = 0;

@@ -396,6 +396,8 @@ static uint32_t get32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+_Static_assert(SU_INPUT_RECORD_BYTES == 28u + 4u * SU_INPUT_MAX_AXES, "record size equals the documented layout");
+
 void su_input_record_encode(const SuInputRecord *r, uint8_t out[SU_INPUT_RECORD_BYTES]) {
     uint32_t i;
     memcpy(out, "SUINREC", 8u);

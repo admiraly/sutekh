@@ -6,6 +6,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "platform/su_thread.h"
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,7 +75,7 @@ static uint32_t evt_b_of(uint32_t sys, uint32_t slot, uint32_t j) {
     return (uint32_t)(h3(sys, slot, 50u + j) >> 32);
 }
 
-static unsigned long g_emit_bad; /* updated from writer threads: use __atomic builtins only */
+static _Atomic unsigned long g_emit_bad; /* updated from writer threads (C11 atomics, as su_cmdq.c) */
 
 static void emit_row(SuCmdQ *q, uint64_t cs, uint32_t sys, uint32_t slot) {
     uint64_t chunk = slot / cs;
@@ -96,7 +97,7 @@ static void emit_row(SuCmdQ *q, uint64_t cs, uint32_t sys, uint32_t slot) {
         }
     }
     if (bad != 0u) {
-        __atomic_fetch_add(&g_emit_bad, bad, __ATOMIC_RELAXED);
+        atomic_fetch_add_explicit(&g_emit_bad, bad, memory_order_relaxed);
     }
 }
 
@@ -463,7 +464,7 @@ static uint64_t run_tick(uint32_t T, uint64_t seed, uint64_t cs, int gated) {
     }
     su_mutex_destroy(&r.mu);
     su_cond_destroy(&r.cv);
-    CHECK(__atomic_load_n(&g_emit_bad, __ATOMIC_RELAXED) == 0u);
+    CHECK(atomic_load_explicit(&g_emit_bad, memory_order_relaxed) == 0u);
 
     CHECK(!su_cmdq_overflowed(q));
     CHECK(su_cmdq_merge(q, &v) == SU_OK);

@@ -200,7 +200,7 @@ static const SuColumnBinding *find_binding(const SuColumnBinding *b, uint32_t n,
  * Returns SU_OK only if every protocol step succeeded. */
 static uint32_t tick_once(SuWorld *w) {
     SuInvocation inv;
-    SuOutputs out;
+    SuOutputs out = {0};
     const SuColumnBinding *pin;
     const SuColumnBinding *vin;
     const SuColumnBinding *pout;

@@ -572,7 +572,7 @@ static void test_fast_digest(void) {
     CHECK(su_host_digest_fast(a, &fa) == SU_OK && fa != f2);
     CHECK(su_host_digest_fast(NULL, &fa) == SU_E_INVALID_ARGUMENT);
     CHECK(su_host_digest_fast(a, NULL) == SU_E_INVALID_ARGUMENT);
-    CHECK(SU_HOST_FAST_DIGEST_VERSION == 1u);
+    _Static_assert(SU_HOST_FAST_DIGEST_VERSION == 1u, "fast digest version");
     su_host_world_destroy(a);
     su_host_world_destroy(b);
 }

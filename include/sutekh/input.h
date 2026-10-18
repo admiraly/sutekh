@@ -342,9 +342,11 @@ SU_INPUT_API void su_input_mapper_reset(SuInputMapper *m);
 /* Maps one tick's device state (one sample, or one part of su_input_state_split) to the record of tick. */
 SU_INPUT_API uint32_t su_input_mapper_tick(SuInputMapper *m, const SuInputState *s, uint64_t tick, SuInputRecord *out);
 
-/* Canonical bytes of a record (88 bytes): "SUINREC" 0x00 | u32 version 1 | u64 tick | u32 buttons |
- * u32 axis_count | 16 x i32 axes, little-endian. Decoding is strict (SU_E_PARSE). */
-#define SU_INPUT_RECORD_BYTES 88u
+/* Canonical bytes of a record (92 bytes): "SUINREC" 0x00 | u32 version 1 | u64 tick | u32 buttons |
+ * u32 axis_count | 16 x i32 axes, little-endian. Decoding is strict (SU_E_PARSE).
+ * 2026-10-18: the size was given as 88, four bytes short of this layout, so encode wrote past an 88-byte
+ * buffer and decode read past its length check (found by an MSVC /RTC1 run and AddressSanitizer). */
+#define SU_INPUT_RECORD_BYTES 92u
 SU_INPUT_API void su_input_record_encode(const SuInputRecord *r, uint8_t out[SU_INPUT_RECORD_BYTES]);
 SU_INPUT_API uint32_t su_input_record_decode(const uint8_t *buf, size_t len, SuInputRecord *r);
 
