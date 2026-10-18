@@ -1,9 +1,18 @@
 # SPDX-FileCopyrightText: 2026 admiraly
 # SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 # Dot-source this file to enable the project-local x64 Windows toolchain.
+# SUTEKH_TOOLCHAIN_HOME (optional): a directory holding the toolchain's `local\` and `.venv\`, for example one
+# shared copy used by a project that includes Sutekh as a git submodule. Unset, the Sutekh checkout itself is used.
 $sutekhRoot = Split-Path -Parent $PSScriptRoot
-$sutekhLlvmBin = Join-Path $sutekhRoot 'local\toolchains\llvm-23.1.3\LLVM\bin'
-$sutekhPythonBin = Join-Path $sutekhRoot '.venv\Scripts'
+$sutekhHome = $sutekhRoot
+if ($env:SUTEKH_TOOLCHAIN_HOME) {
+    if (-not (Test-Path -LiteralPath $env:SUTEKH_TOOLCHAIN_HOME -PathType Container)) {
+        throw "SUTEKH_TOOLCHAIN_HOME is not a directory: $env:SUTEKH_TOOLCHAIN_HOME"
+    }
+    $sutekhHome = (Resolve-Path -LiteralPath $env:SUTEKH_TOOLCHAIN_HOME).Path
+}
+$sutekhLlvmBin = Join-Path $sutekhHome 'local\toolchains\llvm-23.1.3\LLVM\bin'
+$sutekhPythonBin = Join-Path $sutekhHome '.venv\Scripts'
 $sutekhMsvc = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*" -Directory -ErrorAction SilentlyContinue |
     Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'include\vcruntime.h') } |
     Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1

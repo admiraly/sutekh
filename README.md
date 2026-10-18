@@ -91,6 +91,17 @@ tool versions and the verified LLVM installer checksum are recorded in
 `planning/toolchain-windows.json`. Setup evidence is in
 [the dependency handoff](planning/handoffs/2026-10-07-dependencies.md).
 
+**Sutekh as a submodule.** Set `SUTEKH_TOOLCHAIN_HOME` to a directory that holds
+`local\` and `.venv\` (for example a shared copy, or the consuming project's
+root) before dot-sourcing `tools\env-windows.ps1`; unset, the Sutekh checkout's
+own `local\` and `.venv\` are used. A CMake project that includes Sutekh with
+`add_subdirectory` sees these cache entries and targets: `SUTEKH_PYTHON` (the
+interpreter for Sutekh's Python tests and generators; set it before
+`add_subdirectory` to choose another), `SUTEKH_VULKAN_INCLUDE_DIR` (the Vulkan
+header directory the renderer uses, empty when there is none or
+`SUTEKH_RENDER=OFF`) and, when that is non-empty, the interface target
+`Sutekh::vulkan_headers`.
+
 ### Licensing and commercial use
 
 Copyright (c) 2026 **admiraly**, the current project owner. Sutekh is

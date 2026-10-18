@@ -153,6 +153,11 @@ uint32_t su_sched_set_host_instance(SuSchedule *s, uint32_t idx, void *inst, voi
 /* Builds the union field table from the current entries. Conflicting ID/name/type for
  * one field is SU_E_SCHEMA_MISMATCH. Call after the last su_sched_add. */
 uint32_t su_sched_finalize(SuSchedule *s);
+/* After su_sched_finalize fails with SU_E_SCHEMA_MISMATCH: writes a message naming the first two systems that
+ * disagree on a field (ID, name, storage or value type), with a hint when one side is a lane of a 64-bit field
+ * ("x.lo"/"x.hi": an IR 0.3 i64/q32 field "x" at ID J binds lanes "x.lo" at J and "x.hi" at J + 1). Writes an
+ * empty string when no disagreement is found. */
+void su_sched_explain_mismatch(const SuSchedule *s, char *msg, size_t cap);
 /* Index of the entry with this system_id, or -1. */
 int su_sched_find(const SuSchedule *s, const char *system_id);
 

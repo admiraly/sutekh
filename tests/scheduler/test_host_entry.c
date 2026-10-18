@@ -329,6 +329,59 @@ static void test_04_effects(void) {
     su_effects_free(g);
     g = NULL;
 
+    /* Post-query ordering (2026-10-18). Host in phase "query", IR in phase "simulate" ("query" sorts first). */
+    {
+        const char *after_host[1] = {TEST_HOST_POS_ID};
+        uint32_t order[2] = {9u, 9u};
+        in[1].after = NULL;
+        in[1].after_count = 0u;
+        in[1].phase = "query";
+        in[0].phase = "simulate";
+        /* Different phases, no edge: accepted (as before; phase order alone). */
+        st = su_effects_build(in, 2, &g, err, sizeof err);
+        CHECK(st == SU_OK, "cross-phase without edge accepted (got %s: %s)", su_status_name(st), err);
+        su_effects_free(g);
+        g = NULL;
+        /* The IR system's after edge to the earlier-phase host operator: accepted, ordered, host first. */
+        in[0].after = after_host;
+        in[0].after_count = 1u;
+        st = su_effects_build(in, 2, &g, err, sizeof err);
+        CHECK(st == SU_OK, "post-query after edge accepted (got %s: %s)", su_status_name(st), err);
+        if (g != NULL) {
+            CHECK(su_effects_ordered(g, 0, 1) == 1, "post-query edge orders the pair");
+            CHECK(su_effects_serial_order(g, order, 2) == SU_OK && order[0] == 1u && order[1] == 0u,
+                  "host operator first in the serial order (%u %u)", (unsigned)order[0], (unsigned)order[1]);
+        }
+        su_effects_free(g);
+        g = NULL;
+        /* The host operator in a later phase than the IR system: refused with the reason. */
+        in[1].phase = "zz_late";
+        st = su_effects_build(in, 2, &g, err, sizeof err);
+        CHECK(st == SU_E_INVALID_ARGUMENT && strstr(err, "earlier phase") != NULL,
+              "after edge to a later-phase operator refused (got %s: %s)", su_status_name(st), err);
+        /* A host's after edge to an IR system of another phase stays refused. */
+        in[1].phase = "query";
+        in[0].after = NULL;
+        in[0].after_count = 0u;
+        in[1].after = after;
+        in[1].after_count = 1u;
+        st = su_effects_build(in, 2, &g, err, sizeof err);
+        CHECK(st == SU_E_INVALID_ARGUMENT && strstr(err, "crosses phases") != NULL,
+              "host after edge across phases refused (got %s: %s)", su_status_name(st), err);
+        /* A before edge across phases stays refused. */
+        in[1].after = NULL;
+        in[1].after_count = 0u;
+        in[1].before = after;
+        in[1].before_count = 1u;
+        st = su_effects_build(in, 2, &g, err, sizeof err);
+        CHECK(st == SU_E_INVALID_ARGUMENT && strstr(err, "use an after edge") != NULL,
+              "before edge across phases refused (got %s: %s)", su_status_name(st), err);
+        in[1].before = NULL;
+        in[1].before_count = 0u;
+        in[0].phase = "rts";
+        in[1].phase = "rts";
+    }
+
     /* An IR entry with a declared/derived mismatch is still refused when host_declared is 0. */
     if (load_ir("examples/movement.capsule.json", "examples/movement.lir.json", &mbad, &sv, &gen) == SU_OK) {
         SuEffectInput one;
@@ -339,6 +392,8 @@ static void test_04_effects(void) {
         one.phase = "rts";
         st = su_effects_build(&one, 1, &g, err, sizeof err);
         CHECK(st == SU_E_SCHEMA_MISMATCH, "IR declared/derived mismatch still refused (got %s)", su_status_name(st));
+        CHECK(strstr(err, "must equal what the IR actually loads") != NULL && strstr(err, "write:false") != NULL,
+              "mismatch message explains the rule (%s)", err);
         su_effects_free(g);
         g = NULL;
         su_reload_module_free(mbad);

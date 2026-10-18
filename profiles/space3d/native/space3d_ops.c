@@ -62,14 +62,21 @@ static const SuHostField k_fields[] = {
     W32(SPACE3D_F_GATE_DIR, "gate_dir"),
     W32(SPACE3D_F_GATE_SLOT, "gate_slot"),
     WQ(SPACE3D_F_GATE_TOI, "gate_toi"),
+    /* space3d.query_prox only (k_fields_prox): the proximity lanes follow the base table. */
+    RQ(SPACE3D_F_PROX_MARGIN, "prox_margin"),
+    W32(SPACE3D_F_PROX_SLOT, "prox_slot"),
+    W32(SPACE3D_F_PROX_GEN, "prox_gen"),
+    WQ(SPACE3D_F_PROX_DIST, "prox_dist"),
 };
 
-#define S3_NFIELDS (sizeof k_fields / sizeof k_fields[0])
+#define S3_NFIELDS_PROX (sizeof k_fields / sizeof k_fields[0])
+#define S3_NFIELDS (S3_NFIELDS_PROX - 6u)
 
 static Space3dScratch g_scratch;
 static Space3dCtx g_ctx = {{0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, &g_scratch};
 
 static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
+static uint32_t query_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 
 /* Literal: SHA-256 of space3d_constants_text() (checked by test_space3d_ops). */
 const SuHostOpDesc g_space3d_query_desc = {
@@ -81,6 +88,20 @@ const SuHostOpDesc g_space3d_query_desc = {
     (uint32_t)S3_NFIELDS,
     k_fields,
     query_run,
+    &g_ctx,
+};
+
+/* Literal: SHA-256 of space3d_prox_constants_text() (checked by test_space3d_ops). Shares the static context: one
+ * world per worker process, as for space3d.query. */
+const SuHostOpDesc g_space3d_query_prox_desc = {
+    "space3d.query_prox",
+    SPACE3D_SCHEMA_ID,
+    SPACE3D_OPS_VERSION,
+    {0x79, 0x20, 0x4f, 0xc0, 0x6c, 0x5d, 0x7d, 0x1e, 0x5a, 0x0c, 0xa2, 0xe8, 0x5a, 0x68, 0x7f, 0x23,
+     0x4c, 0x73, 0x1f, 0x66, 0x98, 0x53, 0x80, 0x07, 0xb8, 0x1e, 0xec, 0xd9, 0x60, 0x2d, 0x7a, 0x84},
+    (uint32_t)S3_NFIELDS_PROX,
+    k_fields,
+    query_run_prox,
     &g_ctx,
 };
 
@@ -103,6 +124,17 @@ const char *space3d_constants_text(void) {
            "gate_lookup=gate_index_equals_next_gate,lowest_slot\n"
            "gate_side=front_ge_0\n"
            "gate_shapes=rect,disc,ellipse_q32_div\n"
+           "none=4294967295\n";
+}
+
+const char *space3d_prox_constants_text(void) {
+    return "space3d_ops_v1+proximity\n"
+           "base=space3d.query\n"
+           "prox_margin=per_mover_q32_lane,le_0_off\n"
+           "prox_bounds=mover_bounds_widened_by_margin\n"
+           "prox_set=kept_candidates,other_than_self\n"
+           "prox_distance=end_positions,centre_to_shape_minus_radii,clamp_ge_0\n"
+           "prox_keep=distance_le_margin,min_distance,ties_lowest_slot\n"
            "none=4294967295\n";
 }
 
@@ -231,6 +263,8 @@ typedef struct Cols {
     uint32_t *c_slot[SPACE3D_CONTACTS], *c_gen[SPACE3D_CONTACTS];
     uint32_t *c_q[SPACE3D_CONTACTS][4][2]; /* toi, nx, ny, nz; [lo, hi] */
     uint32_t *gate_toi[2];
+    const uint32_t *prox_margin[2]; /* query_prox only */
+    uint32_t *prox_slot, *prox_gen, *prox_dist[2];
 } Cols;
 
 enum { F_POSX, F_POSY, F_POSZ, F_PREVX, F_PREVY, F_PREVZ, F_ROTW, F_ROTX, F_ROTY, F_ROTZ, F_RADIUS, F_HALFX,
@@ -256,7 +290,7 @@ static uint32_t *out_col(SuOutputs *out, uint32_t id) {
     return NULL;
 }
 
-static int bind_cols(const SuInvocation *in, SuOutputs *out, Cols *c) {
+static int bind_cols(const SuInvocation *in, SuOutputs *out, Cols *c, int prox) {
     static const uint32_t qid[14] = {SPACE3D_F_POS_X,  SPACE3D_F_POS_Y,  SPACE3D_F_POS_Z,  SPACE3D_F_PREV_X,
                                      SPACE3D_F_PREV_Y, SPACE3D_F_PREV_Z, SPACE3D_F_ROT_W,  SPACE3D_F_ROT_X,
                                      SPACE3D_F_ROT_Y,  SPACE3D_F_ROT_Z,  SPACE3D_F_RADIUS, SPACE3D_F_HALF_X,
@@ -290,6 +324,16 @@ static int bind_cols(const SuInvocation *in, SuOutputs *out, Cols *c) {
             c->c_q[k][j][1] = out_col(out, base + 3u + 2u * j);
             ok &= c->c_q[k][j][0] != NULL && c->c_q[k][j][1] != NULL;
         }
+    }
+    if (prox) {
+        c->prox_margin[0] = in_col(in, SPACE3D_F_PROX_MARGIN);
+        c->prox_margin[1] = in_col(in, SPACE3D_F_PROX_MARGIN + 1u);
+        c->prox_slot = out_col(out, SPACE3D_F_PROX_SLOT);
+        c->prox_gen = out_col(out, SPACE3D_F_PROX_GEN);
+        c->prox_dist[0] = out_col(out, SPACE3D_F_PROX_DIST);
+        c->prox_dist[1] = out_col(out, SPACE3D_F_PROX_DIST + 1u);
+        ok &= c->prox_margin[0] != NULL && c->prox_margin[1] != NULL && c->prox_slot != NULL && c->prox_gen != NULL &&
+              c->prox_dist[0] != NULL && c->prox_dist[1] != NULL;
     }
     return ok;
 }
@@ -341,6 +385,42 @@ static void bounds_union(SuV3 *lo, SuV3 *hi, SuV3 lo2, SuV3 hi2) {
     hi->x = hi2.x > hi->x ? hi2.x : hi->x;
     hi->y = hi2.y > hi->y ? hi2.y : hi->y;
     hi->z = hi2.z > hi->z ? hi2.z : hi->z;
+}
+
+static int64_t prox_margin_of(const Cols *c, uint32_t r) {
+    return su_i64_from_bits(((uint64_t)c->prox_margin[1][r] << 32) | (uint64_t)c->prox_margin[0][r]);
+}
+
+/* Surface distance (q32, >= 0) between mover m at its end position and collidable o (others at their end position
+ * too): centre-to-shape distance minus the radii, clamped at 0. Every step is a profile operation in this order. */
+static int64_t prox_distance(const Cols *c, uint32_t m, uint32_t o) {
+    SuV3 p = rd3(c, F_POSX, m);
+    int64_t d;
+    uint32_t ko = c->kind[o];
+    if (ko == SPACE3D_KIND_MOVER || ko == SPACE3D_KIND_SPHERE) {
+        d = su_q32_subf(su_v3_lenf(su_v3_subf(p, rd3(c, F_POSX, o))), rdq(c, F_RADIUS, o));
+    } else if (ko == SPACE3D_KIND_CAPSULE) {
+        SuV3 a, b, ab, cp;
+        int64_t den, t = 0;
+        capsule_ends(c, o, &a, &b);
+        ab = su_v3_subf(b, a);
+        den = su_v3_dotf(ab, ab);
+        if (den > 0) {
+            t = su_q32_divf(su_v3_dotf(su_v3_subf(p, a), ab), den);
+            t = t < 0 ? 0 : t > ONE ? ONE : t;
+        }
+        cp = su_v3_addf(a, su_v3_scalef(ab, t));
+        d = su_q32_subf(su_v3_lenf(su_v3_subf(p, cp)), rdq(c, F_RADIUS, o));
+    } else {
+        SuV3 l = su_quat_rotatef(su_quat_conjf(rdrot(c, o)), su_v3_subf(p, rd3(c, F_POSX, o)));
+        SuV3 h = rd3(c, F_HALFX, o), q;
+        q.x = l.x < -h.x ? -h.x : l.x > h.x ? h.x : l.x;
+        q.y = l.y < -h.y ? -h.y : l.y > h.y ? h.y : l.y;
+        q.z = l.z < -h.z ? -h.z : l.z > h.z ? h.z : l.z;
+        d = su_v3_lenf(su_v3_subf(l, q));
+    }
+    d = su_q32_subf(d, rdq(c, F_RADIUS, m));
+    return d < 0 ? 0 : d;
 }
 
 static void row_bounds(Space3dScratch *s, const Cols *c, uint32_t r, uint32_t kind) {
@@ -513,7 +593,7 @@ static void sort_gates(uint32_t *gate_slot, const Cols *c, uint32_t ng) {
     }
 }
 
-static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
+static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx, int prox) {
     Space3dCtx *ctx = host_ctx != NULL ? (Space3dCtx *)host_ctx : &g_ctx;
     Space3dScratch *s = ctx->scratch == &g_scratch ? static_scratch() : ctx->scratch;
     Cols c;
@@ -527,7 +607,7 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
         return SU_E_RESOURCE_LIMIT;
     }
     rows = (uint32_t)rows64;
-    if (!bind_cols(in, out, &c)) {
+    if (!bind_cols(in, out, &c, prox)) {
         return SU_E_SCHEMA_MISMATCH;
     }
     memset(&st, 0, sizeof st);
@@ -547,6 +627,17 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
         }
         if (is_collidable(k)) {
             row_bounds(s, &c, r, k);
+            if (prox && k == SPACE3D_KIND_MOVER) {
+                /* Proximity: a mover's bounds grow by its margin, so every collidable within it is a candidate. */
+                int64_t mg = prox_margin_of(&c, r);
+                uint32_t a;
+                if (mg > 0) {
+                    for (a = 0; a < 3u; a++) {
+                        s->lo[a][r] = su_q32_subf(s->lo[a][r], mg);
+                        s->hi[a][r] = su_q32_addf(s->hi[a][r], mg);
+                    }
+                }
+            }
             s->coll[ncoll++] = r;
             st.movers += k == SPACE3D_KIND_MOVER;
         } else if (k >= SPACE3D_KIND_GATE_RECT && k <= SPACE3D_KIND_GATE_ELLIPSE) {
@@ -619,6 +710,8 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
     for (r = 0; r < rows; r++) {
         Contact best[SPACE3D_CONTACTS];
         uint32_t nbest = 0, found = 0, k, j;
+        uint32_t pslot = S3_NONE;
+        int64_t pdist = 0;
         uint32_t flags = s->flags[r];
         uint32_t gdir = SPACE3D_GATE_NONE, gslot = S3_NONE;
         int64_t gtoi = 0;
@@ -667,6 +760,23 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
                     }
                 }
             }
+            if (prox) {
+                /* Closest collidable within the margin among the same candidates (ascending slot: a strict < keeps
+                 * the lowest slot among equal distances). */
+                int64_t mg = prox_margin_of(&c, r);
+                for (k = 0; k < n && mg > 0; k++) {
+                    uint32_t o = brute ? s->coll[k] : s->cand[r][k];
+                    int64_t d;
+                    if (o == r) {
+                        continue;
+                    }
+                    d = prox_distance(&c, r, o);
+                    if (d <= mg && (pslot == S3_NONE || d < pdist)) {
+                        pslot = o;
+                        pdist = d;
+                    }
+                }
+            }
             st.contacts += found;
             if (found > SPACE3D_CONTACTS) {
                 flags |= SPACE3D_FLAG_CONTACT_TRUNCATED;
@@ -703,9 +813,22 @@ static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *o
         c.gate_dir[r] = gdir;
         c.gate_slot[r] = gslot;
         wrq(c.gate_toi, r, gtoi);
+        if (prox) {
+            c.prox_slot[r] = pslot;
+            c.prox_gen[r] = pslot != S3_NONE ? s->gen[pslot] : 0u;
+            wrq(c.prox_dist, r, pdist);
+        }
     }
     if (ctx != NULL) {
         ctx->last = st;
     }
     return SU_OK;
+}
+
+static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
+    return query_core(w, in, out, host_ctx, 0);
+}
+
+static uint32_t query_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
+    return query_core(w, in, out, host_ctx, 1);
 }

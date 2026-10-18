@@ -13,9 +13,18 @@
  * ago, re-push those ticks' inputs, re-simulate 8 ticks in one call, and require every per-tick fast digest and
  * every event to equal the first pass. --native puts arena.move on the native tier when the library has it.
  *
- *   arena_host [--root <repo>] [--ticks 600] [--rollback-check] [--native] [--quiet] [--expect-digest <hex>] */
+ * --respond (post-query ordering, 2026-10-18) uses space3d.query_prox and adds arena.respond, an IR system ordered
+ * after the operator in the same tick: a ship that moved into its first contact is put back to the contact point
+ * and bounced, so the committed state of the contact tick does not penetrate; a ship with an obstacle within its
+ * 3 m proximity margin and no contact emits a near-miss event (kind 3). Every tick the host measures the deepest
+ * penetration of a ship into the sphere or another ship in committed state; with --respond it must stay within
+ * 1e-6 m (reported, and checked, in both modes).
+ *
+ *   arena_host [--root <repo>] [--ticks 600] [--rollback-check] [--native] [--respond] [--coast] [--quiet]
+ *              [--expect-digest <hex>] */
 #include <stdint.h>
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,7 +38,10 @@
 
 typedef struct Ids {
     uint32_t kind, next_gate, gate_index, pos[3], rot[4], radius, in_ax, in_ay, in_az, vel[3], score, bumps;
+    uint32_t prox_margin; /* --respond only */
 } Ids;
+
+static int g_respond = 0;
 
 static uint8_t *slurp(const char *root, const char *rel, size_t *len) {
     char path[1024];
@@ -79,6 +91,9 @@ static int resolve(const SuHostWorld *w, Ids *ids) {
     ok &= id_of(w, "in_az", &ids->in_az);
     ok &= id_of(w, "score", &ids->score);
     ok &= id_of(w, "bumps", &ids->bumps);
+    if (g_respond) {
+        ok &= id_of(w, "a_prox_margin.lo", &ids->prox_margin);
+    }
     for (k = 0; k < 3; k++) {
         snprintf(name, sizeof name, "a_pos_%s.lo", axes[k]);
         ok &= id_of(w, name, &ids->pos[k]);
@@ -120,6 +135,9 @@ static int spawn(SuHostWorld *w, const Ids *ids, uint32_t kind, int64_t x, int64
     put_q(v, &n, ids->rot[0], kind >= 5u ? half_sqrt2 : Q32(1));
     put_q(v, &n, ids->rot[2], kind >= 5u ? half_sqrt2 : 0);
     put_q(v, &n, ids->vel[0], vx);
+    if (g_respond && kind == 1u) {
+        put_q(v, &n, ids->prox_margin, Q32(3));
+    }
     st = su_host_spawn(w, v, n, 0u, handle, &err);
     if (st != SU_OK) {
         fprintf(stderr, "spawn: %s (%s)\n", su_host_status_name(st), err.message);
@@ -130,8 +148,50 @@ static int spawn(SuHostWorld *w, const Ids *ids, uint32_t kind, int64_t x, int64
 
 /* Scripted inputs of tick t (Q16.16 m/s^2 per axis): ship 0 and 1 accelerate along +x for a second, ship 2
  * weaves in y, ship 3 accelerates along -x towards ship 1's lane. */
+static int g_coast = 0; /* --coast: every input is zero (the ships keep their initial velocities) */
+
+/* Every committed column of every row (slots 0..rows-1) as JSON: the world.create fixture format when fixture is
+ * nonzero (tests/space3d/test_space3d_serve.py builds the same world through `sutekh serve`), else
+ * {"tick", "columns"}. */
+static int dump_world(const char *path, const SuHostWorld *w, uint32_t rows, int fixture) {
+    FILE *f = fopen(path, "wb");
+    uint32_t i, r, n = su_host_field_count(w);
+    uint32_t col[64];
+    if (f == NULL || rows > 64u) {
+        if (f != NULL) {
+            fclose(f);
+        }
+        return 0;
+    }
+    if (fixture) {
+        fprintf(f, "{\"fixture_format\":\"0.1\",\"schema_id\":\"arena\",\"schema_version\":1,\"tick\":0,\"entity_ids\":[");
+        for (r = 0; r < rows; r++) {
+            fprintf(f, "%s%u", r ? "," : "", (unsigned)(r + 1u));
+        }
+        fprintf(f, "],");
+    } else {
+        fprintf(f, "{\"tick\":%llu,", (unsigned long long)su_host_tick(w));
+    }
+    fprintf(f, "\"columns\":{");
+    for (i = 0; i < n; i++) {
+        SuHostFieldInfo fi;
+        su_host_field_info(w, i, &fi);
+        su_host_read(w, fi.id, 0, rows, col);
+        fprintf(f, "%s\"%s\":[", i ? "," : "", fi.name);
+        for (r = 0; r < rows; r++) {
+            fprintf(f, "%s%u", r ? "," : "", (unsigned)col[r]);
+        }
+        fprintf(f, "]");
+    }
+    fprintf(f, "}}\n");
+    return fclose(f) == 0;
+}
+
 static void inputs_for(uint64_t t, uint32_t ship, int32_t a[3]) {
     a[0] = a[1] = a[2] = 0;
+    if (g_coast) {
+        return;
+    }
     if (ship <= 1u && t < 120u) {
         a[0] = 6 * 65536;
     } else if (ship == 2u) {
@@ -197,16 +257,49 @@ static int record(const SuHostWorld *w, Hist *h) {
     return su_host_events_for_tick(w, h->tick, h->ev, 16u, &h->nev, &total, NULL) == SU_OK && total <= 16u;
 }
 
+static int64_t read_q(const SuHostWorld *w, uint32_t lo_id, uint64_t slot) {
+    uint32_t lo = 0, hi = 0;
+    su_host_read(w, lo_id, slot, 1, &lo);
+    su_host_read(w, lo_id + 1u, slot, 1, &hi);
+    return (int64_t)(((uint64_t)hi << 32) | lo);
+}
+
+/* Deepest penetration (m) in committed state: ships 0..3 (radius 1) against each other and the sphere (slot 7,
+ * radius 3). Doubles here are the host's measurement only; they never feed back into the simulation. */
+static double penetration(const SuHostWorld *w, const Ids *ids) {
+    double p[8][3], worst = 0.0;
+    static const uint64_t slots[5] = {0, 1, 2, 3, 7};
+    static const double radius[5] = {1.0, 1.0, 1.0, 1.0, 3.0};
+    uint32_t a, b, k;
+    for (a = 0; a < 5u; a++) {
+        for (k = 0; k < 3u; k++) {
+            p[a][k] = (double)read_q(w, ids->pos[k], slots[a]) / 4294967296.0;
+        }
+    }
+    for (a = 0; a < 4u; a++) {
+        for (b = a + 1u; b < 5u; b++) {
+            double dx = p[a][0] - p[b][0], dy = p[a][1] - p[b][1], dz = p[a][2] - p[b][2];
+            double depth = radius[a] + radius[b] - sqrt(dx * dx + dy * dy + dz * dz);
+            worst = depth > worst ? depth : worst;
+        }
+    }
+    return worst;
+}
+
 int main(int argc, char **argv) {
     const char *root = ".";
     const char *expect = NULL;
+    const char *dump_fixture = NULL, *dump_final = NULL;
     uint64_t ticks = 600, t, ship[SHIPS], other;
-    int rollback = 0, native = 0, quiet = 0, i;
-    static const char *const files[5] = {"arena_score.capsule.json", "arena_score.lir.json", "arena_move.capsule.json",
-                                         "arena_move.lir.json", "arena_query.capsule.json"};
-    uint8_t *bytes[5];
-    size_t lens[5];
-    SuHostCapsule caps[3];
+    int rollback = 0, native = 0, quiet = 0, i, nfiles = 5;
+    static const char *const files[7] = {"arena_score.capsule.json", "arena_score.lir.json", "arena_move.capsule.json",
+                                         "arena_move.lir.json", "arena_query.capsule.json",
+                                         "arena_respond.capsule.json", "arena_respond.lir.json"};
+    uint8_t *bytes[7];
+    size_t lens[7];
+    SuHostCapsule caps[4];
+    uint32_t near_events = 0, worst_tick = 0;
+    double worst = 0.0;
     SuHostWorldDesc d;
     SuHostWorld *w = NULL;
     SuHostError err;
@@ -229,14 +322,23 @@ int main(int argc, char **argv) {
             native = 1;
         } else if (strcmp(argv[i], "--quiet") == 0) {
             quiet = 1;
+        } else if (strcmp(argv[i], "--respond") == 0) {
+            g_respond = 1;
+        } else if (strcmp(argv[i], "--coast") == 0) {
+            g_coast = 1;
+        } else if (strcmp(argv[i], "--dump-fixture") == 0 && i + 1 < argc) {
+            dump_fixture = argv[++i];
+        } else if (strcmp(argv[i], "--dump-final") == 0 && i + 1 < argc) {
+            dump_final = argv[++i];
         } else {
-            fprintf(stderr, "usage: arena_host [--root <repo>] [--ticks N] [--rollback-check] [--native] [--quiet] "
+            fprintf(stderr, "usage: arena_host [--root <repo>] [--ticks N] [--rollback-check] [--native] [--respond] [--quiet] "
                             "[--expect-digest <hex>]\n");
             return 2;
         }
     }
-    for (i = 0; i < 5; i++) {
-        bytes[i] = slurp(root, files[i], &lens[i]);
+    nfiles = g_respond ? 7 : 5;
+    for (i = 0; i < nfiles; i++) {
+        bytes[i] = slurp(root, g_respond && i == 4 ? "arena_query_prox.capsule.json" : files[i], &lens[i]);
         if (bytes[i] == NULL) {
             return 2;
         }
@@ -252,9 +354,15 @@ int main(int argc, char **argv) {
     caps[1].lir_len = lens[3];
     caps[2].capsule_json = bytes[4]; /* host operator record: no IR */
     caps[2].capsule_len = lens[4];
+    if (g_respond) {
+        caps[3].capsule_json = bytes[5];
+        caps[3].capsule_len = lens[5];
+        caps[3].lir_json = bytes[6];
+        caps[3].lir_len = lens[6];
+    }
     memset(&d, 0, sizeof d);
     d.struct_size = sizeof d;
-    d.capsule_count = 3;
+    d.capsule_count = g_respond ? 4u : 3u;
     d.capsules = caps;
     d.max_entities = 16;
     d.tick_rate_hz = 120;
@@ -302,6 +410,10 @@ int main(int argc, char **argv) {
     if (!spawn(w, &ids, 2u, Q32(25), Q32(-6), 0, Q32(3), 0, 0u, &other)) {
         return 1;
     }
+    if (dump_fixture != NULL && !dump_world(dump_fixture, w, SHIPS + GATES + 1u, 1)) {
+        fprintf(stderr, "cannot write %s\n", dump_fixture);
+        return 1;
+    }
     memset(hist, 0, sizeof hist);
     for (t = su_host_tick(w); t < ticks; t++) {
         uint64_t done = 0;
@@ -324,11 +436,20 @@ int main(int argc, char **argv) {
                 gate_events++;
             } else if (e->kind == 2u) {
                 bump_events++;
+            } else if (e->kind == 3u) {
+                near_events++;
             }
             if (!quiet && (e->kind == 1u || e->kind == 2u)) {
                 printf("tick %4llu  ship slot %u  %s %u (%s %u)\n", (unsigned long long)e->tick, (unsigned)e->slot,
                        e->kind == 1u ? "passed gate" : "bumped slot", (unsigned)e->a,
                        e->kind == 1u ? "score" : "contacts", (unsigned)e->b);
+            }
+        }
+        {
+            double pen = penetration(w, &ids);
+            if (pen > worst) {
+                worst = pen;
+                worst_tick = (uint32_t)(t + 1u);
             }
         }
         /* Rollback drill: back DRILL_BACK ticks, re-push the inputs, re-simulate in one call, compare. */
@@ -366,6 +487,10 @@ int main(int argc, char **argv) {
             drill_bad += bad ? 1u : 0u;
         }
     }
+    if (dump_final != NULL && !dump_world(dump_final, w, SHIPS + GATES + 1u, 0)) {
+        fprintf(stderr, "cannot write %s\n", dump_final);
+        return 1;
+    }
     su_host_digest(w, digest);
     su_host_hex(digest, hex);
     {
@@ -377,6 +502,9 @@ int main(int argc, char **argv) {
                (unsigned)sc[1], (unsigned)sc[2], (unsigned)sc[3], (unsigned)bp[0], (unsigned)bp[1], (unsigned)bp[2],
                (unsigned)bp[3]);
     }
+    printf("arena: %s, deepest committed penetration %.9f m (tick %u), %u near-miss events\n",
+           g_respond ? "same-tick response (arena.respond after space3d.query_prox)" : "next-tick response",
+           worst, (unsigned)worst_tick, (unsigned)near_events);
     if (rollback) {
         printf("arena: %u rollback drills (restore in place %u ticks back, re-simulate in one call), %u differed\n",
                (unsigned)drills, (unsigned)DRILL_BACK, (unsigned)drill_bad);
@@ -386,7 +514,7 @@ int main(int argc, char **argv) {
         free(hist[s].snap);
     }
     su_host_world_destroy(w);
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < nfiles; i++) {
         free(bytes[i]);
     }
     if (drill_bad != 0u) {
@@ -396,5 +524,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "digest differs from --expect-digest %s\n", expect);
         return 1;
     }
-    return gate_events > 0u && bump_events > 0u ? 0 : 1;
+    if (g_respond && (worst > 1e-6 || near_events == 0u)) {
+        fprintf(stderr, "same-tick response: penetration %.9f m (limit 1e-6), %u near-miss events\n", worst,
+                (unsigned)near_events);
+        return 1;
+    }
+    return (g_coast || gate_events > 0u) && bump_events > 0u ? 0 : 1;
 }

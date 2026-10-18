@@ -523,7 +523,10 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
     }
     st = su_sched_finalize(&hw->sched);
     if (st != SU_OK) {
-        set_err(err, st, UINT32_MAX, UINT64_MAX, "systems disagree on a field's id, name or type");
+        char why[512];
+        su_sched_explain_mismatch(&hw->sched, why, sizeof why);
+        set_err(err, st, UINT32_MAX, UINT64_MAX, "systems disagree on a field's id, name or type%s%s",
+                why[0] != '\0' ? ": " : "", why);
         goto fail;
     }
     st = check_effects(&hw->sched, facts, err);

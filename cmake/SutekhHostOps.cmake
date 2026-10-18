@@ -57,9 +57,18 @@ target_link_libraries(arena_host PRIVATE sutekh_host)
 sutekh_apply_warnings(arena_host)
 add_test(NAME example_arena_host COMMAND arena_host --root "${CMAKE_CURRENT_SOURCE_DIR}" --ticks 900 --rollback-check
          --quiet --expect-digest "3b1f7e1dc74d79f9fd0d86bddd1478e614cd717c8b9184956322b564c3f8eac9")
+if(NOT WIN32)
+    target_link_libraries(arena_host PRIVATE m) # the host-side penetration measurement only
+endif()
+# Same-tick response (post-query ordering + space3d.query_prox): no committed penetration, near-miss events.
+add_test(NAME example_arena_host_respond COMMAND arena_host --root "${CMAKE_CURRENT_SOURCE_DIR}" --ticks 900
+         --rollback-check --respond --quiet --expect-digest "fab7f11055eb56e58164e4a614098ce6940d5ff142c3d40bf64df08a305eb238")
 if(SUTEKH_NATIVE)
     add_test(NAME example_arena_host_native COMMAND arena_host --root "${CMAKE_CURRENT_SOURCE_DIR}" --ticks 900
              --rollback-check --native --quiet --expect-digest "3b1f7e1dc74d79f9fd0d86bddd1478e614cd717c8b9184956322b564c3f8eac9")
+    add_test(NAME example_arena_host_respond_native COMMAND arena_host --root "${CMAKE_CURRENT_SOURCE_DIR}" --ticks 900
+             --rollback-check --respond --native --quiet
+             --expect-digest "fab7f11055eb56e58164e4a614098ce6940d5ff142c3d40bf64df08a305eb238")
 endif()
 if(Python3_Interpreter_FOUND)
     add_test(NAME example_arena_generated COMMAND "${Python3_EXECUTABLE}" -I

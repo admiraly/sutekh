@@ -88,3 +88,22 @@ The renderer and the mixer read committed state and interpolated transforms only
 to a world. The demo keeps its pinned digest and its shadow-world and rollback checks. No original game asset,
 third-party art or downstream-specific name enters the repository; downstream content stays in the downstream
 project.
+
+## Extension, 18 October 2026: same-tick operator results, proximity, binding diagnostics, consumer build
+
+Same authorization and boundaries (owner-authorized downstream work; no M3 gate is closed by it). Scope:
+
+8. Post-query ordering: an IR system may order itself after a host operator of an earlier phase (`after` edge),
+   verified by the effect analysis, so a response system consumes the operator's results in the same tick, through
+   `sutekh serve` and `host.h` alike, with snapshots, rollback and replays unchanged in kind. Schedules without such
+   an edge are unaffected (their acceptance, order and digests do not change).
+9. A proximity variant of the space3d operator (`space3d.query_prox`, a separate descriptor and record): per mover,
+   the closest collidable within a per-mover margin (slot, generation, distance), deterministic tie-break. The
+   existing `space3d.query` descriptor, constants hash and results are unchanged.
+10. Clearer verifier/schedule messages for q32/i64 lane binding and for read/write flags that differ from the IR's
+    loads and stores; documentation of both rules (`docs/SPACE3D.md`).
+11. Consumer build ergonomics: `SUTEKH_TOOLCHAIN_HOME` for `tools/env-windows.ps1`; `SUTEKH_PYTHON`,
+    `SUTEKH_VULKAN_INCLUDE_DIR` and `Sutekh::vulkan_headers` visible to `add_subdirectory` consumers.
+
+The IR/opcode contract (`LIVE_IR_SPEC.md`, `include/sutekh/ir.h`) is not changed: item 8 is a scheduling rule of the
+effect analysis, not an IR change.

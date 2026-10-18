@@ -74,6 +74,11 @@
 #define SPACE3D_F_GATE_DIR 62u
 #define SPACE3D_F_GATE_SLOT 63u
 #define SPACE3D_F_GATE_TOI 64u
+/* space3d.query_prox (2026-10-18): the base lanes plus a per-mover proximity output. */
+#define SPACE3D_F_PROX_MARGIN 66u /* q32 read: mover's proximity margin (<= 0: off) */
+#define SPACE3D_F_PROX_SLOT 68u   /* u32 write: closest collidable within the margin (0xFFFFFFFF when none) */
+#define SPACE3D_F_PROX_GEN 69u    /* u32 write: its generation (0 when none) */
+#define SPACE3D_F_PROX_DIST 70u   /* q32 write: its surface distance, [0, margin] (0 when none) */
 
 /* Instrumentation (tests): counters of the last run. */
 typedef struct Space3dStats {
@@ -107,6 +112,11 @@ typedef struct Space3dCtx {
 } Space3dCtx;
 
 extern const SuHostOpDesc g_space3d_query_desc;
+/* space3d.query_prox: every lane and result of space3d.query, plus per mover the closest other collidable whose
+ * surface distance at the end positions is within the mover's prox_margin (ties: lowest slot). Movers with a
+ * positive margin have their broadphase bounds widened by it; proximity is taken over the same kept candidates
+ * (so SPACE3D_FLAG_CAND_TRUNCATED also covers it). docs/SPACE3D.md section 3. */
+extern const SuHostOpDesc g_space3d_query_prox_desc;
 /* The descriptor's static context (process-wide scratch for SPACE3D_MAX_ROWS rows; one world per worker
  * process, not reentrant). */
 Space3dCtx *space3d_query_ctx(void);
@@ -121,5 +131,6 @@ uint32_t space3d_query_instance_create(uint32_t max_rows, Space3dCtx **out);
 void space3d_query_instance_destroy(void *ctx); /* NULL-safe; matches su_sched_set_host_instance's free_fn */
 /* Canonical constants text (its SHA-256 is the descriptor's constants_hash). */
 const char *space3d_constants_text(void);
+const char *space3d_prox_constants_text(void);
 
 #endif

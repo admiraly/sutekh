@@ -16,9 +16,14 @@ racer.move, and space3d.query as a host operator, in the driver's schedule order
      every name prefixed "g_", capsules and fixture rewritten), with a space3d.query record that binds each operator
      lane to the game lane ("binds", su_host_load_bound). Stepped to T through the supervisor, every lane mapped back
      to its original name equals the in-process state (on native builds also with racer.move specialized). Otherwise this part prints "not run".
+  6. post-query ordering (--arena <arena_host>): examples/host_space3d with --respond --coast (arena.respond is
+     ordered after the host operator space3d.query_prox in the same tick). arena_host dumps its initial world and
+     its committed state after T ticks through the in-process host API; the same capsules through `sutekh serve`
+     reproduce every lane, also after a snapshot at T/2 and a restore.
 Exit 0 only when every check ran and passed (the native part is reported, not required, on VM-only builds).
 
     test_space3d_serve.py --binary <sutekh> --driver <racer_microcosm> --work <dir> [--n 8] [--ticks 720]
+                          [--arena <arena_host>]
 """
 import argparse
 import json
@@ -139,6 +144,58 @@ def remap_project(src, dst, fixture_path):
         json.dump(fx, fh, separators=(",", ":"))
 
 
+def run_post_query(args, half):
+    """Check 6: arena.respond after space3d.query_prox through the supervisor equals the in-process host API."""
+    aproj = os.path.join(args.work, "arena_project")
+    os.makedirs(aproj)
+    src = os.path.join(ROOT, "examples", "host_space3d")
+    for name in ("arena_score.capsule.json", "arena_score.lir.json", "arena_move.capsule.json", "arena_move.lir.json",
+                 "arena_respond.capsule.json", "arena_respond.lir.json", "arena_query_prox.capsule.json"):
+        shutil.copy(os.path.join(src, name), aproj)
+    fixture = os.path.join(aproj, "arena.json")
+    finals = {}
+    for t in (half, args.ticks):
+        final = os.path.join(args.work, "arena_final_%d.json" % t)
+        out = subprocess.run([args.arena, "--root", ROOT, "--ticks", str(t), "--respond", "--coast", "--quiet",
+                              "--dump-fixture", fixture, "--dump-final", final], capture_output=True, text=True)
+        if out.returncode != 0:
+            check(False, "arena_host --respond --coast failed: %s %s" % (out.stdout[-400:], out.stderr[-400:]))
+            return "FAILED (arena_host)"
+        finals[t] = json.load(open(final, encoding="utf-8"))
+    rows = len(json.load(open(fixture, encoding="utf-8"))["entity_ids"])
+    create = {"fixture_path": "arena.json",
+              "capsule_paths": ["arena_score.capsule.json", "arena_move.capsule.json",
+                                {"capsule_path": "arena_query_prox.capsule.json", "host_operator": "space3d.query_prox"},
+                                "arena_respond.capsule.json"],
+              "max_struct_per_tick": 1, "max_events_per_tick": 64, "event_log_max": 1048576}
+    names = list(finals[args.ticks]["columns"])
+    s = Serve(args.binary, aproj)
+    ok = True
+    try:
+        created = s.call("world.create", create)
+        wid, rev = created["world_id"], created["world_revision"]
+        r = s.call("world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": half})
+        rev = r["world_revision"]
+        cols, _ = read_all(s, wid, rows, names)
+        ok &= compare(cols, finals[half], "post-query arena at T/2")
+        snap = s.call("world.snapshot", {"world_id": wid, "expected_world_revision": rev})
+        rev = snap.get("world_revision", rev)
+        r = s.call("world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": args.ticks - half})
+        rev = r["world_revision"]
+        cols, _ = read_all(s, wid, rows, names)
+        ok &= compare(cols, finals[args.ticks], "post-query arena at T")
+        r = s.call("world.restore", {"world_id": wid, "expected_world_revision": rev, "snapshot_id": snap["snapshot_id"]})
+        rev = r.get("world_revision", rev)
+        r = s.call("world.step", {"world_id": wid, "expected_world_revision": rev, "ticks": args.ticks - half})
+        rev = r["world_revision"]
+        cols, _ = read_all(s, wid, rows, names)
+        ok &= compare(cols, finals[args.ticks], "post-query arena restored at T/2, stepped to T")
+        s.call("world.close", {"world_id": wid, "expected_world_revision": rev})
+    finally:
+        s.close()
+    return "%d rows, %d lanes, T=%d: %s" % (rows, len(names), args.ticks, "ok" if ok else "FAILED")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--binary", required=True)
@@ -146,6 +203,7 @@ def main():
     ap.add_argument("--work", required=True)
     ap.add_argument("--n", type=int, default=8)
     ap.add_argument("--ticks", type=int, default=720)
+    ap.add_argument("--arena")
     args = ap.parse_args()
     half = args.ticks // 2
     shutil.rmtree(args.work, ignore_errors=True)
@@ -260,6 +318,11 @@ def main():
         finally:
             s.close()
 
+    post_query = "not run (no --arena)"
+    if args.arena:
+        post_query = run_post_query(args, half)
+
+    print("space3d serve: post-query ordering: %s" % post_query)
     print("space3d serve: game schema %s (IDs + %d, names g_*): %s" % (REMAP_SCHEMA, REMAP_ID, ", ".join(remap_runs)))
     print("space3d serve: N=%d, %d rows, %d lanes, T=%d (snapshot at %d), %d events; native: %s"
           % (args.n, rows, len(names), args.ticks, half, rec["events"], native))

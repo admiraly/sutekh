@@ -581,11 +581,188 @@ static void test_limits(void) {
     }
 }
 
+/* ---------- space3d.query_prox (2026-10-18) ---------- */
+
+static void prox_mover(uint32_t r, SuV3 prev, SuV3 pos, int64_t radius, int64_t margin) {
+    mover(r, prev, pos, radius, 0);
+    setq(SPACE3D_F_PROX_MARGIN, r, margin);
+}
+
+static uint32_t write_lanes(void) {
+    uint32_t i, n = 0;
+    for (i = 0; i < D->field_count; i++) {
+        n += (D->fields[i].access & SU_ACCESS_WRITE) != 0u;
+    }
+    return n;
+}
+
+static void test_prox(void) {
+    static uint32_t a[32 * MAXR], b[32 * MAXR], c[32 * MAXR];
+    const SuHostOpDesc *base = &g_space3d_query_desc;
+    SuSha256 sh;
+    uint8_t h[32];
+    char msg[256];
+    uint32_t i, sv = 0, gen = 0, seed, compared = 0, flagged = 0, found = 0, nw;
+    SuLirModule *decl = NULL;
+    Scene s;
+    SuWorld *w = NULL;
+
+    D = &g_space3d_query_prox_desc;
+    /* Descriptor: the base table followed by the proximity lanes; own constants hash; record loads only here. */
+    CHECK(su_host_desc_validate(D) == SU_OK);
+    CHECK(D->field_count == base->field_count + 6u);
+    for (i = 0; i < base->field_count; i++) {
+        CHECK(D->fields[i].id == base->fields[i].id && D->fields[i].access == base->fields[i].access &&
+              strcmp(D->fields[i].name, base->fields[i].name) == 0);
+    }
+    su_sha256_init(&sh);
+    su_sha256_update(&sh, space3d_prox_constants_text(), strlen(space3d_prox_constants_text()));
+    su_sha256_final(&sh, h);
+    CHECK(memcmp(h, D->constants_hash, 32) == 0);
+    CHECK(memcmp(h, base->constants_hash, 32) != 0);
+    CHECK(su_host_load("profiles/space3d/space3d_query_prox.capsule.json", NULL, D, &decl, &sv, &gen, msg,
+                       sizeof msg) == SU_OK);
+    su_host_decl_free(decl);
+    decl = NULL;
+    CHECK(su_host_load("profiles/space3d/space3d_query_prox.capsule.json", NULL, base, &decl, &sv, &gen, msg,
+                       sizeof msg) != SU_OK && decl == NULL);
+    CHECK(su_host_load("profiles/space3d/space3d_query.capsule.json", NULL, D, &decl, &sv, &gen, msg, sizeof msg) !=
+              SU_OK &&
+          decl == NULL);
+
+    /* Known answers. Mover 0 at rest at the origin, radius 1. Spheres (radius 1) at +5 x (slot 1) and -5 y
+     * (slot 2): surface distance 3 each, the tie goes to slot 1. A capsule (slot 3) along z from -5 to -3, radius
+     * 1/2: distance 3 - 1/2 - 1 = 3/2. A box (slot 4) centred at +10 z, half extents 1: distance 8. */
+    {
+        static const int64_t margins[5] = {Q(5), 0, Q(1), Q(10), -Q(4)};
+        static const uint32_t want_slot[5] = {3u, NONE, NONE, 3u, NONE};
+        static const int64_t want_dist[5] = {Q(3) / 2, 0, 0, Q(3) / 2, 0};
+        uint32_t k;
+        for (k = 0; k < 5u; k++) {
+            scene_init(&s, 5);
+            prox_mover(0, V(0, 0, 0), V(0, 0, 0), ONE, margins[k]);
+            sphere(1, V(Q(5), 0, 0), ONE);
+            sphere(2, V(0, -Q(5), 0), ONE);
+            capsule(3, V(0, 0, -Q(4)), QID, ONE, ONE / 2);
+            box(4, V(0, 0, Q(10)), QID, V(ONE, ONE, ONE));
+            CHECK(run_scene(&s, &w) == SU_OK);
+            if (w != NULL) {
+                CHECK(rd32(w, SPACE3D_F_PROX_SLOT, 0) == want_slot[k]);
+                CHECK(rdq(w, SPACE3D_F_PROX_DIST, 0) == want_dist[k]);
+                CHECK(rd32(w, SPACE3D_F_PROX_GEN, 0) == (want_slot[k] == NONE ? 0u : 1u));
+                CHECK(rd32(w, SPACE3D_F_PROX_SLOT, 1) == NONE); /* non-mover rows: none */
+                CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 0u);
+                su_world_destroy(w);
+                w = NULL;
+            }
+        }
+        /* Without the capsule: the two spheres tie at distance 3, the lower slot wins. The box alone: 8. */
+        scene_init(&s, 5);
+        prox_mover(0, V(0, 0, 0), V(0, 0, 0), ONE, Q(5));
+        sphere(1, V(Q(5), 0, 0), ONE);
+        sphere(2, V(0, -Q(5), 0), ONE);
+        box(4, V(0, 0, Q(10)), QID, V(ONE, ONE, ONE));
+        CHECK(run_scene(&s, &w) == SU_OK);
+        if (w != NULL) {
+            CHECK(rd32(w, SPACE3D_F_PROX_SLOT, 0) == 1u && rdq(w, SPACE3D_F_PROX_DIST, 0) == Q(3));
+            su_world_destroy(w);
+            w = NULL;
+        }
+        scene_init(&s, 5);
+        prox_mover(0, V(0, 0, 0), V(0, 0, 0), ONE, Q(9));
+        box(4, V(0, 0, Q(10)), QID, V(ONE, ONE, ONE));
+        CHECK(run_scene(&s, &w) == SU_OK);
+        if (w != NULL) {
+            CHECK(rd32(w, SPACE3D_F_PROX_SLOT, 0) == 4u && rdq(w, SPACE3D_F_PROX_DIST, 0) == Q(8));
+            su_world_destroy(w);
+            w = NULL;
+        }
+        /* A touching sphere: distance 0 (and a contact). */
+        scene_init(&s, 2);
+        prox_mover(0, V(0, 0, 0), V(0, 0, 0), ONE, ONE);
+        sphere(1, V(Q(2), 0, 0), ONE);
+        CHECK(run_scene(&s, &w) == SU_OK);
+        if (w != NULL) {
+            CHECK(rd32(w, SPACE3D_F_PROX_SLOT, 0) == 1u && rdq(w, SPACE3D_F_PROX_DIST, 0) == 0);
+            su_world_destroy(w);
+            w = NULL;
+        }
+    }
+
+    /* Random scenes: (1) margin 0 everywhere gives the base operator's lanes bit for bit; (2) random margins: the
+     * broadphase equals brute force on every lane when nothing is truncated; repeat is bit-identical. */
+    nw = write_lanes();
+    for (seed = 1; seed <= 30; seed++) {
+        uint32_t rows = 64u + (seed * 131u) % 700u, r;
+        int64_t span = 20 + (int64_t)(seed % 4u) * 40;
+        SuWorld *w1 = NULL, *w2 = NULL, *w3 = NULL;
+        int flags_any = 0;
+        g_rng = seed * UINT64_C(104729);
+        random_scene(&s, rows, span);
+        D = base;
+        CHECK(run_scene(&s, &w1) == SU_OK);
+        if (w1 != NULL) {
+            snapshot_out(w1, rows, a);
+            su_world_destroy(w1);
+            w1 = NULL;
+        }
+        D = &g_space3d_query_prox_desc;
+        CHECK(run_scene(&s, &w1) == SU_OK);
+        if (w1 != NULL) {
+            snapshot_out(w1, rows, b);
+            CHECK(memcmp(a, b, sizeof(uint32_t) * 26u * rows) == 0); /* margin 0: base lanes unchanged */
+            for (r = 0; r < rows; r++) {
+                CHECK(s.dead[r] || rd32(w1, SPACE3D_F_PROX_SLOT, r) == NONE); /* dead rows are zeroed */
+            }
+            su_world_destroy(w1);
+            w1 = NULL;
+        }
+        for (r = 0; r < rows; r++) {
+            if (g_col[SPACE3D_F_KIND][r] == SPACE3D_KIND_MOVER) {
+                setq(SPACE3D_F_PROX_MARGIN, r, (int64_t)(rng() % (uint64_t)(8 * ONE)) - ONE);
+            }
+        }
+        CHECK(run_scene(&s, &w1) == SU_OK);
+        CHECK(run_scene(&s, &w2) == SU_OK);
+        space3d_query_ctx()->brute_force = 1;
+        CHECK(run_scene(&s, &w3) == SU_OK);
+        space3d_query_ctx()->brute_force = 0;
+        if (w1 != NULL && w2 != NULL && w3 != NULL) {
+            snapshot_out(w1, rows, a);
+            snapshot_out(w2, rows, b);
+            snapshot_out(w3, rows, c);
+            CHECK(memcmp(a, b, sizeof(uint32_t) * nw * rows) == 0);
+            for (r = 0; r < rows; r++) {
+                flags_any |= (rd32(w1, SPACE3D_F_HIT_FLAGS, r) &
+                              (SPACE3D_FLAG_CAND_TRUNCATED | SPACE3D_FLAG_SWEEP_BUDGET)) != 0u;
+                if (rd32(w1, SPACE3D_F_PROX_SLOT, r) != NONE) {
+                    found++;
+                    CHECK(rdq(w1, SPACE3D_F_PROX_DIST, r) <= rdq(w1, SPACE3D_F_PROX_MARGIN, r));
+                }
+            }
+            if (flags_any) {
+                flagged++;
+            } else {
+                compared++;
+                CHECK(memcmp(a, c, sizeof(uint32_t) * nw * rows) == 0);
+            }
+        }
+        su_world_destroy(w1);
+        su_world_destroy(w2);
+        su_world_destroy(w3);
+    }
+    printf("space3d prox: %u scenes equal to brute force, %u truncated (repeat-only), %u proximity hits%c", compared,
+           flagged, found, 10);
+    CHECK(compared >= 20u && found > 50u);
+    D = base;
+}
+
 int main(void) {
     test_descriptor();
     test_known();
     test_random();
     test_limits();
+    test_prox();
     printf("test_space3d_ops: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

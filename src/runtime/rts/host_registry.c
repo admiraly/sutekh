@@ -8,10 +8,11 @@
 extern const SuHostOpDesc g_rts_spatial_desc;
 extern const SuHostOpDesc g_rts_scatter_desc;
 extern const SuHostOpDesc g_space3d_query_desc;
+extern const SuHostOpDesc g_space3d_query_prox_desc;
 
-/* Production table: the two RTS host operators and space3d.query. */
+/* Production table: the two RTS host operators, space3d.query and space3d.query_prox. */
 static const SuHostOpDesc *const k_host_table[] = {&g_rts_spatial_desc, &g_rts_scatter_desc, &g_space3d_query_desc,
-                                                   NULL};
+                                                   &g_space3d_query_prox_desc, NULL};
 
 #ifdef SU_TEST_HOST_REGISTRY
 static const SuHostOpDesc *const *g_test_table = NULL;
