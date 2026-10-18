@@ -134,9 +134,28 @@ static unsigned nlz64(uint64_t x) {
     if (x == 0u) {
         return 64u;
     }
-    while ((x & ((uint64_t)1 << 63)) == 0u) {
-        x <<= 1;
-        n++;
+    if (x <= UINT64_C(0x00000000FFFFFFFF)) {
+        n += 32u;
+        x <<= 32;
+    }
+    if (x <= UINT64_C(0x0000FFFFFFFFFFFF)) {
+        n += 16u;
+        x <<= 16;
+    }
+    if (x <= UINT64_C(0x00FFFFFFFFFFFFFF)) {
+        n += 8u;
+        x <<= 8;
+    }
+    if (x <= UINT64_C(0x0FFFFFFFFFFFFFFF)) {
+        n += 4u;
+        x <<= 4;
+    }
+    if (x <= UINT64_C(0x3FFFFFFFFFFFFFFF)) {
+        n += 2u;
+        x <<= 2;
+    }
+    if (x <= UINT64_C(0x7FFFFFFFFFFFFFFF)) {
+        n += 1u;
     }
     return n;
 }
@@ -197,8 +216,86 @@ static U128 div_rne_u128(U128 n, uint64_t d) {
 
 /* ---- square root ---- */
 
-/* floor(sqrt(hi:lo)) and the remainder n - root^2 (at most 2*root, so it fits 65 bits: U128). */
+/* floor(sqrt(t)) of a 64-bit value: integer Newton from 2^ceil(bits/2) >= sqrt(t), which decreases to the
+ * root and stops when a step no longer decreases (x <= 2^32 and t / x < 2^63, so the sum cannot overflow). */
+static uint64_t isqrt64(uint64_t t) {
+    uint64_t x, y;
+    if (t < 2u) {
+        return t;
+    }
+    x = (uint64_t)1 << ((65u - nlz64(t)) / 2u);
+    for (;;) {
+        y = (x + t / x) >> 1;
+        if (y >= x) {
+            return x;
+        }
+        x = y;
+    }
+}
+
+/* floor(sqrt(hi:lo)) and the remainder n - root^2 (at most 2 * root, so it fits 65 bits: U128).
+ *
+ * The result is the exact integer square root; only the method is chosen for speed. The value is normalized
+ * (m = n * 4^k with the top word at least 2^62), the root of the top word gives a 32-bit-accurate estimate
+ * R = isqrt64(top) * 2^32 <= sqrt(m), and integer Newton steps x' = floor((x + floor(m / x)) / 2) finish it: the
+ * first step from any x >= 1 gives x' >= isqrt(m) (integer AM-GM), and from above the sequence decreases to
+ * isqrt(m), stopping when it no longer decreases. isqrt(n) = floor(isqrt(m) / 2^k). The bit-serial reference
+ * (su_num_isqrt_u128_ref) is kept for the tests. */
 static uint64_t isqrt_rem_u128(uint64_t hi, uint64_t lo, U128 *rem_out) {
+    uint64_t root, mh, ml, x, q, r0, rem;
+    unsigned s;
+    U128 sq, n;
+    if (hi == 0u) {
+        root = isqrt64(lo);
+    } else {
+        s = nlz64(hi) & ~1u; /* even shift: m = n * 4^(s/2) */
+        mh = s == 0u ? hi : (hi << s) | (lo >> (64u - s));
+        ml = lo << s;
+        if (mh == UINT64_MAX) {
+            x = UINT64_MAX; /* m >= (2^64 - 1) * 2^64: isqrt(m) = 2^64 - 1 */
+        } else {
+            r0 = isqrt64(mh) << 32; /* <= sqrt(m), relative error below 2^-31 */
+            if (mh >= r0) {
+                x = UINT64_MAX; /* m / r0 would not fit 64 bits; start from above instead */
+            } else {
+                uint64_t sh, sl;
+                q = su_num_divlu(mh, ml, r0, &rem);
+                x = (r0 >> 1) + (q >> 1) + (r0 & q & 1u);
+                /* x >= isqrt(m) and, from a 2^-31-accurate start, x - sqrt(m) < 5: decrement while x^2 > m. */
+                for (;;) {
+                    su_num_mul_u64(x, x, &sh, &sl);
+                    if (sh < mh || (sh == mh && sl <= ml)) {
+                        break;
+                    }
+                    x--;
+                }
+            }
+            for (;;) {
+                uint64_t y;
+                if (mh >= x) {
+                    break; /* m / x >= 2^64 > x: the next step cannot decrease */
+                }
+                q = su_num_divlu(mh, ml, x, &rem);
+                y = (x >> 1) + (q >> 1) + (x & q & 1u);
+                if (y >= x) {
+                    break;
+                }
+                x = y;
+            }
+        }
+        root = x >> (s / 2u);
+    }
+    if (rem_out != NULL) {
+        n.hi = hi;
+        n.lo = lo;
+        su_num_mul_u64(root, root, &sq.hi, &sq.lo);
+        *rem_out = u128_sub(n, sq);
+    }
+    return root;
+}
+
+/* Bit-serial reference of isqrt_rem_u128 (restoring method over 128 bits). */
+static uint64_t isqrt_rem_u128_ref(uint64_t hi, uint64_t lo, U128 *rem_out) {
     uint64_t root = 0;
     U128 rem = {0, 0};
     int i;
@@ -234,6 +331,10 @@ static uint64_t isqrt_rem_u128(uint64_t hi, uint64_t lo, U128 *rem_out) {
 
 uint64_t su_num_isqrt_u128(uint64_t hi, uint64_t lo) {
     return isqrt_rem_u128(hi, lo, NULL);
+}
+
+uint64_t su_num_isqrt_u128_ref(uint64_t hi, uint64_t lo) {
+    return isqrt_rem_u128_ref(hi, lo, NULL);
 }
 
 /* RNE(sqrt(n)): round up when n - r^2 > r. A tie is impossible: (r + 1/2)^2 is not an integer. */

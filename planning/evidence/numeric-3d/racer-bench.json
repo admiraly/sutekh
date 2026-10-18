@@ -1,0 +1,519 @@
+{
+ "format": "sutekh.bench.6dof_racer_microcosm/1",
+ "statement": "observation on one machine; not performance qualification (ENGINE_CONSTITUTION C10)",
+ "machine": {
+  "cpu": "12th Gen Intel(R) Core(TM) i5-12400F",
+  "logical_cpus": 12,
+  "os": "Windows-11-10.0.26200-SP0",
+  "python": "3.13.15"
+ },
+ "source": {
+  "git_head": "5fd36a3795805c66b65167549765cc9f568e559e",
+  "worktree_dirty": false
+ },
+ "driver": {
+  "path": "C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/scratch-integ/build-win-rel/racer_microcosm.exe",
+  "sha256": "6c876ff4b09f7d1a91c350a25ad0218dee55dc192f264e0a9574fd8602e44d2d"
+ },
+ "measurement": "wall time of su_sched_run_ticks(1 tick) per tick, monotonic clock, single thread, after warm-up; one process per configuration",
+ "records": [
+  {
+   "workload": "6dof_racer_microcosm",
+   "n": 8,
+   "gates": 16,
+   "obstacles": 48,
+   "rows": 72,
+   "seed": 1,
+   "tick_hz": 120,
+   "warmup_ticks": 120,
+   "timed_ticks": 1200,
+   "query": true,
+   "systems": [
+    {
+     "system_id": "racer.race",
+     "kind": "ir",
+     "semantic_hash": "f2d15d69fb0f86d101eef929af0976a2e72400c1c10755c992279c9758d74184"
+    },
+    {
+     "system_id": "racer.move",
+     "kind": "ir",
+     "semantic_hash": "52d14abecb21bb11ef3977707e7b229fc0e05ef0d90b00738e4fdda166433f1e"
+    },
+    {
+     "system_id": "space3d.query",
+     "kind": "host",
+     "semantic_hash": "5c985d13e182ef112e03ec85e7f2e5c7f0c7b668922e9237c2e036e344a4f70d"
+    }
+   ],
+   "lanes": 78,
+   "tick_ns": {
+    "min": 206600,
+    "p50": 219600,
+    "p95": 269600,
+    "p99": 388100,
+    "max": 652900,
+    "mean": 227085
+   },
+   "budget_ns_120hz": 8333333,
+   "p99_fraction_of_budget": 0.0466,
+   "final_tick": 1320,
+   "final_state_sha256": "1c36bfcd4502084f6fc659d6b7be193a08971fddb8b9e9cc08cc941719619931",
+   "event_log_sha256": "290c64b163e3c5c3b7070b2cb752053f37d490893bf0c1a7041b64f0f62f4065",
+   "events": 25,
+   "digest_every": 120,
+   "state_digests": [
+    "35f17ee416c7e378085f515c81e16c4fbd231657a3b0c0b2ee6048831714e4fe",
+    "7a2c141fcab77ad2c4d71bec059063f21102300120bb0bcf089311f76821cdc0",
+    "7a35ab30140d3be26e3ce79e93c66d43625d619a8199e5994b587cf7521e6575",
+    "e169e258fb90de4a930050e3b35327e9b7e9c5586183cca1a660eedde44fc898",
+    "07bfc5281dabb91205fdb438458e7d2bc4f0b03f2dd38d4ae4fbcde218d20795",
+    "bf5f6f07da2d6f538d14b4a25995804fe2580ed57de47c9b0a8663e963d48065",
+    "76bec4f6d251e4dbcb6f2deddee93697e1f92ef7fbbe1ca46e65d55f7ac78ad9",
+    "0ef2f9233dec2fa2b9a7169f33fb6d6b3a1fe15b88585b159ab57694ff0fbe2f",
+    "e605bd956d5b6d3322167dcff61bbdba1f6e7acdc0aa7157004aae33dbf25d5e",
+    "1c36bfcd4502084f6fc659d6b7be193a08971fddb8b9e9cc08cc941719619931"
+   ],
+   "race": {
+    "gates_passed": 24,
+    "laps": 2,
+    "collision_ticks": 1
+   },
+   "last_query": {
+    "movers": 8,
+    "collidables": 56,
+    "sweep_axis": 0,
+    "sweep_pairs": 16,
+    "candidates": 0,
+    "narrow_tests": 0,
+    "contacts": 0
+   },
+   "replay_from_start_identical": true,
+   "replay_from_checkpoint_identical": true,
+   "checkpoint_tick": 720,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "args": [
+    "--n",
+    "8",
+    "--ticks",
+    "1200",
+    "--warmup",
+    "120",
+    "--replay"
+   ]
+  },
+  {
+   "workload": "6dof_racer_microcosm",
+   "n": 8,
+   "gates": 16,
+   "obstacles": 48,
+   "rows": 72,
+   "seed": 1,
+   "tick_hz": 120,
+   "warmup_ticks": 120,
+   "timed_ticks": 1200,
+   "query": false,
+   "systems": [
+    {
+     "system_id": "racer.race",
+     "kind": "ir",
+     "semantic_hash": "f2d15d69fb0f86d101eef929af0976a2e72400c1c10755c992279c9758d74184"
+    },
+    {
+     "system_id": "racer.move",
+     "kind": "ir",
+     "semantic_hash": "52d14abecb21bb11ef3977707e7b229fc0e05ef0d90b00738e4fdda166433f1e"
+    }
+   ],
+   "lanes": 54,
+   "tick_ns": {
+    "min": 180500,
+    "p50": 190700,
+    "p95": 232100,
+    "p99": 347800,
+    "max": 756500,
+    "mean": 198537
+   },
+   "budget_ns_120hz": 8333333,
+   "p99_fraction_of_budget": 0.0417,
+   "final_tick": 1320,
+   "final_state_sha256": "dc3da4e04368174a9825a662c2525bac87a3c47b7cfe62d2fa8b2ef43f7697dc",
+   "event_log_sha256": "d14e52645cd5c90abcf890e5b76a72d14f631b88d044173dea9b76db50f6d07c",
+   "events": 0,
+   "digest_every": 120,
+   "state_digests": [
+    "d181c47df8980371c4d7183c9352a64d74b8b976ade72d9f7d0c7a73dbddb38a",
+    "7e2325ed92a070319d269823f1eeae224f76c99bc40cb67e1b8539f51d2dee94",
+    "a268d12ce0835796674989fefa5122d0c7a8e4c65973169f35717c89696879ce",
+    "f7b0575753ef0fc4a277464f743e21065ab7938288b2b9f99533a2462947fdfc",
+    "90275b5fa1e37e75a4e77d02d6c48df89b85390e510b1c1542b2832c25b40c2e",
+    "daef84e11074427a0d3e81b0e117bc6e7b7b983b0d3b0ceaad667f872ef36639",
+    "725701c69dbfa3cb52ccef54ec10959c66fba8cf852d1df10831801aba7771d8",
+    "78d5ad0bf937949af53a7dac3db158e40b31b2151556408b968f346d24a46981",
+    "ce81a5f21bf862ab1095ca3c34d86e42efd66e7fe6c6e89c23e9472da9b8af29",
+    "dc3da4e04368174a9825a662c2525bac87a3c47b7cfe62d2fa8b2ef43f7697dc"
+   ],
+   "race": {
+    "gates_passed": 0,
+    "laps": 0,
+    "collision_ticks": 0
+   },
+   "last_query": {
+    "movers": 0,
+    "collidables": 0,
+    "sweep_axis": 0,
+    "sweep_pairs": 0,
+    "candidates": 0,
+    "narrow_tests": 0,
+    "contacts": 0
+   },
+   "replay_from_start_identical": true,
+   "replay_from_checkpoint_identical": true,
+   "checkpoint_tick": 720,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "args": [
+    "--n",
+    "8",
+    "--ticks",
+    "1200",
+    "--warmup",
+    "120",
+    "--replay",
+    "--no-query"
+   ]
+  },
+  {
+   "workload": "6dof_racer_microcosm",
+   "n": 32,
+   "gates": 16,
+   "obstacles": 48,
+   "rows": 96,
+   "seed": 1,
+   "tick_hz": 120,
+   "warmup_ticks": 120,
+   "timed_ticks": 1200,
+   "query": true,
+   "systems": [
+    {
+     "system_id": "racer.race",
+     "kind": "ir",
+     "semantic_hash": "f2d15d69fb0f86d101eef929af0976a2e72400c1c10755c992279c9758d74184"
+    },
+    {
+     "system_id": "racer.move",
+     "kind": "ir",
+     "semantic_hash": "52d14abecb21bb11ef3977707e7b229fc0e05ef0d90b00738e4fdda166433f1e"
+    },
+    {
+     "system_id": "space3d.query",
+     "kind": "host",
+     "semantic_hash": "5c985d13e182ef112e03ec85e7f2e5c7f0c7b668922e9237c2e036e344a4f70d"
+    }
+   ],
+   "lanes": 78,
+   "tick_ns": {
+    "min": 300200,
+    "p50": 310800,
+    "p95": 436500,
+    "p99": 515900,
+    "max": 1333400,
+    "mean": 323159
+   },
+   "budget_ns_120hz": 8333333,
+   "p99_fraction_of_budget": 0.0619,
+   "final_tick": 1320,
+   "final_state_sha256": "8c7fcdadcf13c8a7e3949459d0b4582a3011274f3730afd38bf51ca3dba4b153",
+   "event_log_sha256": "83d3413216ec90166bcbd3eac8f2dd0c461f86360350d2f8aea7b6290eca4ed5",
+   "events": 104,
+   "digest_every": 120,
+   "state_digests": [
+    "92f0ee0f5cae831fa8629cd3ab349bf9eaa89674c784531954f985e3417faa6c",
+    "cdd131f194559d3758740fa3d5e5adc2a65e23bc752cf769594f328a26504a5f",
+    "7a11adaf0b003d4fa32142af2a1782312b6be3b26da0423527aeab5286c100a1",
+    "a7ab20fc726505233416459a9efa25338f48090d4acf2dd0c6c05964c968d828",
+    "80108b3db6d046e40857a1c4a333b27c74b1aea12f7f9c6ccf3401d1424d450c",
+    "0094f2642a0a58f1b4c4dbde41daba503e3a22b835952d55d47916e9bf8d8a7d",
+    "9f8f86974b78ec5620377948cb43e8107a102887bc89930173da903562b82e0a",
+    "c93a91101052367b1505d658db1dc6b1ecd33822139ac4b57cbbd05a58cb9356",
+    "e9c8c0b7fdb4311eb33cfd3d63255eb8d45e7ff010a1e22ee9c52bfe5e8591e4",
+    "8c7fcdadcf13c8a7e3949459d0b4582a3011274f3730afd38bf51ca3dba4b153"
+   ],
+   "race": {
+    "gates_passed": 97,
+    "laps": 7,
+    "collision_ticks": 7
+   },
+   "last_query": {
+    "movers": 32,
+    "collidables": 80,
+    "sweep_axis": 0,
+    "sweep_pairs": 24,
+    "candidates": 1,
+    "narrow_tests": 1,
+    "contacts": 0
+   },
+   "replay_from_start_identical": true,
+   "replay_from_checkpoint_identical": true,
+   "checkpoint_tick": 720,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "args": [
+    "--n",
+    "32",
+    "--ticks",
+    "1200",
+    "--warmup",
+    "120",
+    "--replay"
+   ]
+  },
+  {
+   "workload": "6dof_racer_microcosm",
+   "n": 32,
+   "gates": 16,
+   "obstacles": 48,
+   "rows": 96,
+   "seed": 1,
+   "tick_hz": 120,
+   "warmup_ticks": 120,
+   "timed_ticks": 1200,
+   "query": false,
+   "systems": [
+    {
+     "system_id": "racer.race",
+     "kind": "ir",
+     "semantic_hash": "f2d15d69fb0f86d101eef929af0976a2e72400c1c10755c992279c9758d74184"
+    },
+    {
+     "system_id": "racer.move",
+     "kind": "ir",
+     "semantic_hash": "52d14abecb21bb11ef3977707e7b229fc0e05ef0d90b00738e4fdda166433f1e"
+    }
+   ],
+   "lanes": 54,
+   "tick_ns": {
+    "min": 264600,
+    "p50": 273900,
+    "p95": 395700,
+    "p99": 528500,
+    "max": 1150000,
+    "mean": 286720
+   },
+   "budget_ns_120hz": 8333333,
+   "p99_fraction_of_budget": 0.0634,
+   "final_tick": 1320,
+   "final_state_sha256": "c3a90e7fda475e90e62fac2c68a76a717233bbb6d18b401959825e5c8ca6e7aa",
+   "event_log_sha256": "d14e52645cd5c90abcf890e5b76a72d14f631b88d044173dea9b76db50f6d07c",
+   "events": 0,
+   "digest_every": 120,
+   "state_digests": [
+    "7d6fa2e7f862ad64386046f1954333802aaf7bec077e7c4be3105f6c3d356062",
+    "8af2033ba799b283282c4be9830cf95c8a5bd918b9d1e4df80dd4308a6d71582",
+    "ef7129fb5163f6de6c92118a37d294979e0fc15e05cfa260f845a566332240c3",
+    "e244f63bad2d1ab024d4100a847c293f6da2617b3626dfed26c0478a1b5b69dc",
+    "e80e667daff8d609590e25d1dda5bdabb38ef64c1688a0c3ed2e39b4aecd3a54",
+    "4e4676fea6ad4f84ed2cfb1ffbe091275428c7900e701c18ab3d49f2da9119d7",
+    "d2b8825872a759844d455201265041b94edfca315ee58d414c0b32e0eab65878",
+    "29fcd0387f68584b7d07908f01fd3eb23c95e2021c968b6266eaee5fbbf014bd",
+    "8ac002fde5c4f5b71b0d22d2dd8abf3e5497c1b023aaf92d99be5c2fd0c87030",
+    "c3a90e7fda475e90e62fac2c68a76a717233bbb6d18b401959825e5c8ca6e7aa"
+   ],
+   "race": {
+    "gates_passed": 0,
+    "laps": 0,
+    "collision_ticks": 0
+   },
+   "last_query": {
+    "movers": 0,
+    "collidables": 0,
+    "sweep_axis": 0,
+    "sweep_pairs": 0,
+    "candidates": 0,
+    "narrow_tests": 0,
+    "contacts": 0
+   },
+   "replay_from_start_identical": true,
+   "replay_from_checkpoint_identical": true,
+   "checkpoint_tick": 720,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "args": [
+    "--n",
+    "32",
+    "--ticks",
+    "1200",
+    "--warmup",
+    "120",
+    "--replay",
+    "--no-query"
+   ]
+  },
+  {
+   "workload": "6dof_racer_microcosm",
+   "n": 256,
+   "gates": 16,
+   "obstacles": 48,
+   "rows": 320,
+   "seed": 1,
+   "tick_hz": 120,
+   "warmup_ticks": 120,
+   "timed_ticks": 1200,
+   "query": true,
+   "systems": [
+    {
+     "system_id": "racer.race",
+     "kind": "ir",
+     "semantic_hash": "f2d15d69fb0f86d101eef929af0976a2e72400c1c10755c992279c9758d74184"
+    },
+    {
+     "system_id": "racer.move",
+     "kind": "ir",
+     "semantic_hash": "52d14abecb21bb11ef3977707e7b229fc0e05ef0d90b00738e4fdda166433f1e"
+    },
+    {
+     "system_id": "space3d.query",
+     "kind": "host",
+     "semantic_hash": "5c985d13e182ef112e03ec85e7f2e5c7f0c7b668922e9237c2e036e344a4f70d"
+    }
+   ],
+   "lanes": 78,
+   "tick_ns": {
+    "min": 1022100,
+    "p50": 1072200,
+    "p95": 1291300,
+    "p99": 1834500,
+    "max": 2621000,
+    "mean": 1105595
+   },
+   "budget_ns_120hz": 8333333,
+   "p99_fraction_of_budget": 0.2201,
+   "final_tick": 1320,
+   "final_state_sha256": "3a3efe2937e610022ec5d3251747330b88d8c32b736e84de576729d847a150e1",
+   "event_log_sha256": "d2a179b45add772fa5ea79cc9a042446dfb0e3f127d3c0fdcad9e47a302086f8",
+   "events": 1378,
+   "digest_every": 120,
+   "state_digests": [
+    "02c40e4493e7e920dfc964360ccf5a977fffa8fac492ca46b2fbd0bd53b5bacf",
+    "4b435fab4f2319217adc30311263a54038f08b5309ed37395c3f4dde94830d04",
+    "f55e3f8a4f02f69201e008edc53c4056f434ba4bb178869e509dcb5f05f04112",
+    "01789d5f0a5fa89d401e64ef8145eb7f3e9d389ad329c4528daa6001ab71f5ce",
+    "94a708cbd11712a7a31e88d8a38c71f0aee4fb5662e93da123e0e9241c74e98c",
+    "6912e43d203469904ca17275222f21c02a1b13fe730e1ddc88199bb09c2e3183",
+    "ad0c5a4a66f38c8a9c58b148ae0cdade97c88817e63d53616c215840fede819c",
+    "15f884ad77ba8b7befae0381e5af6d88e8f6045b1672fbd381b9ab71e06bed58",
+    "d043d5e8f7da0cf6a3fdefef98c407abb0a4ba27ebeaefab03f2a370b5720d79",
+    "3a3efe2937e610022ec5d3251747330b88d8c32b736e84de576729d847a150e1"
+   ],
+   "race": {
+    "gates_passed": 578,
+    "laps": 29,
+    "collision_ticks": 800
+   },
+   "last_query": {
+    "movers": 256,
+    "collidables": 304,
+    "sweep_axis": 0,
+    "sweep_pairs": 165,
+    "candidates": 4,
+    "narrow_tests": 4,
+    "contacts": 0
+   },
+   "replay_from_start_identical": true,
+   "replay_from_checkpoint_identical": true,
+   "checkpoint_tick": 720,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "args": [
+    "--n",
+    "256",
+    "--ticks",
+    "1200",
+    "--warmup",
+    "120",
+    "--replay"
+   ]
+  },
+  {
+   "workload": "6dof_racer_microcosm",
+   "n": 256,
+   "gates": 16,
+   "obstacles": 48,
+   "rows": 320,
+   "seed": 1,
+   "tick_hz": 120,
+   "warmup_ticks": 120,
+   "timed_ticks": 1200,
+   "query": false,
+   "systems": [
+    {
+     "system_id": "racer.race",
+     "kind": "ir",
+     "semantic_hash": "f2d15d69fb0f86d101eef929af0976a2e72400c1c10755c992279c9758d74184"
+    },
+    {
+     "system_id": "racer.move",
+     "kind": "ir",
+     "semantic_hash": "52d14abecb21bb11ef3977707e7b229fc0e05ef0d90b00738e4fdda166433f1e"
+    }
+   ],
+   "lanes": 54,
+   "tick_ns": {
+    "min": 910400,
+    "p50": 945600,
+    "p95": 1096400,
+    "p99": 1590500,
+    "max": 2768300,
+    "mean": 972176
+   },
+   "budget_ns_120hz": 8333333,
+   "p99_fraction_of_budget": 0.1909,
+   "final_tick": 1320,
+   "final_state_sha256": "d86c60df5b463fd11856123ddfce43852b1964e423179b826d0a87e4c6da0d62",
+   "event_log_sha256": "d14e52645cd5c90abcf890e5b76a72d14f631b88d044173dea9b76db50f6d07c",
+   "events": 0,
+   "digest_every": 120,
+   "state_digests": [
+    "86f4e35956a0d5ba4d5d570c299ea7a1f6bcd1ab9dc94ff7647a8b2802fd6737",
+    "1be8ef7d7353f79a3e8bdd36d0a1e9562f7a550dde16a133d8bd06fb722f3b8e",
+    "58d5c4469d6cffe4acaf0497fc00465d975d5d5dc4067932ef26e434eb6bd7ee",
+    "eef59da165c28e6b32535fae870f23e6cfbf5671a6830549fe77be0139f874eb",
+    "12e7e28f05349e8b87a27849d9a3472747d4bd439d77b625519da681310f9767",
+    "7a5db19272606e51c6f25c670b93d7612ad5ebcd0dc4b5a49ece93092dda8d70",
+    "e6263dc9c9fc3edca34087f361d6a2ebf2454163281474b6377ecd1131275d78",
+    "96fd5021f08db4f7d858af73970e2027a6fc0c7263ffbc9e6d50f4ac90b55829",
+    "f6ccd565bb474db0982f9613c09531772ee59c075297e748426ec1bc781682eb",
+    "d86c60df5b463fd11856123ddfce43852b1964e423179b826d0a87e4c6da0d62"
+   ],
+   "race": {
+    "gates_passed": 0,
+    "laps": 0,
+    "collision_ticks": 0
+   },
+   "last_query": {
+    "movers": 0,
+    "collidables": 0,
+    "sweep_axis": 0,
+    "sweep_pairs": 0,
+    "candidates": 0,
+    "narrow_tests": 0,
+    "contacts": 0
+   },
+   "replay_from_start_identical": true,
+   "replay_from_checkpoint_identical": true,
+   "checkpoint_tick": 720,
+   "compiler": "clang 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
+   "build": "optimized (NDEBUG)",
+   "args": [
+    "--n",
+    "256",
+    "--ticks",
+    "1200",
+    "--warmup",
+    "120",
+    "--replay",
+    "--no-query"
+   ]
+  }
+ ]
+}

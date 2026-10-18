@@ -372,6 +372,61 @@ static void test_wide_helpers(void) {
     }
 }
 
+/* The fast integer square root equals the bit-serial reference: every shift class, perfect squares and their
+ * neighbours, the overflow-guard branches, small consecutive values, and random magnitudes. */
+static void test_isqrt_fast(void) {
+    uint64_t i, bad = 0, n = 0;
+    int k;
+#define ISQ(h, l)                                                                         \
+    do {                                                                                  \
+        uint64_t h_ = (h), l_ = (l);                                                      \
+        n++;                                                                              \
+        if (su_num_isqrt_u128(h_, l_) != su_num_isqrt_u128_ref(h_, l_)) {                 \
+            if (bad++ < 5) {                                                              \
+                fprintf(stderr, "isqrt %016" PRIx64 ":%016" PRIx64 ": fast %" PRIu64      \
+                        " ref %" PRIu64 "\n", h_, l_, su_num_isqrt_u128(h_, l_),           \
+                        su_num_isqrt_u128_ref(h_, l_));                                   \
+            }                                                                             \
+        }                                                                                 \
+    } while (0)
+    for (i = 0; i < 100000u; i++) {
+        ISQ(0, i);
+    }
+    ISQ(UINT64_MAX, UINT64_MAX);
+    ISQ(UINT64_MAX, 0);
+    ISQ(UINT64_MAX - 1u, UINT64_MAX);
+    ISQ(0, UINT64_MAX);
+    ISQ(1, 0);
+    ISQ(0xFFFFFFFE00000000u, 1u); /* (2^64 - 2^32)... region where the first estimate overflows the quotient */
+    ISQ(0xFFFFFFFE00000001u, 0u);
+    ISQ(0xFFFFFFFDFFFFFFFFu, UINT64_MAX);
+    g_rng = UINT64_C(0x15A7);
+    for (k = 0; k < 128; k++) {
+        /* every leading-zero count, plus random low bits */
+        for (i = 0; i < 2000u; i++) {
+            uint64_t h = k < 64 ? (UINT64_MAX >> k) & rng_next() : 0u;
+            uint64_t l = k < 64 ? rng_next() : (UINT64_MAX >> (k - 64)) & rng_next();
+            if (k < 64) {
+                h |= (UINT64_C(1) << 63) >> k;
+            }
+            ISQ(h, l);
+        }
+    }
+    for (i = 0; i < 200000u; i++) {
+        /* r^2 - 1, r^2, r^2 + 1 for random r of every size */
+        uint64_t r = rng_next() >> (rng_next() % 64u), h, l;
+        su_num_mul_u64(r, r, &h, &l);
+        ISQ(h, l);
+        ISQ(h + (l == UINT64_MAX ? 1u : 0u), l + 1u);
+        if (h != 0u || l != 0u) {
+            ISQ(h - (l == 0u ? 1u : 0u), l - 1u);
+        }
+    }
+#undef ISQ
+    printf("isqrt fast vs reference: %" PRIu64 " inputs, %" PRIu64 " differences\n", n, bad);
+    CHECK(bad == 0);
+}
+
 /* ---------- properties ---------- */
 
 static void test_properties(void) {
@@ -522,6 +577,7 @@ int main(int argc, char **argv) {
     test_known_int();
     test_known_vec();
     test_wide_helpers();
+    test_isqrt_fast();
     test_properties();
     test_integrate_drift();
     printf("test_num: %d checks, %d failures\n", g_checks, g_failures);

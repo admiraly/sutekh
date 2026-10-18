@@ -103,6 +103,7 @@ SuQuat su_quat_integrate(SuQuat q, SuV3 w_local, int64_t dt); /* normalize(q + (
 /* ---- exact helpers exposed for tests and the space3d operators ---- */
 /* floor(sqrt(n)) of the 128-bit value hi:lo, and the RNE variant. Results fit 64 bits. */
 uint64_t su_num_isqrt_u128(uint64_t hi, uint64_t lo);
+uint64_t su_num_isqrt_u128_ref(uint64_t hi, uint64_t lo); /* bit-serial reference (tests) */
 uint64_t su_num_sqrt_rne_u128(uint64_t hi, uint64_t lo, int *overflow); /* *overflow = 1 when the RNE result is 2^64 */
 /* Unsigned (hi:lo) / d with hi < d required; returns the quotient, *rem the remainder. d != 0. */
 uint64_t su_num_divlu(uint64_t hi, uint64_t lo, uint64_t d, uint64_t *rem);
