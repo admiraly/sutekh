@@ -12,12 +12,6 @@
 #include "world/entities/su_ents.h"
 #include "world/su_world.h"
 
-struct SuEntRt {
-    uint64_t max_struct_tick;
-    uint64_t max_events_tick;
-    SuEventLog *log;
-};
-
 /* Per-chunk emission target: the writer of (system, chunk). One per worker; `chunk` is set before
  * each chunk runs on that worker. */
 typedef struct EntEmit {
@@ -51,6 +45,57 @@ typedef struct EntSys {
     SuVmEmitter *vem;           /* wk */
     uint32_t *status;           /* one per chunk of this run */
 } EntSys;
+
+/* Per-call state kept between su_ent_run_ticks calls (2026-10-18): the command queue, job pool, per-system VM
+ * contexts (with their plans) and scratch arrays depend only on the key below, so a caller that steps one tick
+ * per call (or re-simulates K ticks after a rollback) does not rebuild them every call. The key holds every
+ * input of their construction; any difference rebuilds. Results do not depend on reuse: every tick resets the
+ * queue, rebinds the column views and sets each chunk's entity view, exactly as a fresh call does. */
+typedef struct EntCache {
+    int valid;
+    const SuSchedule *s;
+    uint32_t count;
+    uint32_t layout_generation;
+    uint64_t rows;
+    uint32_t wk;
+    uint32_t vm_tier;
+    const SuLirModule *mods[SU_SCHED_MAX_SYSTEMS];
+    uint8_t sem[SU_SCHED_MAX_SYSTEMS][32];
+    uint64_t rev[SU_SCHED_MAX_SYSTEMS];
+    uint64_t txid[SU_SCHED_MAX_SYSTEMS];
+    uint32_t ps[SU_SCHED_MAX_SYSTEMS];
+    uint32_t pe[SU_SCHED_MAX_SYSTEMS];
+    uint8_t has_es[SU_SCHED_MAX_SYSTEMS]; /* es[i] holds contexts (never read a cached module: it may be freed) */
+    SuCmdQ *q;
+    SuJobPool *pool;
+    EntSys *es;
+    uint32_t *status;
+} EntCache;
+
+struct SuEntRt {
+    uint64_t max_struct_tick;
+    uint64_t max_events_tick;
+    SuEventLog *log;
+    EntCache cache;
+};
+
+static void ent_sys_free(EntSys *e);
+
+static void ent_cache_drop(EntCache *c) {
+    uint32_t i;
+    if (c->es != NULL) {
+        for (i = 0; i < c->count; i++) {
+            if (c->has_es[i]) {
+                ent_sys_free(&c->es[i]);
+            }
+        }
+    }
+    free(c->es);
+    free(c->status);
+    su_jobs_pool_destroy(c->pool);
+    su_cmdq_destroy(c->q);
+    memset(c, 0, sizeof *c);
+}
 
 /* ---- emitter callbacks (called by the VM on the worker running the chunk) ---- */
 
@@ -101,6 +146,7 @@ void su_ent_rt_destroy(SuEntRt *rt) {
     if (rt == NULL) {
         return;
     }
+    ent_cache_drop(&rt->cache);
     su_evlog_destroy(rt->log);
     free(rt);
 }
@@ -455,7 +501,8 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
     SuCmdQ *q = NULL;
     SuJobPool *pool = NULL;
     EntSys *es = NULL;
-    uint32_t *status = NULL;
+    EntCache *c = NULL;
+    int hit;
     uint32_t *perm = NULL; /* test seam: forced chunk completion order (opt->seeded_completion) */
     uint64_t rows;
     uint64_t chunks;
@@ -483,32 +530,69 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
         return SU_OK;
     }
     sys_row_caps(s, ps, pe);
-    st = su_cmdq_create_ex_checked(s->count, rows, SU_CHUNK_SLOTS,
-                                  ps, SU_SCHED_MAX_SYSTEMS, pe, SU_SCHED_MAX_SYSTEMS,
-                                  rt->max_struct_tick, rt->max_events_tick, &q);
-    if (st != SU_OK) {
-        return st;
+    c = &rt->cache;
+    hit = c->valid && c->s == s && c->count == s->count && c->layout_generation == s->layout_generation &&
+          c->rows == rows && c->wk == wk && c->vm_tier == su_vm_default_tier();
+    for (i = 0; hit && i < s->count; i++) {
+        const SuSysEntry *e = &s->sys[i];
+        hit = c->mods[i] == e->mod && memcmp(c->sem[i], e->mod->semantic_hash, 32u) == 0 &&
+              c->rev[i] == e->system_rev && c->txid[i] == e->txid && c->ps[i] == ps[i] && c->pe[i] == pe[i];
     }
-    st = su_jobs_pool_create(wk, &pool);
-    if (st != SU_OK) {
-        su_cmdq_destroy(q);
-        return st;
+    if (!hit) {
+        ent_cache_drop(c);
+        st = su_cmdq_create_ex_checked(s->count, rows, SU_CHUNK_SLOTS,
+                                      ps, SU_SCHED_MAX_SYSTEMS, pe, SU_SCHED_MAX_SYSTEMS,
+                                      rt->max_struct_tick, rt->max_events_tick, &c->q);
+        if (st == SU_OK) {
+            st = su_jobs_pool_create(wk, &c->pool);
+        }
+        if (st == SU_OK) {
+            c->es = calloc(s->count > 0u ? s->count : 1u, sizeof *c->es);
+            c->status = calloc(chunks > 0u ? (size_t)chunks : 1u, sizeof *c->status);
+            if (c->es == NULL || c->status == NULL) {
+                st = SU_E_RESOURCE_LIMIT;
+            }
+        }
+        c->count = s->count;
+        for (i = 0; i < s->count; i++) {
+            c->mods[i] = s->sys[i].mod;
+        }
+        for (i = 0; st == SU_OK && i < s->count; i++) {
+            if (s->sys[i].mod->uses_entity_ops) {
+                st = ent_sys_create(&c->es[i], s, i, w, c->q, wk, rows, c->status);
+                c->has_es[i] = st == SU_OK; /* on failure ent_sys_create freed its own state */
+            }
+        }
+        if (st != SU_OK) {
+            ent_cache_drop(c);
+            return st;
+        }
+        c->s = s;
+        c->layout_generation = s->layout_generation;
+        c->rows = rows;
+        c->wk = wk;
+        c->vm_tier = su_vm_default_tier();
+        for (i = 0; i < s->count; i++) {
+            memcpy(c->sem[i], s->sys[i].mod->semantic_hash, 32u);
+            c->rev[i] = s->sys[i].system_rev;
+            c->txid[i] = s->sys[i].txid;
+            c->ps[i] = ps[i];
+            c->pe[i] = pe[i];
+        }
+        c->valid = 1;
     }
-    es = calloc(s->count > 0u ? s->count : 1u, sizeof *es);
-    status = calloc(chunks > 0u ? (size_t)chunks : 1u, sizeof *status);
-    if (opt != NULL && opt->seeded_completion && chunks > 0u) {
-        perm = calloc((size_t)chunks, sizeof *perm);
-    }
-    if (es == NULL || status == NULL || (opt != NULL && opt->seeded_completion && chunks > 0u && perm == NULL)) {
-        st = SU_E_RESOURCE_LIMIT;
-        goto out;
-    }
+    q = c->q;
+    pool = c->pool;
+    es = c->es;
     for (i = 0; i < s->count; i++) {
         if (s->sys[i].mod->uses_entity_ops) {
-            st = ent_sys_create(&es[i], s, i, w, q, wk, rows, status);
-            if (st != SU_OK) {
-                goto out;
-            }
+            es[i].w = w; /* the world may be a different object between calls (restore) */
+        }
+    }
+    if (opt != NULL && opt->seeded_completion && chunks > 0u) {
+        perm = calloc((size_t)chunks, sizeof *perm);
+        if (perm == NULL) {
+            return SU_E_RESOURCE_LIMIT;
         }
     }
 
@@ -569,17 +653,6 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
     }
     st = SU_OK;
 out:
-    if (es != NULL) {
-        for (i = 0; i < s->count; i++) {
-            if (s->sys[i].mod->uses_entity_ops) {
-                ent_sys_free(&es[i]);
-            }
-        }
-    }
-    free(es);
-    free(status);
     free(perm);
-    su_jobs_pool_destroy(pool);
-    su_cmdq_destroy(q);
     return st;
 }
