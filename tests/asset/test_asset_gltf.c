@@ -450,7 +450,7 @@ static void test_scene_paint(void) {
              "\"normalTexture\":{\"index\":1,\"scale\":0.5},\"emissiveFactor\":[1,0.5,0.25],"
              "\"extensions\":{\"KHR_materials_emissive_strength\":{\"emissiveStrength\":3},"
              "\"SUTEKH_materials_layered_paint\":{\"maskTexture\":{\"index\":2},\"roughnessTexture\":{\"index\":2,\"texCoord\":1},"
-             "\"channels\":{\"roughness\":1,\"metal\":2,\"specular\":3,\"dirt\":0,\"ao\":-1},\"specular\":0.25,"
+             "\"channels\":{\"roughness\":1,\"metal\":2,\"specular\":3,\"dirt\":0,\"ao\":-1,\"glow\":3},\"glowMaskTexture\":{\"index\":2},\"specular\":0.25,"
              "\"dirt\":{\"amount\":0.4,\"darken\":0.7,\"roughen\":0.2},"
              "\"layers\":[{\"color\":[1,0,0],\"roughness\":0.3,\"metallic\":1,\"opacity\":0.8,\"blend\":\"tint\"},"
              "{\"color\":[0.5,0.5,1],\"blend\":\"multiply\",\"glowColor\":[0,1,0],\"glowStrength\":4,\"metallic\":0.5,\"roughness\":0.9}],"
@@ -480,7 +480,8 @@ static void test_scene_paint(void) {
     CHECK(pt.texture[SU_PAINT_SLOT_MASK] == su_asset_id("p/tex/paint_m.png.linear"));
     CHECK(pt.texture[SU_PAINT_SLOT_ROUGHNESS] == su_asset_id("p/tex/paint_m.png.linear"));
     CHECK((pt.tex_info[SU_PAINT_SLOT_ROUGHNESS] & 0xFFu) == 1u && (pt.tex_info[SU_PAINT_SLOT_MASK] & 0xFFu) == 0u);
-    CHECK(pt.texture[SU_PAINT_SLOT_GLOW] == 0u && pt.texture[SU_PAINT_SLOT_AO] == 0u && pt.texture[SU_PAINT_SLOT_DIRT] == 0u);
+    CHECK(pt.texture[SU_PAINT_SLOT_GLOW] == su_asset_id("p/tex/paint_m.png.linear") && pt.channel[SU_PAINT_CH_GLOW] == 3);
+    CHECK(pt.texture[SU_PAINT_SLOT_AO] == 0u && pt.texture[SU_PAINT_SLOT_DIRT] == 0u);
     CHECK(pt.channel[SU_PAINT_CH_ROUGHNESS] == 1 && pt.channel[SU_PAINT_CH_METAL] == 2 &&
           pt.channel[SU_PAINT_CH_SPECULAR] == 3 && pt.channel[SU_PAINT_CH_DIRT] == 0 &&
           pt.channel[SU_PAINT_CH_AO] == SU_PAINT_CH_NONE);

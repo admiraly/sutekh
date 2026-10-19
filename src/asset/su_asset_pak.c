@@ -697,7 +697,7 @@ static uint32_t check_paint(const SuAssetPak *p, uint32_t ei, char *msg) {
     memcpy(&a, payload(p, ei) + sizeof(SuAssetMaterial), sizeof a);
     for (i = 0; i < SU_PAINT_SLOT_COUNT; i++) {
         uint32_t t = a.tex_info[i];
-        int need_srgb = i == SU_PAINT_SLOT_ALBEDO || i == SU_PAINT_SLOT_GLOW;
+        int need_srgb = i == SU_PAINT_SLOT_ALBEDO; /* glow: either (sRGB colour map or linear mask) */
         if (!ref_ok(p, a.texture[i], SU_ASSET_TEXTURE) || (t & 0xFFu) > 1u || ((t >> 8) & 0xFu) > 2u ||
             ((t >> 12) & 0xFu) > 2u || (t >> 16) != 0u) {
             msgf(msg, "material %016llx: paint texture slot %u invalid", id, (unsigned)i);
@@ -706,7 +706,7 @@ static uint32_t check_paint(const SuAssetPak *p, uint32_t ei, char *msg) {
         if (a.texture[i] != 0u) {
             uint32_t fmt;
             memcpy(&fmt, payload(p, (uint32_t)find_index(p, a.texture[i])) + 8, sizeof fmt);
-            if (tex_is_srgb(fmt) != need_srgb) {
+            if (i != SU_PAINT_SLOT_GLOW && tex_is_srgb(fmt) != need_srgb) {
                 msgf(msg, "material %016llx: paint slot %u needs a %s texture", id, (unsigned)i,
                      need_srgb ? "sRGB" : "linear");
                 return SU_E_PARSE;

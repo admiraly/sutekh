@@ -201,13 +201,14 @@ void su_asset_material_default(SuAssetMaterial *m);
 
 /* Paint texture slots. Colour space is part of the slot and is checked: SRGB slots take *_SRGB texture formats,
  * LINEAR slots take UNORM formats (BC4 / BC5 included). A texture of the wrong kind makes the material (and a pack
- * containing it) invalid. */
+ * containing it) invalid. The glow slot takes either: its format chooses an sRGB colour map or a linear mask. */
 #define SU_PAINT_SLOT_ALBEDO 0u     /* sRGB   rgb albedo, a coverage */
 #define SU_PAINT_SLOT_NORMAL 1u     /* linear two-channel tangent-space normal (BC5 style: r = x, g = y, z rebuilt) */
 #define SU_PAINT_SLOT_ROUGHNESS 2u  /* linear one channel, selected by channel[SU_PAINT_CH_ROUGHNESS] */
 #define SU_PAINT_SLOT_MATERIAL 3u   /* linear, channels meant by channel[SU_PAINT_CH_METAL] and [SU_PAINT_CH_SPECULAR] */
 #define SU_PAINT_SLOT_MASK 4u       /* linear, r g b a = weight of layer 0 1 2 3 */
-#define SU_PAINT_SLOT_GLOW 5u       /* sRGB   rgb glow map */
+#define SU_PAINT_SLOT_GLOW 5u       /* sRGB rgb glow map, or linear: a one-channel glow mask (BC4 style), selected by
+                                     * channel[SU_PAINT_CH_GLOW] (see render.h) */
 #define SU_PAINT_SLOT_DIRT 6u       /* linear one channel, selected by channel[SU_PAINT_CH_DIRT] */
 #define SU_PAINT_SLOT_AO 7u         /* linear one channel, selected by channel[SU_PAINT_CH_AO] */
 #define SU_PAINT_SLOT_COUNT 8u
@@ -218,7 +219,8 @@ void su_asset_material_default(SuAssetMaterial *m);
 #define SU_PAINT_CH_SPECULAR 2u
 #define SU_PAINT_CH_DIRT 3u
 #define SU_PAINT_CH_AO 4u
-#define SU_PAINT_CH_COUNT 5u
+#define SU_PAINT_CH_GLOW 5u          /* used only when the glow slot holds a linear texture (a mask); default 0 = r */
+#define SU_PAINT_CH_COUNT 6u
 #define SU_PAINT_CH_NONE 4u
 
 #define SU_PAINT_MAX_LAYERS 4u
@@ -253,7 +255,7 @@ typedef struct SuAssetPaint {
     SuAssetPaintLayer layer[SU_PAINT_MAX_LAYERS];
 } SuAssetPaint;
 
-/* Zero layers, identity order, channels: roughness r, metal r, specular none (constant), dirt r, ao r; specular 0.5,
+/* Zero layers, identity order, channels: roughness r, metal r, specular none (constant), dirt r, ao r, glow r; specular 0.5,
  * dirt amount 0 (darken 0.6, roughen 0.5). Layer defaults: white, roughness 1, metallic 0, opacity 1, lerp. */
 void su_asset_paint_default(SuAssetPaint *p);
 

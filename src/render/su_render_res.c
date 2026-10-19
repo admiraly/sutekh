@@ -892,6 +892,7 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
     uint32_t idx;
     uint32_t i;
     uint32_t seen = 0;
+    uint32_t glow_mask = 0;
     Res *s;
     PaintUbo u;
     const SuAssetPaint *p;
@@ -922,7 +923,7 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
     }
     for (i = 0; i < SU_PAINT_SLOT_COUNT; i++) {
         const Res *x;
-        int need_srgb = i == SU_PAINT_SLOT_ALBEDO || i == SU_PAINT_SLOT_GLOW;
+        int need_srgb = i == SU_PAINT_SLOT_ALBEDO; /* glow: either (sRGB colour map or linear mask) */
         if (d->textures[i] == 0u) {
             continue;
         }
@@ -930,7 +931,9 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
         if (x == NULL || x->u.tex.layers != 1u) {
             return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint slot %u: unknown texture handle", (unsigned)i);
         }
-        if (tex_srgb_format(x->u.tex.format) != need_srgb) {
+        if (i == SU_PAINT_SLOT_GLOW) {
+            glow_mask = !tex_srgb_format(x->u.tex.format);
+        } else if (tex_srgb_format(x->u.tex.format) != need_srgb) {
             return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint slot %u needs a %s texture (got %s)", (unsigned)i,
                                need_srgb ? "sRGB" : "linear", su_asset_texture_format_name(x->u.tex.format));
         }
@@ -954,7 +957,7 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
              ((uint32_t)p->layer_order[3] << 24);
     u.b[2] = (uint32_t)p->channel[SU_PAINT_CH_ROUGHNESS] | ((uint32_t)p->channel[SU_PAINT_CH_METAL] << 8) |
              ((uint32_t)p->channel[SU_PAINT_CH_SPECULAR] << 16) | ((uint32_t)p->channel[SU_PAINT_CH_DIRT] << 24);
-    u.b[3] = p->channel[SU_PAINT_CH_AO];
+    u.b[3] = (uint32_t)p->channel[SU_PAINT_CH_AO] | ((uint32_t)p->channel[SU_PAINT_CH_GLOW] << 8) | (glow_mask << 16);
     for (i = 0; i < p->layer_count; i++) {
         const SuAssetPaintLayer *l = &p->layer[i];
         memcpy(u.layer[i].color_rough, l->color, 3u * sizeof(float));

@@ -38,7 +38,8 @@ meaning: `baseColorTexture` albedo (sRGB), `normalTexture` normal (cooked as BC5
 | key | meaning |
 | --- | --- |
 | `roughnessTexture`, `materialTexture`, `maskTexture`, `dirtTexture` | `{index, texCoord}` (linear) |
-| `channels` | `{roughness, metal, specular, dirt, ao}`: 0..3 = r g b a, -1 = do not read the map |
+| `glowMaskTexture` | `{index, texCoord}` (linear): a one-channel glow mask used instead of `emissiveTexture`; glow = mask x `emissiveFactor` x strength |
+| `channels` | `{roughness, metal, specular, dirt, ao, glow}`: 0..3 = r g b a, -1 = do not read the map (`glow` applies to `glowMaskTexture`) |
 | `specular` | dielectric specular scale, F0 = 0.08 x specular (default 0.5) |
 | `dirt` | `{amount, darken, roughen}` in 0..1 |
 | `layers` | up to four `{color [r,g,b] linear, roughness, metallic, opacity, blend "lerp"/"multiply"/"tint", glowColor [r,g,b], glowStrength}`; layer k is mask channel k; `glowColor` present enables the glow tint |
