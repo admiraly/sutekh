@@ -485,11 +485,154 @@ static void test_parse(void) {
     }
 }
 
+static int rgba_is(const uint8_t *p, int r, int g, int b, int a) {
+    return p[0] == r && p[1] == g && p[2] == b && p[3] == a;
+}
+
+/* LDR block decoders against values computed by hand from the specification. */
+static void test_bc_ldr(void) {
+    uint8_t blk[16];
+    uint8_t out[64];
+    uint32_t pos;
+    uint32_t t;
+    /* BC1, four colours: c0 red > c1 blue; texels 0..3 use indices 0..3 */
+    memset(blk, 0, sizeof blk);
+    blk[0] = 0x00;
+    blk[1] = 0xF8;
+    blk[2] = 0x1F;
+    blk[3] = 0x00;
+    blk[4] = 0xE4;
+    CHECK(su_bc_decode_block(SU_TEX_BC1_UNORM, blk, out) == SU_OK);
+    CHECK(rgba_is(out, 255, 0, 0, 255) && rgba_is(out + 4, 0, 0, 255, 255) && rgba_is(out + 8, 170, 0, 85, 255) &&
+          rgba_is(out + 12, 85, 0, 170, 255) && rgba_is(out + 16, 255, 0, 0, 255));
+    /* BC1, three colours and transparent black: c0 <= c1 */
+    blk[0] = 0x1F;
+    blk[1] = 0x00;
+    blk[2] = 0x00;
+    blk[3] = 0xF8;
+    CHECK(su_bc_decode_block(SU_TEX_BC1_SRGB, blk, out) == SU_OK);
+    CHECK(rgba_is(out, 0, 0, 255, 255) && rgba_is(out + 8, 128, 0, 128, 255) && rgba_is(out + 12, 0, 0, 0, 0));
+    /* BC2: explicit 4-bit alpha (texel 0 = 15, texel 1 = 8), colour always four-colour (c0 <= c1 here) */
+    memset(blk, 0, sizeof blk);
+    blk[0] = 0x8F;
+    blk[8] = 0x1F;
+    blk[11] = 0xF8;
+    blk[12] = 0xE4;
+    CHECK(su_bc_decode_block(SU_TEX_BC2_UNORM, blk, out) == SU_OK);
+    CHECK(rgba_is(out, 0, 0, 255, 255) && rgba_is(out + 4, 255, 0, 0, 136) && rgba_is(out + 8, 85, 0, 170, 0) &&
+          rgba_is(out + 12, 170, 0, 85, 0));
+    /* BC3 alpha, eight-value mode (200 > 100): indices 0, 1, 2 */
+    memset(blk, 0, sizeof blk);
+    blk[0] = 200;
+    blk[1] = 100;
+    blk[2] = (uint8_t)(0u | (1u << 3) | (2u << 6));
+    CHECK(su_bc_decode_block(SU_TEX_BC3_UNORM, blk, out) == SU_OK);
+    CHECK(out[3] == 200 && out[7] == 100 && out[11] == 186);
+    /* six-value mode (50 <= 150): index 2 = (4 * 50 + 150 + 2) / 5, 6 = 0, 7 = 255 */
+    blk[0] = 50;
+    blk[1] = 150;
+    blk[2] = (uint8_t)(2u | (6u << 3) | (7u << 6)); /* texel 2's index straddles into byte 3 */
+    blk[3] = (uint8_t)(7u >> 2);
+    CHECK(su_bc_decode_block(SU_TEX_BC3_UNORM, blk, out) == SU_OK);
+    CHECK(out[3] == 70 && out[7] == 0 && out[11] == 255);
+    /* BC4 and BC5 fill r, then g; blue 0, alpha 255 */
+    memset(blk, 0, sizeof blk);
+    blk[0] = blk[1] = 77;
+    blk[8] = blk[9] = 33;
+    CHECK(su_bc_decode_block(SU_TEX_BC4_UNORM, blk, out) == SU_OK && rgba_is(out + 60, 77, 0, 0, 255));
+    CHECK(su_bc_decode_block(SU_TEX_BC5_UNORM, blk, out) == SU_OK && rgba_is(out + 60, 77, 33, 0, 255));
+    /* BC7 mode 6, one colour: 7-bit endpoints with p-bit 1 give (x << 1) | 1 */
+    memset(blk, 0, sizeof blk);
+    pos = 0;
+    put_bits(blk, &pos, 0x40u, 7);
+    put_bits(blk, &pos, 100, 7);
+    put_bits(blk, &pos, 100, 7);
+    put_bits(blk, &pos, 50, 7);
+    put_bits(blk, &pos, 50, 7);
+    put_bits(blk, &pos, 20, 7);
+    put_bits(blk, &pos, 20, 7);
+    put_bits(blk, &pos, 127, 7);
+    put_bits(blk, &pos, 127, 7);
+    put_bits(blk, &pos, 1, 1);
+    put_bits(blk, &pos, 1, 1);
+    CHECK(su_bc_decode_block(SU_TEX_BC7_UNORM, blk, out) == SU_OK);
+    for (t = 0; t < 16u; t++) {
+        CHECK(rgba_is(out + t * 4u, 201, 101, 41, 255));
+    }
+    /* BC7 mode 5: red 0 -> 255 (7-bit 0 and 127), alpha 255 -> 0; texel 1 colour index 1 (weight 21), alpha index 3 */
+    {
+        uint32_t rot;
+        for (rot = 0; rot < 2u; rot++) {
+            memset(blk, 0, sizeof blk);
+            pos = 0;
+            put_bits(blk, &pos, 0x20u, 6);
+            put_bits(blk, &pos, rot, 2);
+            put_bits(blk, &pos, 0, 7);
+            put_bits(blk, &pos, 127, 7); /* red */
+            put_bits(blk, &pos, 0, 7);
+            put_bits(blk, &pos, 0, 7); /* green */
+            put_bits(blk, &pos, 0, 7);
+            put_bits(blk, &pos, 0, 7); /* blue */
+            put_bits(blk, &pos, 255, 8);
+            put_bits(blk, &pos, 0, 8); /* alpha */
+            put_bits(blk, &pos, 0, 1); /* texel 0, anchor: one bit */
+            put_bits(blk, &pos, 1, 2); /* texel 1 */
+            pos += 14u * 2u;
+            put_bits(blk, &pos, 0, 1);
+            put_bits(blk, &pos, 3, 2);
+            CHECK(su_bc_decode_block(SU_TEX_BC7_UNORM, blk, out) == SU_OK);
+            if (rot == 0u) {
+                CHECK(rgba_is(out, 0, 0, 0, 255) && rgba_is(out + 4, 84, 0, 0, 0));
+            } else { /* rotation 1 swaps red and alpha */
+                CHECK(rgba_is(out, 255, 0, 0, 0) && rgba_is(out + 4, 0, 0, 0, 84));
+            }
+        }
+    }
+    /* reserved BC7 mode: zeros; a format without an LDR decoder is refused */
+    memset(blk, 0, sizeof blk);
+    memset(out, 0xAB, sizeof out);
+    CHECK(su_bc_decode_block(SU_TEX_BC7_SRGB, blk, out) == SU_OK && rgba_is(out + 20, 0, 0, 0, 0));
+    CHECK(su_bc_decode_block(SU_TEX_BC6H_UF16, blk, out) == SU_E_UNSUPPORTED_METHOD);
+    CHECK(su_bc_decode_block(SU_TEX_BC1_UNORM, NULL, out) == SU_E_INVALID_ARGUMENT);
+    /* a whole level through su_dds_decode_rgba32f: legacy DXT3 cube, read as sRGB and as linear */
+    {
+        static uint8_t file[148 + 6 * 16];
+        static uint8_t px[6 * 16];
+        float lv[16 * 4];
+        DdsSpec sp;
+        SuDdsImage img;
+        char msg[160];
+        size_t n;
+        uint32_t f;
+        memset(px, 0, sizeof px);
+        for (f = 0; f < 6u; f++) {
+            uint8_t *b = px + f * 16u;
+            memset(b, 0xFF, 8); /* alpha 15 everywhere */
+            b[8] = b[10] = 0x00;
+            b[9] = b[11] = (uint8_t)(0x80u); /* c0 = c1 = r5 16 -> 132 */
+        }
+        memset(&sp, 0, sizeof sp);
+        sp.w = sp.h = 4;
+        sp.mips = 1;
+        sp.cube = 1;
+        sp.fourcc = FOURCC('D', 'X', 'T', '3');
+        n = write_dds(file, &sp, px, sizeof px);
+        CHECK(su_dds_parse(file, n, SU_DDS_CS_SRGB, &img, msg) == SU_OK && img.format == SU_TEX_BC2_SRGB && img.faces == 6u);
+        CHECK(su_dds_decode_rgba32f(&img, 5, 0, lv) == SU_OK);
+        CHECK(fabsf(lv[0] - 0.2307f) < 0.001f && lv[1] == 0.0f && lv[3] == 1.0f);
+        CHECK(su_dds_parse(file, n, SU_DDS_CS_FILE, &img, msg) == SU_OK && img.format == SU_TEX_BC2_UNORM);
+        CHECK(su_dds_decode_rgba32f(&img, 5, 0, lv) == SU_OK);
+        CHECK(fabsf(lv[0] - 132.0f / 255.0f) < 1e-6f && lv[60] == lv[0]);
+    }
+    printf("bc ldr: BC1 (both modes), BC2, BC3 (both alpha modes), BC4, BC5, BC7 modes 5 and 6, reserved mode ok\n");
+}
+
 int main(void) {
     test_formats();
     test_half();
     test_bc6h();
     test_parse();
+    test_bc_ldr();
     printf("test_asset_dds: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail != 0 ? 1 : 0;
 }

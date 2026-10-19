@@ -544,10 +544,18 @@ SU_RENDER_API uint32_t su_render_env_create(SuRenderer *r, uint32_t size, const 
  * image data must stay valid until READY unless SU_RENDER_UPLOAD_COPY. A cube can be drawn as the sky background
  * (SuRenderFrameDesc.sky_cube) without any prefiltering. */
 SU_RENDER_API uint32_t su_render_texture_create_dds(SuRenderer *r, const SuDdsImage *img, uint32_t flags, SuRenderHandle *out);
-/* An environment cube (as su_render_env_create) from a DDS cube of HDR data (BC6H, RGBA16F; RGBA8 also works): the top
- * mip that is a power of two in 8..1024 is decoded on the CPU and prefiltered as su_render_env_create does (the GPU
- * does not prefilter here). SU_E_INVALID_ARGUMENT for a 2D file or a size outside 8..1024 in every mip. */
+/* An environment cube (as su_render_env_create) from a DDS cube: HDR (BC6H, RGBA16F) or LDR (RGBA8, BC1..BC5, BC7; read
+ * as linear or sRGB by the colour space chosen at su_dds_parse). Decoded and prefiltered on the CPU as
+ * su_render_env_create does (the GPU does not prefilter here). The size is the largest square power-of-two mip in
+ * 8..1024; when every such mip is larger than 1024 (a 2048 cube with a single mip), the smallest larger one is decoded
+ * and box-downsampled to 1024. SU_E_INVALID_ARGUMENT for a 2D file, or no square power-of-two mip of at least 8;
+ * SU_E_UNSUPPORTED_METHOD for a format without a CPU decoder. Same as su_render_env_from_dds_ex(r, img, 0, out). */
 SU_RENDER_API uint32_t su_render_env_from_dds(SuRenderer *r, const SuDdsImage *img, SuRenderHandle *out);
+/* As su_render_env_from_dds with a size cap: max_size (a power of two in 8..1024; 0 = 1024) replaces 1024 above, so a
+ * 2048 nebula can become a cheap 256 environment. Prefiltering cost grows with size squared: 256 is a good default for
+ * ambient light; 1024 takes seconds. SU_E_INVALID_ARGUMENT for another max_size. */
+SU_RENDER_API uint32_t su_render_env_from_dds_ex(SuRenderer *r, const SuDdsImage *img, uint32_t max_size,
+                                                 SuRenderHandle *out);
 /* A model references meshes by handle (they must exist; the nodes are copied). READY when every LOD 0 mesh is. */
 SU_RENDER_API uint32_t su_render_model_create(SuRenderer *r, const SuRenderModelNode *nodes, uint32_t count,
                                               SuRenderHandle *out);

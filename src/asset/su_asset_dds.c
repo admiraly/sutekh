@@ -647,6 +647,48 @@ uint32_t su_dds_decode_rgba32f(const SuDdsImage *img, uint32_t face, uint32_t mi
             }
         }
         return SU_OK;
+    case SU_TEX_BC1_UNORM:
+    case SU_TEX_BC1_SRGB:
+    case SU_TEX_BC2_UNORM:
+    case SU_TEX_BC2_SRGB:
+    case SU_TEX_BC3_UNORM:
+    case SU_TEX_BC3_SRGB:
+    case SU_TEX_BC4_UNORM:
+    case SU_TEX_BC5_UNORM:
+    case SU_TEX_BC7_UNORM:
+    case SU_TEX_BC7_SRGB: {
+        int srgb = img->format == SU_TEX_BC1_SRGB || img->format == SU_TEX_BC2_SRGB || img->format == SU_TEX_BC3_SRGB ||
+                   img->format == SU_TEX_BC7_SRGB;
+        size_t bsize = (img->format == SU_TEX_BC1_UNORM || img->format == SU_TEX_BC1_SRGB || img->format == SU_TEX_BC4_UNORM)
+                           ? 8u
+                           : 16u;
+        uint32_t bw = (w + 3u) / 4u;
+        uint32_t bx;
+        uint32_t by;
+        float lut[256];
+        for (x = 0; x < 256u; x++) {
+            lut[x] = srgb ? srgb_to_linear((float)x / 255.0f) : (float)x / 255.0f;
+        }
+        for (by = 0; by < (h + 3u) / 4u; by++) {
+            for (bx = 0; bx < bw; bx++) {
+                uint8_t px[64];
+                uint32_t k;
+                (void)su_bc_decode_block(img->format, src + ((size_t)by * bw + bx) * bsize, px);
+                for (k = 0; k < 16u; k++) {
+                    uint32_t tx = bx * 4u + (k & 3u);
+                    uint32_t ty = by * 4u + (k >> 2);
+                    if (tx < w && ty < h) {
+                        float *o = out + ((size_t)ty * w + tx) * 4u;
+                        o[0] = lut[px[k * 4u]];
+                        o[1] = lut[px[k * 4u + 1u]];
+                        o[2] = lut[px[k * 4u + 2u]];
+                        o[3] = (float)px[k * 4u + 3u] / 255.0f;
+                    }
+                }
+            }
+        }
+        return SU_OK;
+    }
     default:
         return SU_E_UNSUPPORTED_METHOD;
     }
