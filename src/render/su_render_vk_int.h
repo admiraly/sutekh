@@ -337,8 +337,12 @@ typedef struct FrameUbo {
     float sky_nadir[4];
     float up[4];
     float params[4];
-    float shadow_vp[16];      /* camera-relative position -> shadow map clip space (x, y in -1..1, depth 0..1) */
-    float shadow_params[4];   /* x: strength (0 = no shadow), y: depth bias, z: 1 / map size, w: normal offset (units) */
+    float shadow_vp[64];      /* per cascade: camera-relative position -> shadow map clip space (x, y -1..1, depth 0..1) */
+    float shadow_params[4];   /* x: strength (0 = no shadow), z: 1 / map size, w: cascade count */
+    float shadow_split[4];    /* far view depth of each cascade */
+    float shadow_bias[4];     /* depth bias of each cascade (depth units) */
+    float shadow_noff[4];     /* normal offset of each cascade (units) */
+    float shadow_fwd[4];      /* the camera's forward axis */
 } FrameUbo;
 
 typedef struct MatPush {
@@ -531,7 +535,11 @@ struct SuRenderer {
     VkImage shadow_img;
     VkDeviceMemory shadow_mem;
     VkImageView shadow_view;
-    VkFramebuffer shadow_fb;
+    VkFramebuffer shadow_fbs[4];        /* one per cascade layer */
+    VkImageView shadow_layer_views[4];
+    uint32_t shadow_layers;             /* cascades the map has layers for */
+    uint32_t shadow_first[4];           /* caster instance range of each cascade in the last build */
+    uint32_t shadow_count[4];
     uint32_t shadow_size;               /* texels per side (1 until shadows are first used) */
     int shadow_fresh;                   /* the image has never been through the shadow pass (layout undefined) */
     ShadowItem *sitems;                 /* max_draw */
@@ -610,6 +618,6 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
 uint32_t su_rvk_shadow_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, const SuMat4f *view_proj, float proj_y,
                              FrameUbo *ubo);
 /* Records the caster draws (inside the shadow pass). */
-void su_rvk_shadow_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t count);
+void su_rvk_shadow_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t first, uint32_t count);
 
 #endif
