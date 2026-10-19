@@ -23,6 +23,7 @@
 #define K_STORE 2u  /* stores field lanes */
 #define K_ROW 3u    /* slot_u32, gen_u32, tick_u32: per-row or per-invocation values */
 #define K_EMIT 4u   /* emit_event, despawn_self */
+#define K_GATHER 5u /* IR 0.4 gather_*, find_eq_u32: read other rows of the entry state (never hoisted) */
 
 typedef struct Shape {
     uint32_t nread;
@@ -101,6 +102,8 @@ static int shape_of(uint32_t op, Shape *s) {
     for (k = 0; k < o->n; k++) {
         if (o->o[k].kind == SU_O_REG) {
             rd(s, o->o[k].slot, o->o[k].type);
+        } else if (o->o[k].kind == SU_O_FGATHER) {
+            s->kind = K_GATHER;
         } else if (o->o[k].kind == SU_O_FREAD) {
             s->kind = K_LOAD;
         } else if (o->o[k].kind == SU_O_FWRITE) {
@@ -259,6 +262,50 @@ static uint32_t exec1(const SuVmPlanInsn *p, int64_t *R, SuVmPlanRun *run, size_
         }
         (*seq)++;
         return SU_OK;
+
+    /* ---- IR 0.4: u32 and i64 bit operations, cross-row reads ---- */
+    case SU_OP_AND_U32: R[p->d] = (int64_t)((uint32_t)R[p->a] & (uint32_t)R[p->b]); return SU_OK;
+    case SU_OP_OR_U32: R[p->d] = (int64_t)((uint32_t)R[p->a] | (uint32_t)R[p->b]); return SU_OK;
+    case SU_OP_XOR_U32: R[p->d] = (int64_t)((uint32_t)R[p->a] ^ (uint32_t)R[p->b]); return SU_OK;
+    case SU_OP_NOT_U32: R[p->d] = (int64_t)(uint32_t)~(uint32_t)R[p->a]; return SU_OK;
+    case SU_OP_SHL_U32: R[p->d] = (int64_t)su_u32_shl((uint32_t)R[p->a], (uint32_t)R[p->b]); return SU_OK;
+    case SU_OP_SHR_U32: R[p->d] = (int64_t)su_u32_shr((uint32_t)R[p->a], (uint32_t)R[p->b]); return SU_OK;
+    case SU_OP_DIV_U32: R[p->d] = (int64_t)su_u32_div((uint32_t)R[p->a], (uint32_t)R[p->b]); return SU_OK;
+    case SU_OP_REM_U32: R[p->d] = (int64_t)su_u32_rem((uint32_t)R[p->a], (uint32_t)R[p->b]); return SU_OK;
+    case SU_OP_AND_I64: R[p->d] = su_i64_from_bits((uint64_t)R[p->a] & (uint64_t)R[p->b]); return SU_OK;
+    case SU_OP_OR_I64: R[p->d] = su_i64_from_bits((uint64_t)R[p->a] | (uint64_t)R[p->b]); return SU_OK;
+    case SU_OP_XOR_I64: R[p->d] = su_i64_from_bits((uint64_t)R[p->a] ^ (uint64_t)R[p->b]); return SU_OK;
+    case SU_OP_NOT_I64: R[p->d] = su_i64_from_bits(~(uint64_t)R[p->a]); return SU_OK;
+    case SU_OP_GATHER_U32:
+    case SU_OP_GATHER_I32:
+    case SU_OP_GATHER_I64:
+    case SU_OP_GATHER_Q32: {
+        uint64_t s = (uint64_t)(uint32_t)R[p->b], bits = 0;
+        if (s < run->gather_rows) {
+            bits = run->gather_cols[p->a][s];
+            if (p->op == SU_OP_GATHER_I64 || p->op == SU_OP_GATHER_Q32) {
+                bits |= (uint64_t)run->gather_cols[p->a + 1u][s] << 32;
+            }
+        }
+        R[p->d] = p->op == SU_OP_GATHER_U32   ? (int64_t)(uint32_t)bits
+                  : p->op == SU_OP_GATHER_I32 ? (int64_t)su_i32_from_bits((uint32_t)bits)
+                                              : su_i64_from_bits(bits);
+        return SU_OK;
+    }
+    case SU_OP_FIND_EQ_U32: {
+        const uint32_t *col = run->gather_cols[p->a];
+        uint32_t key = (uint32_t)R[p->b];
+        uint64_t n = p->c < run->gather_rows ? p->c : run->gather_rows, s;
+        uint32_t found = SU_FIND_NONE;
+        for (s = 0; s < n; s++) {
+            if (col[s] == key) {
+                found = (uint32_t)s;
+                break;
+            }
+        }
+        R[p->d] = (int64_t)found;
+        return SU_OK;
+    }
 
     /* ---- IR 0.3: constants, fields, bool ---- */
     case SU_OP_CONST_I32:
@@ -473,7 +520,7 @@ uint32_t su_vm_plan_run(SuVmPlan *p, SuVmPlanRun *run, uint64_t rows, uint32_t *
     int64_t *R = p->regs;
     const uint8_t *alive = run->alive;
     uint64_t r;
-    uint64_t body_rows = 0, skipped = 0;
+    uint64_t body_rows = 0, skipped = 0, filtered = 0;
     uint64_t run_from = 0; /* first row of the pending run of guarded rows (rows [run_from, r) are guarded) */
     for (r = 0; r < rows; r++) {
         uint32_t seq = 0;
@@ -481,6 +528,15 @@ uint32_t su_vm_plan_run(SuVmPlan *p, SuVmPlanRun *run, uint64_t rows, uint32_t *
         if (alive != NULL && alive[r] == 0u) {
             copy_run(p, run, run_from, r); /* a dead row is never written */
             run_from = r + 1u;
+            continue;
+        }
+        if (run->filter_col != NULL && (run->filter_col[r] & run->filter_mask) != run->filter_value) {
+            copy_run(p, run, run_from, r);
+            run_from = r + 1u;
+            for (i = 0; i < run->n_filter_lanes; i++) {
+                run->out_cols[run->filter_lanes[i]][r] = run->in_cols[run->filter_lanes[i]][r];
+            }
+            filtered++;
             continue;
         }
         if (p->has_guard) {
@@ -506,6 +562,7 @@ uint32_t su_vm_plan_run(SuVmPlan *p, SuVmPlanRun *run, uint64_t rows, uint32_t *
                 *failed_insn = p->body[i].idx;
                 run->rows_body = body_rows;
                 run->rows_skipped = skipped;
+                run->rows_filtered = filtered;
                 return st;
             }
         }
@@ -514,6 +571,7 @@ uint32_t su_vm_plan_run(SuVmPlan *p, SuVmPlanRun *run, uint64_t rows, uint32_t *
     copy_run(p, run, run_from, rows);
     run->rows_body = body_rows;
     run->rows_skipped = skipped;
+    run->rows_filtered = filtered;
     return SU_OK;
 }
 

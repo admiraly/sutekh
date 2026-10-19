@@ -63,7 +63,7 @@ uint32_t su_effects_derive(const SuLirModule *m, uint8_t *reads, uint8_t *writes
             uint32_t k;
             for (k = 0; o != NULL && k < o->n; k++) {
                 uint32_t kind = o->o[k].kind, idx, lanes, l;
-                if (kind != SU_O_FREAD && kind != SU_O_FWRITE) {
+                if (kind != SU_O_FREAD && kind != SU_O_FWRITE && kind != SU_O_FGATHER) {
                     continue;
                 }
                 idx = o->o[k].slot == SU_S_A ? ins->a : (o->o[k].slot == SU_S_B ? ins->b : ins->c);
@@ -72,12 +72,25 @@ uint32_t su_effects_derive(const SuLirModule *m, uint8_t *reads, uint8_t *writes
                     return SU_E_INTERNAL;
                 }
                 for (l = 0; l < lanes; l++) {
-                    if (kind == SU_O_FREAD) {
+                    if (kind != SU_O_FWRITE) { /* load, or an IR 0.4 cross-row read (gather_*, find_eq_u32) */
                         reads[idx + l] = 1u;
                     } else {
                         writes[idx + l] = 1u;
                     }
                 }
+            }
+        }
+    }
+    if (m->has_row_filter) {
+        /* IR 0.4: the row filter reads its field for every row, and a filtered-out row copies every writable
+         * lane from its input (so a filtered system reads each field it writes). */
+        if (m->row_filter_field >= m->field_count) {
+            return SU_E_INTERNAL;
+        }
+        reads[m->row_filter_field] = 1u;
+        for (i = 0; i < m->field_count; i++) {
+            if ((m->fields[i].access & SU_ACCESS_WRITE) != 0u) {
+                reads[i] = 1u;
             }
         }
     }

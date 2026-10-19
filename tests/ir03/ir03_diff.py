@@ -19,6 +19,12 @@ skip rows, so the proof is exercised, not only tolerated.
 
 --native (with ir03_native_driver, SUTEKH_NATIVE=ON): every program is also compiled by the native IR 0.3 lowering
 and run on the same inputs; the kernel's committed lanes must equal the VM's for every program.
+
+--ir04 (IR 0.4, 2026-10-19): programs declare ir_version "0.4" and also draw the u32 and i64 bit operations,
+div_u32/rem_u32, the cross-row reads gather_u32/_i32/_i64/_q32 and find_eq_u32 (slots drawn mostly inside the table,
+some outside), and half of them carry a row_filter on a u32 "sel" field (filtered-out rows must keep their inputs).
+With --native, programs without cross-row reads must compile and match the VM; programs with them must be refused
+(ir_0_4_gather_not_lowered) and are counted separately.
 """
 import argparse
 import hashlib
@@ -105,6 +111,58 @@ def build_ops():
 OPS = build_ops()
 COMPUTE = [n for n in OPS if not n.startswith("const_")]
 
+# IR 0.4 additions (added to OPS by enable_ir04).
+OPS04 = {
+    "and_u32": ("u32", [("a", "reg", "u32"), ("b", "reg", "u32")]),
+    "or_u32": ("u32", [("a", "reg", "u32"), ("b", "reg", "u32")]),
+    "xor_u32": ("u32", [("a", "reg", "u32"), ("b", "reg", "u32")]),
+    "not_u32": ("u32", [("a", "reg", "u32")]),
+    "shl_u32": ("u32", [("a", "reg", "u32"), ("n", "reg", "u32")]),
+    "shr_u32": ("u32", [("a", "reg", "u32"), ("n", "reg", "u32")]),
+    "div_u32": ("u32", [("a", "reg", "u32"), ("b", "reg", "u32")]),
+    "rem_u32": ("u32", [("a", "reg", "u32"), ("b", "reg", "u32")]),
+    "and_i64": ("i64", [("a", "reg", "i64"), ("b", "reg", "i64")]),
+    "or_i64": ("i64", [("a", "reg", "i64"), ("b", "reg", "i64")]),
+    "xor_i64": ("i64", [("a", "reg", "i64"), ("b", "reg", "i64")]),
+    "not_i64": ("i64", [("a", "reg", "i64")]),
+}
+GATHER04 = ("gather_u32", "gather_i32", "gather_i64", "gather_q32", "find_eq_u32")
+IR04 = [False]
+
+
+def enable_ir04():
+    IR04[0] = True
+    OPS.update(OPS04)
+    COMPUTE.extend(OPS04)
+
+
+def eval04(name, a):
+    if name == "and_u32":
+        return a[0] & a[1]
+    if name == "or_u32":
+        return a[0] | a[1]
+    if name == "xor_u32":
+        return a[0] ^ a[1]
+    if name == "not_u32":
+        return a[0] ^ 0xFFFFFFFF
+    if name == "shl_u32":
+        return 0 if a[1] >= 32 else (a[0] << a[1]) & 0xFFFFFFFF
+    if name == "shr_u32":
+        return 0 if a[1] >= 32 else a[0] >> a[1]
+    if name == "div_u32":
+        return 0 if a[1] == 0 else a[0] // a[1]
+    if name == "rem_u32":
+        return a[0] if a[1] == 0 else a[0] % a[1]
+    if name == "and_i64":
+        return wrap(a[0] & a[1], 64)
+    if name == "or_i64":
+        return wrap(a[0] | a[1], 64)
+    if name == "xor_i64":
+        return wrap(a[0] ^ a[1], 64)
+    if name == "not_i64":
+        return wrap(~a[0], 64)
+    raise KeyError(name)
+
 
 # ---------- interpreter ----------
 
@@ -145,6 +203,8 @@ def evaluate(name, ins, regs):
             args.append(regs[ins[key]][1])
         else:
             args.append(ins[key])
+    if name in OPS04:
+        return eval04(name, args)
     if name == "const_u32":
         return args[0]
     if name in ("const_i32", "const_i64"):
@@ -244,8 +304,27 @@ def lanes_of(fields):
     return out
 
 
-def run_program(fields, insns, lane_in):
-    """Returns {lane name: u32} of the stored lanes for one row."""
+def typed_value(f, lane_in):
+    """The value of field f in one row's lanes."""
+    if f["type"] in ("i64", "q32"):
+        return wrap(lane_in[f["name"] + ".lo"] | (lane_in[f["name"] + ".hi"] << 32), 64)
+    if f["type"] == "i32":
+        return wrap(lane_in[f["name"]], 32)
+    return lane_in[f["name"]]
+
+
+def run_program(fields, insns, lane_in, table=None, row_filter=None):
+    """Returns {lane name: u32} of the stored lanes for one row. table: every row's lanes (IR 0.4 cross-row
+    reads); row_filter: the IR's "row_filter" object or None."""
+    if row_filter is not None:
+        sel = lane_in[row_filter["field"]]
+        if sel & row_filter.get("mask", 0xFFFFFFFF) != row_filter["equals"]:
+            out = {}
+            for f in fields:
+                if f["write"]:
+                    for lane in ([f["name"] + ".lo", f["name"] + ".hi"] if f["type"] in ("i64", "q32") else [f["name"]]):
+                        out[lane] = lane_in[lane]
+            return out
     vals = {}
     for f in fields:
         if f["type"] in ("i64", "q32"):
@@ -269,6 +348,21 @@ def run_program(fields, insns, lane_in):
 
     for ins in insns:
         op = ins["op"]
+        if op in GATHER04:
+            f = next(x for x in fields if x["name"] == ins["field"])
+            if op == "find_eq_u32":
+                key = regs[ins["key"]][1]
+                found = 0xFFFFFFFF
+                for srow in range(min(ins["span"], len(table))):
+                    if table[srow][f["name"]] == key:
+                        found = srow
+                        break
+                regs[ins["dst"]] = ("u32", found)
+            else:
+                slot = regs[ins["slot"]][1]
+                v = typed_value(f, table[slot]) if slot < len(table) else 0
+                regs[ins["dst"]] = (op[len("gather_"):], v)
+            continue
         if op.startswith("load_"):
             t = op[5:]
             if t == "v3":
@@ -290,7 +384,7 @@ def run_program(fields, insns, lane_in):
 
 # ---------- generator ----------
 
-def gen_program(rng, idx, guard_policy=None):
+def gen_program(rng, idx, guard_policy=None, rows=48):
     """guard_policy: None (plain), "clean" (every store identity when the gate condition is false) or "mixed"."""
     nfields = {"q32": rng.randint(3, 6), "i32": rng.randint(1, 3), "i64": rng.randint(1, 2), "u32": rng.randint(1, 3)}
     ids = rng.sample(range(1, 400, 2), sum(nfields.values()))
@@ -303,6 +397,8 @@ def gen_program(rng, idx, guard_policy=None):
             k += 1
     if guard_policy:
         fields.append({"id": 401, "name": "gate", "type": "u32", "read": True, "write": False})
+    if IR04[0]:
+        fields.append({"id": 403, "name": "sel", "type": "u32", "read": True, "write": False})
     rng.shuffle(fields)
     insns = []
     pool = {}
@@ -356,6 +452,26 @@ def gen_program(rng, idx, guard_policy=None):
             d = new_reg(f["type"])
             insns.append({"op": "load_" + f["type"], "dst": d, "field": f["name"]})
             loaded[f["name"]] = d
+    if IR04[0] and idx % 2 == 0:
+        # Cross-row reads: slots mostly inside the table (rem by rows + 3), sometimes raw.
+        for _ in range(rng.randint(1, 6)):
+            gf = rng.choice(fields)
+            if rng.random() < 0.25 and gf["type"] == "u32":
+                key = get("u32")  # before new_reg: the operand must not be the register being defined
+                d = new_reg("u32")
+                insns.append({"op": "find_eq_u32", "dst": d, "field": gf["name"], "key": key,
+                              "span": rng.choice([1, 5, max(1, rows // 2), rows, rows + 7, 4096])})
+                continue
+            raw = get("u32")
+            if rng.random() < 0.8:
+                m = new_reg("u32")
+                insns.append({"op": "const_u32", "dst": m, "value": rows + 3})
+                slot = new_reg("u32")
+                insns.append({"op": "rem_u32", "dst": slot, "a": raw, "b": m})
+            else:
+                slot = raw
+            d = new_reg(gf["type"])
+            insns.append({"op": "gather_" + gf["type"], "dst": d, "field": gf["name"], "slot": slot})
     for _ in range(rng.randint(15, 60)):
         name = rng.choice(COMPUTE)
         dst_t, operands = OPS[name]
@@ -381,16 +497,34 @@ def gen_program(rng, idx, guard_policy=None):
         if f["name"] not in stored:
             insns.append({"op": "store_" + f["type"], "field": f["name"], "src": get(f["type"])})
     capsule = {
-        "capsule_format": "0.1", "ir_version": "0.3", "system_id": "diff.p%d" % idx, "source": "p.lir.json",
+        "capsule_format": "0.1", "ir_version": IRV(), "system_id": "diff.p%d" % idx, "source": "p.lir.json",
         "schema": {"id": "diff.table", "version": 1, "layout_generation": 1}, "numeric_profile": "fixed_q32_v1",
         "fields": fields,
         "schedule": {"phase": "simulate", "after": [], "before": [], "parallel": "serial"},
         "limits": {"max_instructions": 4096, "max_rows": 1000000, "allocation": "forbidden"},
         "tests": ["p.test.json"],
     }
-    lir = {"ir_version": "0.3", "system_id": "diff.p%d" % idx, "numeric_profile": "fixed_q32_v1",
+    lir = {"ir_version": IRV(), "system_id": "diff.p%d" % idx, "numeric_profile": "fixed_q32_v1",
            "query": "diff.table", "instructions": insns}
+    add_filter(rng, idx, lir)
     return capsule, lir
+
+
+def IRV():
+    return "0.4" if IR04[0] else "0.3"
+
+
+def add_filter(rng, idx, lir, policy=None):
+    """IR 0.4: a row_filter on "sel" for about half the programs (values of a u32 lane are mostly below 70). Clean
+    guarded programs get none, so the guard check below still sees rows reach the guard."""
+    if not IR04[0] or policy == "clean" or rng.random() < 0.5:
+        return
+    mask = rng.choice([0xFFFFFFFF, 1, 3, 7, 0x40, 0xFFFFFFFF])
+    eq = rng.choice([0, 1, 2, 3, 5, 64, rng.getrandbits(32)]) & mask
+    flt = {"field": "sel", "equals": eq}
+    if mask != 0xFFFFFFFF or rng.random() < 0.5:
+        flt["mask"] = mask
+    lir["row_filter"] = flt
 
 
 def guarded_stores(rng, idx, fields, insns, loaded, get, new_reg, policy):
@@ -444,15 +578,16 @@ def guarded_stores(rng, idx, fields, insns, loaded, get, new_reg, policy):
         if f["name"] not in stored:
             insns.append({"op": "store_" + f["type"], "field": f["name"], "src": value_for(f)})
     capsule = {
-        "capsule_format": "0.1", "ir_version": "0.3", "system_id": "diff.p%d" % idx, "source": "p.lir.json",
+        "capsule_format": "0.1", "ir_version": IRV(), "system_id": "diff.p%d" % idx, "source": "p.lir.json",
         "schema": {"id": "diff.table", "version": 1, "layout_generation": 1}, "numeric_profile": "fixed_q32_v1",
         "fields": fields,
         "schedule": {"phase": "simulate", "after": [], "before": [], "parallel": "serial"},
         "limits": {"max_instructions": 4096, "max_rows": 1000000, "allocation": "forbidden"},
         "tests": ["p.test.json"],
     }
-    lir = {"ir_version": "0.3", "system_id": "diff.p%d" % idx, "numeric_profile": "fixed_q32_v1",
+    lir = {"ir_version": IRV(), "system_id": "diff.p%d" % idx, "numeric_profile": "fixed_q32_v1",
            "query": "diff.table", "instructions": insns}
+    add_filter(rng, idx, lir, policy)
     return capsule, lir
 
 
@@ -464,7 +599,12 @@ def main():
     ap.add_argument("--rows", type=int, default=48)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--native", action="store_true", help="require native kernels identical to the VM")
+    ap.add_argument("--ir04", action="store_true", help="IR 0.4 programs (bit ops, cross-row reads, row filters)")
     args = ap.parse_args()
+    if args.ir04:
+        enable_ir04()
+    native_refused_gather = 0
+    filtered_programs = 0
     native_ok = 0
     os.makedirs(args.work, exist_ok=True)
     rng = random.Random(args.seed)
@@ -476,7 +616,9 @@ def main():
                   "hoisted": 0}
     for p in range(args.programs):
         policy = None if p % 3 != 1 else ("clean" if p % 6 == 1 else "mixed")
-        capsule, lir = gen_program(rng, p, policy)
+        capsule, lir = gen_program(rng, p, policy, args.rows)
+        gathers = any(ins["op"] in GATHER04 for ins in lir["instructions"])
+        filtered_programs += 1 if "row_filter" in lir else 0
         cap_text = json.dumps(capsule, sort_keys=True)
         lir_text = json.dumps(lir, sort_keys=True)
         corpus.update(cap_text.encode() + b"\0" + lir_text.encode() + b"\0")
@@ -502,7 +644,12 @@ def main():
             continue
         has_plan, has_guard, body_rows, skipped, hoisted = (int(x) for x in tiers[2:7])
         native = int(tiers[7]) if len(tiers) > 7 else -1
-        if args.native:
+        if args.native and gathers:
+            if native != 2:
+                mismatches.append("program %d: native kernel for a cross-row read was not refused (%d)" % (p, native))
+                continue
+            native_refused_gather += 1
+        elif args.native:
             if native != 1:
                 mismatches.append("program %d: native kernel %s" % (
                     p, {0: "differs from the VM", 2: "was refused", -1: "not built (use ir03_native_driver)"}
@@ -521,7 +668,8 @@ def main():
             kind, row, lane, val = line.split()
             (lane_in if kind == "IN" else lane_out).setdefault(int(row), {})[lane] = int(val)
         for r in range(args.rows):
-            want = run_program(capsule["fields"], lir["instructions"], lane_in[r])
+            want = run_program(capsule["fields"], lir["instructions"], lane_in[r],
+                               [lane_in[x] for x in range(args.rows)], lir.get("row_filter"))
             got = lane_out.get(r, {})
             checked += len(want)
             if want != got:
@@ -536,7 +684,10 @@ def main():
         print("MISMATCH", m)
     if args.native:
         print("ir03_diff native: %d of %d programs compiled by the IR 0.3 lowering with lanes identical to the VM"
-              % (native_ok, args.programs))
+              "%s" % (native_ok, args.programs,
+                      (", %d with cross-row reads refused as specified" % native_refused_gather) if args.ir04 else ""))
+    if args.ir04:
+        print("ir03_diff ir04: %d programs with a row_filter" % filtered_programs)
     print("ir03_diff tiers: %d programs with a plan, %d with a guard (%d of %d clean guarded programs), "
           "%d rows executed, %d rows skipped by guards, %d hoisted instructions"
           % (tier_stats["plans"], tier_stats["guards"], tier_stats["clean_guards"], tier_stats["clean"],

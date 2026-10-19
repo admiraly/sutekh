@@ -177,6 +177,16 @@ bool roles_of(const Ins &in, Roles &r) {
     case SU_NLOW_OP_LT_U32:
     case SU_NLOW_OP_AND_BOOL:
     case SU_NLOW_OP_OR_BOOL:
+    case SU_NLOW_OP_AND_U32:
+    case SU_NLOW_OP_OR_U32:
+    case SU_NLOW_OP_XOR_U32:
+    case SU_NLOW_OP_SHL_U32:
+    case SU_NLOW_OP_SHR_U32:
+    case SU_NLOW_OP_DIV_U32:
+    case SU_NLOW_OP_REM_U32:
+    case SU_NLOW_OP_AND_I64:
+    case SU_NLOW_OP_OR_I64:
+    case SU_NLOW_OP_XOR_I64:
         rd(in.a, false);
         rd(in.b, false);
         return true;
@@ -186,6 +196,8 @@ bool roles_of(const Ins &in, Roles &r) {
         rd(in.c, false);
         return true;
     case SU_NLOW_OP_NOT_BOOL:
+    case SU_NLOW_OP_NOT_U32:
+    case SU_NLOW_OP_NOT_I64:
     case SU_NLOW_OP_SQRT_Q32:
     case SU_NLOW_OP_RSQRT_Q32:
     case SU_NLOW_OP_I32_FROM_U32:
@@ -852,6 +864,63 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
                     a.xor_(rax, 1);
                     L.E(Inst::kIdMov, L.S(d), rax);
                     break;
+                /* IR 0.4 bit operations: u32 results zero-extended (a 32-bit mov clears bits 32..63). */
+                case SU_NLOW_OP_AND_U32:
+                case SU_NLOW_OP_OR_U32:
+                case SU_NLOW_OP_XOR_U32:
+                    L.E(Inst::kIdMov, eax, L.SD(ra));
+                    L.E(op == SU_NLOW_OP_AND_U32 ? Inst::kIdAnd : (op == SU_NLOW_OP_OR_U32 ? Inst::kIdOr : Inst::kIdXor),
+                        eax, L.SD(rb));
+                    L.E(Inst::kIdMov, L.S(d), rax);
+                    break;
+                case SU_NLOW_OP_NOT_U32:
+                    L.E(Inst::kIdMov, eax, L.SD(ra));
+                    a.not_(eax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
+                    break;
+                case SU_NLOW_OP_SHL_U32:
+                case SU_NLOW_OP_SHR_U32:
+                    /* n >= 32 gives 0; the hardware masks the count to 5 bits, so select 0 explicitly. */
+                    L.E(Inst::kIdMov, eax, L.SD(ra));
+                    L.E(Inst::kIdMov, ecx, L.SD(rb));
+                    if (op == SU_NLOW_OP_SHL_U32) a.shl(eax, cl);
+                    else a.shr(eax, cl);
+                    a.xor_(edx, edx);
+                    a.cmp(ecx, 32);
+                    a.cmovae(eax, edx);
+                    L.E(Inst::kIdMov, L.S(d), rax);
+                    break;
+                case SU_NLOW_OP_DIV_U32:
+                case SU_NLOW_OP_REM_U32: {
+                    /* b = 0: div gives 0, rem gives a. */
+                    Label l_zero_div = a.new_label(), l_done_div = a.new_label();
+                    L.E(Inst::kIdMov, eax, L.SD(ra));
+                    L.E(Inst::kIdMov, ecx, L.SD(rb));
+                    a.test(ecx, ecx);
+                    a.jz(l_zero_div);
+                    a.xor_(edx, edx);
+                    a.div(edx, eax, ecx);
+                    if (op == SU_NLOW_OP_REM_U32) a.mov(eax, edx);
+                    a.jmp(l_done_div);
+                    a.bind(l_zero_div);
+                    if (op == SU_NLOW_OP_DIV_U32) a.xor_(eax, eax);
+                    a.bind(l_done_div);
+                    L.E(Inst::kIdMov, L.S(d), rax);
+                    break;
+                }
+                case SU_NLOW_OP_AND_I64:
+                case SU_NLOW_OP_OR_I64:
+                case SU_NLOW_OP_XOR_I64:
+                    L.E(Inst::kIdMov, rax, L.S(ra));
+                    L.E(op == SU_NLOW_OP_AND_I64 ? Inst::kIdAnd : (op == SU_NLOW_OP_OR_I64 ? Inst::kIdOr : Inst::kIdXor),
+                        rax, L.S(rb));
+                    L.E(Inst::kIdMov, L.S(d), rax);
+                    break;
+                case SU_NLOW_OP_NOT_I64:
+                    L.E(Inst::kIdMov, rax, L.S(ra));
+                    a.not_(rax);
+                    L.E(Inst::kIdMov, L.S(d), rax);
+                    break;
                 case SU_NLOW_OP_I32_FROM_U32:
                 case SU_NLOW_OP_I32_FROM_I64:
                     L.E(Inst::kIdMovsxd, rax, L.SD(ra));
@@ -951,10 +1020,14 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
         /* Identity lanes: copy each whole input column into its output column once per call (memcpy of rows u32
          * cells). A guarded row then needs no per-lane copy, and every other row's body overwrites every writable
          * lane, so the outputs are exactly the per-row copies' (2026-10-18). */
-        if ((in->guard_count > 0u || in->identity_count > 0u) && in->identity_count > 0u) {
-            a.comment("identity lanes: whole-column copies");
-            for (uint32_t i = 0; i < in->identity_count; i++) {
-                const uint32_t lane = in->identity_lanes[i];
+        /* IR 0.4 row filter: a filtered-out row keeps its input values, so its writable lanes are copied the same way
+         * (the identity lanes, when present, are every writable lane and cover them). */
+        const uint32_t ncopy = in->identity_count > 0u ? in->identity_count : (in->has_filter ? in->filter_count : 0u);
+        const uint32_t *copy_lanes = in->identity_count > 0u ? in->identity_lanes : in->filter_lanes;
+        if (ncopy > 0u) {
+            a.comment("identity / filter lanes: whole-column copies");
+            for (uint32_t i = 0; i < ncopy; i++) {
+                const uint32_t lane = copy_lanes[i];
                 L.out_col(kCallArg[0], lane);
                 L.in_col(kCallArg[1], lane);
                 a.mov(kCallArg[2], r13);
@@ -978,6 +1051,14 @@ extern "C" uint32_t su_native_lower_x64_03(const SuNativeLowerInput *in, SuNativ
             }
         }
         a.bind(l_loop);
+        if (in->has_filter) {
+            a.comment("row filter");
+            L.in_col(rcx, in->filter_field);
+            a.mov(eax, dword_ptr(rcx, r12, 2));
+            a.and_(eax, in->filter_mask);
+            a.cmp(eax, in->filter_value);
+            a.jne(l_next); /* the row's writable lanes already hold their input values (copied above) */
+        }
         if (in->guard_count > 0u || in->identity_count > 0u) {
             a.comment("identity-row guard");
             for (uint32_t g = 0; g < in->guard_count; g++) {

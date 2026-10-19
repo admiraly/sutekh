@@ -61,6 +61,12 @@ struct SuExecContext {
     uint32_t last_tier;
     uint64_t last_rows_body;
     uint64_t last_rows_skipped;
+    /* IR 0.4 whole-table view for gather_* / find_eq_u32 (su_vm_context_set_table_view). */
+    int has_table;
+    SuInvocation table;            /* copied; bindings borrowed until replaced */
+    uint32_t **gather_cols;        /* per table index, filled per invocation (whole-table columns) */
+    uint64_t gather_rows;
+    uint32_t *filter_copy;         /* writable lane indices copied on a filtered-out row */
 };
 
 /* Process default tier for new contexts: 0 = not set (environment SUTEKH_VM_TIER, else planned). */
@@ -133,8 +139,10 @@ static int su_insn_known(uint32_t op, uint32_t minor) {
     case SU_OP_DESPAWN_SELF:
     case SU_OP_EMIT_EVENT:
         return minor >= 2u;
-    default:
-        return minor >= 3u && su_op03_by_code(op) != NULL;
+    default: {
+        const SuOp03 *o = su_op03_by_code(op);
+        return minor >= 3u && o != NULL && su_op_min_minor(o) <= minor;
+    }
     }
 }
 
@@ -251,7 +259,13 @@ static int su_insn03_shape_ok(const SuInsn *ins, const SuLirModule *m) {
             }
             break;
         case SU_O_FREAD:
+        case SU_O_FGATHER:
             if (!su_field03_ok(m, slot[o->slot], o->type, SU_ACCESS_READ)) {
+                return 0;
+            }
+            break;
+        case SU_O_CSPAN:
+            if (slot[o->slot] < 1u || slot[o->slot] > SU_FIND_SPAN_MAX) {
                 return 0;
             }
             break;
@@ -408,6 +422,102 @@ static uint32_t su_exec_insn03(SuExecContext *ctx, const SuInsn *ins, size_t r) 
     SuV3 va, vb;
     SuQuat qa, qb;
     uint32_t op = ins->op;
+
+    switch (op) {
+    case SU_OP_AND_U32:
+    case SU_OP_OR_U32:
+    case SU_OP_XOR_U32:
+    case SU_OP_SHL_U32:
+    case SU_OP_SHR_U32:
+    case SU_OP_DIV_U32:
+    case SU_OP_REM_U32: {
+        uint32_t ua = 0, ub = 0, ur = 0;
+        if (!su_read_u32(ctx, ins->a, &ua) || !su_read_u32(ctx, ins->b, &ub)) {
+            return SU_E_INTERNAL;
+        }
+        switch (op) {
+        case SU_OP_AND_U32: ur = ua & ub; break;
+        case SU_OP_OR_U32: ur = ua | ub; break;
+        case SU_OP_XOR_U32: ur = ua ^ ub; break;
+        case SU_OP_SHL_U32: ur = su_u32_shl(ua, ub); break;
+        case SU_OP_SHR_U32: ur = su_u32_shr(ua, ub); break;
+        case SU_OP_DIV_U32: ur = su_u32_div(ua, ub); break;
+        default: ur = su_u32_rem(ua, ub); break;
+        }
+        su_write_reg(ctx, ins->dst, SU_TYPE_U32, ur);
+        return SU_OK;
+    }
+    case SU_OP_NOT_U32:
+        if (!su_read_u32(ctx, ins->a, &u)) {
+            return SU_E_INTERNAL;
+        }
+        su_write_reg(ctx, ins->dst, SU_TYPE_U32, ~u);
+        return SU_OK;
+    case SU_OP_AND_I64:
+    case SU_OP_OR_I64:
+    case SU_OP_XOR_I64:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_I64, &x) || !su_rd_w(ctx, ins->b, SU_TYPE_I64, &y)) {
+            return SU_E_INTERNAL;
+        }
+        z = su_i64_from_bits(op == SU_OP_AND_I64   ? ((uint64_t)x & (uint64_t)y)
+                             : op == SU_OP_OR_I64 ? ((uint64_t)x | (uint64_t)y)
+                                                  : ((uint64_t)x ^ (uint64_t)y));
+        su_wr_w(ctx, ins->dst, SU_TYPE_I64, z);
+        return SU_OK;
+    case SU_OP_NOT_I64:
+        if (!su_rd_w(ctx, ins->a, SU_TYPE_I64, &x)) {
+            return SU_E_INTERNAL;
+        }
+        su_wr_w(ctx, ins->dst, SU_TYPE_I64, su_i64_from_bits(~(uint64_t)x));
+        return SU_OK;
+    case SU_OP_GATHER_U32:
+    case SU_OP_GATHER_I32:
+    case SU_OP_GATHER_I64:
+    case SU_OP_GATHER_Q32: {
+        uint32_t s = 0;
+        int two = op == SU_OP_GATHER_I64 || op == SU_OP_GATHER_Q32;
+        uint64_t bits = 0;
+        if (!su_read_u32(ctx, ins->b, &s) || ctx->gather_cols[ins->a] == NULL ||
+            (two && ctx->gather_cols[ins->a + 1u] == NULL)) {
+            return SU_E_INTERNAL;
+        }
+        if ((uint64_t)s < ctx->gather_rows) {
+            bits = ctx->gather_cols[ins->a][s];
+            if (two) {
+                bits |= (uint64_t)ctx->gather_cols[ins->a + 1u][s] << 32;
+            }
+        }
+        if (op == SU_OP_GATHER_U32) {
+            su_write_reg(ctx, ins->dst, SU_TYPE_U32, (uint32_t)bits);
+        } else if (op == SU_OP_GATHER_I32) {
+            su_wr_w(ctx, ins->dst, SU_TYPE_I32, su_i32_from_bits((uint32_t)bits));
+        } else {
+            su_wr_w(ctx, ins->dst, op == SU_OP_GATHER_I64 ? SU_TYPE_I64 : SU_TYPE_Q32, su_i64_from_bits(bits));
+        }
+        return SU_OK;
+    }
+    case SU_OP_FIND_EQ_U32: {
+        uint64_t n = ins->c, s;
+        uint32_t found = SU_FIND_NONE;
+        const uint32_t *col = ctx->gather_cols[ins->a];
+        if (!su_read_u32(ctx, ins->b, &u) || col == NULL) {
+            return SU_E_INTERNAL;
+        }
+        if (n > ctx->gather_rows) {
+            n = ctx->gather_rows;
+        }
+        for (s = 0; s < n; s++) {
+            if (col[s] == u) {
+                found = (uint32_t)s;
+                break;
+            }
+        }
+        su_write_reg(ctx, ins->dst, SU_TYPE_U32, found);
+        return SU_OK;
+    }
+    default:
+        break;
+    }
 
     if (op >= SU_OP_I32_BASE && op < SU_OP_Q32_BASE + SU_OPX_COUNT &&
         (op - SU_OP_I32_BASE) % 32u < SU_OPX_COUNT) {
@@ -712,6 +822,8 @@ void su_vm_context_destroy(SuExecContext *ctx) {
     free(ctx->write_ids);
     free(ctx->scr_in);
     free(ctx->scr_out);
+    free(ctx->gather_cols);
+    free(ctx->filter_copy);
     su_vm_plan_free(ctx->plan);
     free(ctx);
 }
@@ -753,6 +865,17 @@ uint32_t su_vm_context_create(const SuLirModule *m, uint32_t layout_generation,
             return SU_E_INVALID_ARGUMENT;
         }
     }
+    /* IR 0.4 row filter of a hand-built module: a readable u32 lane-0 field, and every writable lane readable. */
+    if (m->has_row_filter) {
+        if (m->ir_version_minor < 4u || !su_field03_ok(m, m->row_filter_field, SU_TYPE_U32, SU_ACCESS_READ)) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        for (i = 0; i < m->field_count; i++) {
+            if ((m->fields[i].access & SU_ACCESS_WRITE) != 0u && (m->fields[i].access & SU_ACCESS_READ) == 0u) {
+                return SU_E_INVALID_ARGUMENT;
+            }
+        }
+    }
 
     c = calloc(1, sizeof *c);
     if (c == NULL) {
@@ -776,11 +899,14 @@ uint32_t su_vm_context_create(const SuLirModule *m, uint32_t layout_generation,
     c->stored = su_vm_calloc(m->field_count, sizeof *c->stored);
     c->write_fields = su_vm_calloc(nw, sizeof *c->write_fields);
     c->write_ids = su_vm_calloc(nw, sizeof *c->write_ids);
+    c->gather_cols = su_vm_calloc(m->field_count, sizeof *c->gather_cols);
+    c->filter_copy = su_vm_calloc(nw, sizeof *c->filter_copy);
     if (m->ir_version_minor >= 3u) {
         c->reg_w = su_vm_calloc((size_t)m->register_count * 4u, sizeof *c->reg_w);
     }
     if (c->reg_val == NULL || c->reg_tag == NULL || c->in_cols == NULL || c->out_cols == NULL ||
         c->bound == NULL || c->stored == NULL || c->write_fields == NULL || c->write_ids == NULL ||
+        c->gather_cols == NULL || c->filter_copy == NULL ||
         (m->ir_version_minor >= 3u && c->reg_w == NULL)) {
         su_vm_context_destroy(c);
         return SU_E_RESOURCE_LIMIT;
@@ -835,6 +961,20 @@ uint32_t su_vm_context_set_entity_view(SuExecContext *ctx, const uint8_t *alive,
     } else {
         memset(&ctx->emitter, 0, sizeof ctx->emitter);
     }
+    return SU_OK;
+}
+
+uint32_t su_vm_context_set_table_view(SuExecContext *ctx, const SuInvocation *table) {
+    if (ctx == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (table == NULL) {
+        ctx->has_table = 0;
+        memset(&ctx->table, 0, sizeof ctx->table);
+        return SU_OK;
+    }
+    ctx->table = *table;
+    ctx->has_table = 1;
     return SU_OK;
 }
 
@@ -999,6 +1139,57 @@ static uint32_t su_check_set(SuExecContext *ctx, const SuColumnBinding *b, uint3
     return SU_OK;
 }
 
+/* IR 0.4: binds the whole-table view for gather_* / find_eq_u32. Without su_vm_context_set_table_view the
+ * invocation is the table, which is only meaningful when it starts at slot 0 (else SU_E_INVALID_ARGUMENT, so a
+ * chunked caller cannot silently gather from its chunk). A set view is checked like the inputs: same readable
+ * fields and generation, one row count, and no overlap with any staging column. */
+static uint32_t su_bind_table(SuExecContext *ctx, const SuOutputs *out, uint64_t rows) {
+    const SuInvocation *t = &ctx->table;
+    size_t fc = ctx->module->field_count > 0 ? ctx->module->field_count : 1u;
+    uint32_t st, j, i;
+    uintptr_t tb, ob;
+    if (!ctx->module->uses_gather) {
+        return SU_OK;
+    }
+    memset(ctx->gather_cols, 0, sizeof *ctx->gather_cols * fc);
+    if (!ctx->has_table) {
+        if (ctx->base_slot != 0u) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        memcpy(ctx->gather_cols, ctx->in_cols, sizeof *ctx->gather_cols * fc);
+        ctx->gather_rows = rows;
+        return SU_OK;
+    }
+    if (t->struct_size != (uint32_t)sizeof(SuInvocation) || t->abi_version != SU_ABI_VERSION ||
+        t->binding_count != ctx->readable_count || (t->binding_count > 0u && t->bindings == NULL)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (t->layout_generation != ctx->layout_generation) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    if (t->row_count > SIZE_MAX / sizeof(uint32_t)) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memset(ctx->bound, 0, fc);
+    st = su_check_set(ctx, t->bindings, t->binding_count, SU_ACCESS_READ, t->row_count, ctx->gather_cols);
+    if (st != SU_OK) {
+        return st;
+    }
+    tb = (uintptr_t)t->row_count * 4u;
+    ob = (uintptr_t)rows * 4u;
+    for (j = 0; tb > 0u && ob > 0u && j < out->binding_count; j++) {
+        uintptr_t os = (uintptr_t)out->bindings[j].data;
+        for (i = 0; i < t->binding_count; i++) {
+            uintptr_t ts = (uintptr_t)t->bindings[i].data;
+            if (os > UINTPTR_MAX - ob || ts > UINTPTR_MAX - tb || su_ranges_overlap(os, os + ob, ts, ts + tb)) {
+                return SU_E_INVALID_ARGUMENT;
+            }
+        }
+    }
+    ctx->gather_rows = t->row_count;
+    return SU_OK;
+}
+
 /* ---- execution -------------------------------------------------------- */
 
 /* Executes one instruction for row r. Returns SU_OK or SU_E_INTERNAL. */
@@ -1128,6 +1319,15 @@ static int su_exec_rows_planned(SuExecContext *ctx, uint64_t rows, SuOutputs *ou
     run.base_slot = ctx->base_slot;
     run.tick_low = ctx->tick_low;
     run.emits = ctx->needs_emitter;
+    run.gather_cols = ctx->gather_cols;
+    run.gather_rows = ctx->gather_rows;
+    if (ctx->module->has_row_filter) {
+        run.filter_col = ctx->in_cols[ctx->module->row_filter_field];
+        run.filter_mask = ctx->module->row_filter_mask;
+        run.filter_value = ctx->module->row_filter_value;
+        run.filter_lanes = ctx->filter_copy;
+        run.n_filter_lanes = ctx->writable_count;
+    }
     if (ctx->has_emitter) {
         run.emit_user = ctx->emitter.user;
         run.emit_despawn = ctx->emitter.emit_despawn;
@@ -1163,6 +1363,14 @@ static uint32_t su_exec_rows(SuExecContext *ctx, uint64_t rows, SuOutputs *out) 
         uint32_t k;
         /* A dead row is skipped entirely: no staged writes, no emissions, no store check. */
         if (alive != NULL && alive[r] == 0u) {
+            continue;
+        }
+        /* IR 0.4 row filter: a live row that does not match keeps its entry values and runs nothing. */
+        if (m->has_row_filter && (ctx->in_cols[m->row_filter_field][r] & m->row_filter_mask) != m->row_filter_value) {
+            for (k = 0; k < ctx->writable_count; k++) {
+                uint32_t f = ctx->write_fields[k];
+                ctx->out_cols[f][r] = ctx->in_cols[f][r];
+            }
             continue;
         }
         if (emits) {
@@ -1246,6 +1454,19 @@ uint32_t su_vm_invoke_v1(SuExecContext *ctx, const SuInvocation *input, SuOutput
     if (st != SU_OK) {
         return fail_out(ctx, out, st);
     }
+    if (ctx->module->has_row_filter) {
+        uint32_t k;
+        for (k = 0; k < ctx->writable_count; k++) {
+            if (ctx->in_cols[ctx->write_fields[k]] == NULL) {
+                return fail_out(ctx, out, SU_E_INVALID_ARGUMENT);
+            }
+            ctx->filter_copy[k] = ctx->write_fields[k];
+        }
+    }
+    st = su_bind_table(ctx, out, rows);
+    if (st != SU_OK) {
+        return fail_out(ctx, out, st);
+    }
 
     if (rows == 0u) {
         return SU_OK;
@@ -1325,7 +1546,18 @@ uint32_t su_vm_run_system(SuWorld *w, SuExecContext *ctx) {
     outs.reserved = 0u;
     outs.bindings = ctx->scr_out;
 
-    st = su_vm_invoke_v1(ctx, &inv, &outs);
+    if (m->uses_gather) {
+        /* The invocation is the whole table: it is also the gather view for this call (IR 0.4). */
+        int had = ctx->has_table;
+        SuInvocation prev = ctx->table;
+        ctx->table = inv;
+        ctx->has_table = 1;
+        st = su_vm_invoke_v1(ctx, &inv, &outs);
+        ctx->table = prev;
+        ctx->has_table = had;
+    } else {
+        st = su_vm_invoke_v1(ctx, &inv, &outs);
+    }
     if (st != SU_OK) {
         return st;
     }

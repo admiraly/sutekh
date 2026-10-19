@@ -36,7 +36,7 @@ static int g_failures = 0;
 
 /* ---------- document builders ---------- */
 
-static char g_cap[16384];
+static char g_cap[65536];
 static char g_lir[65536];
 
 /* Capsule with the given fields JSON array body (without brackets). */
@@ -171,7 +171,7 @@ static void test_reject(void) {
     make_capsule("0.2", P3, "{\"id\":1,\"name\":\"a\",\"type\":\"u32\",\"read\":true,\"write\":false}");
     make_lir("0.2", P3, "");
     expect(__LINE__, SU_E_TYPE, "/numeric_profile");
-    make_capsule("0.4", P3, FIELDS_STD);
+    make_capsule("0.9", P3, FIELDS_STD);
     make_lir("0.3", P3, STORES_STD);
     expect(__LINE__, SU_E_TYPE, "/ir_version");
     make_capsule("0.3", P3, FIELDS_STD);
@@ -203,11 +203,11 @@ static void test_reject(void) {
     make_lir("0.3", P3, "");
     expect(__LINE__, SU_E_SCHEMA_MISMATCH, "/fields/0/id");
     {
-        /* 129 q32 fields = 258 lanes > 256. */
-        static char fields[16384];
+        /* 513 q32 fields = 1026 lanes > SU_LIMIT_FIELDS (1024). */
+        static char fields[65536];
         size_t n = 0;
         int i;
-        for (i = 0; i < 129; i++) {
+        for (i = 0; i < 513; i++) {
             n += (size_t)snprintf(fields + n, sizeof fields - n, "%s{\"id\":%d,\"name\":\"f%d\",\"type\":\"q32\","
                                   "\"read\":true,\"write\":false}", i ? "," : "", 2 * i + 1, i);
         }

@@ -1,0 +1,21 @@
+{
+  "capsule_format": "0.1",
+  "ir_version": "0.4",
+  "system_id": "t.claim",
+  "source": "claim.lir.json",
+  "schema": {
+    "id": "t.claims",
+    "version": 1,
+    "layout_generation": 1
+  },
+  "numeric_profile": "fixed_q32_v1",
+  "fields": [
+    {"id": 1, "name": "kind", "type": "u32", "read": true, "write": false},
+    {"id": 2, "name": "want", "type": "u32", "read": true, "write": false},
+    {"id": 3, "name": "owner", "type": "u32", "read": true, "write": true},
+    {"id": 4, "name": "far", "type": "u32", "read": true, "write": true}
+  ],
+  "schedule": {"phase": "simulate", "after": [], "before": [], "parallel": "serial"},
+  "limits": {"max_instructions": 64, "max_rows": 4096, "allocation": "forbidden"},
+  "tests": ["claim.test.json"]
+}

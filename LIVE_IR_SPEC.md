@@ -72,7 +72,7 @@ M0 contains one table with fixed rows and fields. A later schema change is a tra
 
 ## 7. Resource limits
 
-Initial, configurable defensive limits: 256 KiB IR source, JSON nesting depth 32, 4,096 instructions, 4,096 virtual registers, 256 bound fields, and 1,000,000 rows for the supplied stress harness. These are acceptance/configuration values, not fundamental engine limits. Caps must be checked before proportional allocation and before multiplication of sizes. Oversized input yields a structured resource error.
+Initial, configurable defensive limits: 256 KiB IR source, JSON nesting depth 32, 4,096 instructions, 4,096 virtual registers, 1,024 bound field lanes (256 before 2026-10-19; see "IR 0.4"), and 1,000,000 rows for the supplied stress harness. These are acceptance/configuration values, not fundamental engine limits. Caps must be checked before proportional allocation and before multiplication of sizes. Oversized input yields a structured resource error.
 
 Execution work is bounded by row count × instruction count. The supervisor also applies a wall-time watchdog to candidate workers. A wall-clock timeout is a tool failure and must never alter authoritative deterministic simulation state or select a gameplay outcome.
 
@@ -179,8 +179,53 @@ Integer families wrap; q32 saturates and rounds to nearest even; division by zer
 
 **Native.** (2026-10-18) `su_native_compile` lowers a 0.3 module without entity operations with the scalar capability set (`backends/native/su_native_lower03.cpp`): constants, loads, stores, bool and u32 operations, i32/i64 arithmetic, compares, selects, saturating q32 add/sub/neg/abs, the q32 multiply and the v3/quat moves are emitted inline; division, shifts, square roots and the vector and quaternion operations call C helpers (`su_native_ops03.c`) built on the exact functions of `src/ir/su_num_fast.h`. When the VM plan builder proves an identity-row guard, the kernel uses it too. An AVX2 request for a 0.3 module is refused with `SU_E_CAPABILITY_DENIED`, reason `ir_0_3_avx2_not_lowered` (`world.specialize` with backend `auto` selects scalar); a 0.3 module with entity operations is refused like 0.2 (`ir_0_2_not_lowered`) and stays on the VM tier. Evidence: `ir03_native_diff` (600 random programs, kernel lanes against the VM) and the racer digests with `racer_microcosm --native`.
 
-**Resource bounds.** The 0.1 limits apply (4,096 instructions and registers, 256 lanes). The 0.3 register file adds at most 4,096 x 32 bytes per context. Execution remains bounded by rows x instructions; the most expensive operations (`v3_len`, `v3_normalize`, `quat_normalize`, `quat_integrate`) run a fixed-size integer square root (at most 64 bit-pair steps) and 128/64 divisions.
+**Resource bounds.** The 0.1 limits apply (4,096 instructions and registers, 256 lanes; 1,024 since 2026-10-19). The 0.3 register file adds at most 4,096 x 32 bytes per context. Execution remains bounded by rows x instructions; the most expensive operations (`v3_len`, `v3_normalize`, `quat_normalize`, `quat_integrate`) run a fixed-size integer square root (at most 64 bit-pair steps) and 128/64 divisions.
 
 **Evidence.** `test_num` (numeric library), `num_model` (independent Python model, 2,460,000 records), `ir03` (verifier rejections with exact codes and pointers, lane layout, hash invariants and a pinned golden, VM known answers, VM defensive checks), `ir03_diff` (300 seeded random programs covering all 100 operations of a 0.3 module, real verifier and VM against an independent interpreter, corpus SHA-256 printed).
 
 **Not in 0.3:** trigonometry, control flow, cross-row reads, floating point, native lowering of 0.3 operations, typed fields in host capsule records (see `docs/SPACE3D.md` for the host operator path), and migrations that add, rename or transform typed lanes (untested; a migration sees lanes as u32 fields).
+
+## IR 0.4 (bit operations, row filter, cross-row reads)
+
+Status: implemented in the verifier, both VM tiers and (except cross-row reads) the native scalar lowering (2026-10-19). Every 0.1, 0.2 and 0.3 rule is unchanged; modules of those versions keep their semantic hashes byte for byte, and an operation or key added here is refused in them (`SU_E_UNKNOWN_OPCODE`, or `SU_E_TYPE` at `/row_filter`).
+
+**Version and profile.** `ir_version` `"0.4"` in both documents, numeric profile `fixed_q32_v1`, field types as in 0.3. Every 0.3 operation is valid in 0.4.
+
+**Operations.** Frozen codes in `include/sutekh/ir.h`; operand table rows in `src/ir/su_ops03.c` (`su_op_min_minor` is 4 for them).
+
+| op (code) | JSON keys | result |
+|---|---|---|
+| `and_u32` (48), `or_u32` (49), `xor_u32` (50) | `a`, `b` (u32) | u32 bitwise |
+| `not_u32` (51) | `a` | u32 complement |
+| `shl_u32` (52), `shr_u32` (53) | `a`, `n` (u32) | `n >= 32`: 0. Else `a << n` mod 2^32, logical `a >> n` |
+| `div_u32` (54), `rem_u32` (55) | `a`, `b` | `b = 0`: div 0, rem `a`. Else truncating quotient and remainder (so `div * b + rem = a` always) |
+| `and_i64` (56), `or_i64` (57), `xor_i64` (58) | `a`, `b` (i64) | i64 bitwise on the two's-complement bits |
+| `not_i64` (59) | `a` | i64 complement |
+| `gather_u32` (240), `gather_i32` (241), `gather_i64` (242), `gather_q32` (243) | `field`, `slot` (u32) | the field's value in the row at `slot` in the system's entry state; 0 when `slot` is not a row of the table |
+| `find_eq_u32` (245) | `field` (u32 field), `key` (u32), `span` (constant 1..4096) | the lowest slot `s < min(span, rows)` whose `field` equals `key` in the entry state, else `0xFFFFFFFF` |
+
+A v3 of another row is three `gather_q32`. The field of a gather or `find_eq_u32` must be declared readable (`SU_E_UNDECLARED_READ` otherwise) and have the operation's type (`SU_E_TYPE`); it counts as a read of that field for effects and scheduling. `span` outside 1..4096 is `SU_E_TYPE` at `/instructions/<i>/span`.
+
+**Row filter.** An optional top-level IR key `"row_filter": {"field": F, "equals": V, "mask": M}` (`mask` optional, default `0xFFFFFFFF`). A live row runs the body only when `(F & M) == V`, with `F` read from the entry state. Any other live row executes no instruction, emits nothing, and keeps the entry values of every writable lane (the executor copies them from the inputs, so staging stays fully defined). Dead rows are skipped as before. Rules (all stage 5, before the instructions): unknown or missing keys and JSON types are `SU_E_TYPE` under `/row_filter`; `V & ~M != 0` (no row could run) is `SU_E_TYPE` at `/row_filter/equals`; `F` undeclared or not readable is `SU_E_UNDECLARED_READ` at `/row_filter/field`; `F` not `u32` is `SU_E_TYPE` there; with a filter every writable field must also be readable (`SU_E_UNDECLARED_READ` at `/row_filter`). The filter reads `F` and every writable lane, so `su_effects_derive` lists them as reads. The filter tests one masked value: "kind is A or B" is expressible only when the kinds are bit flags sharing a bit no other kind has (`mask` = that bit, `equals` = that bit); otherwise select in the body.
+
+**Encoding and hash.** `gather_*`: `dst`, `a` = field table index (lane 0), `b` = slot register. `find_eq_u32`: `dst`, `a` = field index, `b` = key register, `c` = span. Artifact format 4 (`SU_ARTIFACT_FORMAT_VERSION_0_4`): the format 3 encoding with version string `"0.4"` and, after `max_events_per_row`, the row filter (u32 present flag; when present the field's lane-0 ID, the mask and the value). Field operands of gathers hash as field IDs like loads. `SuLirModule` records `has_row_filter`, `row_filter_field` (table index), `row_filter_mask`, `row_filter_value` and `uses_gather`.
+
+**Whole-table view.** Chunked execution invokes the VM on slices of the table, but a gather must see every row. `su_vm_context_set_table_view(ctx, table)` (`src/vm/su_vm.h`) gives the context an `SuInvocation` over the whole table (the module's readable fields, row index = slot), checked at each invocation of a module that gathers: shape, generation, one row count, no overlap with any staging column. Without a view the invocation is the table, which is accepted only when it starts at slot 0 (`base_slot` 0), so a chunk can never silently gather from itself (`SU_E_INVALID_ARGUMENT`). `su_vm_run_system` uses its own whole-table invocation; the chunked runners (`su_jobs_run_system_chunked`, the entity runtime) set the view per chunk.
+
+**Determinism.** Every IR 0.4 read is a pure function of the system's entry state (the committed state after the previous system), which no chunk of the same system can modify: staging never aliases the inputs, and the wrapper checks that the table view does not overlap staging. Results therefore do not depend on chunk size, worker count, completion order or tier. `find_eq_u32` scans slots in ascending order and returns the first match, so it is a deterministic order statistic, not a race. Rollback and replay re-run systems on restored state and reproduce the same values; snapshots need nothing new because nothing is cached between invocations.
+
+**Shared state between rows ("claims").** A system can still write only its own row; IR 0.4 makes cross-row protocols expressible as a sequence of systems, each reading the previous one's committed output:
+
+1. claimants (filter: their kind) store the slot of the resource they want, or a sentinel, in a `want` field;
+2. resources (filter: resource kind) compute `owner = find_eq_u32(want, slot_u32, span)`, the lowest-slot claimant, and update their own state (for example taken, respawn timer);
+3. claimants read `gather_u32(owner, want)` and know whether they won (`== slot_u32`).
+
+The winner is "first claimant by slot order", identical on every machine, tier and chunking. Costs: `find_eq_u32` scans at most `span` (<= 4,096) rows per executing row, so a system's work stays bounded by rows x instructions x 4,096; use a row filter so only resource rows pay it. Dead rows hold zeros, so a key of 0 can match a dead slot: use keys that are never 0 (for example slot + 1) or check the found slot. Not in 0.4: general reductions (count, min, sum over matching rows), more than one match per scan, and writes to other rows.
+
+**VM.** Both tiers implement every 0.4 operation with the same arithmetic (`su_u32_shl`/`shr`/`div`/`rem` in `src/ir/su_ops03.h`). Gathers are never hoisted and never part of an identity-row guard; the filter test runs before the guard, and filtered rows are copied like guarded rows. `ir03_diff --ir04` checks both tiers against the independent interpreter.
+
+**Native.** `su_native_compile` lowers 0.4 modules without cross-row reads: the bit operations and div/rem inline (shift counts >= 32 and zero divisors selected explicitly), and the row filter as a per-row mask test that skips to the next row after the writable lanes were copied as whole columns. A module with `gather_*` or `find_eq_u32` is refused with `SU_E_CAPABILITY_DENIED`, reason `ir_0_4_gather_not_lowered` (the kernel ABI carries only the call's rows), and stays on the VM tiers. Evidence: `ir04_native_diff` (400 programs: the 200 without cross-row reads compile and match the VM lane for lane, the 200 with them are refused).
+
+**Field budget.** `SU_LIMIT_FIELDS` is 1,024 storage lanes per capsule and per world (256 before 2026-10-19). No persisted format stores the limit (snapshots, replays and digests carry the actual field count), so existing snapshots, replays and hashes are unchanged; a world with more than 256 lanes cannot be loaded by an older build.
+
+**Evidence.** `ir04` (verifier rejections with exact codes and pointers, hash coverage of the filter, VM known answers on both tiers and through `su_jobs_run_system_chunked` with 3-row chunks, table-view wrapper checks), `host04` (the claim pattern through the host API over three entity chunks, digests of two identical runs equal), `ir04_diff` and `ir04_native_diff` (`tests/ir03/ir03_diff.py --ir04`: random programs over every 0.4 operation, half of them filtered, against an independent Python interpreter).

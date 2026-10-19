@@ -23,6 +23,12 @@ function(_sutekh_numeric3d_late)
         target_include_directories(test_host03 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
         sutekh_apply_warnings(test_host03)
         add_test(NAME host03 COMMAND test_host03 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        # IR 0.4 row filter and cross-row reads through the chunked entity runtime.
+        add_executable(test_host04 "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir04/test_host04.c")
+        target_link_libraries(test_host04 PRIVATE su_host)
+        target_include_directories(test_host04 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        sutekh_apply_warnings(test_host04)
+        add_test(NAME host04 COMMAND test_host04 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
     # 6dof_racer_microcosm: the engine's schedule executor (su_agent) running two IR 0.3 systems and space3d.query.
     if(TARGET su_agent)
@@ -79,6 +85,11 @@ if(SUTEKH_NATIVE)
         add_test(NAME ir03_native_diff COMMAND "${Python3_EXECUTABLE}" -I
                  "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/ir03_diff.py" --driver $<TARGET_FILE:ir03_native_driver>
                  --work "${CMAKE_BINARY_DIR}/ir03_native_diff_scratch" --programs 600 --rows 48 --seed 11 --native)
+        # IR 0.4: bit operations and row filters must match the VM; cross-row reads must be refused.
+        add_test(NAME ir04_native_diff COMMAND "${Python3_EXECUTABLE}" -I
+                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/ir03_diff.py" --driver $<TARGET_FILE:ir03_native_driver>
+                 --work "${CMAKE_BINARY_DIR}/ir04_native_diff_scratch" --programs 400 --rows 48 --seed 13 --native
+                 --ir04)
     endif()
 endif()
 if(Python3_Interpreter_FOUND)
@@ -86,7 +97,16 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME ir03_diff COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/ir03_diff.py"
              --driver $<TARGET_FILE:ir03_driver> --work "${CMAKE_BINARY_DIR}/ir03_diff_scratch"
              --programs 300 --rows 48 --seed 1)
+    # IR 0.4 programs (bit operations, gather/find_eq, row filters) against the same independent interpreter.
+    add_test(NAME ir04_diff COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/ir03_diff.py"
+             --driver $<TARGET_FILE:ir03_driver> --work "${CMAKE_BINARY_DIR}/ir04_diff_scratch"
+             --programs 300 --rows 48 --seed 2 --ir04)
 endif()
+# IR 0.4 verifier, VM known answers, row filter, chunked cross-row reads.
+add_executable(test_ir04 tests/ir04/test_ir04.c)
+target_link_libraries(test_ir04 PRIVATE su_vm su_jobs)
+sutekh_apply_warnings(test_ir04)
+add_test(NAME ir04 COMMAND test_ir04 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # space3d (docs/SPACE3D.md): narrow phase, broadphase and the space3d.query host operator.
 add_library(su_space3d STATIC profiles/space3d/native/space3d_geom.c profiles/space3d/native/space3d_ops.c)

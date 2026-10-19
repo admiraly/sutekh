@@ -307,6 +307,17 @@ static void ent_chunk(uint32_t chunk, uint32_t worker, void *argp) {
     outs.failed_insn = UINT32_MAX;
     outs.reserved = 0u;
     outs.bindings = so;
+    if (e->mod->uses_gather) {
+        /* IR 0.4 cross-row reads see the whole table (entry state), never just this chunk. */
+        SuInvocation whole = inv;
+        whole.bindings = e->base_in;
+        whole.row_count = e->rows;
+        st = su_vm_context_set_table_view(e->ctx[worker], &whole);
+        if (st != SU_OK) {
+            e->status[chunk] = st;
+            return;
+        }
+    }
     e->status[chunk] = su_vm_invoke_v1(e->ctx[worker], &inv, &outs);
 }
 

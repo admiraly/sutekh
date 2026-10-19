@@ -1,0 +1,15 @@
+{
+  "ir_version": "0.4",
+  "system_id": "t.claim",
+  "numeric_profile": "fixed_q32_v1",
+  "query": "t.claims",
+  "row_filter": {"field": "kind", "equals": 2},
+  "instructions": [
+    {"op": "slot_u32", "dst": "me"},
+    {"op": "find_eq_u32", "dst": "first", "field": "want", "key": "me", "span": 4096},
+    {"op": "const_u32", "dst": "last", "value": 2099},
+    {"op": "gather_u32", "dst": "w_last", "field": "want", "slot": "last"},
+    {"op": "store_u32", "field": "owner", "src": "first"},
+    {"op": "store_u32", "field": "far", "src": "w_last"}
+  ]
+}

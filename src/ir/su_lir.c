@@ -131,7 +131,10 @@ typedef struct IrInfo {
     Str query;
     Str profile;
     const SuJsonValue *insns;
-    uint32_t ir_minor;           /* 1 for "0.1", 2 for "0.2" */
+    uint32_t ir_minor;           /* 1 for "0.1", 2 for "0.2", 3 for "0.3", 4 for "0.4" */
+    const SuJsonValue *row_filter; /* IR 0.4 optional "row_filter" object, NULL when absent */
+    uint32_t filter_mask;
+    uint32_t filter_value;
 } IrInfo;
 
 typedef struct CapField {
@@ -442,6 +445,8 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
             ci->ir_version_minor = 2u;
         } else if (str_is(jstr(v), SU_IR_VERSION_STRING_0_3)) {
             ci->ir_version_minor = 3u;
+        } else if (str_is(jstr(v), SU_IR_VERSION_STRING_0_4)) {
+            ci->ir_version_minor = 4u;
         } else {
             return set_diag(d, SU_E_TYPE, "/ir_version", "unsupported capsule ir_version");
         }
@@ -601,10 +606,12 @@ static uint32_t check_capsule(SuDiag *d, const SuJsonValue *root, CapInfo *ci) {
 }
 
 static uint32_t check_ir(SuDiag *d, const SuJsonValue *root, IrInfo *ii) {
+    /* Five required keys; "row_filter" (IR 0.4) is optional. */
     static const KeySpec top[] = {
         {"ir_version", K_STRING}, {"system_id", K_NAME}, {"numeric_profile", K_STRING},
-        {"query", K_NAME}, {"instructions", K_ARRAY}};
-    uint32_t rc = check_keys(d, root, "", top, sizeof top / sizeof top[0]);
+        {"query", K_NAME}, {"instructions", K_ARRAY}, {"row_filter", K_OBJECT}};
+    static const KeySpec filter_keys[] = {{"field", K_NAME}, {"equals", K_U32}, {"mask", K_U32}};
+    uint32_t rc = check_keys_opt(d, root, "", top, sizeof top / sizeof top[0], 5u);
     if (rc != SU_OK) {
         return rc;
     }
@@ -614,6 +621,8 @@ static uint32_t check_ir(SuDiag *d, const SuJsonValue *root, IrInfo *ii) {
         ii->ir_minor = 2u;
     } else if (str_is(jstr(su_json_member(root, "ir_version")), SU_IR_VERSION_STRING_0_3)) {
         ii->ir_minor = 3u;
+    } else if (str_is(jstr(su_json_member(root, "ir_version")), SU_IR_VERSION_STRING_0_4)) {
+        ii->ir_minor = 4u;
     } else {
         return set_diag(d, SU_E_TYPE, "/ir_version", "unsupported ir_version");
     }
@@ -628,6 +637,28 @@ static uint32_t check_ir(SuDiag *d, const SuJsonValue *root, IrInfo *ii) {
     ii->query = jstr(su_json_member(root, "query"));
     ii->profile = jstr(su_json_member(root, "numeric_profile"));
     ii->insns = su_json_member(root, "instructions");
+    ii->row_filter = su_json_member(root, "row_filter");
+    if (ii->row_filter != NULL) {
+        uint64_t mask = 0xFFFFFFFFu, eq = 0;
+        if (ii->ir_minor < 4u) {
+            return set_diag(d, SU_E_TYPE, "/row_filter", "row_filter requires ir_version 0.4");
+        }
+        rc = check_keys_opt(d, ii->row_filter, "/row_filter", filter_keys, sizeof filter_keys / sizeof filter_keys[0],
+                            2u);
+        if (rc != SU_OK) {
+            return rc;
+        }
+        if (su_json_member(ii->row_filter, "mask") != NULL) {
+            su_json_get_uint(su_json_member(ii->row_filter, "mask"), &mask);
+        }
+        su_json_get_uint(su_json_member(ii->row_filter, "equals"), &eq);
+        if ((eq & ~mask) != 0u) {
+            return set_diag(d, SU_E_TYPE, "/row_filter/equals",
+                            "row_filter equals has bits outside mask, so no row would ever run");
+        }
+        ii->filter_mask = (uint32_t)mask;
+        ii->filter_value = (uint32_t)eq;
+    }
     return SU_OK;
 }
 
@@ -786,8 +817,9 @@ typedef struct Body {
     RegDef *regs;
     uint32_t nregs;
     SuInsn *out;
-    uint32_t ir_minor;   /* 1 or 2 */
+    uint32_t ir_minor;   /* 1..4 */
     uint32_t uses_ops;   /* any 0.2 op seen */
+    uint32_t uses_gather; /* any 0.4 cross-row read (gather_*, find_eq_u32) seen */
 } Body;
 
 /* One IR 0.3 instruction (table-driven, su_ops03.h). Check order within the instruction matches 0.1: keys and
@@ -817,7 +849,7 @@ static uint32_t check_insn03(SuDiag *d, const SuJsonValue *ins, const char *base
         case SU_O_CI32: keys[nk].kind = K_I32; break;
         case SU_O_CI64: case SU_O_CQNUM: keys[nk].kind = K_I64; break;
         case SU_O_CQDEN: keys[nk].kind = K_UINT_POS; break;
-        case SU_O_AXIS: keys[nk].kind = K_U32; break;
+        case SU_O_AXIS: case SU_O_CSPAN: keys[nk].kind = K_U32; break;
         default: keys[nk].kind = K_NAME; break;
         }
         nk++;
@@ -833,6 +865,11 @@ static uint32_t check_insn03(SuDiag *d, const SuJsonValue *ins, const char *base
         if (o->kind == SU_O_AXIS && u32_of(su_json_member(ins, o->key)) >= o->type) {
             ptr_child(ptr, sizeof ptr, base, o->key, strlen(o->key));
             return set_diag(d, SU_E_TYPE, ptr, "axis must be 0..%u", (unsigned)(o->type - 1u));
+        }
+        if (o->kind == SU_O_CSPAN &&
+            (u32_of(su_json_member(ins, o->key)) < 1u || u32_of(su_json_member(ins, o->key)) > SU_FIND_SPAN_MAX)) {
+            ptr_child(ptr, sizeof ptr, base, o->key, strlen(o->key));
+            return set_diag(d, SU_E_TYPE, ptr, "span must be 1..%u", (unsigned)SU_FIND_SPAN_MAX);
         }
     }
     if (op->code == SU_OP_CONST_Q32) {
@@ -881,17 +918,17 @@ static uint32_t check_insn03(SuDiag *d, const SuJsonValue *ins, const char *base
         const SuOp03Operand *o = &op->o[k];
         Str fname;
         uint32_t fi = SU_OPERAND_NONE;
-        if (o->kind != SU_O_FREAD && o->kind != SU_O_FWRITE) {
+        if (o->kind != SU_O_FREAD && o->kind != SU_O_FWRITE && o->kind != SU_O_FGATHER) {
             continue;
         }
         fname = jstr(su_json_member(ins, o->key));
         ptr_child(ptr, sizeof ptr, base, o->key, strlen(o->key));
         if (!find_field(b->table, b->nf, fname, &fi)) {
-            return set_diag_ev(d, o->kind == SU_O_FREAD ? SU_E_UNDECLARED_READ : SU_E_UNDECLARED_WRITE, ptr,
+            return set_diag_ev(d, o->kind == SU_O_FWRITE ? SU_E_UNDECLARED_WRITE : SU_E_UNDECLARED_READ, ptr,
                                "declared field", "not declared", "field '%.*s' is not declared in the capsule",
                                clampi(fname.n), fname.p);
         }
-        if (o->kind == SU_O_FREAD && !(b->table[fi].access & SU_ACCESS_READ)) {
+        if (o->kind != SU_O_FWRITE && !(b->table[fi].access & SU_ACCESS_READ)) {
             return set_diag_ev(d, SU_E_UNDECLARED_READ, ptr, "read:true", "read:false",
                                "field '%.*s' is not readable", clampi(fname.n), fname.p);
         }
@@ -941,7 +978,11 @@ static uint32_t check_insn03(SuDiag *d, const SuJsonValue *ins, const char *base
         case SU_O_REG:
         case SU_O_FREAD:
         case SU_O_FWRITE:
+        case SU_O_FGATHER:
             slot_val[o->slot] = idx[k];
+            break;
+        case SU_O_CSPAN:
+            slot_val[o->slot] = u32_of(cv);
             break;
         case SU_O_CI32:
             slot_val[o->slot] = (uint32_t)((uint64_t)i64_of(cv) & 0xFFFFFFFFu);
@@ -963,6 +1004,10 @@ static uint32_t check_insn03(SuDiag *d, const SuJsonValue *ins, const char *base
         default:
             break;
         }
+    }
+    if (op->code == SU_OP_GATHER_U32 || op->code == SU_OP_GATHER_I32 || op->code == SU_OP_GATHER_I64 ||
+        op->code == SU_OP_GATHER_Q32 || op->code == SU_OP_FIND_EQ_U32) {
+        b->uses_gather = 1u;
     }
     out->op = op->code;
     out->dst = slot_val[SU_S_DST];
@@ -1001,7 +1046,7 @@ static uint32_t check_instructions(SuDiag *d, const IrInfo *ii, Body *b) {
         ptr_child(ptr, sizeof ptr, base, "op", 2);
         if (spec == NULL && b->ir_minor >= 3u) {
             const SuOp03 *op3 = su_op03_by_name(jstr(opv).p, jstr(opv).n);
-            if (op3 != NULL) {
+            if (op3 != NULL && su_op_min_minor(op3) <= b->ir_minor) {
                 rc = check_insn03(d, ins, base, op3, b, &b->out[i]);
                 if (rc != SU_OK) {
                     return rc;
@@ -1197,12 +1242,22 @@ static void compute_semantic(SuLirModule *m, Str profile, Str system, Str query)
         /* 0.2 and later: ir_version string, then the per-row caps. 0.1 hashes do not include these. */
         static const char ver02[] = SU_IR_VERSION_STRING_0_2;
         static const char ver03[] = SU_IR_VERSION_STRING_0_3;
+        static const char ver04[] = SU_IR_VERSION_STRING_0_4;
         Str sv;
-        sv.p = m->ir_version_minor >= 3u ? ver03 : ver02;
+        sv.p = m->ir_version_minor >= 4u ? ver04 : (m->ir_version_minor >= 3u ? ver03 : ver02);
         sv.n = sizeof ver02 - 1u;
         hash_str(&c, sv);
         hash_u32(&c, m->max_struct_per_row);
         hash_u32(&c, m->max_events_per_row);
+    }
+    if (m->ir_version_minor >= 4u) {
+        /* 0.4 only (format 4): the row filter (present flag, then field ID, mask and value). */
+        hash_u32(&c, m->has_row_filter);
+        if (m->has_row_filter) {
+            hash_u32(&c, m->fields[m->row_filter_field].id);
+            hash_u32(&c, m->row_filter_mask);
+            hash_u32(&c, m->row_filter_value);
+        }
     }
     hash_u32(&c, m->insn_count);
     for (i = 0; i < m->insn_count; i++) {
@@ -1220,7 +1275,7 @@ static void compute_semantic(SuLirModule *m, Str profile, Str system, Str query)
             const SuOp03 *op = su_op03_by_code(in->op);
             uint32_t k;
             for (k = 0; op != NULL && k < op->n; k++) {
-                if (op->o[k].kind == SU_O_FREAD || op->o[k].kind == SU_O_FWRITE) {
+                if (op->o[k].kind == SU_O_FREAD || op->o[k].kind == SU_O_FWRITE || op->o[k].kind == SU_O_FGATHER) {
                     w[1u + op->o[k].slot] = m->fields[w[1u + op->o[k].slot]].id;
                 }
             }
@@ -1291,6 +1346,7 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     IrInfo ii;
     Body b;
     uint32_t nf, i;
+    uint32_t filter_idx = 0;
     size_t ninsn;
     SuLirModule m;
 
@@ -1472,6 +1528,35 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     }
     qsort(b.table, nf, sizeof *b.table, cmp_field);
 
+    /* Stage 5 (IR 0.4): the row filter names a readable u32 field, and every writable field is readable (a
+     * filtered-out row keeps its entry values, which the executor copies from the input lanes). */
+    if (ii.row_filter != NULL) {
+        Str fname = jstr(su_json_member(ii.row_filter, "field"));
+        if (!find_field(b.table, nf, fname, &filter_idx)) {
+            rc = set_diag_ev(d, SU_E_UNDECLARED_READ, "/row_filter/field", "declared field", "not declared",
+                             "row_filter field '%.*s' is not declared in the capsule", clampi(fname.n), fname.p);
+            goto done;
+        }
+        if (!(b.table[filter_idx].access & SU_ACCESS_READ)) {
+            rc = set_diag_ev(d, SU_E_UNDECLARED_READ, "/row_filter/field", "read:true", "read:false",
+                             "row_filter field '%.*s' is not readable", clampi(fname.n), fname.p);
+            goto done;
+        }
+        if (b.table[filter_idx].vtype != SU_TYPE_U32) {
+            rc = set_diag_ev(d, SU_E_TYPE, "/row_filter/field", "u32", su_type_name(b.table[filter_idx].vtype),
+                             "row_filter field '%.*s' must have type u32", clampi(fname.n), fname.p);
+            goto done;
+        }
+        for (i = 0; i < nf; i++) {
+            if ((b.table[i].access & SU_ACCESS_WRITE) && !(b.table[i].access & SU_ACCESS_READ)) {
+                rc = set_diag_ev(d, SU_E_UNDECLARED_READ, "/row_filter", "read:true", "read:false",
+                                 "with a row_filter, writable field '%.*s' must also be readable (skipped rows keep "
+                                 "their values)", clampi(b.table[i].name.n), b.table[i].name.p);
+                goto done;
+            }
+        }
+    }
+
     /* Stage 6: instructions in ascending order. */
     rc = check_instructions(d, &ii, &b);
     if (rc != SU_OK) {
@@ -1490,7 +1575,8 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
 
     /* Build the module. */
     memset(&m, 0, sizeof m);
-    m.artifact_format = ii.ir_minor >= 3u   ? SU_ARTIFACT_FORMAT_VERSION_0_3
+    m.artifact_format = ii.ir_minor >= 4u   ? SU_ARTIFACT_FORMAT_VERSION_0_4
+                        : ii.ir_minor >= 3u ? SU_ARTIFACT_FORMAT_VERSION_0_3
                         : ii.ir_minor >= 2u ? SU_ARTIFACT_FORMAT_VERSION_0_2
                                             : SU_ARTIFACT_FORMAT_VERSION;
     m.ir_version_minor = ii.ir_minor;
@@ -1501,6 +1587,13 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     m.capabilities = ci.capabilities;
     m.max_events_per_row = ci.max_events_per_row;
     m.uses_entity_ops = b.uses_ops;
+    m.uses_gather = b.uses_gather;
+    if (ii.row_filter != NULL) {
+        m.has_row_filter = 1u;
+        m.row_filter_field = filter_idx;
+        m.row_filter_mask = ii.filter_mask;
+        m.row_filter_value = ii.filter_value;
+    }
     m.system_id = dup_str(ii.system);
     m.query = dup_str(ii.query);
     m.numeric_profile = dup_str(ii.profile);

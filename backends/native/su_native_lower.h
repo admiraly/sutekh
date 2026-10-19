@@ -91,6 +91,19 @@
 #define SU_NLOW_OP_MAKE_QUAT UINT32_C(224)
 #define SU_NLOW_OP_QUAT_GET UINT32_C(225)
 #define SU_NLOW_OP_SELECT_QUAT UINT32_C(231)
+/* IR 0.4 u32 and i64 bit operations (inline). */
+#define SU_NLOW_OP_AND_U32 UINT32_C(48)
+#define SU_NLOW_OP_OR_U32 UINT32_C(49)
+#define SU_NLOW_OP_XOR_U32 UINT32_C(50)
+#define SU_NLOW_OP_NOT_U32 UINT32_C(51)
+#define SU_NLOW_OP_SHL_U32 UINT32_C(52)
+#define SU_NLOW_OP_SHR_U32 UINT32_C(53)
+#define SU_NLOW_OP_DIV_U32 UINT32_C(54)
+#define SU_NLOW_OP_REM_U32 UINT32_C(55)
+#define SU_NLOW_OP_AND_I64 UINT32_C(56)
+#define SU_NLOW_OP_OR_I64 UINT32_C(57)
+#define SU_NLOW_OP_XOR_I64 UINT32_C(58)
+#define SU_NLOW_OP_NOT_I64 UINT32_C(59)
 #define SU_NLOW_HELPER_SLOTS 256u
 
 /* field_access bits (same values as SU_ACCESS_READ / SU_ACCESS_WRITE). */
@@ -124,6 +137,15 @@ typedef struct SuNativeLowerInput {
      * contains them. */
     uint32_t pre_count;
     const uint32_t *pre_insns;
+    /* IR 0.4 row filter (has_filter 0 = none): a row runs only when (lane filter_field & filter_mask) ==
+     * filter_value; every other row keeps its input values in the writable lanes filter_lanes[0..filter_count),
+     * which are copied as whole columns before the loop (as the identity lanes are). */
+    uint32_t has_filter;
+    uint32_t filter_field;
+    uint32_t filter_mask;
+    uint32_t filter_value;
+    uint32_t filter_count;
+    const uint32_t *filter_lanes;
 } SuNativeLowerInput;
 
 typedef struct SuNativeLowered {
