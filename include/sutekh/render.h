@@ -244,7 +244,19 @@ SU_RENDER_API void su_trail_build(const SuTrail *t, double now_s, SuWorldPos cam
  *
  * Sprite uv conventions: a camera-facing sprite maps uv_rect (u0, v0, u1, v1) with (u0, v0) at the top left as an
  * image is stored. An axis sprite has U across and V along the axis (v0 at the tail, v1 at the head). A textured trail
- * has U along its length and V across it (see SuTrailTex). */
+ * has U along its length and V across it (see SuTrailTex).
+ *
+ * Soft particles (SuFxBatch.soft_distance > 0): the sprite fades out as it nears the scene surface behind it, so it does
+ * not show a hard line where it cuts through geometry. With d = (view depth of the scene at the pixel) - (view depth of
+ * the sprite fragment), both along the camera axis in world units, c.a is multiplied by clamp(d / soft_distance, 0, 1)
+ * (both blend modes). Background pixels (sky, clear) count as infinitely far. 0 = hard intersections, as before.
+ *
+ * Sorting (SU_FX_BATCH_SORT): the quads (6 vertices each, as su_fx_sprite and su_fx_sprite_axis write them) of every
+ * batch with this flag are sorted together back to front by the distance of their centre from the camera and drawn
+ * with their own batch's texture, blend, wrap and softness, at the position of the first sorted batch in the batch
+ * order (unsorted batches before and after it keep their order). So many premultiplied explosions with different
+ * textures interleave correctly. Ties keep submission order. A sorted batch whose vertex_count is not a multiple of 6 is
+ * drawn unsorted in place. Trails (su_trail_build_tex) are not quads: do not flag them. */
 typedef uint64_t SuRenderHandle;   /* a renderer resource (see "GPU resources" below); 0 = none */
 
 #define SU_FX_BLEND_ADD 0u
@@ -252,6 +264,7 @@ typedef uint64_t SuRenderHandle;   /* a renderer resource (see "GPU resources" b
 #define SU_FX_WRAP_CLAMP 0u
 #define SU_FX_WRAP_REPEAT 1u
 #define SU_FX_WRAP_MIRROR 2u
+#define SU_FX_BATCH_SORT 0x1u              /* sort this batch's quads back to front with the other sorted batches */
 
 typedef struct SuFxBatch {
     SuRenderHandle texture;            /* a READY 2D texture */
@@ -259,10 +272,12 @@ typedef struct SuFxBatch {
     uint32_t wrap_u, wrap_v;           /* SU_FX_WRAP_* */
     uint32_t first_vertex;             /* into SuRenderFrameDesc.fx_tex; a multiple of 3 */
     uint32_t vertex_count;             /* a multiple of 3 */
+    float soft_distance;               /* world units; > 0: soft particles (see above); 0 = hard, as before */
+    uint32_t flags;                    /* SU_FX_BATCH_*; 0 = drawn in batch order, as before */
 } SuFxBatch;
 
 /* A batch covering the vertices written to buffer since first_vertex (take first_vertex = buffer->count before
- * adding the sprites of one texture). */
+ * adding the sprites of one texture). soft_distance and flags are 0; set them on the result. */
 SU_RENDER_API SuFxBatch su_fx_batch(SuRenderHandle texture, uint32_t blend, uint32_t wrap_u, uint32_t wrap_v,
                                     uint32_t first_vertex, const SuFxBuffer *buffer_now);
 
@@ -736,6 +751,8 @@ typedef struct SuRenderStats {
     uint32_t fx_tex_vertices;      /* drawn */
     uint32_t fx_batches_drawn;
     uint32_t fx_batches_skipped;   /* texture not READY, not 2D, or bad range */
+    uint32_t fx_quads_sorted;      /* quads of SU_FX_BATCH_SORT batches sorted in the last frame */
+    uint32_t fx_sort_draws;        /* draw calls those sorted quads took (one per run of quads of the same batch) */
 } SuRenderStats;
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given

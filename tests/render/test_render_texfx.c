@@ -100,6 +100,8 @@ typedef struct Scene {
     SuQuatf sky_rot;
     float sky_lod;
     int sky;
+    const SuRenderInstance *inst;      /* debug instances (opaque geometry for the depth buffer) */
+    uint32_t inst_count;
 } Scene;
 
 static void scene_init(Scene *s) {
@@ -137,6 +139,8 @@ static int render(const Scene *s, uint8_t *out) {
     f.sky_rot = s->sky_rot;
     f.sky_lod = s->sky_lod;
     f.post = s->post;
+    f.debug_instances = s->inst;
+    f.debug_instance_count = s->inst_count;
     for (k = 0; k < 3; k++) {
         uint32_t st = su_render_frame_ex(g_r, &f);
         CHECK(st == SU_OK);
@@ -1233,6 +1237,140 @@ static void test_bc6h_gpu(void) {
            worst);
 }
 
+/* Soft particles: a sprite in front of an opaque wall fades with its distance to it. */
+static void test_soft_particles(void) {
+    uint8_t white[4 * 4];
+    SuFxVertex vtx[64];
+    SuFxBuffer fb = fxbuf(vtx, 64);
+    SuFxBatch bt;
+    SuRenderInstance wall;
+    SuRenderHandle h;
+    Scene s;
+    float col[4] = {0.5f, 0.5f, 0.5f, 1.0f};
+    static const float gaps[4] = {0.25f, 0.5f, 1.0f, 3.0f};
+    uint32_t i;
+    memset(white, 255, sizeof white);
+    h = make_tex(SU_TEX_RGBA8_UNORM, 2, 2, white);
+    memset(&wall, 0, sizeof wall);
+    wall.pos[2] = -16.0f; /* a 20 unit black box: its front face is the plane z = -6, filling the view centre */
+    wall.scale = 20.0f;
+    wall.rot[3] = 1.0f;
+    wall.color[3] = 1.0f;
+    wall.mesh = SU_MESH_BOX;
+    for (i = 0; i < 4u; i++) {
+        double fade = gaps[i] / 2.0 > 1.0 ? 1.0 : gaps[i] / 2.0;
+        double got;
+        uint32_t k;
+        scene_init(&s);
+        s.inst = &wall;
+        s.inst_count = 1;
+        fb.count = 0;
+        /* left: in front of the wall; right of the wall's edge nothing is behind it (half the sprite over the clear) */
+        su_fx_sprite(&fb, v3(0, 0, -6.0f + gaps[i]), 0.6f, 0.6f, 0.0f, col, NULL, camera_view(&s));
+        bt = su_fx_batch(h, (i & 1u) != 0u ? SU_FX_BLEND_PREMUL : SU_FX_BLEND_ADD, SU_FX_WRAP_CLAMP, SU_FX_WRAP_CLAMP, 0, &fb);
+        s.fx_tex = vtx;
+        s.fx_tex_count = fb.count;
+        s.batches = &bt;
+        s.batch_count = 1;
+        for (k = 0; k < 2u; k++) {
+            bt.soft_distance = k == 0u ? 0.0f : 2.0f;
+            CHECK(render(&s, g_img));
+            got = srgb_to_lin((double)px(g_img, W / 2, H / 2)[0] / 255.0);
+            printf("soft: gap %.2f, soft distance %.0f -> %.4f (expected %.4f)\n", gaps[i], (double)bt.soft_distance, got,
+                   k == 0u ? 0.5 : 0.5 * fade);
+            CHECK(fabs(got - (k == 0u ? 0.5 : 0.5 * fade)) < 0.01);
+        }
+    }
+    /* nothing behind the sprite (the clear colour): no fade whatever the distance */
+    scene_init(&s);
+    fb.count = 0;
+    su_fx_sprite(&fb, v3(0, 0, -6.0f), 0.6f, 0.6f, 0.0f, col, NULL, camera_view(&s));
+    bt = su_fx_batch(h, SU_FX_BLEND_ADD, SU_FX_WRAP_CLAMP, SU_FX_WRAP_CLAMP, 0, &fb);
+    bt.soft_distance = 100.0f;
+    s.fx_tex = vtx;
+    s.fx_tex_count = fb.count;
+    s.batches = &bt;
+    s.batch_count = 1;
+    CHECK(render(&s, g_img));
+    CHECK(near_i(px(g_img, W / 2, H / 2)[0], srgb8(0.5), 1));
+    CHECK(su_render_release(g_r, h) == SU_OK);
+}
+
+/* SU_FX_BATCH_SORT: quads of sorted batches interleave back to front across batches. */
+static void test_fx_sort(void) {
+    uint8_t red[4 * 4];
+    uint8_t blue[4 * 4];
+    uint8_t green[4 * 4];
+    SuFxVertex vtx[64];
+    SuFxBuffer fb = fxbuf(vtx, 64);
+    SuFxBatch bt[3];
+    SuRenderHandle hr;
+    SuRenderHandle hb;
+    SuRenderHandle hg;
+    SuRenderStats st;
+    Scene s;
+    float one[4] = {1, 1, 1, 1};
+    uint32_t i;
+    for (i = 0; i < 4u; i++) { /* opaque premultiplied texels */
+        red[i * 4u] = 255;
+        red[i * 4u + 1u] = red[i * 4u + 2u] = 0;
+        blue[i * 4u + 2u] = 255;
+        blue[i * 4u] = blue[i * 4u + 1u] = 0;
+        green[i * 4u + 1u] = 255;
+        green[i * 4u] = green[i * 4u + 2u] = 0;
+        red[i * 4u + 3u] = blue[i * 4u + 3u] = green[i * 4u + 3u] = 255;
+    }
+    hr = make_tex(SU_TEX_RGBA8_UNORM, 2, 2, red);
+    hb = make_tex(SU_TEX_RGBA8_UNORM, 2, 2, blue);
+    hg = make_tex(SU_TEX_RGBA8_UNORM, 2, 2, green);
+    scene_init(&s);
+    /* batch 0 (green, unsorted, drawn first); batch 1 red at z -4 (small) and -8 (large); batch 2 blue at -6 (medium)
+     * and -10 (largest). Back to front: blue -10, red -8, blue -6, red -4: rings blue, red, blue, red from the edge. */
+    su_fx_sprite(&fb, v3(0, 0, -12), 10.0f, 10.0f, 0.0f, one, NULL, camera_view(&s));
+    bt[0] = su_fx_batch(hg, SU_FX_BLEND_PREMUL, SU_FX_WRAP_CLAMP, SU_FX_WRAP_CLAMP, 0, &fb);
+    su_fx_sprite(&fb, v3(0, 0, -4), 0.4f, 0.4f, 0.0f, one, NULL, camera_view(&s));
+    su_fx_sprite(&fb, v3(0, 0, -8), 2.4f, 2.4f, 0.0f, one, NULL, camera_view(&s));
+    bt[1] = su_fx_batch(hr, SU_FX_BLEND_PREMUL, SU_FX_WRAP_CLAMP, SU_FX_WRAP_CLAMP, 6, &fb);
+    su_fx_sprite(&fb, v3(0, 0, -6), 1.2f, 1.2f, 0.0f, one, NULL, camera_view(&s));
+    su_fx_sprite(&fb, v3(0, 0, -10), 4.0f, 4.0f, 0.0f, one, NULL, camera_view(&s));
+    bt[2] = su_fx_batch(hb, SU_FX_BLEND_PREMUL, SU_FX_WRAP_CLAMP, SU_FX_WRAP_CLAMP, 18, &fb);
+    s.fx_tex = vtx;
+    s.fx_tex_count = fb.count;
+    s.batches = bt;
+    s.batch_count = 3;
+    /* unsorted: batch order, so blue (drawn last) covers the centre */
+    CHECK(render(&s, g_img));
+    CHECK(rgb_near(px(g_img, W / 2, H / 2), 0, 0, 255, 1));
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.fx_quads_sorted == 0u && st.fx_sort_draws == 0u);
+    /* sorted: centre red (z -4), then a blue ring (-6), a red ring (-8), a blue ring (-10), green outside (unsorted, first) */
+    bt[1].flags = bt[2].flags = SU_FX_BATCH_SORT;
+    CHECK(render(&s, g_img));
+    {
+        /* screen radius of a half size h at distance z: h / z * (H / 2) / tan(fov / 2) */
+        static const float zs[4] = {4.0f, 6.0f, 8.0f, 10.0f};
+        static const float hs[4] = {0.4f, 1.2f, 2.4f, 4.0f};
+        static const int want_red[4] = {1, 0, 1, 0};
+        double inner = 0.0;
+        uint32_t k;
+        for (k = 0; k < 4u; k++) {
+            double outer = hs[k] / zs[k] * (H / 2.0) / tan(FOV / 2.0);
+            int x = W / 2 + (int)((inner + outer) / 2.0);
+            const uint8_t *p = px(g_img, (uint32_t)x, H / 2);
+            printf("sort: ring %u at x %d -> %d %d %d (want %s)\n", k, x, p[0], p[1], p[2], want_red[k] ? "red" : "blue");
+            CHECK(want_red[k] ? rgb_near(p, 255, 0, 0, 1) : rgb_near(p, 0, 0, 255, 1));
+            inner = outer;
+        }
+        CHECK(rgb_near(px(g_img, 4, 4), 0, 255, 0, 1));
+    }
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.fx_quads_sorted == 4u && st.fx_sort_draws == 4u &&
+          st.fx_batches_drawn == 3u);
+    /* a sorted batch that is not made of quads is drawn in place, unsorted */
+    bt[2].vertex_count = 9;
+    CHECK(render(&s, g_img));
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.fx_quads_sorted == 2u && st.fx_batches_drawn == 3u);
+    CHECK(su_render_release(g_r, hr) == SU_OK && su_render_release(g_r, hb) == SU_OK && su_render_release(g_r, hg) == SU_OK);
+}
+
 static void test_skips_and_unchanged(void) {
     Scene s;
     SuFxVertex vtx[64];
@@ -1348,6 +1486,8 @@ int main(int argc, char **argv) {
     test_dds_2d();
     test_cube_sky();
     test_bc6h_gpu();
+    test_soft_particles();
+    test_fx_sort();
     test_skips_and_unchanged();
     CHECK(su_render_stats(g_r, &st) == SU_OK);
     if (validation) {
