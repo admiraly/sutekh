@@ -1272,38 +1272,94 @@ uint32_t su_render_texture_create_dds(SuRenderer *r, const SuDdsImage *img, uint
     return texture_create(r, &d, 0, out);
 }
 
-uint32_t su_render_env_from_dds(SuRenderer *r, const SuDdsImage *img, SuRenderHandle *out) {
+uint32_t su_render_env_from_dds_ex(SuRenderer *r, const SuDdsImage *img, uint32_t max_size, SuRenderHandle *out) {
     uint32_t m;
     uint32_t f;
-    uint32_t size = 0;
+    uint32_t pick = UINT32_MAX;
+    uint32_t src = 0;
+    uint32_t size;
     uint32_t st = SU_OK;
     float *faces;
-    if (r == NULL || img == NULL || out == NULL || img->faces != 6u) {
+    float *tmp = NULL;
+    if (max_size == 0u) {
+        max_size = 1024u;
+    }
+    if (r == NULL || img == NULL || out == NULL || img->faces != 6u || su_env_mip_count(max_size) == 0u) {
         return SU_E_INVALID_ARGUMENT;
     }
+    /* the largest square power-of-two mip in 8..max_size, else the smallest larger one (downsampled) */
     for (m = 0; m < img->mip_count; m++) {
         uint32_t w = img->width >> m;
         uint32_t h = img->height >> m;
-        if (w == h && su_env_mip_count(w) != 0u) {
-            size = w;
+        if (w != h || w < 8u || (w & (w - 1u)) != 0u) {
+            continue;
+        }
+        if (w <= max_size) {
+            pick = m;
+            src = w;
             break;
         }
+        pick = m;
+        src = w;
     }
-    if (size == 0u) {
+    if (pick == UINT32_MAX) {
         return SU_E_INVALID_ARGUMENT;
     }
+    size = src < max_size ? src : max_size;
     faces = malloc((size_t)6u * size * size * 4u * sizeof *faces);
     if (faces == NULL) {
         return SU_E_RESOURCE_LIMIT;
     }
-    for (f = 0; f < 6u && st == SU_OK; f++) {
-        st = su_dds_decode_rgba32f(img, f, m, faces + (size_t)f * size * size * 4u);
+    if (src != size) {
+        tmp = malloc((size_t)src * src * 4u * sizeof *tmp);
+        if (tmp == NULL) {
+            free(faces);
+            return SU_E_RESOURCE_LIMIT;
+        }
     }
+    for (f = 0; f < 6u && st == SU_OK; f++) {
+        float *dst = faces + (size_t)f * size * size * 4u;
+        if (tmp == NULL) {
+            st = su_dds_decode_rgba32f(img, f, pick, dst);
+            continue;
+        }
+        st = su_dds_decode_rgba32f(img, f, pick, tmp);
+        if (st == SU_OK) { /* box filter: each output texel is the mean of a k x k block (k a power of two) */
+            uint32_t k = src / size;
+            float inv = 1.0f / (float)(k * k);
+            uint32_t x;
+            uint32_t y;
+            for (y = 0; y < size; y++) {
+                for (x = 0; x < size; x++) {
+                    float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                    uint32_t i;
+                    uint32_t j;
+                    uint32_t c;
+                    for (j = 0; j < k; j++) {
+                        const float *row = tmp + ((size_t)(y * k + j) * src + (size_t)x * k) * 4u;
+                        for (i = 0; i < k; i++) {
+                            for (c = 0; c < 4u; c++) {
+                                acc[c] += row[i * 4u + c];
+                            }
+                        }
+                    }
+                    for (c = 0; c < 4u; c++) {
+                        dst[((size_t)y * size + x) * 4u + c] = acc[c] * inv;
+                    }
+                }
+            }
+        }
+    }
+    free(tmp);
     if (st == SU_OK) {
         st = su_render_env_create(r, size, faces, out);
     }
     free(faces);
     return st;
+}
+
+uint32_t su_render_env_from_dds(SuRenderer *r, const SuDdsImage *img, SuRenderHandle *out) {
+    return su_render_env_from_dds_ex(r, img, 0u, out);
 }
 
 VkDescriptorSet su_rvk_env_set(SuRenderer *r, SuRenderHandle env, float intensity, float *lod_out, float *intensity_out) {

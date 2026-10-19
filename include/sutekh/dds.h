@@ -14,8 +14,9 @@
  *     trailing_bytes, never read.
  *   - Faces are +X -X +Y -Y +Z -Z, each with its mips, the same face order as the environment cubes of sutekh/render.h.
  *
- * Also here: a CPU BC6H decoder (bit-exact to the D3D11 / OpenGL BPTC float decode: 16-bit half-float outputs), for
- * devices that cannot sample BCn, for building environment cubes, and for tests. */
+ * Also here: a CPU BC6H decoder (bit-exact to the D3D11 / OpenGL BPTC float decode: 16-bit half-float outputs) and
+ * CPU decoders for the LDR block formats BC1..BC5 and BC7, for devices that cannot sample BCn, for building
+ * environment cubes, and for tests. */
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #ifndef SUTEKH_DDS_H
@@ -63,9 +64,16 @@ uint32_t su_bc6h_decode_block(const uint8_t block[16], int is_signed, uint16_t o
 float su_half_to_float(uint16_t h);
 uint16_t su_float_to_half(float f);
 
-/* Decodes a whole face level to linear RGBA32F (4 floats per texel, width * height * 4). Handles BC6H, RGBA16F and
- * RGBA8 (sRGB formats are converted to linear; alpha 1 for BC6H). SU_E_UNSUPPORTED_METHOD for other formats,
- * SU_E_INVALID_ARGUMENT for a bad face or mip. */
+/* Decodes one 4x4 block of an LDR block format to 16 RGBA8 texels (row-major, out[texel * 4 + channel]) as stored,
+ * without any sRGB conversion. BC1 (with its three-colour + transparent mode), BC2, BC3, BC4 (r, 0, 0, 255), BC5
+ * (r, g, 0, 255) and BC7 (all eight modes; a reserved mode decodes to zeros, as the specification asks). BC1..BC3
+ * interpolate with exact integer thirds (GPUs may round the thirds one or two codes differently); BC7 is bit-exact.
+ * SU_E_UNSUPPORTED_METHOD for another format. */
+uint32_t su_bc_decode_block(uint32_t format, const uint8_t *block, uint8_t out[64]);
+
+/* Decodes a whole face level to linear RGBA32F (4 floats per texel, width * height * 4). Handles BC6H, RGBA16F, RGBA8
+ * and BC1..BC5, BC7 (sRGB formats, the colour space chosen at su_dds_parse, are converted to linear; alpha 1 for BC6H).
+ * SU_E_UNSUPPORTED_METHOD for other formats, SU_E_INVALID_ARGUMENT for a bad face or mip. */
 uint32_t su_dds_decode_rgba32f(const SuDdsImage *img, uint32_t face, uint32_t mip, float *out);
 
 #ifdef __cplusplus
