@@ -56,7 +56,11 @@ hulls), with texels snapped to a world-space grid so it does not shimmer as the 
 objects without `SU_RENDER_OBJECT_NO_SHADOW` reaching into that box from the sun's side, drawn depth-only at the LOD the
 camera selects; blended materials and translucent objects do not cast. PBR-lite and paint materials multiply the sun's
 direct light (not ambient or glow) by a 3 x 3 percentage-closer filter of the map, scaled by `strength`. Cost: one
-depth-only pass over the casters and nine shadow taps per lit pixel. Tests: `test_render_paint` (`test_shadows`).
+depth-only pass over the casters and nine shadow taps per lit pixel. `cascades` 2..4 split the view (uniform/log blend
+`split_lambda`, default 0.75) into one map layer each, fitted by the slice's bounding sphere and snapped to world texels;
+0/1 keeps the single map. Measured on a Quadro P600 at 1920 x 1080 with 400 sphere casters (300 k triangles): scene
+4.73 ms; one 2048 map +0.66 ms; 2 cascades of 2048 +1.25 ms; 4 of 2048 +2.64 ms; 4 of 1024 +1.49 ms
+(`SUTEKH_SHADOW_BENCH=1 test_render_paint`). Tests: `test_render_paint` (`test_shadows`, `test_shadow_cascades`).
 
 ## 3. Shader/pipeline edits
 

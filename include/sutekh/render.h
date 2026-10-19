@@ -666,7 +666,9 @@ typedef struct SuRenderObject {
  * 1 - strength * (1 - lit), where lit is a 3 x 3 percentage-closer filter of the map (hardware-filtered when the depth
  * format allows). Points outside the map are lit.
  * Cost: one extra depth-only pass over the casters plus nine shadow taps per lit pixel; size 2048 is 16 MiB, allocated on
- * the first frame that asks for it (changing size later waits for the device once). */
+ * the first frame that asks for it (changing size later waits for the device once). Cascades (SuRenderShadow.cascades)
+ * keep near detail over long view distances: one depth pass and one size x size layer per cascade (4 x 2048 = 64 MiB),
+ * the same nine taps per pixel in the cascade its view depth falls in. */
 #define SU_SHADOW_ON 0x1u
 
 typedef struct SuRenderShadow {
@@ -677,6 +679,12 @@ typedef struct SuRenderShadow {
     float strength;                    /* 0..1, the fraction of the sun a full shadow removes; 0 = 1 */
     float bias;                        /* receiver depth bias in texels of the map's width; 0 = 1.5 */
     float normal_offset;               /* receiver offset along its normal in texels; 0 = 1.5 */
+    uint32_t cascades;                 /* 0 or 1: the single fitted map above. 2..4: cascaded shadow maps, one size x size
+                                        * layer each, splitting the view from the near plane to distance (0: to the
+                                        * farthest visible receiver); each cascade is fitted by its slice's bounding
+                                        * sphere and snapped to world texels, so it neither swims nor shimmers */
+    float split_lambda;                /* cascade split scheme: 0..1 blend of uniform (0) and logarithmic (1) splits;
+                                        * 0 = 0.75 */
 } SuRenderShadow;
 
 /* Post processing on the HDR scene (RGBA16F), before the tonemap. Zero-initialised = everything off, so existing
@@ -799,7 +807,9 @@ typedef struct SuRenderStats {
     uint32_t shadow_size;          /* texels per side of the shadow map used by the last frame, 0 when off */
     uint32_t shadow_casters;       /* caster instances (node x submesh) drawn into it */
     uint32_t shadow_draws;         /* draw calls of the shadow pass */
-    float shadow_texel;            /* world units per shadow texel in the last frame */
+    float shadow_texel;            /* world units per shadow texel in the last frame (the first cascade's) */
+    uint32_t shadow_cascades;      /* cascades of the last frame (1 for the single map, 0 when off) */
+    float shadow_cascade_texel[4]; /* world units per texel of each cascade */
 } SuRenderStats;
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given

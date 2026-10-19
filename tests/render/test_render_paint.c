@@ -994,6 +994,245 @@ static void test_shadows(void) {
     g_obj_count = 1;
 }
 
+/* Cascaded shadow maps: walls at 6, 40 and 150 units, each shadowed by its own caster; the cascades' texels grow with
+ * distance and the nearest is much finer than a single map over the same range. */
+static void test_shadow_cascades(void) {
+    static uint8_t off[W * H * 4];
+    static uint8_t on[W * H * 4];
+    static const double ds[3] = {6.0, 40.0, 150.0};   /* wall distances */
+    static const double sxs[3] = {60.0, 128.0, 196.0}; /* their screen columns */
+    Scene sc;
+    Pm p;
+    SuRenderObject o[6];
+    SuRenderHandle mat = 0;
+    SuRenderHandle quad;
+    SuRenderStats st;
+    float single_texel;
+    double f = 128.0 / tan(FOV * 0.5);
+    uint32_t k;
+    uint32_t c;
+    scene_init(&sc);
+    sc.sun_dir[0] = 1.0f; /* travelling away from the camera and to +x: a caster g in front shadows g to its right */
+    sc.sun_dir[2] = -1.0f;
+    sc.sun_intensity = 3.0f;
+    sc.ambient = 0.25f;
+    sc.sky[0] = sc.sky[1] = sc.sky[2] = 0.4f;
+    pm_init(&p, 0.8f);
+    CHECK(su_render_paint_material_create(g_r, &p.d, &mat) == SU_OK);
+    quad = quad_model(mat);
+    memset(o, 0, sizeof o);
+    for (k = 0; k < 6u; k++) {
+        o[k].rot.w = 1.0f;
+        o[k].tint[0] = o[k].tint[1] = o[k].tint[2] = o[k].tint[3] = 1.0f;
+        o[k].emissive = 1.0f;
+        o[k].model = quad;
+    }
+    for (k = 0; k < 3u; k++) {
+        double d = ds[k];
+        double x = (sxs[k] - 128.0) / f * d;
+        double g = 0.25 * d;
+        o[k].pos = su_wpos(x, 0.0, -d); /* a wall facing the camera, 0.12 d half size */
+        o[k].scale = (float)(0.12 * d);
+        o[3u + k].pos = su_wpos(x - g, 0.0, -(d - g)); /* its caster, g in front: the shadow lands on the wall's centre */
+        o[3u + k].scale = (float)(0.03 * d);
+    }
+    g_obj = o;
+    g_obj_count = 6;
+    memset(&sc.shadow, 0, sizeof sc.shadow);
+    CHECK(render(&sc, 0, off));
+    sc.shadow.flags = SU_SHADOW_ON;
+    sc.shadow.distance = 200.0f;
+    CHECK(render(&sc, 0, on));
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.shadow_cascades == 1u);
+    single_texel = st.shadow_texel;
+    sc.shadow.cascades = 4;
+    CHECK(render(&sc, 0, on));
+    CHECK(su_render_stats(g_r, &st) == SU_OK);
+    printf("cascades: %u, texels %.4f %.4f %.4f %.4f units (single map over the same range %.4f), %u caster instances\n",
+           (unsigned)st.shadow_cascades, (double)st.shadow_cascade_texel[0], (double)st.shadow_cascade_texel[1],
+           (double)st.shadow_cascade_texel[2], (double)st.shadow_cascade_texel[3], (double)single_texel,
+           (unsigned)st.shadow_casters);
+    CHECK(st.shadow_cascades == 4u && st.shadow_size == 2048u);
+    for (c = 1; c < 4u; c++) {
+        CHECK(st.shadow_cascade_texel[c] > st.shadow_cascade_texel[c - 1u]);
+    }
+    CHECK(st.shadow_cascade_texel[0] * 3.0f < single_texel);
+    for (k = 0; k < 3u; k++) {
+        int sx = (int)sxs[k];
+        double lit = lin(px(off, sx, 128)[1]);
+        double dark = lin(px(on, sx, 128)[1]);
+        printf("cascades: wall at %.0f units, shadow centre %.4f lit, %.4f shadowed\n", ds[k], lit, dark);
+        CHECK(dark < lit * 0.5);
+        CHECK(same_px(px(on, sx, 128 + (int)(0.09 * f)), px(off, sx, 128 + (int)(0.09 * f)))); /* below the shadow */
+    }
+    /* cascades 1 is the single map; invalid counts and lambdas are refused */
+    sc.shadow.cascades = 1;
+    CHECK(render(&sc, 0, on));
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.shadow_cascades == 1u && st.shadow_texel == single_texel);
+    {
+        SuRenderFrameDesc fd;
+        memset(&fd, 0, sizeof fd);
+        fd.struct_size = sizeof fd;
+        fd.camera.rot.w = 1.0f;
+        fd.camera.fov_y = FOV;
+        fd.camera.near_z = 0.05f;
+        fd.shadow.flags = SU_SHADOW_ON;
+        fd.shadow.cascades = 5;
+        CHECK(su_render_frame_ex(g_r, &fd) == SU_E_INVALID_ARGUMENT);
+        fd.shadow.cascades = 2;
+        fd.shadow.split_lambda = 1.5f;
+        CHECK(su_render_frame_ex(g_r, &fd) == SU_E_INVALID_ARGUMENT);
+    }
+    memset(&sc.shadow, 0, sizeof sc.shadow);
+    CHECK(render(&sc, 0, on));
+    CHECK(memcmp(on, off, sizeof on) == 0);
+    g_obj = NULL;
+    g_obj_count = 1;
+}
+
+/* Optional cost measurement (SUTEKH_SHADOW_BENCH=1): a 1920 x 1080 frame of 400 sphere objects (about 300 k triangles)
+ * on a floor, GPU time per frame with shadows off, one 2048 map, and 2 / 4 cascades of 2048 and 1024. Prints only. */
+static void bench_shadows(void) {
+    SuRenderer *r = NULL;
+    SuRenderDesc d;
+    char msg[256];
+    SuMeshVertex mv[2048];
+    uint16_t mi[8192];
+    static SuAssetVertex av[2048];
+    static uint32_t ai[8192];
+    uint32_t nv = 0;
+    uint32_t ni = 0;
+    uint32_t i;
+    SuAssetSubmesh sm;
+    SuRenderMeshDesc mesh;
+    SuRenderModelNode mn;
+    SuRenderHandle msh = 0;
+    SuRenderHandle model = 0;
+    SuRenderHandle mat = 0;
+    SuRenderHandle floor_model;
+    SuRenderMaterialDesc md;
+    static SuRenderObject objs[401];
+    SuRenderFrameDesc f;
+    static const struct {
+        uint32_t on, size, cascades;
+        const char *name;
+    } cases[6] = {{0, 0, 0, "off"}, {1, 2048, 0, "1 map 2048"}, {1, 2048, 2, "2 cascades 2048"},
+                  {1, 2048, 4, "4 cascades 2048"}, {1, 1024, 4, "4 cascades 1024"}, {1, 1024, 2, "2 cascades 1024"}};
+    uint32_t cs;
+    if (getenv("SUTEKH_SHADOW_BENCH") == NULL) {
+        return;
+    }
+    memset(&d, 0, sizeof d);
+    d.struct_size = sizeof d;
+    d.width = 1920;
+    d.height = 1080;
+    d.device_index = -1;
+    if (su_render_create(&d, &r, msg) != SU_OK) {
+        printf("bench: no renderer: %s\n", msg);
+        return;
+    }
+    CHECK(su_mesh_build(SU_MESH_SPHERE, mv, 2048, &nv, mi, 8192, &ni) == SU_OK);
+    for (i = 0; i < nv; i++) {
+        memset(&av[i], 0, sizeof av[i]);
+        memcpy(av[i].pos, mv[i].pos, sizeof av[i].pos);
+        memcpy(av[i].normal, mv[i].normal, sizeof av[i].normal);
+        av[i].tangent[0] = av[i].tangent[3] = 1.0f;
+    }
+    for (i = 0; i < ni; i++) {
+        ai[i] = mi[i];
+    }
+    memset(&md, 0, sizeof md);
+    su_asset_material_default(&md.factors);
+    md.factors.metallic = 0.0f;
+    CHECK(su_render_material_create(r, &md, &mat) == SU_OK);
+    memset(&sm, 0, sizeof sm);
+    sm.index_count = ni;
+    sm.radius = 0.5f;
+    memset(&mesh, 0, sizeof mesh);
+    mesh.vertices = av;
+    mesh.vertex_count = nv;
+    mesh.indices = ai;
+    mesh.index_count = ni;
+    mesh.submeshes = &sm;
+    mesh.submesh_count = 1;
+    mesh.materials = &mat;
+    mesh.radius = 0.5f;
+    mesh.flags = SU_RENDER_UPLOAD_COPY;
+    CHECK(su_render_mesh_create(r, &mesh, &msh) == SU_OK);
+    memset(&mn, 0, sizeof mn);
+    mn.transform[0] = mn.transform[5] = mn.transform[10] = mn.transform[15] = 1.0f;
+    mn.lod_mesh[0] = msh;
+    mn.lod_screen[0] = 1.0f;
+    mn.lod_count = 1;
+    CHECK(su_render_model_create(r, &mn, 1, &model) == SU_OK);
+    {
+        SuAssetVertex qv[4];
+        uint32_t qi[6];
+        SuRenderHandle qm = 0;
+        quad_mesh(qv, qi);
+        memset(&sm, 0, sizeof sm);
+        sm.index_count = 6;
+        sm.radius = 1.5f;
+        mesh.vertices = qv;
+        mesh.vertex_count = 4;
+        mesh.indices = qi;
+        mesh.index_count = 6;
+        mesh.radius = 1.5f;
+        CHECK(su_render_mesh_create(r, &mesh, &qm) == SU_OK);
+        mn.lod_mesh[0] = qm;
+        CHECK(su_render_model_create(r, &mn, 1, &floor_model) == SU_OK);
+    }
+    memset(objs, 0, sizeof objs);
+    for (i = 0; i < 401u; i++) {
+        objs[i].rot.w = 1.0f;
+        objs[i].tint[0] = objs[i].tint[1] = objs[i].tint[2] = objs[i].tint[3] = 1.0f;
+        objs[i].emissive = 1.0f;
+        objs[i].model = model;
+        objs[i].scale = 1.5f;
+        objs[i].pos = su_wpos((double)((int)(i % 20u) - 10) * 4.0, -1.0, -5.0 - (double)(i / 20u) * 6.0);
+    }
+    objs[400].model = floor_model;
+    objs[400].pos = su_wpos(0.0, -2.0, -70.0);
+    objs[400].rot = su_quatf_axis_angle(v3(1, 0, 0), -1.5707963f);
+    objs[400].scale = 80.0f;
+    memset(&f, 0, sizeof f);
+    f.struct_size = sizeof f;
+    f.camera.pos = su_wpos(0.0, 3.0, 0.0);
+    f.camera.rot = su_quatf_axis_angle(v3(1, 0, 0), -0.25f);
+    f.camera.fov_y = FOV;
+    f.camera.near_z = 0.1f;
+    f.light.sun_dir = v3(0.5f, -1.0f, -0.3f);
+    f.light.sun_intensity = 3.0f;
+    f.light.sun_color = v3(1, 1, 1);
+    f.light.ambient = 0.2f;
+    f.light.sky_zenith = f.light.sky_horizon = f.light.sky_nadir = v3(0.3f, 0.3f, 0.4f);
+    f.light.tonemap = SU_TONEMAP_ACES;
+    f.objects = objs;
+    f.object_count = 401;
+    for (cs = 0; cs < 6u; cs++) {
+        double sum = 0.0;
+        int k;
+        int got = 0;
+        SuRenderStats st;
+        memset(&f.shadow, 0, sizeof f.shadow);
+        f.shadow.flags = cases[cs].on ? SU_SHADOW_ON : 0u;
+        f.shadow.size = cases[cs].size;
+        f.shadow.cascades = cases[cs].cascades;
+        f.shadow.distance = 150.0f;
+        for (k = 0; k < 40; k++) {
+            CHECK(su_render_frame_ex(r, &f) == SU_OK);
+            CHECK(su_render_stats(r, &st) == SU_OK);
+            if (k >= 10 && st.gpu_ms >= 0.0) {
+                sum += st.gpu_ms;
+                got++;
+            }
+        }
+        printf("bench 1920x1080, 400 spheres (%u triangles each): %-16s GPU %.3f ms/frame, %u caster instances\n",
+               (unsigned)(ni / 3u), cases[cs].name, got > 0 ? sum / got : -1.0, (unsigned)st.shadow_casters);
+    }
+    su_render_destroy(r);
+}
+
 static void test_dirt_ao(void) {
     static uint8_t dirt[16 * 16 * 4];
     static uint8_t ao[16 * 16 * 4];
@@ -1468,6 +1707,8 @@ int main(int argc, char **argv) {
     test_glow_mask();
     test_scale3();
     test_shadows();
+    test_shadow_cascades();
+    bench_shadows();
     test_dirt_ao();
     test_environment();
     test_color_spaces();
