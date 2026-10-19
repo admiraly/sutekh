@@ -195,7 +195,7 @@ int main(int argc, char **argv) {
     d.height = H;
     d.device_index = -1;
     d.max_draw_instances = 256;
-    if (getenv("SUTEKH_RENDER_VALIDATION") != NULL) {
+    if (getenv("SUTEKH_RENDER_VALIDATION") != NULL || getenv("SUTEKH_REQUIRE_VALIDATION") != NULL) {
         d.flags |= SU_RENDER_FLAG_VALIDATION;
     }
     status = su_render_create(&d, &r, msg);
@@ -344,6 +344,7 @@ int main(int argc, char **argv) {
         }
     }
     (void)su_render_stats(r, &st);
+    CHECK(getenv("SUTEKH_REQUIRE_VALIDATION") == NULL || st.validation_enabled != 0u); /* CI: the layer must be on */
     if (st.validation_enabled != 0u) {
         CHECK(st.validation_errors == 0u && st.validation_warnings == 0u);
         printf("validation layer on: %u errors, %u warnings\n", (unsigned)st.validation_errors, (unsigned)st.validation_warnings);

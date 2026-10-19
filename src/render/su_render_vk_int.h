@@ -136,6 +136,9 @@
     X(vkCmdCopyImageToBuffer)          \
     X(vkCmdCopyBuffer)                 \
     X(vkCmdCopyBufferToImage)          \
+    X(vkCmdBlitImage)                  \
+    X(vkCmdCopyImage)                  \
+    X(vkFreeCommandBuffers)            \
     X(vkCmdPipelineBarrier)            \
     X(vkCmdResetQueryPool)             \
     X(vkCmdWriteTimestamp)             \
@@ -501,6 +504,8 @@ struct SuRenderer {
     VkPipelineLayout bloom_layout;      /* tex_dsl + BloomPush */
     VkPipelineLayout bloom3_layout;     /* tex3_dsl + BloomPush */
     VkPipeline bloom_down_pipe;
+    VkPipeline env_pf_pipe;             /* GPU environment prefilter (bloom pass and layout); NULL: CPU only */
+    int env_gpu;                        /* RGBA16F can be blitted, rendered and filtered: prefilter on the GPU */
     VkPipeline bloom_up_pipe;
     VkPipeline post_bloom_pipe;
     VkDescriptorPool pool_bloom;

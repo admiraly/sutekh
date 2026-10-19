@@ -558,6 +558,15 @@ SU_RENDER_API uint32_t su_render_paint_material_create(SuRenderer *r, const SuRe
 /* An environment cubemap with prefiltered mips (see "image-based lighting"); READY when uploaded. Release with
  * su_render_release. SU_E_UNSUPPORTED_METHOD when the device cannot filter RGBA16F cube images. */
 SU_RENDER_API uint32_t su_render_env_create(SuRenderer *r, uint32_t size, const float *faces, SuRenderHandle *out);
+/* GPU prefiltering: when the device can blit and render RGBA16F (nearly all), su_render_env_create (and env_from_sky,
+ * env_from_dds) prefilter on the GPU instead: the same chain (box-filtered source mips, GGX importance sampling with 96
+ * samples per texel and the same level selection) rendered by fragment passes in one submission that the call waits
+ * for, READY on return. It matches su_env_prefilter within half-float and filtering differences (the GPU filters
+ * across cube faces where the CPU clamps at face edges) and turns a 1024 cube from seconds into milliseconds.
+ * SuRenderStats.env_prefilter_ms and env_prefilter_gpu report the last one. SU_ENV_CPU forces the CPU reference. */
+#define SU_ENV_CPU 0x1u
+SU_RENDER_API uint32_t su_render_env_create_ex(SuRenderer *r, uint32_t size, const float *faces, uint32_t flags,
+                                               SuRenderHandle *out);
 /* A texture straight from a parsed DDS (sutekh/dds.h): 2D, or a cube with a cube image view (6 layers). The format
  * (and so sRGB vs linear) comes from the SuDdsImage; choose it at su_dds_parse. BCn, BC6H included, is uploaded
  * natively when the device supports it; otherwise the handle is FAILED (see SuRenderDeviceInfo.bc_textures). The
@@ -800,6 +809,9 @@ typedef struct SuRenderStats {
     uint32_t shadow_casters;       /* caster instances (node x submesh) drawn into it */
     uint32_t shadow_draws;         /* draw calls of the shadow pass */
     float shadow_texel;            /* world units per shadow texel in the last frame */
+    /* ---- environment prefiltering ---- */
+    double env_prefilter_ms;       /* wall time of the last environment prefilter (upload included on the GPU path) */
+    uint32_t env_prefilter_gpu;    /* 1: it ran on the GPU; 0: on the CPU */
 } SuRenderStats;
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given

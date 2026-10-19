@@ -540,6 +540,7 @@ int main(int argc, char **argv) {
         uint32_t k;
         static const uint32_t sizes[5][2] = {{321u, 177u}, {64u, 48u}, {16u, 8u}, {7u, 5u}, {1280u, 720u}};
         CHECK(su_render_stats(g_r, &st) == SU_OK);
+        CHECK(getenv("SUTEKH_REQUIRE_VALIDATION") == NULL || st.validation_enabled != 0u); /* CI: the layer must be on */
         verr += st.validation_errors;
         vwarn += st.validation_warnings;
         su_render_destroy(g_r);
