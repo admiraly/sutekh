@@ -117,7 +117,7 @@ else()
 endif()
 
 # ---- assets (M5): cooked packs (always built) and the glTF importer (needs tools/bootstrap_asset_deps.py) ----
-add_library(su_asset STATIC src/asset/su_asset_pak.c src/asset/su_asset_bc.c src/asset/su_asset_dds.c)
+add_library(su_asset STATIC src/asset/su_asset_pak.c src/asset/su_asset_bc.c src/asset/su_asset_dds.c src/asset/su_asset_bcdec.c)
 target_include_directories(su_asset PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
 target_link_libraries(su_asset PUBLIC su_platform PRIVATE su_ir)
 if(NOT WIN32)

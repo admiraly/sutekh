@@ -1371,6 +1371,226 @@ static void test_fx_sort(void) {
     CHECK(su_render_release(g_r, hr) == SU_OK && su_render_release(g_r, hb) == SU_OK && su_render_release(g_r, hg) == SU_OK);
 }
 
+/* CPU decoders of the LDR block formats against the GPU's sampling of random blocks (BC1, BC2, BC3, BC4, BC5, BC7 with
+ * every mode). Drawn additively, so the pixel is the texel's rgb x alpha. */
+static void test_bc_ldr_gpu(void) {
+    static const struct {
+        uint32_t dxgi;
+        uint32_t block;
+        double tol; /* linear codes: hardware interpolates BC1..BC5 at its own precision; BC7 is exact */
+        const char *name;
+    } fmts[6] = {{71, 8, 3.5, "BC1"}, {74, 16, 3.5, "BC2"}, {77, 16, 3.5, "BC3"},
+                 {80, 8, 3.5, "BC4"}, {83, 16, 3.5, "BC5"}, {98, 16, 1.0, "BC7"}};
+    static uint8_t blocks[8 * 8 * 16];
+    static uint8_t file[1024 * 8 + 148];
+    SuDdsImage img;
+    char msg[160];
+    SuRenderDeviceInfo dev;
+    uint32_t seed = 777;
+    uint32_t fi;
+    long compared = 0;
+    (void)su_render_device(g_r, &dev);
+    if (!dev.bc_textures || dev.type == SU_RENDER_DEVICE_CPU) {
+        printf("BC1-BC7 GPU comparison skipped: %s\n", dev.bc_textures ? "software rasterizer is not a reference" : "no BCn sampling");
+        return;
+    }
+    for (fi = 0; fi < 6u; fi++) {
+        int round;
+        long worst = 0;
+        for (round = 0; round < (fmts[fi].dxgi == 98u ? 8 : 2); round++) {
+            Scene s;
+            SuFxVertex vtx[64];
+            SuFxBuffer fb = fxbuf(vtx, 64);
+            SuFxBatch bt;
+            SuRenderHandle h = 0;
+            float one[4] = {1, 1, 1, 1};
+            static float lvl[32 * 32 * 4];
+            size_t bytes = 64u * fmts[fi].block;
+            uint32_t i;
+            uint32_t bx;
+            uint32_t by;
+            size_t n;
+            for (i = 0; i < bytes; i++) {
+                seed = seed * 1664525u + 1013904223u;
+                blocks[i] = (uint8_t)(seed >> 20);
+            }
+            /* BC3 alpha, BC4 and BC5 channel blocks in the eight-value mode (a0 > a1): the six-value mode's fifths are
+             * approximated differently by some hardware (seen on Pascal: about 3/16, 6/16, 10/16, 13/16); the CPU
+             * decoder follows the specification, checked by test_asset_dds */
+            for (i = 0; i < 64u && (fmts[fi].dxgi == 77u || fmts[fi].dxgi == 80u || fmts[fi].dxgi == 83u); i++) {
+                uint32_t half;
+                for (half = 0; half < (fmts[fi].dxgi == 83u ? 2u : 1u); half++) {
+                    uint8_t *e = blocks + i * fmts[fi].block + half * 8u;
+                    if (e[0] < e[1]) {
+                        uint8_t tmp = e[0];
+                        e[0] = e[1];
+                        e[1] = tmp;
+                    } else if (e[0] == e[1]) {
+                        e[0] = (uint8_t)(e[0] | 1u);
+                        e[1] = (uint8_t)(e[1] & 0xFEu);
+                    }
+                }
+            }
+            if (fmts[fi].dxgi == 98u) { /* force block i to mode (i + round) % 8 */
+                for (i = 0; i < 64u; i++) {
+                    uint32_t m = (i + (uint32_t)round) % 8u;
+                    blocks[i * 16u] = (uint8_t)((blocks[i * 16u] & (uint32_t)(0xFEu << m)) | (1u << m));
+                }
+            }
+            n = write_dds(file, fmts[fi].dxgi, 32, 32, 1, 0, blocks, bytes);
+            CHECK(su_dds_parse(file, n, SU_DDS_CS_FILE, &img, msg) == SU_OK);
+            CHECK(su_render_texture_create_dds(g_r, &img, SU_RENDER_UPLOAD_COPY, &h) == SU_OK);
+            wait_ready(h);
+            CHECK(su_render_resource_state(g_r, h) == SU_RENDER_STATE_READY);
+            CHECK(su_dds_decode_rgba32f(&img, 0, 0, lvl) == SU_OK);
+            scene_init(&s);
+            su_fx_sprite(&fb, v3(0, 0, -4), 4.0f * 0.57735027f * (112.0f / 128.0f), 4.0f * 0.57735027f * (112.0f / 128.0f), 0.0f,
+                         one, NULL, camera_view(&s));
+            bt = su_fx_batch(h, SU_FX_BLEND_ADD, SU_FX_WRAP_CLAMP, SU_FX_WRAP_CLAMP, 0, &fb);
+            s.fx_tex = vtx;
+            s.fx_tex_count = fb.count;
+            s.batches = &bt;
+            s.batch_count = 1;
+            CHECK(render(&s, g_img));
+            for (by = 0; by < 32u; by++) {
+                for (bx = 0; bx < 32u; bx++) {
+                    const float *c = lvl + ((size_t)by * 32u + bx) * 4u;
+                    const uint8_t *p = px(g_img, 16u + 7u * bx + 3u, 16u + 7u * by + 3u);
+                    uint32_t ch;
+                    for (ch = 0; ch < 3u; ch++) {
+                        double tol = fmts[fi].tol / 255.0;
+                        double lin = (double)c[ch] * (double)c[3];
+                        int lo = srgb8(lin - tol < 0.0 ? 0.0 : lin - tol) - 1;
+                        int hi = srgb8(lin + tol > 1.0 ? 1.0 : lin + tol) + 1;
+                        int want = srgb8(lin);
+                        int d = abs((int)p[ch] - want);
+                        worst = d > worst ? d : worst;
+                        compared++;
+                        if (p[ch] < lo || p[ch] > hi) {
+                            static int shown = 0;
+                            if (shown++ < 10) {
+                                fprintf(stderr, "%s round %d texel %u,%u ch %u: gpu %d cpu %d (rgba %g %g %g %g)\n",
+                                        fmts[fi].name, round, (unsigned)bx, (unsigned)by, (unsigned)ch, p[ch], want, c[0],
+                                        c[1], c[2], c[3]);
+                            }
+                        }
+                        CHECK(p[ch] >= lo && p[ch] <= hi);
+                    }
+                }
+            }
+            CHECK(su_render_release(g_r, h) == SU_OK);
+        }
+        printf("%s: CPU decoder vs GPU sampling, worst difference %ld levels of 255 (sRGB output)\n", fmts[fi].name, worst);
+    }
+    printf("LDR BC: %ld channel values compared\n", compared);
+}
+
+/* Environment cubes from LDR DDS files and from cubes larger than the size cap (box-downsampled on the CPU). */
+static void test_env_ldr_and_downsample(void) {
+    static uint8_t px32[6 * 32 * 32 * 4];
+    static uint8_t file[148 + 6 * 32 * 32 * 4];
+    static float dec[32 * 32 * 4];
+    static float faces[6 * 8 * 8 * 4];
+    SuDdsImage img;
+    char msg[160];
+    SuRenderHandle a = 0;
+    SuRenderHandle b = 0;
+    SuRenderHandle none = 0;
+    Scene s;
+    uint32_t seed = 31337;
+    uint32_t i;
+    uint32_t f;
+    size_t n;
+    static uint8_t img_a[W * H * 4];
+    for (i = 0; i < sizeof px32; i++) {
+        seed = seed * 1664525u + 1013904223u;
+        px32[i] = (uint8_t)(seed >> 24);
+    }
+    /* RGBA8 sRGB cube of 32: capped at 8, every output texel is the mean of a 4 x 4 block of the decoded (linear) face */
+    n = write_dds(file, 29, 32, 32, 1, 1, px32, sizeof px32);
+    CHECK(su_dds_parse(file, n, SU_DDS_CS_FILE, &img, msg) == SU_OK && img.faces == 6u);
+    CHECK(su_render_env_from_dds_ex(g_r, &img, 8, &a) == SU_OK);
+    for (f = 0; f < 6u; f++) {
+        uint32_t x;
+        uint32_t y;
+        CHECK(su_dds_decode_rgba32f(&img, f, 0, dec) == SU_OK);
+        for (y = 0; y < 8u; y++) {
+            for (x = 0; x < 8u; x++) {
+                float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                uint32_t ii;
+                uint32_t jj;
+                uint32_t c;
+                for (jj = 0; jj < 4u; jj++) {
+                    for (ii = 0; ii < 4u; ii++) {
+                        for (c = 0; c < 4u; c++) {
+                            acc[c] += dec[((size_t)(y * 4u + jj) * 32u + x * 4u + ii) * 4u + c];
+                        }
+                    }
+                }
+                for (c = 0; c < 4u; c++) {
+                    faces[(((size_t)f * 8u + y) * 8u + x) * 4u + c] = acc[c] * (1.0f / 16.0f);
+                }
+            }
+        }
+    }
+    CHECK(su_render_env_create(g_r, 8, faces, &b) == SU_OK);
+    wait_ready(a);
+    wait_ready(b);
+    CHECK(su_render_resource_state(g_r, a) == SU_RENDER_STATE_READY && su_render_resource_state(g_r, b) == SU_RENDER_STATE_READY);
+    scene_init(&s);
+    s.sky = 1;
+    s.sky_cube = a;
+    CHECK(render(&s, img_a));
+    s.sky_cube = b;
+    CHECK(render(&s, g_img));
+    CHECK(memcmp(img_a, g_img, sizeof g_img) == 0);
+    printf("env: 32 px RGBA8 sRGB cube capped at 8 matches the box-downsampled faces (%s)\n",
+           memcmp(img_a, g_img, sizeof g_img) == 0 ? "identical" : "DIFFERENT");
+    CHECK(su_render_release(g_r, a) == SU_OK);
+    CHECK(su_render_release(g_r, b) == SU_OK);
+    /* the same file uncapped is a 32 environment; a cap that is not a power of two in 8..1024 is refused */
+    CHECK(su_render_env_from_dds(g_r, &img, &a) == SU_OK);
+    CHECK(su_render_release(g_r, a) == SU_OK);
+    CHECK(su_render_env_from_dds_ex(g_r, &img, 100, &none) == SU_E_INVALID_ARGUMENT && none == 0u);
+    CHECK(su_render_env_from_dds_ex(g_r, &img, 2048, &none) == SU_E_INVALID_ARGUMENT);
+    /* LDR block cubes decode on the CPU whatever the device: BC2 (DXT3-style) and BC7, 16 px */
+    {
+        static uint8_t bc[6 * 16 * 16];
+        static const uint32_t dx[2] = {74, 98};
+        uint32_t k;
+        for (k = 0; k < 2u; k++) {
+            for (i = 0; i < 6u * 16u; i++) {
+                uint8_t *blk = bc + i * 16u;
+                if (dx[k] == 74u) {
+                    memset(blk, 0xFF, 8);
+                    blk[8] = blk[10] = 0x00;
+                    blk[9] = blk[11] = 0x80; /* c0 = c1: red 132 */
+                    memset(blk + 12, 0, 4);
+                } else {
+                    bc7_solid(blk, 66, 0, 0); /* red 133 */
+                }
+            }
+            n = write_dds(file, dx[k], 16, 16, 1, 1, bc, sizeof bc);
+            CHECK(su_dds_parse(file, n, SU_DDS_CS_FILE, &img, msg) == SU_OK);
+            CHECK(su_render_env_from_dds(g_r, &img, &a) == SU_OK);
+            wait_ready(a);
+            scene_init(&s);
+            s.sky = 1;
+            s.sky_cube = a;
+            CHECK(render(&s, g_img));
+            {
+                const uint8_t *c = px(g_img, W / 2, H / 2);
+                printf("env: %s cube of red %d -> sky pixel %d %d %d\n", k == 0 ? "BC2" : "BC7", k == 0 ? 132 : 133, c[0], c[1],
+                       c[2]);
+                int gb = k == 0 ? 0 : srgb8(1.0 / 255.0); /* BC7: 7-bit 0 with p-bit 1 is 1 */
+                CHECK(abs((int)c[0] - srgb8((k == 0 ? 132.0 : 133.0) / 255.0)) <= 2 && abs((int)c[1] - gb) <= 1 &&
+                      abs((int)c[2] - gb) <= 1);
+            }
+            CHECK(su_render_release(g_r, a) == SU_OK);
+        }
+    }
+}
+
 static void test_skips_and_unchanged(void) {
     Scene s;
     SuFxVertex vtx[64];
@@ -1488,6 +1708,8 @@ int main(int argc, char **argv) {
     test_bc6h_gpu();
     test_soft_particles();
     test_fx_sort();
+    test_bc_ldr_gpu();
+    test_env_ldr_and_downsample();
     test_skips_and_unchanged();
     CHECK(su_render_stats(g_r, &st) == SU_OK);
     if (validation) {

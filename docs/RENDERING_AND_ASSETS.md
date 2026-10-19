@@ -110,7 +110,9 @@ per quad).
 `include/sutekh/dds.h` parses DDS files in memory (2D and cube, mips, BC1 to BC7 including BC6H, RGBA8, RGBA16F) and
 `su_render_texture_create_dds` uploads them natively when the device supports BCn (`SuRenderDeviceInfo.bc_textures`);
 a cube gets a cube image view. Trailing bytes after the pixel data are ignored. `su_render_env_from_dds` builds a
-prefiltered environment from an HDR cube; `SuRenderFrameDesc.sky_cube` draws any cube (raw or prefiltered) as the sky
+prefiltered environment from an HDR or LDR cube (BC1 to BC5 and BC7 decode on the CPU with `su_bc_decode_block`, in the
+colour space chosen at parse); cubes above 1024 (or above the cap given to `su_render_env_from_dds_ex`) are
+box-downsampled on the CPU; `SuRenderFrameDesc.sky_cube` draws any cube (raw or prefiltered) as the sky
 background, with intensity, rotation and lod. The BC6H decoder (`su_bc6h_decode_block`) is bit-exact to the D3D11 /
 OpenGL decode; it was checked against an independent decoder on four million random blocks and against the GPU on
-every mode. Tests: `test_render_texfx`, `test_asset_dds`.
+every mode. The BC7 decoder matches the GPU within one output level on random blocks of every mode. Tests: `test_render_texfx`, `test_asset_dds`.
