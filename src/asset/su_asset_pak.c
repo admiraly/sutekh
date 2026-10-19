@@ -724,7 +724,7 @@ static uint32_t check_paint(const SuAssetPak *p, uint32_t ei, char *msg) {
             return SU_E_PARSE;
         }
         seen |= 1u << a.layer_order[i];
-        if (!finite_n(l->color, 10u) || (l->flags & ~3u) != 0u) {
+        if (!finite_n(l->color, 10u) || (l->flags & ~7u) != 0u || (l->flags & 5u) == 5u) { /* MULTIPLY and TINT exclusive */
             msgf(msg, "material %016llx: paint layer %u invalid", id, (unsigned)i);
             return SU_E_PARSE;
         }

@@ -417,6 +417,52 @@ static void test_blend_order(void) {
             CHECK(fabs(pb[c] - exp_half[c]) < 0.012);
         }
     }
+    /* tint: A = mix(albedo * base, albedo * C, w), independent of the base colour where w = 1 */
+    {
+        static uint8_t alb[16 * 16 * 4];
+        static const float tc[3] = {0.9f, 0.6f, 0.2f};
+        static const float b2[3] = {0.1f, 0.2f, 0.3f};
+        double kd[3];
+        double al = lin(188);
+        double exp_full[3];
+        double exp_half[3];
+        SuRenderHandle t_alb;
+        for (c = 0; c < 3; c++) {
+            kd[c] = (pc[c] - pk[c]) / 0.8;
+        }
+        fill_rgba(alb, 16 * 16, 188, 188, 188, 255);
+        t_alb = mk_tex(SU_TEX_RGBA8_SRGB, 16, 16, alb);
+        pm_init(&p, 0.8f);
+        p.d.textures[SU_PAINT_SLOT_ALBEDO] = t_alb;
+        p.d.textures[SU_PAINT_SLOT_MASK] = mk_tex(SU_TEX_RGBA8_UNORM, 16, 16, mask);
+        layer_set(&p, 0, tc[0], tc[1], tc[2], 1.0f, 0.0f, 1.0f, SU_PAINT_LAYER_TINT);
+        p.d.paint.layer_count = 1;
+        CHECK(shoot(&sc, &p, a));
+        lin_px(a, 0.5f, 0.5f, pa);
+        for (c = 0; c < 3; c++) {
+            p.d.factors.base_color[c] = b2[c]; /* another base colour: the fully tinted surface does not change */
+        }
+        CHECK(shoot(&sc, &p, b));
+        CHECK(same_px(px(a, 128, 128), px(b, 128, 128)));
+        for (c = 0; c < 3; c++) {
+            p.d.factors.base_color[c] = 0.8f;
+        }
+        p.d.paint.layer[0].opacity = 0.5f;
+        CHECK(shoot(&sc, &p, b));
+        lin_px(b, 0.5f, 0.5f, pb);
+        for (c = 0; c < 3; c++) {
+            exp_full[c] = al * (double)tc[c] * kd[c] + pk[c];
+            exp_half[c] = (al * 0.8 + (al * (double)tc[c] - al * 0.8) * 0.5) * kd[c] + pk[c];
+        }
+        printf("blend: tint measured %.4f %.4f %.4f expected %.4f %.4f %.4f\n", pa[0], pa[1], pa[2], exp_full[0], exp_full[1],
+               exp_full[2]);
+        printf("blend: tint 0.5 measured %.4f %.4f %.4f expected %.4f %.4f %.4f\n", pb[0], pb[1], pb[2], exp_half[0],
+               exp_half[1], exp_half[2]);
+        for (c = 0; c < 3; c++) {
+            CHECK(fabs(pa[c] - exp_full[c]) < 0.012);
+            CHECK(fabs(pb[c] - exp_half[c]) < 0.012);
+        }
+    }
 }
 
 /* PBR-lite and a paint material with no layers see the same inputs: the images are identical. */
@@ -908,6 +954,15 @@ static void test_color_spaces(void) {
     pm_init(&p, 1.0f);
     p.d.paint.layer_count = 2;
     p.d.paint.layer_order[0] = p.d.paint.layer_order[1] = 1;
+    CHECK(su_render_paint_material_create(g_r, &p.d, &m) == SU_E_INVALID_ARGUMENT);
+    pm_init(&p, 1.0f);
+    p.d.paint.layer_count = 1;
+    p.d.paint.layer[0].flags = SU_PAINT_LAYER_MULTIPLY | SU_PAINT_LAYER_TINT; /* two blends at once */
+    CHECK(su_render_paint_material_create(g_r, &p.d, &m) == SU_E_INVALID_ARGUMENT);
+    p.d.paint.layer[0].flags = SU_PAINT_LAYER_TINT | SU_PAINT_LAYER_GLOW_TINT;
+    CHECK(su_render_paint_material_create(g_r, &p.d, &m) == SU_OK);
+    CHECK(su_render_release(g_r, m) == SU_OK);
+    p.d.paint.layer[0].flags = 0x8u;
     CHECK(su_render_paint_material_create(g_r, &p.d, &m) == SU_E_INVALID_ARGUMENT);
     pm_init(&p, 1.0f);
     p.d.paint.channel[SU_PAINT_CH_DIRT] = 5;

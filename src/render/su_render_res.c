@@ -909,7 +909,9 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
             return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint material: layer_order is not a permutation of the layers");
         }
         seen |= 1u << p->layer_order[i];
-        if (!all_finite(l->color, 10u) || (l->flags & ~(SU_PAINT_LAYER_MULTIPLY | SU_PAINT_LAYER_GLOW_TINT)) != 0u) {
+        if (!all_finite(l->color, 10u) ||
+            (l->flags & ~(SU_PAINT_LAYER_MULTIPLY | SU_PAINT_LAYER_GLOW_TINT | SU_PAINT_LAYER_TINT)) != 0u ||
+            (l->flags & (SU_PAINT_LAYER_MULTIPLY | SU_PAINT_LAYER_TINT)) == (SU_PAINT_LAYER_MULTIPLY | SU_PAINT_LAYER_TINT)) {
             return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint material: layer %u invalid", (unsigned)i);
         }
     }

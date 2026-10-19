@@ -452,7 +452,7 @@ static void test_scene_paint(void) {
              "\"SUTEKH_materials_layered_paint\":{\"maskTexture\":{\"index\":2},\"roughnessTexture\":{\"index\":2,\"texCoord\":1},"
              "\"channels\":{\"roughness\":1,\"metal\":2,\"specular\":3,\"dirt\":0,\"ao\":-1},\"specular\":0.25,"
              "\"dirt\":{\"amount\":0.4,\"darken\":0.7,\"roughen\":0.2},"
-             "\"layers\":[{\"color\":[1,0,0],\"roughness\":0.3,\"metallic\":1,\"opacity\":0.8},"
+             "\"layers\":[{\"color\":[1,0,0],\"roughness\":0.3,\"metallic\":1,\"opacity\":0.8,\"blend\":\"tint\"},"
              "{\"color\":[0.5,0.5,1],\"blend\":\"multiply\",\"glowColor\":[0,1,0],\"glowStrength\":4,\"metallic\":0.5,\"roughness\":0.9}],"
              "\"order\":[1,0]}}}],"
              "\"textures\":[{\"source\":0},{\"source\":1},{\"source\":2}],"
@@ -487,7 +487,7 @@ static void test_scene_paint(void) {
     CHECK(pt.specular == 0.25f && pt.dirt_amount == 0.4f && pt.dirt_darken == 0.7f && pt.dirt_roughen == 0.2f);
     CHECK(pt.layer_count == 2u && pt.layer_order[0] == 1 && pt.layer_order[1] == 0);
     CHECK(pt.layer[0].color[0] == 1.0f && pt.layer[0].roughness == 0.3f && pt.layer[0].metallic == 1.0f &&
-          pt.layer[0].opacity == 0.8f && pt.layer[0].flags == 0u);
+          pt.layer[0].opacity == 0.8f && pt.layer[0].flags == SU_PAINT_LAYER_TINT);
     CHECK(pt.layer[1].flags == (SU_PAINT_LAYER_MULTIPLY | SU_PAINT_LAYER_GLOW_TINT) && pt.layer[1].glow_color[1] == 1.0f &&
           pt.layer[1].glow_strength == 4.0f && pt.layer[1].opacity == 1.0f);
     {
