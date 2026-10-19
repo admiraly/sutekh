@@ -51,7 +51,11 @@ jobs:
     runs-on: ubuntu-latest
     # The newest GCC release series (16.x point release) under the repository's -Werror policy, renderer and glTF
     # importer included; lavapipe draws the render tests.
-    container: gcc:16.2
+    container:
+      image: gcc:16.2
+      # the containment test installs its own seccomp filter and probes io_uring: Docker's default profile would be a
+      # second filter and blocks io_uring, so the container runs without it (the runner VM is the isolation)
+      options: --security-opt seccomp=unconfined
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -72,6 +76,13 @@ jobs:
           # -k 0: report every file that fails, not just the first
           cmake --build build -j 2 -- -k 0
           ctest --test-dir build --output-on-failure -j 2
+      - name: Diagnose (temporary) render_ghost at -O0
+        if: always()
+        run: |
+          export PATH=/opt/venv/bin:$PATH
+          cmake -S . -B build-dbg -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=ON -DSUTEKH_ASSET_IMPORT=ON
+          cmake --build build-dbg --target test_render_ghost
+          mkdir -p build-dbg/gw && ./build-dbg/test_render_ghost build-dbg/gw || true
 
   runtime:
     name: Linux checked runtime
