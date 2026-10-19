@@ -100,7 +100,8 @@ interpreter for Sutekh's Python tests and generators; set it before
 `add_subdirectory` to choose another), `SUTEKH_VULKAN_INCLUDE_DIR` (the Vulkan
 header directory the renderer uses, empty when there is none or
 `SUTEKH_RENDER=OFF`) and, when that is non-empty, the interface target
-`Sutekh::vulkan_headers`.
+`Sutekh::vulkan_headers`. Warnings are errors by default; `-DSUTEKH_WERROR=OFF`
+keeps them as warnings (for a compiler newer than the ones CI checks).
 
 ### Licensing and commercial use
 

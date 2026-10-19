@@ -41,20 +41,28 @@ static char g_lir[65536];
 
 /* Capsule with the given fields JSON array body (without brackets). */
 static void make_capsule(const char *ver, const char *profile, const char *fields) {
-    snprintf(g_cap, sizeof g_cap,
+    int n = snprintf(g_cap, sizeof g_cap,
              "{\"capsule_format\":\"0.1\",\"ir_version\":\"%s\",\"system_id\":\"t.sys\",\"source\":\"t.lir.json\","
              "\"schema\":{\"id\":\"t.ship\",\"version\":1,\"layout_generation\":1},\"numeric_profile\":\"%s\","
              "\"fields\":[%s],\"schedule\":{\"phase\":\"simulate\",\"after\":[],\"before\":[],\"parallel\":\"serial\"},"
              "\"limits\":{\"max_instructions\":4096,\"max_rows\":1000000,\"allocation\":\"forbidden\"},"
              "\"tests\":[\"t.test.json\"]}",
              ver, profile, fields);
+    if (n < 0 || (size_t)n >= sizeof g_cap) {
+        fprintf(stderr, "capsule document too long\n");
+        exit(1);
+    }
 }
 
 static void make_lir(const char *ver, const char *profile, const char *insns) {
-    snprintf(g_lir, sizeof g_lir,
+    int n = snprintf(g_lir, sizeof g_lir,
              "{\"ir_version\":\"%s\",\"system_id\":\"t.sys\",\"numeric_profile\":\"%s\",\"query\":\"t.ship\","
              "\"instructions\":[%s]}",
              ver, profile, insns);
+    if (n < 0 || (size_t)n >= sizeof g_lir) {
+        fprintf(stderr, "lir document too long\n");
+        exit(1);
+    }
 }
 
 #define P3 "fixed_q32_v1"

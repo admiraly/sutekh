@@ -259,7 +259,7 @@ uint32_t su_render_resource_state(const SuRenderer *r, SuRenderHandle h) {
 }
 
 uint32_t su_render_release(SuRenderer *r, SuRenderHandle h) {
-    uint32_t idx;
+    uint32_t idx = 0;
     Res *s = su_rvk_get(r, h, RES_NONE, &idx);
     if (s == NULL || s->internal) {
         return SU_E_STALE_HANDLE;
@@ -272,7 +272,7 @@ uint32_t su_render_release(SuRenderer *r, SuRenderHandle h) {
 /* ---------- meshes ---------- */
 
 uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRenderHandle *out) {
-    uint32_t idx;
+    uint32_t idx = 0;
     uint32_t i;
     Res *s;
     MeshRes *m;
@@ -462,7 +462,7 @@ static int make_cube_set(SuRenderer *r, TexRes *t) {
 }
 
 static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int internal, SuRenderHandle *out) {
-    uint32_t idx;
+    uint32_t idx = 0;
     uint32_t i;
     uint32_t maxm = 1;
     uint32_t big;
@@ -889,7 +889,7 @@ static int all_finite(const float *v, uint32_t n) {
 }
 
 uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc *d, SuRenderHandle *out) {
-    uint32_t idx;
+    uint32_t idx = 0;
     uint32_t i;
     uint32_t seen = 0;
     Res *s;
@@ -989,7 +989,7 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
 }
 
 uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d, SuRenderHandle *out) {
-    uint32_t idx;
+    uint32_t idx = 0;
     uint32_t i;
     Res *s;
     if (r == NULL || d == NULL || out == NULL || d->factors.alpha_mode > SU_ASSET_ALPHA_BLEND) {
@@ -1070,7 +1070,7 @@ static float max_scale(const float *m) {
 }
 
 uint32_t su_render_model_create(SuRenderer *r, const SuRenderModelNode *nodes, uint32_t count, SuRenderHandle *out) {
-    uint32_t idx;
+    uint32_t idx = 0;
     uint32_t i;
     uint32_t k;
     Res *s;
@@ -1144,7 +1144,7 @@ uint32_t su_render_model_create(SuRenderer *r, const SuRenderModelNode *nodes, u
 
 /* Takes ownership of half (size and mips as su_env_half_count / su_env_mip_count; freed on failure too). */
 static uint32_t env_create(SuRenderer *r, uint32_t size, uint32_t mips, uint16_t *half, int internal, SuRenderHandle *out) {
-    uint32_t idx;
+    uint32_t idx = 0;
     uint32_t m;
     Res *s;
     TexRes *t;
