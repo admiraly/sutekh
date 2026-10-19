@@ -79,6 +79,7 @@ typedef struct Scene {
     SuRenderHandle env;
     float env_intensity;
     SuRenderPost post;
+    SuRenderShadow shadow;
 } Scene;
 
 static void scene_init(Scene *s) {
@@ -89,7 +90,8 @@ static void scene_init(Scene *s) {
     s->emissive = 1.0f;
 }
 
-static const SuRenderObject *g_obj = NULL; /* when set, render() draws this object instead of the default one */
+static const SuRenderObject *g_obj = NULL; /* when set, render() draws these objects instead of the default one */
+static uint32_t g_obj_count = 1;
 
 static int render(const Scene *s, SuRenderHandle model, uint8_t *out) {
     SuRenderFrameDesc f;
@@ -117,8 +119,9 @@ static int render(const Scene *s, SuRenderHandle model, uint8_t *out) {
     f.light.exposure = s->exposure;
     f.light.clear_color[3] = 1.0f;
     f.objects = g_obj != NULL ? g_obj : &o;
-    f.object_count = 1;
+    f.object_count = g_obj != NULL ? g_obj_count : 1u;
     f.post = s->post;
+    f.shadow = s->shadow;
     f.env = s->env;
     f.env_intensity = s->env_intensity;
     for (k = 0; k < 3; k++) {
@@ -869,6 +872,128 @@ static void test_scale3(void) {
     g_obj = NULL;
 }
 
+/* Directional sun shadows: a small quad between the sun and a large one shades it; off, NO_SHADOW, strength. */
+static void test_shadows(void) {
+    static uint8_t off[W * H * 4];
+    static uint8_t on[W * H * 4];
+    static uint8_t img[W * H * 4];
+    Scene sc;
+    Pm p;
+    SuRenderObject o[2];
+    SuRenderHandle mat = 0;
+    SuRenderHandle pbr = 0;
+    SuRenderHandle ground;
+    SuRenderHandle ground_pbr;
+    SuRenderMaterialDesc md;
+    SuRenderStats st;
+    double lit;
+    double dark;
+    double v[3];
+    uint32_t k;
+    int pass;
+    scene_init(&sc);
+    sc.sun_dir[0] = 0.3f; /* the shadow of a caster 2 units in front falls 0.6 units to +x */
+    sc.sun_dir[2] = -1.0f;
+    sc.ambient = 0.25f;
+    sc.sky[0] = sc.sky[1] = sc.sky[2] = 0.4f;
+    pm_init(&p, 0.8f);
+    CHECK(su_render_paint_material_create(g_r, &p.d, &mat) == SU_OK);
+    ground = quad_model(mat);
+    memset(&md, 0, sizeof md);
+    su_asset_material_default(&md.factors);
+    md.factors.base_color[0] = md.factors.base_color[1] = md.factors.base_color[2] = 0.8f;
+    md.factors.metallic = 0.0f;
+    md.factors.roughness = 1.0f;
+    CHECK(su_render_material_create(g_r, &md, &pbr) == SU_OK);
+    ground_pbr = quad_model(pbr);
+    memset(o, 0, sizeof o);
+    for (k = 0; k < 2u; k++) {
+        o[k].rot.w = 1.0f;
+        o[k].tint[0] = o[k].tint[1] = o[k].tint[2] = o[k].tint[3] = 1.0f;
+        o[k].emissive = 1.0f;
+        o[k].model = ground;
+    }
+    o[0].pos = su_wpos(0.0, 0.0, -6.0); /* the receiver: 6 x 6 units facing the camera */
+    o[0].scale = 3.0f;
+    o[1].pos = su_wpos(-0.6, 0.0, -4.0); /* the caster: 1 x 1, its shadow centred on the receiver */
+    o[1].scale = 0.5f;
+    g_obj = o;
+    g_obj_count = 2;
+    for (pass = 0; pass < 2; pass++) { /* paint receiver, then PBR-lite receiver */
+        o[0].model = pass == 0 ? ground : ground_pbr;
+        memset(&sc.shadow, 0, sizeof sc.shadow);
+        CHECK(render(&sc, 0, off));
+        CHECK(su_render_stats(g_r, &st) == SU_OK && st.shadow_size == 0u && st.shadow_casters == 0u);
+        sc.shadow.flags = SU_SHADOW_ON;
+        CHECK(render(&sc, 0, on));
+        CHECK(su_render_stats(g_r, &st) == SU_OK);
+        printf("shadow (%s receiver): map %u, %u casters, %u draws, texel %.4f units\n", pass == 0 ? "paint" : "PBR-lite",
+               (unsigned)st.shadow_size, (unsigned)st.shadow_casters, (unsigned)st.shadow_draws, (double)st.shadow_texel);
+        CHECK(st.shadow_size == 2048u && st.shadow_casters == 2u && st.shadow_draws >= 1u && st.shadow_texel > 0.0f);
+        lin_px(off, 0.5f, 0.5f, v);
+        lit = v[1];
+        lin_px(on, 0.5f, 0.5f, v);
+        dark = v[1];
+        printf("shadow: centre of the receiver %.4f lit, %.4f in the shadow\n", lit, dark);
+        CHECK(dark < lit * 0.5);
+        /* far from the shadow (right part of the receiver) nothing changes */
+        CHECK(same_px(px(on, 128 + 70, 128), px(off, 128 + 70, 128)));
+        CHECK(same_px(px(on, 128 - 18, 128 + 70), px(off, 128 - 18, 128 + 70)));
+        /* the caster's own lit face is unchanged */
+        CHECK(same_px(px(on, 128 - 33, 128), px(off, 128 - 33, 128)));
+        /* strength 0.5: half of the sun's contribution is removed */
+        sc.shadow.strength = 0.5f;
+        CHECK(render(&sc, 0, img));
+        lin_px(img, 0.5f, 0.5f, v);
+        printf("shadow: strength 0.5 -> %.4f (expected about %.4f)\n", v[1], (lit + dark) * 0.5);
+        CHECK(fabs(v[1] - (lit + dark) * 0.5) < 0.02);
+        sc.shadow.strength = 0.0f;
+        /* a caster flagged NO_SHADOW throws none */
+        o[1].flags = SU_RENDER_OBJECT_NO_SHADOW;
+        CHECK(render(&sc, 0, img));
+        CHECK(su_render_stats(g_r, &st) == SU_OK && st.shadow_casters == 1u);
+        CHECK(same_px(px(img, 128, 128), px(off, 128, 128)));
+        o[1].flags = 0;
+        /* translucent objects do not cast either */
+        o[1].tint[3] = 0.5f;
+        CHECK(render(&sc, 0, img));
+        CHECK(su_render_stats(g_r, &st) == SU_OK && st.shadow_casters == 1u);
+        o[1].tint[3] = 1.0f;
+        /* a fitted slice that ends before the receiver: no receivers, no shadow */
+        sc.shadow.distance = 2.0f;
+        CHECK(render(&sc, 0, img));
+        CHECK(same_px(px(img, 128, 128), px(off, 128, 128)));
+        /* a slice that reaches it, at another map size */
+        sc.shadow.distance = 20.0f;
+        sc.shadow.size = 1024;
+        CHECK(render(&sc, 0, img));
+        CHECK(su_render_stats(g_r, &st) == SU_OK && st.shadow_size == 1024u);
+        lin_px(img, 0.5f, 0.5f, v);
+        CHECK(v[1] < lit * 0.5);
+        sc.shadow.distance = 0.0f;
+        sc.shadow.size = 0;
+        /* back off: identical to never having had shadows */
+        memset(&sc.shadow, 0, sizeof sc.shadow);
+        CHECK(render(&sc, 0, img));
+        CHECK(memcmp(img, off, sizeof img) == 0);
+    }
+    /* a size that is not a power of two in 256..8192 is refused */
+    sc.shadow.flags = SU_SHADOW_ON;
+    sc.shadow.size = 300;
+    {
+        SuRenderFrameDesc f;
+        memset(&f, 0, sizeof f);
+        f.struct_size = sizeof f;
+        f.camera.rot.w = 1.0f;
+        f.camera.fov_y = FOV;
+        f.camera.near_z = 0.05f;
+        f.shadow = sc.shadow;
+        CHECK(su_render_frame_ex(g_r, &f) == SU_E_INVALID_ARGUMENT);
+    }
+    g_obj = NULL;
+    g_obj_count = 1;
+}
+
 static void test_dirt_ao(void) {
     static uint8_t dirt[16 * 16 * 4];
     static uint8_t ao[16 * 16 * 4];
@@ -1342,6 +1467,7 @@ int main(int argc, char **argv) {
     test_glow();
     test_glow_mask();
     test_scale3();
+    test_shadows();
     test_dirt_ao();
     test_environment();
     test_color_spaces();

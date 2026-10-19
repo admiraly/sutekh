@@ -12,7 +12,34 @@ layout(set = 0, binding = 0) uniform Frame {
     vec4 sky_nadir;
     vec4 up;           // xyz; w: exposure
     vec4 params;       // x: tonemap mode, y: time in seconds
+    mat4 shadow_vp;    // camera-relative position -> shadow map clip space (x, y -1..1, depth 0..1 from the sun)
+    vec4 shadow_params; // x: strength (0: no shadow), y: depth bias, z: 1 / map size, w: normal offset (units)
 } fr;
+
+#ifdef SU_SHADOW_RECEIVER
+// The sun's shadow map (compare sampler: 1 where the reference depth is not farther than the stored one).
+layout(set = 0, binding = 1) uniform sampler2DShadow t_shadow;
+
+// Fraction of the sun reaching p (camera-relative) with geometric normal n: 3 x 3 percentage-closer filter.
+float sun_shadow(vec3 p, vec3 n) {
+    if (fr.shadow_params.x <= 0.0) {
+        return 1.0;
+    }
+    vec4 s = fr.shadow_vp * vec4(p + n * fr.shadow_params.w, 1.0);
+    if (abs(s.x) > 1.0 || abs(s.y) > 1.0 || s.z > 1.0) {
+        return 1.0;
+    }
+    vec2 uv = s.xy * 0.5 + 0.5;
+    float ref = s.z - fr.shadow_params.y;
+    float lit = 0.0;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            lit += texture(t_shadow, vec3(uv + vec2(float(x), float(y)) * fr.shadow_params.z, ref));
+        }
+    }
+    return 1.0 - fr.shadow_params.x * (1.0 - lit / 9.0);
+}
+#endif
 
 vec3 sky_base(vec3 d) {
     float h = dot(d, fr.up.xyz);

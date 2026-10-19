@@ -47,6 +47,17 @@ meaning: `baseColorTexture` albedo (sRGB), `normalTexture` normal (cooked as BC5
 
 Malformed fields produce an import warning and keep the default; a material without the extension cooks exactly as
 before. The cooked layout is `SuAssetMaterial` + `SuAssetPaint` (`include/sutekh/asset.h`). Tests: `test_render_paint`.
+### 2.2 Directional sun shadows (optional)
+
+`SuRenderFrameDesc.shadow` (`SuRenderShadow`) is zero for "off": nothing extra is allocated or drawn and frames render
+exactly as before. With `SU_SHADOW_ON` a single shadow map (`size`, default 2048) is fitted each frame in the sun's frame
+to the visible objects (and, with `distance` > 0, to the view frustum slice up to that distance, for close-ups of huge
+hulls), with texels snapped to a world-space grid so it does not shimmer as the camera moves. Casters are the opaque
+objects without `SU_RENDER_OBJECT_NO_SHADOW` reaching into that box from the sun's side, drawn depth-only at the LOD the
+camera selects; blended materials and translucent objects do not cast. PBR-lite and paint materials multiply the sun's
+direct light (not ambient or glow) by a 3 x 3 percentage-closer filter of the map, scaled by `strength`. Cost: one
+depth-only pass over the casters and nine shadow taps per lit pixel. Tests: `test_render_paint` (`test_shadows`).
+
 ## 3. Shader/pipeline edits
 
 Shader source is an asset with explicit include dependencies and compiler/target/resource-layout fingerprints. Compile only affected variants using an established compiler adapter. Prepare driver pipelines away from the render-critical path. Keep the last compatible pipeline active until the new one is ready; use a documented fallback when an interface change makes that impossible.

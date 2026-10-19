@@ -717,7 +717,7 @@ void su_rvk_record_uploads(SuRenderer *r, Frame *fr, VkCommandBuffer cmd) {
         } else {
             free(s->u.tex.owned);
             s->u.tex.owned = NULL;
-            memset(s->u.tex.src, 0, sizeof s->u.tex.src);
+            memset((void *)s->u.tex.src, 0, sizeof s->u.tex.src);
             r->tex_ready_this_frame = 1;
         }
         r->q_head = (r->q_head + 1u) % cap;
