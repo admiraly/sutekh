@@ -69,7 +69,8 @@ jobs:
           python tools/bootstrap_vulkan_headers.py
           python tools/bootstrap_asset_deps.py
           cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=ON -DSUTEKH_ASSET_IMPORT=ON
-          cmake --build build -j 2
+          # -k 0: report every file that fails, not just the first
+          cmake --build build -j 2 -- -k 0
           ctest --test-dir build --output-on-failure -j 2
 
   runtime:
