@@ -142,7 +142,11 @@ static const uint8_t *center(void) {
 }
 
 static int is(const uint8_t *p, int r, int g, int b) {
-    return abs(p[0] - r) <= 2 && abs(p[1] - g) <= 2 && abs(p[2] - b) <= 2;
+    int ok = abs(p[0] - r) <= 2 && abs(p[1] - g) <= 2 && abs(p[2] - b) <= 2;
+    if (!ok) {
+        fprintf(stderr, "pixel %d %d %d, expected %d %d %d\n", p[0], p[1], p[2], r, g, b);
+    }
+    return ok;
 }
 
 static int srgb8(double l) {
