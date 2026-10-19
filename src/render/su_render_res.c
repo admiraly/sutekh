@@ -388,7 +388,13 @@ static uint64_t level_bytes(uint32_t format, uint32_t w, uint32_t h) {
     return format == TEXFMT_ENV ? (uint64_t)w * h * 8u : su_asset_texture_level_size(format, w, h);
 }
 
+static int make_texture_image_usage(SuRenderer *r, TexRes *t, VkImageUsageFlags extra);
+
 static int make_texture_image(SuRenderer *r, TexRes *t) {
+    return make_texture_image_usage(r, t, 0);
+}
+
+static int make_texture_image_usage(SuRenderer *r, TexRes *t, VkImageUsageFlags extra) {
     VkImageCreateInfo ii;
     VkMemoryRequirements req;
     VkMemoryAllocateInfo ai;
@@ -406,7 +412,7 @@ static int make_texture_image(SuRenderer *r, TexRes *t) {
     ii.flags = t->layers == 6u ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0u;
     ii.samples = VK_SAMPLE_COUNT_1_BIT;
     ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | extra;
     ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (r->f.vkCreateImage(r->dev, &ii, NULL, &t->img) != VK_SUCCESS) {
         return 0;
@@ -1220,11 +1226,309 @@ static uint32_t env_create(SuRenderer *r, uint32_t size, uint32_t mips, uint16_t
     return SU_OK;
 }
 
-uint32_t su_render_env_create(SuRenderer *r, uint32_t size, const float *faces, SuRenderHandle *out) {
+static void image_barrier(SuRenderer *r, VkCommandBuffer cmd, VkImage img, uint32_t mip0, uint32_t mips, VkImageLayout from,
+                          VkImageLayout to, VkAccessFlags src_access, VkAccessFlags dst_access, VkPipelineStageFlags src_stage,
+                          VkPipelineStageFlags dst_stage) {
+    VkImageMemoryBarrier b;
+    memset(&b, 0, sizeof b);
+    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.srcAccessMask = src_access;
+    b.dstAccessMask = dst_access;
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = img;
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.baseMipLevel = mip0;
+    b.subresourceRange.levelCount = mips;
+    b.subresourceRange.layerCount = 6;
+    r->f.vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &b);
+}
+
+/* The GPU prefilter (see render.h): source chain by blits, mip 0 copied, mips 1.. rendered face by face. */
+static uint32_t env_create_gpu(SuRenderer *r, uint32_t size, uint32_t mips, const float *faces, SuRenderHandle *out) {
+    uint32_t idx = 0;
+    uint32_t m;
+    uint32_t f;
+    uint32_t nviews = 0;
+    uint32_t st = SU_OK;
+    Res *s;
+    TexRes *t;
+    TexRes src;
+    Buffer staging;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cai;
+    VkCommandBufferBeginInfo bi;
+    VkSubmitInfo si;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkImageView views[6u * 16u];
+    VkFramebuffer fbs[6u * 16u];
+    size_t texels = (size_t)6u * size * size;
+    size_t i;
+    uint16_t *h;
+    *out = 0;
+    memset(&src, 0, sizeof src);
+    memset(&staging, 0, sizeof staging);
+    memset(views, 0, sizeof views);
+    memset(fbs, 0, sizeof fbs);
+    if (!su_rvk_make_buffer(r, (VkDeviceSize)texels * 8u, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging)) {
+        su_rvk_free_buffer(r, &staging);
+        return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "staging memory for a %ux%u environment cube", (unsigned)size, (unsigned)size);
+    }
+    h = (uint16_t *)staging.map;
+    for (i = 0; i < texels; i++) { /* the CPU path's input rule: NaN, negative and > 65000 read as 0 */
+        int k;
+        for (k = 0; k < 3; k++) {
+            float v = faces[i * 4u + (size_t)k];
+            h[i * 4u + (size_t)k] = su_float_to_half(v == v && v < 65000.0f ? (v > 0.0f ? v : 0.0f) : 0.0f);
+        }
+        h[i * 4u + 3u] = su_float_to_half(1.0f);
+    }
+    if (alloc_slot(r, RES_TEXTURE, &idx) != SU_OK) {
+        su_rvk_free_buffer(r, &staging);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    s = &r->res[idx];
+    t = &s->u.tex;
+    t->format = TEXFMT_ENV;
+    t->vkfmt = VK_FORMAT_R16G16B16A16_SFLOAT;
+    t->width = t->height = size;
+    t->mips = mips;
+    t->cube_mips = mips;
+    t->layers = 6u;
+    src = *t;
+    if (!make_texture_image_usage(r, t, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) ||
+        !make_texture_image_usage(r, &src, VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+        st = su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "device memory for a %ux%u environment cube", (unsigned)size, (unsigned)size);
+        goto done;
+    }
+    {
+        VkDescriptorSetAllocateInfo ai;
+        VkDescriptorImageInfo ii;
+        VkWriteDescriptorSet w;
+        memset(&ai, 0, sizeof ai);
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = r->pool_mat;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &r->tex_dsl;
+        if (r->f.vkAllocateDescriptorSets(r->dev, &ai, &set) != VK_SUCCESS) {
+            set = VK_NULL_HANDLE;
+            st = su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "descriptor pool exhausted");
+            goto done;
+        }
+        ii.sampler = r->samplers[4];
+        ii.imageView = src.view;
+        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        memset(&w, 0, sizeof w);
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = set;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &ii;
+        r->f.vkUpdateDescriptorSets(r->dev, 1, &w, 0, NULL);
+    }
+    for (m = 1; m < mips && st == SU_OK; m++) {
+        for (f = 0; f < 6u; f++) {
+            VkImageViewCreateInfo vi;
+            VkFramebufferCreateInfo fi;
+            memset(&vi, 0, sizeof vi);
+            vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = t->img;
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = t->vkfmt;
+            vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vi.subresourceRange.baseMipLevel = m;
+            vi.subresourceRange.levelCount = 1;
+            vi.subresourceRange.baseArrayLayer = f;
+            vi.subresourceRange.layerCount = 1;
+            if (r->f.vkCreateImageView(r->dev, &vi, NULL, &views[nviews]) != VK_SUCCESS) {
+                st = su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "environment prefilter views");
+                break;
+            }
+            memset(&fi, 0, sizeof fi);
+            fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fi.renderPass = r->bloom_pass;
+            fi.attachmentCount = 1;
+            fi.pAttachments = &views[nviews];
+            fi.width = fi.height = size >> m;
+            fi.layers = 1;
+            nviews++;
+            if (r->f.vkCreateFramebuffer(r->dev, &fi, NULL, &fbs[nviews - 1u]) != VK_SUCCESS) {
+                st = su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "environment prefilter framebuffers");
+                break;
+            }
+        }
+    }
+    if (st != SU_OK) {
+        goto done;
+    }
+    memset(&cai, 0, sizeof cai);
+    cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cai.commandPool = r->pool;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    if (r->f.vkAllocateCommandBuffers(r->dev, &cai, &cmd) != VK_SUCCESS) {
+        cmd = VK_NULL_HANDLE;
+        st = su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "command buffer for the environment prefilter");
+        goto done;
+    }
+    memset(&bi, 0, sizeof bi);
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    (void)r->f.vkBeginCommandBuffer(cmd, &bi);
+    /* source mip 0 from the staging buffer, then the box chain by 2:1 linear blits */
+    image_barrier(r, cmd, src.img, 0, mips, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    {
+        VkBufferImageCopy c;
+        memset(&c, 0, sizeof c);
+        c.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        c.imageSubresource.layerCount = 6;
+        c.imageExtent.width = c.imageExtent.height = size;
+        c.imageExtent.depth = 1;
+        r->f.vkCmdCopyBufferToImage(cmd, staging.buf, src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+    }
+    for (m = 1; m < mips; m++) {
+        VkImageBlit b;
+        image_barrier(r, cmd, src.img, m - 1u, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT);
+        memset(&b, 0, sizeof b);
+        b.srcSubresource.aspectMask = b.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.srcSubresource.mipLevel = m - 1u;
+        b.dstSubresource.mipLevel = m;
+        b.srcSubresource.layerCount = b.dstSubresource.layerCount = 6;
+        b.srcOffsets[1].x = b.srcOffsets[1].y = (int32_t)(size >> (m - 1u));
+        b.dstOffsets[1].x = b.dstOffsets[1].y = (int32_t)(size >> m);
+        b.srcOffsets[1].z = b.dstOffsets[1].z = 1;
+        r->f.vkCmdBlitImage(cmd, src.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, src.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                            &b, VK_FILTER_LINEAR);
+    }
+    image_barrier(r, cmd, src.img, mips - 1u, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT);
+    /* target mip 0 = the source; mips 1.. rendered (the pass leaves each shader-readable) */
+    image_barrier(r, cmd, t->img, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    {
+        VkImageCopy c;
+        memset(&c, 0, sizeof c);
+        c.srcSubresource.aspectMask = c.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        c.srcSubresource.layerCount = c.dstSubresource.layerCount = 6;
+        c.extent.width = c.extent.height = size;
+        c.extent.depth = 1;
+        r->f.vkCmdCopyImage(cmd, src.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                            &c);
+    }
+    image_barrier(r, cmd, t->img, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    image_barrier(r, cmd, src.img, 0, mips, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                  VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->env_pf_pipe);
+    r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->bloom_layout, 0, 1, &set, 0, NULL);
+    nviews = 0;
+    for (m = 1; m < mips; m++) {
+        uint32_t ms = size >> m;
+        for (f = 0; f < 6u; f++) {
+            VkRenderPassBeginInfo rp;
+            VkViewport vp;
+            VkRect2D sc;
+            BloomPush pp;
+            memset(&rp, 0, sizeof rp);
+            rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rp.renderPass = r->bloom_pass;
+            rp.framebuffer = fbs[nviews++];
+            rp.renderArea.extent.width = rp.renderArea.extent.height = ms;
+            r->f.vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+            memset(&vp, 0, sizeof vp);
+            vp.width = vp.height = (float)ms;
+            vp.maxDepth = 1.0f;
+            memset(&sc, 0, sizeof sc);
+            sc.extent.width = sc.extent.height = ms;
+            r->f.vkCmdSetViewport(cmd, 0, 1, &vp);
+            r->f.vkCmdSetScissor(cmd, 0, 1, &sc);
+            memset(&pp, 0, sizeof pp);
+            pp.a[0] = (float)f;
+            pp.a[1] = (float)ms;
+            pp.a[2] = (float)m / (float)(mips - 1u);
+            pp.a[3] = 4.0f * 3.14159265358979f / (6.0f * (float)size * (float)size);
+            pp.b[0] = (float)(mips - 1u);
+            r->f.vkCmdPushConstants(cmd, r->bloom_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                    sizeof pp, &pp);
+            r->f.vkCmdDraw(cmd, 3, 1, 0, 0);
+            r->f.vkCmdEndRenderPass(cmd);
+        }
+    }
+    (void)r->f.vkEndCommandBuffer(cmd);
+    memset(&si, 0, sizeof si);
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    if (r->f.vkQueueSubmit(r->queue, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS || r->f.vkQueueWaitIdle(r->queue) != VK_SUCCESS) {
+        st = su_rvk_fail(r, SU_E_IO, "the environment prefilter submission failed");
+        goto done;
+    }
+    if (!make_cube_set(r, t)) {
+        st = su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "descriptor pool exhausted");
+        goto done;
+    }
+done:
+    if (cmd != VK_NULL_HANDLE) {
+        r->f.vkFreeCommandBuffers(r->dev, r->pool, 1, &cmd);
+    }
+    for (i = 0; i < (size_t)(6u * 16u); i++) {
+        if (fbs[i] != VK_NULL_HANDLE) {
+            r->f.vkDestroyFramebuffer(r->dev, fbs[i], NULL);
+        }
+        if (views[i] != VK_NULL_HANDLE) {
+            r->f.vkDestroyImageView(r->dev, views[i], NULL);
+        }
+    }
+    if (set != VK_NULL_HANDLE) {
+        (void)r->f.vkFreeDescriptorSets(r->dev, r->pool_mat, 1, &set);
+    }
+    {
+        Retired rt;
+        memset(&rt, 0, sizeof rt);
+        rt.img = src.img;
+        rt.mem = src.mem;
+        rt.view = src.view;
+        destroy_retired(r, &rt);
+    }
+    su_rvk_free_buffer(r, &staging);
+    if (st != SU_OK) {
+        Retired rt;
+        memset(&rt, 0, sizeof rt);
+        rt.img = t->img;
+        rt.mem = t->mem;
+        rt.view = t->view;
+        destroy_retired(r, &rt);
+        free_slot(r, idx);
+        return st;
+    }
+    s->state = SU_RENDER_STATE_READY;
+    r->stats.resources++;
+    *out = make_handle(RES_TEXTURE, s->gen, idx);
+    return SU_OK;
+}
+
+uint32_t su_render_env_create_ex(SuRenderer *r, uint32_t size, const float *faces, uint32_t flags, SuRenderHandle *out) {
     uint32_t mips = su_env_mip_count(size);
     uint16_t *half;
-    if (r == NULL || faces == NULL || out == NULL || mips == 0u) {
+    uint32_t st;
+    double t0;
+    if (r == NULL || faces == NULL || out == NULL || mips == 0u || (flags & ~SU_ENV_CPU) != 0u) {
         return SU_E_INVALID_ARGUMENT;
+    }
+    t0 = su_rvk_now_ms();
+    if ((flags & SU_ENV_CPU) == 0u && r->env_gpu) {
+        st = env_create_gpu(r, size, mips, faces, out);
+        r->stats.env_prefilter_ms = su_rvk_now_ms() - t0;
+        r->stats.env_prefilter_gpu = 1;
+        return st;
     }
     half = malloc((size_t)su_env_half_count(size) * sizeof *half);
     if (half == NULL) {
@@ -1234,7 +1538,13 @@ uint32_t su_render_env_create(SuRenderer *r, uint32_t size, const float *faces, 
         free(half);
         return SU_E_RESOURCE_LIMIT;
     }
+    r->stats.env_prefilter_ms = su_rvk_now_ms() - t0;
+    r->stats.env_prefilter_gpu = 0;
     return env_create(r, size, mips, half, 0, out);
+}
+
+uint32_t su_render_env_create(SuRenderer *r, uint32_t size, const float *faces, SuRenderHandle *out) {
+    return su_render_env_create_ex(r, size, faces, 0u, out);
 }
 
 uint32_t su_render_env_from_sky(SuRenderer *r, uint32_t size, const SuRenderLighting *light, SuRenderHandle *out) {

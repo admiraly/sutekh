@@ -1591,6 +1591,115 @@ static void test_env_ldr_and_downsample(void) {
     }
 }
 
+/* GPU environment prefilter against the CPU reference: every mip drawn as the sky from three directions. */
+static void test_env_gpu(void) {
+    static uint8_t a[W * H * 4];
+    static const SuVec3f dirs[3] = {{0, 0, -1}, {1, 0.3f, 0}, {-0.2f, 1, 0.4f}};
+    SuRenderLighting sky;
+    SuRenderHandle hc = 0;
+    SuRenderHandle hg = 0;
+    SuRenderStats st;
+    SuRenderDeviceInfo dev;
+    Scene s;
+    float *faces;
+    uint32_t size = 64;
+    uint32_t mips = su_env_mip_count(size);
+    uint32_t m;
+    uint32_t d;
+    uint32_t i;
+    uint32_t seed = 99;
+    double cpu_ms;
+    double gpu_ms;
+    int worst = 0;
+    double sum = 0.0;
+    long n = 0;
+    (void)su_render_device(g_r, &dev);
+    faces = malloc((size_t)6u * 1024u * 1024u * 4u * sizeof *faces);
+    CHECK(faces != NULL);
+    if (faces == NULL) {
+        return;
+    }
+    memset(&sky, 0, sizeof sky);
+    sky.sun_dir = v3(0.3f, -0.5f, -0.8f);
+    sky.sun_intensity = 4.0f;
+    sky.sun_color = v3(1, 0.9f, 0.8f);
+    sky.sky_zenith = v3(0.1f, 0.2f, 0.6f);
+    sky.sky_horizon = v3(0.6f, 0.5f, 0.4f);
+    sky.sky_nadir = v3(0.05f, 0.05f, 0.08f);
+    sky.up = v3(0, 1, 0);
+    su_env_sky_faces(size, &sky, faces);
+    for (i = 0; i < 6u * size * size; i++) { /* texture detail and a few HDR hot spots */
+        seed = seed * 1664525u + 1013904223u;
+        faces[i * 4u + 0u] *= 0.6f + 0.8f * (float)(seed >> 24) / 255.0f;
+        faces[i * 4u + 1u] *= 0.6f + 0.8f * (float)((seed >> 16) & 255u) / 255.0f;
+        if ((seed & 0x3FFu) == 0u) {
+            faces[i * 4u + 0u] = faces[i * 4u + 1u] = faces[i * 4u + 2u] = 40.0f;
+        }
+    }
+    CHECK(su_render_env_create_ex(g_r, size, faces, SU_ENV_CPU, &hc) == SU_OK);
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.env_prefilter_gpu == 0u);
+    cpu_ms = st.env_prefilter_ms;
+    CHECK(su_render_env_create_ex(g_r, size, faces, 0, &hg) == SU_OK);
+    CHECK(su_render_stats(g_r, &st) == SU_OK);
+    gpu_ms = st.env_prefilter_ms;
+    {
+        SuRenderHandle bad = 0;
+        CHECK(su_render_env_create_ex(g_r, size, faces, 0x80u, &bad) == SU_E_INVALID_ARGUMENT && bad == 0u);
+    }
+    printf("env %u: CPU prefilter %.1f ms, %s %.1f ms\n", (unsigned)size, cpu_ms, st.env_prefilter_gpu ? "GPU" : "CPU (no GPU path)",
+           gpu_ms);
+    if (!st.env_prefilter_gpu) {
+        CHECK(su_render_release(g_r, hc) == SU_OK && su_render_release(g_r, hg) == SU_OK);
+        free(faces);
+        return;
+    }
+    wait_ready(hc);
+    CHECK(su_render_resource_state(g_r, hg) == SU_RENDER_STATE_READY); /* READY on return */
+    for (m = 0; m < mips; m++) {
+        for (d = 0; d < 3u; d++) {
+            long k;
+            scene_init(&s);
+            s.sky = 1;
+            s.cam_rot = look_quat(dirs[d]);
+            s.sky_lod = (float)m;
+            s.exposure = 0.5f;
+            s.sky_cube = hc;
+            CHECK(render(&s, a));
+            s.sky_cube = hg;
+            CHECK(render(&s, g_img));
+            for (k = 0; k < (long)(W * H); k++) {
+                int c;
+                for (c = 0; c < 3; c++) {
+                    int df = abs((int)a[k * 4 + c] - (int)g_img[k * 4 + c]);
+                    worst = df > worst ? df : worst;
+                    sum += df;
+                    n++;
+                }
+            }
+        }
+    }
+    printf("env GPU vs CPU prefilter, %u mips x 3 views: mean %.3f, worst %d levels of 255\n", (unsigned)mips, sum / (double)n,
+           worst);
+    CHECK(sum / (double)n < (dev.type == SU_RENDER_DEVICE_CPU ? 2.0 : 1.0));
+    CHECK(worst <= (dev.type == SU_RENDER_DEVICE_CPU ? 40 : 8));
+    CHECK(su_render_release(g_r, hc) == SU_OK && su_render_release(g_r, hg) == SU_OK);
+    /* the cost at the sizes that matter (1024: the CPU path takes seconds; skipped on software rasterizers) */
+    for (size = 256; size <= (dev.type == SU_RENDER_DEVICE_CPU ? 256u : 1024u); size *= 4u) {
+        su_env_sky_faces(size, &sky, faces);
+        CHECK(su_render_env_create(g_r, size, faces, &hg) == SU_OK);
+        CHECK(su_render_stats(g_r, &st) == SU_OK);
+        printf("env %u: GPU prefilter %.1f ms (upload included)\n", (unsigned)size, st.env_prefilter_ms);
+        CHECK(su_render_release(g_r, hg) == SU_OK);
+        if (size == 256u) {
+            CHECK(su_render_env_create_ex(g_r, size, faces, SU_ENV_CPU, &hc) == SU_OK);
+            CHECK(su_render_stats(g_r, &st) == SU_OK);
+            printf("env %u: CPU prefilter %.1f ms\n", (unsigned)size, st.env_prefilter_ms);
+            CHECK(su_render_release(g_r, hc) == SU_OK);
+        }
+    }
+    free(faces);
+}
+
 static void test_skips_and_unchanged(void) {
     Scene s;
     SuFxVertex vtx[64];
@@ -1710,6 +1819,7 @@ int main(int argc, char **argv) {
     test_fx_sort();
     test_bc_ldr_gpu();
     test_env_ldr_and_downsample();
+    test_env_gpu();
     test_skips_and_unchanged();
     CHECK(su_render_stats(g_r, &st) == SU_OK);
     if (validation) {

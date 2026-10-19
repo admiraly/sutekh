@@ -1305,6 +1305,24 @@ static int make_pipelines(SuRenderer *r) {
             ok = make_pipe(r, &s, outs[k]);
         }
     }
+    /* GPU environment prefilter: through the bloom pass (RGBA16F, discard, left shader-readable) and layout */
+    if (ok && r->bloom_pass != VK_NULL_HANDLE) {
+        VkFormatProperties fp;
+        VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+                                    VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        r->f.vkGetPhysicalDeviceFormatProperties(r->pd, HDR_FORMAT, &fp);
+        if ((fp.optimalTilingFeatures & need) == need) {
+            memset(&s, 0, sizeof s);
+            s.vs = su_shader_fullscreen_vert;
+            s.vs_bytes = sizeof su_shader_fullscreen_vert;
+            s.fs = su_shader_env_prefilter_frag;
+            s.fs_bytes = sizeof su_shader_env_prefilter_frag;
+            s.vin = VIN_NONE;
+            s.bloom = 1;
+            ok = make_pipe(r, &s, &r->env_pf_pipe);
+            r->env_gpu = ok;
+        }
+    }
     memset(&s, 0, sizeof s);
     s.vs = su_shader_hud_vert;
     s.vs_bytes = sizeof su_shader_hud_vert;
@@ -2175,6 +2193,9 @@ void su_render_destroy(SuRenderer *r) {
             all[9] = r->skycube_pipe;
             if (r->bloom_up_pipe != VK_NULL_HANDLE) {
                 r->f.vkDestroyPipeline(r->dev, r->bloom_up_pipe, NULL);
+            }
+            if (r->env_pf_pipe != VK_NULL_HANDLE) {
+                r->f.vkDestroyPipeline(r->dev, r->env_pf_pipe, NULL);
             }
             if (r->post_bloom_pipe != VK_NULL_HANDLE) {
                 r->f.vkDestroyPipeline(r->dev, r->post_bloom_pipe, NULL);
