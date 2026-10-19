@@ -46,6 +46,32 @@ jobs:
       - name: Check repository licensing
         run: python tools/check_repository_license.py
 
+  gcc16:
+    name: Linux GCC 16.2 -Werror
+    runs-on: ubuntu-latest
+    # The newest GCC release series (16.x point release) under the repository's -Werror policy, renderer and glTF
+    # importer included; lavapipe draws the render tests.
+    container: gcc:16.2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install build tools, Python and a CPU Vulkan driver
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3 python3-venv mesa-vulkan-drivers libvulkan1 git
+          python3 -m venv /opt/venv
+          /opt/venv/bin/python -m pip install -r tools/requirements-dev.txt
+          gcc --version
+      - name: Configure, build and test with GCC 16
+        run: |
+          export PATH=/opt/venv/bin:$PATH
+          python tools/bootstrap_vulkan_headers.py
+          python tools/bootstrap_asset_deps.py
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=ON -DSUTEKH_ASSET_IMPORT=ON
+          cmake --build build -j 2
+          ctest --test-dir build --output-on-failure -j 2
+
   runtime:
     name: Linux checked runtime
     runs-on: ubuntu-latest
