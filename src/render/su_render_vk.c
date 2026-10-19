@@ -337,6 +337,12 @@ static int describe(VkFns *f, VkPhysicalDevice pd, VkSurfaceKHR surface, SuRende
     f->vkGetPhysicalDeviceFormatProperties(pd, HDR_FORMAT, &hp);
     info->bloom = (hp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0u &&
                   (hp.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0u;
+    {
+        VkPhysicalDeviceFeatures ft;
+        memset(&ft, 0, sizeof ft);
+        f->vkGetPhysicalDeviceFeatures(pd, &ft);
+        info->bc_textures = ft.textureCompressionBC == VK_TRUE;
+    }
     if (p.apiVersion < VK_API_VERSION_1_2) {
         snprintf(info->why_not, sizeof info->why_not, "device supports Vulkan %u.%u; 1.2 is required",
                  VK_API_VERSION_MAJOR(p.apiVersion), VK_API_VERSION_MINOR(p.apiVersion));
@@ -806,6 +812,7 @@ static VkShaderModule shader(SuRenderer *r, const uint32_t *code, size_t bytes) 
 #define BLEND_NONE 0
 #define BLEND_ALPHA 1
 #define BLEND_ADD 2
+#define BLEND_PREMUL 3
 
 typedef struct PipeSpec {
     const uint32_t *vs;
@@ -821,6 +828,7 @@ typedef struct PipeSpec {
     int post;          /* output pass (no depth attachment) */
     int bloom;         /* 1: bloom downsample, 3: bloom upsample, 2: bloom output pass (all without depth) */
     int paint;         /* 1: the layered paint layout (frame, paint material, environment) */
+    int layout;        /* 1: the textured-effects layout (frame, one sampler), 2: the cube sky layout */
 } PipeSpec;
 
 static void attr(VkVertexInputAttributeDescription *a, uint32_t *n, uint32_t loc, uint32_t binding, VkFormat fmt,
@@ -965,6 +973,14 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         cba.alphaBlendOp = VK_BLEND_OP_ADD;
+    } else if (s->blend == BLEND_PREMUL) {
+        cba.blendEnable = VK_TRUE;
+        cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        cba.colorBlendOp = VK_BLEND_OP_ADD;
+        cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        cba.alphaBlendOp = VK_BLEND_OP_ADD;
     } else if (s->blend == BLEND_ADD) {
         cba.blendEnable = VK_TRUE;
         cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -995,6 +1011,11 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
     gi.pColorBlendState = &cb;
     gi.pDynamicState = &dy;
     gi.layout = s->post ? r->post_layout : s->paint ? r->paint_layout : r->scene_layout;
+    if (s->layout == 1) {
+        gi.layout = r->fxtex_layout;
+    } else if (s->layout == 2) {
+        gi.layout = r->skycube_layout;
+    }
     gi.renderPass = s->post ? r->post_pass : r->scene_pass;
     if (s->bloom == 1 || s->bloom == 3) { /* 1: downsample (one sampler), 3: upsample (three samplers) */
         gi.layout = s->bloom == 1 ? r->bloom_layout : r->bloom3_layout;
@@ -1053,6 +1074,24 @@ static int make_pipelines(SuRenderer *r) {
     s.depth_test = 1;
     s.blend = BLEND_ADD;
     ok = ok && make_pipe(r, &s, &r->fx_pipe);
+    /* textured effects: additive and premultiplied alpha */
+    s.layout = 1;
+    s.fs = su_shader_fx_tex_add_frag;
+    s.fs_bytes = sizeof su_shader_fx_tex_add_frag;
+    ok = ok && make_pipe(r, &s, &r->fxtex_pipe[0]);
+    s.fs = su_shader_fx_tex_pm_frag;
+    s.fs_bytes = sizeof su_shader_fx_tex_pm_frag;
+    s.blend = BLEND_PREMUL;
+    ok = ok && make_pipe(r, &s, &r->fxtex_pipe[1]);
+    /* the cube-map sky background */
+    memset(&s, 0, sizeof s);
+    s.vs = su_shader_fullscreen_vert;
+    s.vs_bytes = sizeof su_shader_fullscreen_vert;
+    s.fs = su_shader_sky_cube_frag;
+    s.fs_bytes = sizeof su_shader_sky_cube_frag;
+    s.vin = VIN_NONE;
+    s.layout = 2;
+    ok = ok && make_pipe(r, &s, &r->skycube_pipe);
     /* PBR variants */
     for (i = 0; i < PIPE_PBR_COUNT && ok; i++) {
         memset(&s, 0, sizeof s);
@@ -1228,6 +1267,30 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
     if (r->f.vkCreatePipelineLayout(r->dev, &pli, NULL, &r->post_layout) != VK_SUCCESS) {
         return 0;
     }
+    {
+        /* textured effects (frame + one sampler, no push constants) and the cube sky (frame + cube + SkyPush) */
+        VkDescriptorSetLayout fsets[2];
+        VkPushConstantRange spc;
+        VkPipelineLayoutCreateInfo fli;
+        fsets[0] = r->frame_dsl;
+        fsets[1] = r->tex_dsl;
+        memset(&fli, 0, sizeof fli);
+        fli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        fli.setLayoutCount = 2;
+        fli.pSetLayouts = fsets;
+        if (r->f.vkCreatePipelineLayout(r->dev, &fli, NULL, &r->fxtex_layout) != VK_SUCCESS) {
+            return 0;
+        }
+        fsets[1] = r->env_dsl;
+        memset(&spc, 0, sizeof spc);
+        spc.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        spc.size = sizeof(SkyPush);
+        fli.pushConstantRangeCount = 1;
+        fli.pPushConstantRanges = &spc;
+        if (r->f.vkCreatePipelineLayout(r->dev, &fli, NULL, &r->skycube_layout) != VK_SUCCESS) {
+            return 0;
+        }
+    }
     /* frame sets (one per slot), the output pass input and the font */
     /* bloom: output/upsample layout with three samplers, push constants for both bloom layouts, one pool for the
      * per-level sets (BLOOM_MAX_LEVELS down + up_a + up_b + the output set) */
@@ -1341,6 +1404,20 @@ static void write_image_set(SuRenderer *r, VkDescriptorSet set, VkImageView view
     w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w.pImageInfo = &ii;
     r->f.vkUpdateDescriptorSets(r->dev, 1, &w, 0, NULL);
+}
+
+/* The per-frame pool of sampler sets for textured effect batches (reset at the start of each frame). */
+static int make_fx_pool(SuRenderer *r, Frame *fr) {
+    VkDescriptorPoolSize ps;
+    VkDescriptorPoolCreateInfo pi;
+    ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ps.descriptorCount = r->max_fx_batches;
+    memset(&pi, 0, sizeof pi);
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = r->max_fx_batches;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &ps;
+    return r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &fr->fx_pool) == VK_SUCCESS;
 }
 
 static int make_frame_sets(SuRenderer *r) {
@@ -1858,6 +1935,10 @@ void su_render_destroy(SuRenderer *r) {
             su_rvk_free_buffer(r, &fr->lines);
             su_rvk_free_buffer(r, &fr->draw_inst);
             su_rvk_free_buffer(r, &fr->fx);
+            su_rvk_free_buffer(r, &fr->fx_tex);
+            if (fr->fx_pool != VK_NULL_HANDLE) {
+                r->f.vkDestroyDescriptorPool(r->dev, fr->fx_pool, NULL);
+            }
             su_rvk_free_buffer(r, &fr->hud);
             su_rvk_free_buffer(r, &fr->ubo);
             su_rvk_free_buffer(r, &fr->staging);
@@ -1874,7 +1955,7 @@ void su_render_destroy(SuRenderer *r) {
         su_rvk_free_buffer(r, &r->mesh_vb);
         su_rvk_free_buffer(r, &r->mesh_ib);
         {
-            VkPipeline all[7 + 2 * PIPE_PBR_COUNT];
+            VkPipeline all[10 + 2 * PIPE_PBR_COUNT];
             uint32_t k;
             all[0] = r->mesh_pipe;
             all[1] = r->line_pipe;
@@ -1883,6 +1964,9 @@ void su_render_destroy(SuRenderer *r) {
             all[4] = r->post_pipe;
             all[5] = r->hud_pipe;
             all[6] = r->bloom_down_pipe;
+            all[7] = r->fxtex_pipe[0];
+            all[8] = r->fxtex_pipe[1];
+            all[9] = r->skycube_pipe;
             if (r->bloom_up_pipe != VK_NULL_HANDLE) {
                 r->f.vkDestroyPipeline(r->dev, r->bloom_up_pipe, NULL);
             }
@@ -1908,10 +1992,10 @@ void su_render_destroy(SuRenderer *r) {
                 r->f.vkDestroySampler(r->dev, r->bloom_sampler, NULL);
             }
             for (k = 0; k < PIPE_PBR_COUNT; k++) {
-                all[7 + k] = r->pbr_pipe[k];
-                all[7 + PIPE_PBR_COUNT + k] = r->paint_pipe[k];
+                all[10 + k] = r->pbr_pipe[k];
+                all[10 + PIPE_PBR_COUNT + k] = r->paint_pipe[k];
             }
-            for (k = 0; k < 7 + 2 * PIPE_PBR_COUNT; k++) {
+            for (k = 0; k < 10 + 2 * PIPE_PBR_COUNT; k++) {
                 if (all[k] != VK_NULL_HANDLE) {
                     r->f.vkDestroyPipeline(r->dev, all[k], NULL);
                 }
@@ -1933,6 +2017,12 @@ void su_render_destroy(SuRenderer *r) {
         }
         if (r->pool_frame != VK_NULL_HANDLE) {
             r->f.vkDestroyDescriptorPool(r->dev, r->pool_frame, NULL);
+        }
+        if (r->fxtex_layout != VK_NULL_HANDLE) {
+            r->f.vkDestroyPipelineLayout(r->dev, r->fxtex_layout, NULL);
+        }
+        if (r->skycube_layout != VK_NULL_HANDLE) {
+            r->f.vkDestroyPipelineLayout(r->dev, r->skycube_layout, NULL);
         }
         if (r->scene_layout != VK_NULL_HANDLE) {
             r->f.vkDestroyPipelineLayout(r->dev, r->scene_layout, NULL);
@@ -1982,6 +2072,7 @@ void su_render_destroy(SuRenderer *r) {
     free(r->sorted);
     free(r->items);
     free(r->order);
+    free(r->fxb);
     free(r);
 }
 
@@ -2059,6 +2150,9 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
     r->max_draw = DESC_FIELD(desc, max_draw_instances, DEFAULT_DRAW_INSTANCES);
     r->max_fx = DESC_FIELD(desc, max_fx_vertices, DEFAULT_FX_VERTICES);
     r->max_hud = DESC_FIELD(desc, max_hud_vertices, DEFAULT_HUD_VERTICES);
+    r->max_fx_tex = DESC_FIELD(desc, max_fx_tex_vertices, DEFAULT_FX_TEX_VERTICES);
+    r->max_fx_batches = DESC_FIELD(desc, max_fx_batches, DEFAULT_FX_BATCHES);
+    r->fxb = malloc((size_t)r->max_fx_batches * sizeof *r->fxb);
     max_res = DESC_FIELD(desc, max_resources, DEFAULT_RESOURCES);
     if (desc->struct_size == sizeof *desc && desc->pipeline_cache_path != NULL) {
         snprintf(r->cache_path, sizeof r->cache_path, "%s", desc->pipeline_cache_path);
@@ -2068,7 +2162,7 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
     r->sorted = malloc((size_t)r->max_instances * sizeof *r->sorted);
     r->items = malloc((size_t)r->max_draw * sizeof *r->items);
     r->order = malloc((size_t)r->max_draw * sizeof *r->order);
-    if (r->sorted == NULL || r->items == NULL || r->order == NULL) {
+    if (r->sorted == NULL || r->items == NULL || r->order == NULL || r->fxb == NULL) {
         return create_fail(r, SU_E_RESOURCE_LIMIT, message, "allocation failed");
     }
     if (!load_loader(&r->f, message)) {
@@ -2178,6 +2272,9 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
                                 host, &fr->draw_inst) ||
             !su_rvk_make_buffer(r, (VkDeviceSize)r->max_fx * sizeof(SuFxVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, host,
                                 &fr->fx) ||
+            !su_rvk_make_buffer(r, (VkDeviceSize)r->max_fx_tex * sizeof(SuFxVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                host, &fr->fx_tex) ||
+            !make_fx_pool(r, fr) ||
             !su_rvk_make_buffer(r, (VkDeviceSize)r->max_hud * sizeof(SuHudVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                 host, &fr->hud) ||
             !su_rvk_make_buffer(r, sizeof(FrameUbo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, host, &fr->ubo) ||
@@ -2299,6 +2396,14 @@ typedef struct FrameIn {
     uint32_t fx_count;
     const SuHudVertex *hud;
     uint32_t hud_count;
+    const SuFxVertex *fx_tex;
+    uint32_t fx_tex_count;
+    const SuFxBatch *batches;
+    uint32_t batch_count;
+    SuRenderHandle sky_cube;
+    float sky_intensity;
+    float sky_lod;
+    SuQuatf sky_rot;
     const SuRenderFrameDesc *scene;
     SuMat4f scene_vp;
     float proj_y;
@@ -2339,6 +2444,10 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     uint32_t n_lines;
     uint32_t n_fx;
     uint32_t n_hud;
+    uint32_t n_fxt = 0;
+    uint32_t n_fxb = 0;
+    uint32_t skipped = 0;
+    VkDescriptorSet sky_set = VK_NULL_HANDLE;
     uint32_t n_items = 0;
     uint32_t i;
     uint32_t m;
@@ -2386,6 +2495,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     r->stats.wait_ms = su_rvk_now_ms() - tw;
     (void)r->f.vkResetFences(r->dev, 1, &fr->fence);
     su_rvk_collect_retired(r);
+    (void)r->f.vkResetDescriptorPool(r->dev, fr->fx_pool, 0);
 
     (void)r->f.vkResetCommandBuffer(cmd, 0);
     memset(&bi, 0, sizeof bi);
@@ -2398,6 +2508,57 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     }
     su_rvk_record_uploads(r, fr, cmd);
     su_rvk_refresh_materials(r);
+    n_fxt = in->fx_tex_count < r->max_fx_tex ? in->fx_tex_count : r->max_fx_tex;
+    n_fxt -= n_fxt % 3u;
+    if (n_fxt > 0u) {
+        memcpy(fr->fx_tex.map, in->fx_tex, (size_t)n_fxt * sizeof *in->fx_tex);
+    }
+    for (i = 0; i < in->batch_count; i++) {
+        const SuFxBatch *bt = &in->batches[i];
+        Res *tr = su_rvk_get(r, bt->texture, RES_TEXTURE, NULL);
+        uint32_t first = bt->first_vertex;
+        uint32_t count = bt->vertex_count;
+        VkDescriptorSetAllocateInfo dai;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        static const uint32_t wrap_index[3] = {1u, 0u, 2u}; /* SU_FX_WRAP_* to the sampler table (repeat, clamp, mirror) */
+        if (count == 0u) {
+            continue;
+        }
+        if (first >= n_fxt) {
+            count = 0;
+        } else if (count > n_fxt - first) {
+            count = n_fxt - first;
+        }
+        count -= count % 3u;
+        if (tr == NULL || tr->state != SU_RENDER_STATE_READY || tr->u.tex.layers != 1u || count == 0u || first % 3u != 0u ||
+            bt->blend > SU_FX_BLEND_PREMUL || n_fxb >= r->max_fx_batches) {
+            skipped++;
+            continue;
+        }
+        memset(&dai, 0, sizeof dai);
+        dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool = fr->fx_pool;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts = &r->tex_dsl;
+        if (r->f.vkAllocateDescriptorSets(r->dev, &dai, &set) != VK_SUCCESS) {
+            skipped++;
+            continue;
+        }
+        write_image_set(r, set, tr->u.tex.view,
+                        r->samplers[wrap_index[bt->wrap_u > 2u ? 0u : bt->wrap_u] * 3u +
+                                    wrap_index[bt->wrap_v > 2u ? 0u : bt->wrap_v]]);
+        r->fxb[n_fxb].set = set;
+        r->fxb[n_fxb].first = first;
+        r->fxb[n_fxb].count = count;
+        r->fxb[n_fxb].pipe = bt->blend;
+        n_fxb++;
+    }
+    if (in->sky && in->sky_cube != 0u) {
+        Res *cr = su_rvk_get(r, in->sky_cube, RES_TEXTURE, NULL);
+        if (cr != NULL && cr->state == SU_RENDER_STATE_READY && cr->u.tex.layers == 6u && cr->u.tex.env_set != VK_NULL_HANDLE) {
+            sky_set = cr->u.tex.env_set;
+        }
+    }
     {
         /* the environment: a READY cube from the frame description, else the built-in black one (params.z = 0) */
         FrameUbo u = in->ubo;
@@ -2469,7 +2630,43 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     viewport(r, cmd);
     r->stats.draws = 0;
     r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->scene_layout, 0, 1, &fr->frame_set, 0, NULL);
-    if (in->sky) {
+    if (in->sky && sky_set != VK_NULL_HANDLE) {
+        SkyPush sp;
+        SuQuatf q = in->sky_rot;
+        SuMat4f rm;
+        VkDescriptorSet two[2];
+        uint32_t k;
+        if (q.x == 0.0f && q.y == 0.0f && q.z == 0.0f && q.w == 0.0f) {
+            q.w = 1.0f;
+        } else {
+            float ql = sqrtf(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+            q.x /= ql;
+            q.y /= ql;
+            q.z /= ql;
+            q.w /= ql;
+        }
+        q.x = -q.x; /* world to cube: the inverse rotation */
+        q.y = -q.y;
+        q.z = -q.z;
+        rm = su_mat4f_from_quat(q);
+        memset(&sp, 0, sizeof sp);
+        for (k = 0; k < 3u; k++) { /* rows of the matrix: element (row k, column c) is m[c * 4 + k] */
+            sp.r[k][0] = rm.m[0 * 4 + k];
+            sp.r[k][1] = rm.m[1 * 4 + k];
+            sp.r[k][2] = rm.m[2 * 4 + k];
+        }
+        sp.p[0] = in->sky_intensity > 0.0f ? in->sky_intensity : 1.0f;
+        sp.p[1] = in->sky_lod > 0.0f ? in->sky_lod : 0.0f;
+        two[0] = fr->frame_set;
+        two[1] = sky_set;
+        r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->skycube_pipe);
+        r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->skycube_layout, 0, 2, two, 0, NULL);
+        r->f.vkCmdPushConstants(cmd, r->skycube_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof sp, &sp);
+        r->f.vkCmdDraw(cmd, 3, 1, 0, 0);
+        r->stats.draws++;
+        /* the scene layout's push constant range differs: bind its frame set again */
+        r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->scene_layout, 0, 1, &fr->frame_set, 0, NULL);
+    } else if (in->sky) {
         r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->sky_pipe);
         r->f.vkCmdDraw(cmd, 3, 1, 0, 0);
         r->stats.draws++;
@@ -2509,6 +2706,22 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->fx.buf, &zero);
         r->f.vkCmdDraw(cmd, n_fx, 1, 0, 0);
         r->stats.draws++;
+    }
+    if (n_fxb > 0u) {
+        uint32_t last_pipe = UINT32_MAX;
+        r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->fx_tex.buf, &zero);
+        for (i = 0; i < n_fxb; i++) {
+            VkDescriptorSet two[2];
+            if (r->fxb[i].pipe != last_pipe) {
+                r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fxtex_pipe[r->fxb[i].pipe]);
+                last_pipe = r->fxb[i].pipe;
+            }
+            two[0] = fr->frame_set;
+            two[1] = r->fxb[i].set;
+            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fxtex_layout, 0, 2, two, 0, NULL);
+            r->f.vkCmdDraw(cmd, r->fxb[i].count, 1, r->fxb[i].first, 0);
+            r->stats.draws++;
+        }
     }
     r->f.vkCmdEndRenderPass(cmd);
 
@@ -2703,6 +2916,9 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     r->stats.instances = n_inst;
     r->stats.line_vertices = n_lines;
     r->stats.fx_vertices = n_fx;
+    r->stats.fx_tex_vertices = n_fxt;
+    r->stats.fx_batches_drawn = n_fxb;
+    r->stats.fx_batches_skipped = skipped;
     r->stats.hud_vertices = n_hud;
     r->stats.width = r->width;
     r->stats.height = r->height;
@@ -2792,6 +3008,7 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
     if (r == NULL || f == NULL || f->struct_size != sizeof *f || (f->objects == NULL && f->object_count > 0u) ||
         (f->debug_instances == NULL && f->debug_instance_count > 0u) || (f->lines == NULL && f->line_vertex_count > 0u) ||
         (f->fx == NULL && f->fx_vertex_count > 0u) || (f->hud == NULL && f->hud_vertex_count > 0u) ||
+        (f->fx_tex == NULL && f->fx_tex_vertex_count > 0u) || (f->fx_batches == NULL && f->fx_batch_count > 0u) ||
         !(f->camera.fov_y > 0.0f && f->camera.fov_y < 3.1f) || !(f->camera.near_z > 0.0f)) {
         return SU_E_INVALID_ARGUMENT;
     }
@@ -2856,6 +3073,14 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
     in.fx_count = f->fx_vertex_count;
     in.hud = f->hud;
     in.hud_count = f->hud_vertex_count;
+    in.fx_tex = f->fx_tex;
+    in.fx_tex_count = f->fx_tex_vertex_count;
+    in.batches = f->fx_batches;
+    in.batch_count = f->fx_batch_count;
+    in.sky_cube = f->sky_cube;
+    in.sky_intensity = f->sky_intensity;
+    in.sky_lod = f->sky_lod;
+    in.sky_rot = f->sky_rot;
     in.scene = f;
     return render(r, &in);
 }

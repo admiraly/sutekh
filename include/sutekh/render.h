@@ -25,6 +25,7 @@
 #include <stdint.h>
 
 #include "sutekh/asset.h"
+#include "sutekh/dds.h"
 #include "sutekh/status.h"
 
 #ifdef __cplusplus
@@ -32,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 2u
+#define SU_RENDER_API_VERSION 3u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -227,6 +228,74 @@ SU_RENDER_API void su_trail_push(SuTrail *t, SuWorldPos pos, double time_s);
 SU_RENDER_API void su_trail_build(const SuTrail *t, double now_s, SuWorldPos camera, float width_head, float width_tail,
                                   const float color_head[4], const float color_tail[4], SuFxBuffer *out);
 
+/* ---- textured effects: sprites, axis-aligned sprites, textured ribbons ----
+ *
+ * The same camera-relative triangles (SuFxVertex), but uv is a real texture coordinate and a texture is bound per
+ * batch: a SuFxBatch names a range of vertices of SuRenderFrameDesc.fx_tex and the texture they sample. Draw order is
+ * the batch order, after the untextured fx, depth tested against the scene and never writing depth.
+ *
+ * Shading, exactly (t = texture sample, c = vertex colour; all linear, HDR: c.rgb may exceed 1 and feeds bloom):
+ *   SU_FX_BLEND_ADD      result = dst + t.rgb * t.a * c.rgb * c.a
+ *   SU_FX_BLEND_PREMUL   result = t.rgb * c.rgb * c.a  +  dst * (1 - t.a * c.a)     (t is premultiplied by its alpha)
+ * Colour space is the texture's format: *_SRGB formats are decoded to linear on sampling, the others are read as
+ * stored. Sprites use mip-mapped linear filtering; wrap modes apply per batch (SU_FX_WRAP_*), so a trail texture can
+ * repeat along its length while an atlas clamps. A batch whose texture is not READY (or not a 2D texture) is skipped and
+ * counted in SuRenderStats.fx_batches_skipped.
+ *
+ * Sprite uv conventions: a camera-facing sprite maps uv_rect (u0, v0, u1, v1) with (u0, v0) at the top left as an
+ * image is stored. An axis sprite has U across and V along the axis (v0 at the tail, v1 at the head). A textured trail
+ * has U along its length and V across it (see SuTrailTex). */
+typedef uint64_t SuRenderHandle;   /* a renderer resource (see "GPU resources" below); 0 = none */
+
+#define SU_FX_BLEND_ADD 0u
+#define SU_FX_BLEND_PREMUL 1u
+#define SU_FX_WRAP_CLAMP 0u
+#define SU_FX_WRAP_REPEAT 1u
+#define SU_FX_WRAP_MIRROR 2u
+
+typedef struct SuFxBatch {
+    SuRenderHandle texture;            /* a READY 2D texture */
+    uint32_t blend;                    /* SU_FX_BLEND_* */
+    uint32_t wrap_u, wrap_v;           /* SU_FX_WRAP_* */
+    uint32_t first_vertex;             /* into SuRenderFrameDesc.fx_tex; a multiple of 3 */
+    uint32_t vertex_count;             /* a multiple of 3 */
+} SuFxBatch;
+
+/* A batch covering the vertices written to buffer since first_vertex (take first_vertex = buffer->count before
+ * adding the sprites of one texture). */
+SU_RENDER_API SuFxBatch su_fx_batch(SuRenderHandle texture, uint32_t blend, uint32_t wrap_u, uint32_t wrap_v,
+                                    uint32_t first_vertex, const SuFxBuffer *buffer_now);
+
+/* UV rectangle (u0, v0, u1, v1) of frame number frame in a cols x rows atlas, frames numbered row by row from the
+ * top left; frame is taken modulo cols * rows (so a looping animation just counts up). cols or rows of 0 mean 1. */
+SU_RENDER_API void su_fx_atlas_rect(uint32_t cols, uint32_t rows, uint32_t frame, float rect[4]);
+
+/* A camera-facing sprite of half-extents half_w x half_h at pos (camera-relative), rotated by rotation radians around
+ * the view axis, with per-sprite colour (linear RGB intensity, alpha scales it) and uv_rect (NULL = 0,0,1,1). view as
+ * for su_fx_billboard. */
+SU_RENDER_API void su_fx_sprite(SuFxBuffer *b, SuVec3f pos, float half_w, float half_h, float rotation, const float color[4],
+                                const float uv_rect[4], SuMat4f view);
+/* An axis-aligned (cylindrical) sprite: a quad centred on pos (camera-relative) stretched along the world direction
+ * axis (half_length each way) and rotated around that axis to face the camera (half_width across). It stays aligned to
+ * the axis whatever the camera does; looking straight along the axis it degenerates to a sliver. Engine flames and
+ * plumes: put pos at the middle of the flame, axis along the exhaust. */
+SU_RENDER_API void su_fx_sprite_axis(SuFxBuffer *b, SuVec3f pos, SuVec3f axis, float half_length, float half_width,
+                                     const float color[4], const float uv_rect[4]);
+
+#define SU_TRAIL_U_AGE 0u                  /* u = u_offset + (age / lifetime) * u_scale */
+#define SU_TRAIL_U_DISTANCE 1u             /* u = u_offset + (distance from the head along the trail) * u_scale */
+typedef struct SuTrailTex {
+    uint32_t mode;                     /* SU_TRAIL_U_* */
+    float u_scale;                     /* 0 = 1. AGE: texture repeats across the whole trail; DISTANCE: repeats per unit^-1 */
+    float u_offset;                    /* scroll: add speed * time each frame (use SU_FX_WRAP_REPEAT) */
+    float v0, v1;                      /* v at the two edges (side vector of the plain ribbon at v0); 0 and 1 for the whole texture */
+} SuTrailTex;
+/* su_trail_build with uv: u along the length (by age, or by distance) with a scrolling offset, v across. The geometry
+ * and colours are exactly those of su_trail_build. */
+SU_RENDER_API void su_trail_build_tex(const SuTrail *t, double now_s, SuWorldPos camera, float width_head, float width_tail,
+                                      const float color_head[4], const float color_tail[4], const SuTrailTex *tex,
+                                      SuFxBuffer *out);
+
 /* ---- HUD: immediate-mode screen-space quads and text ----
  * Pixels, origin top-left. Text uses the built-in 5x7 bitmap font (project-authored, ASCII 32..126) in 8x8 cells
  * of a 128x64 R8 atlas; scale multiplies the 8-pixel cell (integer scales stay crisp). The HUD is drawn after
@@ -296,6 +365,8 @@ typedef struct SuRenderDeviceInfo {
     char why_not[160];             /* reason when meets_baseline is 0 */
     uint32_t bloom;                /* 1: the HDR format can be sampled with linear filtering, which bloom and auto
                                     * exposure need. 0: SuRenderPost requests are ignored (plain tonemap). */
+    uint32_t bc_textures;          /* 1: BC1..BC7 (BC6H included) textures are sampled natively; 0: decode on the CPU
+                                    * (su_bc6h_decode_block, su_dds_decode_rgba32f) and upload RGBA16F */
 } SuRenderDeviceInfo;
 
 /* Lists the Vulkan physical devices. *count receives the number found (all of them, even beyond cap).
@@ -321,6 +392,8 @@ typedef struct SuRenderDesc {
     uint32_t max_draw_instances;   /* object-node-submesh instances per frame after culling; 0 = 65536 */
     uint32_t max_fx_vertices;      /* per frame; 0 = 196608 */
     uint32_t max_hud_vertices;     /* per frame; 0 = 49152 */
+    uint32_t max_fx_tex_vertices;  /* textured fx per frame; 0 = 98304 */
+    uint32_t max_fx_batches;       /* textured fx batches per frame; 0 = 256 */
 } SuRenderDesc;
 #define SU_RENDER_DESC_V1_SIZE ((uint32_t)offsetof(SuRenderDesc, pipeline_cache_path))
 
@@ -347,7 +420,6 @@ SU_RENDER_API void su_render_resize(SuRenderer *r, uint32_t width, uint32_t heig
  * refused), and the GPU objects are destroyed only after every frame that could have used them has completed.
  * Handles are never part of simulation state. */
 
-typedef uint64_t SuRenderHandle;   /* 0 = none */
 
 #define SU_RENDER_STATE_INVALID 0u /* unknown, stale or released handle */
 #define SU_RENDER_STATE_PENDING 1u
@@ -373,8 +445,10 @@ typedef struct SuRenderTextureDesc {
     uint32_t width, height;
     uint32_t format;                   /* SU_TEX_* (sutekh/asset.h); BCn needs device support */
     uint32_t mip_count;
-    const uint8_t *const *mip_data;    /* level i: su_asset_texture_level_size bytes */
+    const uint8_t *const *mip_data;    /* mip_data[mip * layers + layer]: su_asset_texture_level_size bytes each */
     uint32_t flags;                    /* SU_RENDER_UPLOAD_COPY */
+    uint32_t layers;                   /* 0 or 1: a 2D texture; 6: a cube map (width == height; faces +X -X +Y -Y +Z -Z),
+                                        * sampled through a cube view; the full mip chain is uploaded as given */
 } SuRenderTextureDesc;
 
 typedef struct SuRenderMaterialDesc {
@@ -464,6 +538,16 @@ SU_RENDER_API uint32_t su_render_paint_material_create(SuRenderer *r, const SuRe
 /* An environment cubemap with prefiltered mips (see "image-based lighting"); READY when uploaded. Release with
  * su_render_release. SU_E_UNSUPPORTED_METHOD when the device cannot filter RGBA16F cube images. */
 SU_RENDER_API uint32_t su_render_env_create(SuRenderer *r, uint32_t size, const float *faces, SuRenderHandle *out);
+/* A texture straight from a parsed DDS (sutekh/dds.h): 2D, or a cube with a cube image view (6 layers). The format
+ * (and so sRGB vs linear) comes from the SuDdsImage; choose it at su_dds_parse. BCn, BC6H included, is uploaded
+ * natively when the device supports it; otherwise the handle is FAILED (see SuRenderDeviceInfo.bc_textures). The
+ * image data must stay valid until READY unless SU_RENDER_UPLOAD_COPY. A cube can be drawn as the sky background
+ * (SuRenderFrameDesc.sky_cube) without any prefiltering. */
+SU_RENDER_API uint32_t su_render_texture_create_dds(SuRenderer *r, const SuDdsImage *img, uint32_t flags, SuRenderHandle *out);
+/* An environment cube (as su_render_env_create) from a DDS cube of HDR data (BC6H, RGBA16F; RGBA8 also works): the top
+ * mip that is a power of two in 8..1024 is decoded on the CPU and prefiltered as su_render_env_create does (the GPU
+ * does not prefilter here). SU_E_INVALID_ARGUMENT for a 2D file or a size outside 8..1024 in every mip. */
+SU_RENDER_API uint32_t su_render_env_from_dds(SuRenderer *r, const SuDdsImage *img, SuRenderHandle *out);
 /* A model references meshes by handle (they must exist; the nodes are copied). READY when every LOD 0 mesh is. */
 SU_RENDER_API uint32_t su_render_model_create(SuRenderer *r, const SuRenderModelNode *nodes, uint32_t count,
                                               SuRenderHandle *out);
@@ -580,6 +664,19 @@ typedef struct SuRenderFrameDesc {
     SuRenderHandle env;                /* 0: paint materials take ambient from the procedural sky. Else an env cubemap
                                         * (su_render_env_create); a handle that is not READY counts as 0 */
     float env_intensity;               /* multiplies the env's light; 0 = 1 */
+    const SuFxVertex *fx_tex;          /* textured effects (su_fx_sprite, su_fx_sprite_axis, su_trail_build_tex) */
+    uint32_t fx_tex_vertex_count;
+    const SuFxBatch *fx_batches;       /* ranges of fx_tex and their textures, drawn in this order */
+    uint32_t fx_batch_count;
+    SuRenderHandle sky_cube;           /* 0: the procedural sky (or the clear colour). Else a READY cube (su_render_env_create,
+                                        * su_render_env_from_dds, or a cube texture) drawn as the background instead of
+                                        * the procedural sky: radiance = cube(R^-1 * d) * sky_intensity. No sun disc or
+                                        * stars are added; light.no_sky still turns the background off. Not READY: the
+                                        * procedural sky is drawn. */
+    float sky_intensity;               /* multiplies the cube background; 0 = 1 */
+    SuQuatf sky_rot;                   /* orientation of the cube in the world (all zero = identity); rotate around
+                                        * light.up with su_quatf_axis_angle */
+    float sky_lod;                     /* mip level sampled (0 = sharpest); a prefiltered env cube gets blurrier with it */
 } SuRenderFrameDesc;
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object
@@ -630,6 +727,10 @@ typedef struct SuRenderStats {
     /* ---- post processing ---- */
     uint32_t bloom_levels_active;  /* levels of the last frame's bloom chain, 0 when the chain did not run */
     uint32_t post_passes;          /* bloom render passes of the last frame (downsample + upsample) */
+    /* ---- textured effects ---- */
+    uint32_t fx_tex_vertices;      /* drawn */
+    uint32_t fx_batches_drawn;
+    uint32_t fx_batches_skipped;   /* texture not READY, not 2D, or bad range */
 } SuRenderStats;
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given

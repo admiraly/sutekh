@@ -81,3 +81,21 @@ The shipped player/server excludes agent RPC, source watchers, untrusted compila
 Maintain debug/source-map artifacts separately for profiling and crash diagnosis. Distribution size and startup time are measured alongside runtime performance. Dependency notices and the final license are owner-approved release requirements.
 
 Sources: [SOURCE_NOTES.md](SOURCE_NOTES.md).
+
+### 2.3 Textured effects, DDS textures and the cube-map sky
+
+Effects can carry textures: `SuRenderFrameDesc.fx_tex` holds camera-relative triangles (`SuFxVertex`, with real uv) and
+`fx_batches` names, per run of vertices, a 2D texture, a blend (`SU_FX_BLEND_ADD`: `dst + t.rgb * t.a * c.rgb * c.a`;
+`SU_FX_BLEND_PREMUL`: `t.rgb * c.rgb * c.a + dst * (1 - t.a * c.a)`) and wrap modes. `c` is the per-sprite colour (linear,
+HDR, so intensities above 1 feed bloom). The texture's format decides sRGB or linear. Helpers: `su_fx_sprite`,
+`su_fx_sprite_axis` (a quad along a world axis that turns about it to face the camera: flames and plumes; end-on it
+degrades to a sliver), `su_fx_atlas_rect` (frame to uv; keep a texel of padding between atlas cells, sampling is
+bilinear), `su_trail_build_tex` (U along the trail by age or by distance, with a scroll offset and wrap `REPEAT`; V across).
+
+`include/sutekh/dds.h` parses DDS files in memory (2D and cube, mips, BC1 to BC7 including BC6H, RGBA8, RGBA16F) and
+`su_render_texture_create_dds` uploads them natively when the device supports BCn (`SuRenderDeviceInfo.bc_textures`);
+a cube gets a cube image view. Trailing bytes after the pixel data are ignored. `su_render_env_from_dds` builds a
+prefiltered environment from an HDR cube; `SuRenderFrameDesc.sky_cube` draws any cube (raw or prefiltered) as the sky
+background, with intensity, rotation and lod. The BC6H decoder (`su_bc6h_decode_block`) is bit-exact to the D3D11 /
+OpenGL decode; it was checked against an independent decoder on four million random blocks and against the GPU on
+every mode. Tests: `test_render_texfx`, `test_asset_dds`.

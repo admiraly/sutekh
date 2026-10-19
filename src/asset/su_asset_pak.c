@@ -96,7 +96,13 @@ uint64_t su_asset_texture_level_size(uint32_t format, uint32_t width, uint32_t h
     case SU_TEX_BC5_UNORM:
     case SU_TEX_BC7_UNORM:
     case SU_TEX_BC7_SRGB:
+    case SU_TEX_BC2_UNORM:
+    case SU_TEX_BC2_SRGB:
+    case SU_TEX_BC6H_UF16:
+    case SU_TEX_BC6H_SF16:
         return bw * bh * 16u;
+    case SU_TEX_RGBA16F:
+        return (uint64_t)width * height * 8u;
     default:
         return 0;
     }
@@ -104,7 +110,8 @@ uint64_t su_asset_texture_level_size(uint32_t format, uint32_t width, uint32_t h
 
 const char *su_asset_texture_format_name(uint32_t format) {
     static const char *names[SU_TEX_FORMAT_COUNT] = {"unknown", "rgba8", "rgba8_srgb", "bc1", "bc1_srgb", "bc3",
-                                                     "bc3_srgb", "bc4", "bc5", "bc7", "bc7_srgb"};
+                                                     "bc3_srgb", "bc4", "bc5", "bc7", "bc7_srgb", "bc2", "bc2_srgb",
+                                                     "bc6h_uf16", "bc6h_sf16", "rgba16f"};
     return format < SU_TEX_FORMAT_COUNT ? names[format] : "unknown";
 }
 
@@ -678,7 +685,8 @@ static uint32_t check_texture(const SuAssetPak *p, uint32_t ei, char *msg) {
 }
 
 static int tex_is_srgb(uint32_t f) {
-    return f == SU_TEX_RGBA8_SRGB || f == SU_TEX_BC1_SRGB || f == SU_TEX_BC3_SRGB || f == SU_TEX_BC7_SRGB;
+    return f == SU_TEX_RGBA8_SRGB || f == SU_TEX_BC1_SRGB || f == SU_TEX_BC3_SRGB || f == SU_TEX_BC7_SRGB ||
+           f == SU_TEX_BC2_SRGB;
 }
 
 static uint32_t check_paint(const SuAssetPak *p, uint32_t ei, char *msg) {

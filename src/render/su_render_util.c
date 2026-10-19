@@ -661,6 +661,119 @@ void su_fx_glare(SuFxBuffer *b, SuVec3f pos, float size, float streak, const flo
     }
 }
 
+
+/* ---------- textured effects ---------- */
+
+/* uv is not const-qualified: C17 has no implicit float (*)[2] -> const float (*)[2] conversion (GCC -pedantic). */
+static void fx_tri_quad_uv(SuFxBuffer *b, const SuVec3f p[4], float uv[4][2], const float *c0, const float *c1) {
+    /* corners in order 0-1-2-3 around the quad; c0 for corners 0 and 1, c1 for corners 2 and 3 */
+    static const uint8_t order[6] = {0, 1, 2, 0, 2, 3};
+    uint32_t i;
+    if (b->count + 6u > b->cap) {
+        b->dropped += 2u;
+        return;
+    }
+    for (i = 0; i < 6u; i++) {
+        uint8_t k = order[i];
+        fx_vertex(&b->v[b->count], p[k], uv[k][0], uv[k][1], k < 2u ? c0 : c1);
+        b->count++;
+    }
+}
+
+static void uv_default(const float *in, float out[4]) {
+    if (in == NULL) {
+        out[0] = out[1] = 0.0f;
+        out[2] = out[3] = 1.0f;
+    } else {
+        memcpy(out, in, 4u * sizeof(float));
+    }
+}
+
+void su_fx_atlas_rect(uint32_t cols, uint32_t rows, uint32_t frame, float rect[4]) {
+    uint32_t n;
+    uint32_t cx;
+    uint32_t cy;
+    cols = cols != 0u ? cols : 1u;
+    rows = rows != 0u ? rows : 1u;
+    n = cols * rows;
+    frame %= n;
+    cx = frame % cols;
+    cy = frame / cols;
+    rect[0] = (float)cx / (float)cols;
+    rect[1] = (float)cy / (float)rows;
+    rect[2] = (float)(cx + 1u) / (float)cols;
+    rect[3] = (float)(cy + 1u) / (float)rows;
+}
+
+void su_fx_sprite(SuFxBuffer *b, SuVec3f pos, float half_w, float half_h, float rotation, const float color[4],
+                  const float uv_rect[4], SuMat4f view) {
+    SuVec3f right = v3(view.m[0], view.m[4], view.m[8]);
+    SuVec3f up = v3(view.m[1], view.m[5], view.m[9]);
+    float cs = cosf(rotation);
+    float sn = sinf(rotation);
+    SuVec3f rx = add(scale(right, cs * half_w), scale(up, sn * half_w));
+    SuVec3f ry = add(scale(right, -sn * half_h), scale(up, cs * half_h));
+    float r[4];
+    SuVec3f p[4];
+    float uv[4][2];
+    uv_default(uv_rect, r);
+    /* corners: top-left, top-right, bottom-right, bottom-left (v grows downward on screen, as in an image) */
+    p[0] = add(sub(pos, rx), ry);
+    p[1] = add(add(pos, rx), ry);
+    p[2] = sub(add(pos, rx), ry);
+    p[3] = sub(sub(pos, rx), ry);
+    uv[0][0] = r[0]; uv[0][1] = r[1];
+    uv[1][0] = r[2]; uv[1][1] = r[1];
+    uv[2][0] = r[2]; uv[2][1] = r[3];
+    uv[3][0] = r[0]; uv[3][1] = r[3];
+    fx_tri_quad_uv(b, p, uv, color, color);
+}
+
+void su_fx_sprite_axis(SuFxBuffer *b, SuVec3f pos, SuVec3f axis, float half_length, float half_width, const float color[4],
+                       const float uv_rect[4]) {
+    SuVec3f a = axis;
+    SuVec3f side;
+    SuVec3f along;
+    SuVec3f across;
+    float r[4];
+    SuVec3f p[4];
+    float uv[4][2];
+    if (dot(a, a) < 1e-20f) {
+        return;
+    }
+    a = norm(a);
+    side = cross(a, pos); /* pos is the vector from the camera (at the origin) to the sprite */
+    if (dot(side, side) < 1e-12f * (dot(pos, pos) + 1e-20f)) { /* looking along the axis: any perpendicular */
+        side = fabsf(a.y) < 0.9f ? cross(a, v3(0.0f, 1.0f, 0.0f)) : cross(a, v3(1.0f, 0.0f, 0.0f));
+    }
+    along = scale(a, half_length);
+    across = scale(norm(side), half_width);
+    uv_default(uv_rect, r);
+    /* U across (u0 at -side), V along the axis (v0 at the tail, v1 at the head) */
+    p[0] = sub(sub(pos, along), across);
+    p[1] = add(sub(pos, along), across);
+    p[2] = add(add(pos, along), across);
+    p[3] = sub(add(pos, along), across);
+    uv[0][0] = r[0]; uv[0][1] = r[1];
+    uv[1][0] = r[2]; uv[1][1] = r[1];
+    uv[2][0] = r[2]; uv[2][1] = r[3];
+    uv[3][0] = r[0]; uv[3][1] = r[3];
+    fx_tri_quad_uv(b, p, uv, color, color);
+}
+
+SuFxBatch su_fx_batch(SuRenderHandle texture, uint32_t blend, uint32_t wrap_u, uint32_t wrap_v, uint32_t first_vertex,
+                      const SuFxBuffer *buffer_now) {
+    SuFxBatch k;
+    memset(&k, 0, sizeof k);
+    k.texture = texture;
+    k.blend = blend;
+    k.wrap_u = wrap_u;
+    k.wrap_v = wrap_v;
+    k.first_vertex = first_vertex;
+    k.vertex_count = buffer_now->count > first_vertex ? buffer_now->count - first_vertex : 0u;
+    return k;
+}
+
 void su_trail_init(SuTrail *t, SuTrailPoint *storage, uint32_t cap, float lifetime_s, float spacing) {
     memset(t, 0, sizeof *t);
     t->p = storage;
@@ -744,6 +857,74 @@ void su_trail_build(const SuTrail *t, double now_s, SuWorldPos camera, float wid
         prev_l = sub(rel, side);
         prev_r = add(rel, side);
         prev_v = k;
+        memcpy(prev_c, c, sizeof c);
+        have = 1;
+    }
+}
+
+void su_trail_build_tex(const SuTrail *t, double now_s, SuWorldPos camera, float width_head, float width_tail,
+                        const float color_head[4], const float color_tail[4], const SuTrailTex *tex, SuFxBuffer *out) {
+    uint32_t i;
+    SuVec3f prev_l = v3(0, 0, 0);
+    SuVec3f prev_r = v3(0, 0, 0);
+    SuVec3f prev_rel = v3(0, 0, 0);
+    float prev_u = 0.0f;
+    float prev_c[4] = {0, 0, 0, 0};
+    float dist = 0.0f;
+    float us = tex->u_scale != 0.0f ? tex->u_scale : 1.0f;
+    int have = 0;
+    for (i = 0; i < t->count; i++) {
+        const SuTrailPoint *p = trail_at(t, i);
+        float k = t->lifetime_s > 0.0f ? (float)(now_s - p->time_s) / t->lifetime_s : 0.0f;
+        SuVec3f rel = su_wpos_delta(p->pos, camera);
+        SuVec3f dir;
+        SuVec3f side;
+        float w;
+        float c[4];
+        float u;
+        SuVec3f q[4];
+        float uv[4][2];
+        int j;
+        if (k > 1.0f) {
+            break;
+        }
+        k = k < 0.0f ? 0.0f : k;
+        if (i + 1u < t->count) {
+            dir = sub(rel, su_wpos_delta(trail_at(t, i + 1u)->pos, camera));
+        } else if (i > 0u) {
+            dir = sub(su_wpos_delta(trail_at(t, i - 1u)->pos, camera), rel);
+        } else {
+            return;
+        }
+        side = cross(dir, rel);
+        if (dot(side, side) < 1e-20f) {
+            side = v3(0.0f, 1.0f, 0.0f);
+        }
+        w = (width_head + (width_tail - width_head) * k) * 0.5f;
+        side = scale(norm(side), w);
+        for (j = 0; j < 4; j++) {
+            c[j] = color_head[j] + (color_tail[j] - color_head[j]) * k;
+        }
+        if (have) {
+            SuVec3f d = sub(rel, prev_rel);
+            dist += sqrtf(dot(d, d));
+        }
+        u = tex->u_offset + (tex->mode == SU_TRAIL_U_DISTANCE ? dist : k) * us;
+        if (have) {
+            q[0] = prev_l;
+            q[1] = prev_r;
+            q[2] = add(rel, side);
+            q[3] = sub(rel, side);
+            uv[0][0] = prev_u; uv[0][1] = tex->v0;
+            uv[1][0] = prev_u; uv[1][1] = tex->v1;
+            uv[2][0] = u;      uv[2][1] = tex->v1;
+            uv[3][0] = u;      uv[3][1] = tex->v0;
+            fx_tri_quad_uv(out, q, uv, prev_c, c);
+        }
+        prev_l = sub(rel, side);
+        prev_r = add(rel, side);
+        prev_rel = rel;
+        prev_u = u;
         memcpy(prev_c, c, sizeof c);
         have = 1;
     }

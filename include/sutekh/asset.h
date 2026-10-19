@@ -105,7 +105,12 @@ typedef struct SuAssetMeshView {
 #define SU_TEX_BC5_UNORM 8u
 #define SU_TEX_BC7_UNORM 9u
 #define SU_TEX_BC7_SRGB 10u
-#define SU_TEX_FORMAT_COUNT 11u
+#define SU_TEX_BC2_UNORM 11u       /* 16 bytes per block: 4-bit explicit alpha, then BC1 colour */
+#define SU_TEX_BC2_SRGB 12u
+#define SU_TEX_BC6H_UF16 13u       /* HDR, unsigned half-float RGB, 16 bytes per block */
+#define SU_TEX_BC6H_SF16 14u       /* HDR, signed half-float RGB */
+#define SU_TEX_RGBA16F 15u         /* 8 bytes per texel, linear half floats (BC6H fallback, HDR sprites) */
+#define SU_TEX_FORMAT_COUNT 16u
 
 #define SU_ASSET_MAX_MIPS 16u
 
