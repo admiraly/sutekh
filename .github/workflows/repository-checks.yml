@@ -65,13 +65,15 @@ jobs:
           python tools/bootstrap_vulkan_headers.py
           python tools/bootstrap_asset_deps.py
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 vulkan-validationlayers
       - name: Configure checked reference runtime
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=ON -DSUTEKH_ASSET_IMPORT=ON
       - name: Build runtime and test executables
         run: cmake --build build -j 2
       - name: Run runtime regression suite
         run: ctest --test-dir build --output-on-failure -j 2
+        env:
+          SUTEKH_REQUIRE_VALIDATION: '1'
       - name: Run runtime regression suite on the reference VM tier
         # The planned VM tier is the default; this keeps the reference interpreter covered end to end.
         run: ctest --test-dir build --output-on-failure -j 2

@@ -936,6 +936,7 @@ static VkShaderModule shader(SuRenderer *r, const uint32_t *code, size_t bytes) 
 #define VIN_PBR 3
 #define VIN_FX 4
 #define VIN_HUD 5
+#define VIN_SHADOW 6 /* asset vertex position and the instance rows only (shadow casters) */
 
 #define BLEND_NONE 0
 #define BLEND_ALPHA 1
@@ -1045,6 +1046,17 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         attr(at, &na, 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32);
         attr(at, &na, 8, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48);
         attr(at, &na, 9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 64);
+        break;
+    case VIN_SHADOW:
+        bind[0].stride = sizeof(SuAssetVertex);
+        bind[1].binding = 1;
+        bind[1].stride = sizeof(DrawInstance);
+        bind[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+        nb = 2;
+        attr(at, &na, 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0);
+        attr(at, &na, 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0);
+        attr(at, &na, 6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16);
+        attr(at, &na, 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32);
         break;
     case VIN_FX:
         bind[0].stride = sizeof(SuFxVertex);
@@ -1250,7 +1262,7 @@ static int make_pipelines(SuRenderer *r) {
         s.vs_bytes = sizeof su_shader_shadow_vert;
         s.fs = su_shader_shadow_frag;
         s.fs_bytes = sizeof su_shader_shadow_frag;
-        s.vin = VIN_PBR;
+        s.vin = VIN_SHADOW;
         s.depth_test = s.depth_write = 1;
         s.shadow = 1;
         ok = make_pipe(r, &s, &r->shadow_pipe);

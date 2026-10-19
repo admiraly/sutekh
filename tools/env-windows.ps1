@@ -32,3 +32,11 @@ $env:LIB = (@((Join-Path $sutekhMsvc.FullName 'lib\x64'),
     (Join-Path $sutekhSdkRoot "Lib\$($sutekhSdk.Name)\um\x64"), $env:LIB) |
     Where-Object { $_ }) -join ';'
 $env:CC = Join-Path $sutekhLlvmBin 'clang.exe'
+# Optional: a Vulkan validation layer built into local\toolchains\vvl-* (tools/bootstrap_validation_layers.ps1); the
+# render tests then run with VK_LAYER_KHRONOS_validation and fail on any message of error or warning severity.
+$sutekhVvl = Get-ChildItem -Path (Join-Path $sutekhHome 'local\toolchains') -Directory -Filter 'vvl-*' -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'bin\VkLayer_khronos_validation.json') } |
+    Sort-Object Name -Descending | Select-Object -First 1
+if ($sutekhVvl) {
+    $env:VK_ADD_LAYER_PATH = Join-Path $sutekhVvl.FullName 'bin'
+}

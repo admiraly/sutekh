@@ -1713,6 +1713,7 @@ int main(int argc, char **argv) {
     test_skips_and_unchanged();
     CHECK(su_render_stats(g_r, &st) == SU_OK);
     if (validation) {
+        CHECK(getenv("SUTEKH_REQUIRE_VALIDATION") == NULL || st.validation_enabled != 0u); /* CI: the layer must be on */
         printf("validation %s: %u errors, %u warnings\n", st.validation_enabled ? "on" : "not available",
                (unsigned)st.validation_errors, (unsigned)st.validation_warnings);
         CHECK(st.validation_errors == 0u && st.validation_warnings == 0u);
