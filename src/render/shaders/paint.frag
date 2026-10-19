@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 admiraly
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 // Layered paint material: albedo, two-channel normal, roughness, material map, a four-channel paint mask selecting up
-// to four layers (colour, roughness, metalness, tinted glow; lerp or multiply, in a configurable order), glow, dirt,
+// to four layers (colour, roughness, metalness, tinted glow; lerp, multiply or tint, in a configurable order), glow, dirt,
 // AO. Lighting is PBR-lite's (GGX, Smith, Schlick, Lambert, one sun); ambient is image based when an environment
 // cubemap is bound (prefiltered mips, split-sum scale and bias), else the procedural sky exactly like pbr.frag.
 // The blend is specified in include/sutekh/render.h ("layered paint material"). Output is linear HDR.
@@ -27,7 +27,7 @@ layout(set = 1, binding = 7) uniform sampler2D t_ao;         // linear
 
 struct Layer {
     vec4 color_rough;  // rgb colour, roughness
-    vec4 mop;          // metallic, opacity, flags (bit 0 multiply, bit 1 glow tint), glow strength
+    vec4 mop;          // metallic, opacity, flags (bit 0 multiply, bit 1 glow tint, bit 2 tint), glow strength
     vec4 glow;         // rgb glow colour
 };
 
@@ -88,7 +88,11 @@ void main() {
         float lr = pt.layer[k].color_rough.w;
         float lm = pt.layer[k].mop.x;
         uint fl = uint(pt.layer[k].mop.z + 0.5);
-        if ((fl & 1u) != 0u) {
+        if ((fl & 4u) != 0u) {
+            a = mix(a, albedo.rgb * c, w);
+            rough = mix(rough, lr, w);
+            metallic = mix(metallic, lm, w);
+        } else if ((fl & 1u) != 0u) {
             a = mix(a, a * c, w);
             rough = mix(rough, rough * lr, w);
             metallic = mix(metallic, metallic * lm, w);

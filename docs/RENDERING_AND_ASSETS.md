@@ -41,7 +41,7 @@ meaning: `baseColorTexture` albedo (sRGB), `normalTexture` normal (cooked as BC5
 | `channels` | `{roughness, metal, specular, dirt, ao}`: 0..3 = r g b a, -1 = do not read the map |
 | `specular` | dielectric specular scale, F0 = 0.08 x specular (default 0.5) |
 | `dirt` | `{amount, darken, roughen}` in 0..1 |
-| `layers` | up to four `{color [r,g,b] linear, roughness, metallic, opacity, blend "lerp"/"multiply", glowColor [r,g,b], glowStrength}`; layer k is mask channel k; `glowColor` present enables the glow tint |
+| `layers` | up to four `{color [r,g,b] linear, roughness, metallic, opacity, blend "lerp"/"multiply"/"tint", glowColor [r,g,b], glowStrength}`; layer k is mask channel k; `glowColor` present enables the glow tint |
 | `order` | permutation of the layer indices, bottom to top (default identity) |
 
 Malformed fields produce an import warning and keep the default; a material without the extension cooks exactly as

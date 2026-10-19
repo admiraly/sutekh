@@ -224,6 +224,7 @@ void su_asset_material_default(SuAssetMaterial *m);
 #define SU_PAINT_MAX_LAYERS 4u
 #define SU_PAINT_LAYER_MULTIPLY 0x1u     /* blend: multiply instead of lerp (see render.h) */
 #define SU_PAINT_LAYER_GLOW_TINT 0x2u    /* the layer recolours the glow it covers with glow_color x glow_strength */
+#define SU_PAINT_LAYER_TINT 0x4u         /* blend: tint the raw albedo map by the layer colour (see render.h); not with MULTIPLY */
 
 /* 48 bytes. Layer k is driven by channel k of the mask map. */
 typedef struct SuAssetPaintLayer {

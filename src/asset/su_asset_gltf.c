@@ -819,8 +819,8 @@ static void cook_paint(Cook *c, const cgltf_material *gm, const char *ext, SuAss
                 (void)j_num(j_get(e, "roughness"), &l->roughness);
                 (void)j_num(j_get(e, "metallic"), &l->metallic);
                 (void)j_num(j_get(e, "opacity"), &l->opacity);
-                l->flags = j_is_str(b, "multiply") ? SU_PAINT_LAYER_MULTIPLY : 0u;
-                if (b != NULL && !j_is_str(b, "multiply") && !j_is_str(b, "lerp")) {
+                l->flags = j_is_str(b, "multiply") ? SU_PAINT_LAYER_MULTIPLY : j_is_str(b, "tint") ? SU_PAINT_LAYER_TINT : 0u;
+                if (b != NULL && !j_is_str(b, "multiply") && !j_is_str(b, "tint") && !j_is_str(b, "lerp")) {
                     warn(c, "paint layer %u: unknown blend; lerp used", (unsigned)n);
                 }
                 if (gc != NULL && j_floats(gc, l->glow_color, 3)) {

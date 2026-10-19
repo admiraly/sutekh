@@ -478,6 +478,8 @@ typedef struct SuRenderMaterialDesc {
  *       w = clamp(mask[k]) * clamp(layer[k].opacity)            mask[k] is channel k (r g b a) of the mask map
  *       lerp:      A = mix(A, C_k, w)    R = mix(R, r_k, w)    M = mix(M, m_k, w)
  *       multiply:  A = mix(A, A * C_k, w) R = mix(R, R * r_k, w) M = mix(M, M * m_k, w)
+ *       tint:      A = mix(A, albedo.rgb * C_k, w)   R, M as lerp   (albedo.rgb: the raw albedo map, without base_color
+ *                  or instance tint, so each layer is an absolute tint of the same detail map; MULTIPLY | TINT is invalid)
  *       glow tint (flag): T = mix(T, G_k, w)   I = mix(I, s_k, w)     (G_k glow_color, s_k glow_strength)
  *   dirt:  d = clamp(dirt_amount * (dirt map channel, or 1))
  *          A = A * (1 - d * dirt_darken)       R = mix(R, 1, d * dirt_roughen)      (metalness and glow unchanged)
