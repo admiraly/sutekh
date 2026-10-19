@@ -1245,6 +1245,7 @@ int main(int argc, char **argv) {
     while (!g.quit) {
         MSG m;
         SuInputState frame_state;
+        memset(&frame_state, 0, sizeof frame_state);
         double now;
         double dt;
         double alpha = 0.0;
