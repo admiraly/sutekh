@@ -1105,7 +1105,13 @@ int main(int argc, char **argv) {
     if (scratch == NULL) {
         scratch = tmpdir != NULL ? tmpdir : su_test_scratch_base();
     }
-    snprintf(scratch_dir, sizeof scratch_dir, "%s/sutekh-control-%ld", scratch, (long)getpid());
+    {
+        int n = snprintf(scratch_dir, sizeof scratch_dir, "%s/sutekh-control-%ld", scratch, (long)getpid());
+        if (n < 0 || (size_t)n >= sizeof scratch_dir) {
+            fprintf(stderr, "scratch path too long\n");
+            return 2;
+        }
+    }
     if (mkdir(scratch_dir, 0700) != 0 && errno != EEXIST) {
         perror("mkdir scratch");
         return 2;

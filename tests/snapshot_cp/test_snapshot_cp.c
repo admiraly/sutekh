@@ -918,7 +918,10 @@ int main(int argc, char **argv) {
         return 2;
     }
     tmp = su_test_scratch_base(); /* SU_TEST_SCRATCH, then TMPDIR, then the platform temporary directory */
-    snprintf(base, sizeof base, "%s/su_snapshot_cp_XXXXXX", tmp);
+    if (snprintf(base, sizeof base, "%s/su_snapshot_cp_XXXXXX", tmp) >= (int)sizeof base) {
+        fprintf(stderr, "scratch path too long\n");
+        return 2;
+    }
     if (su_platform_mkdtemp(base) == NULL) {
         perror("mkdtemp");
         return 2;

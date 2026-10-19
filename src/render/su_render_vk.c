@@ -145,6 +145,22 @@ static int has_instance_ext(VkFns *f, const char *name) {
     return 0;
 }
 
+/* 1 when the named layer provides the instance extension. */
+static int has_layer_ext(VkFns *f, const char *layer, const char *name) {
+    VkExtensionProperties props[64];
+    uint32_t n = 64;
+    uint32_t i;
+    if (f->vkEnumerateInstanceExtensionProperties(layer, &n, props) < 0) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (strcmp(props[i].extensionName, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Counts error and warning messages; the first 8 of either are printed to stderr. */
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
                                                VkDebugUtilsMessageTypeFlagsEXT type,
@@ -168,8 +184,10 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBi
 /* Creates a Vulkan 1.2 instance. surface: also enable the surface extensions. */
 static int make_instance(VkFns *f, int surface, int validation, Validation *vstate, VkInstance *inst,
                          VkDebugUtilsMessengerEXT *messenger, char *msg) {
-    const char *exts[4];
+    const char *exts[5];
     const char *layers[1];
+    VkValidationFeaturesEXT vf;
+    VkValidationFeatureEnableEXT vf_enable = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
     uint32_t next = 0;
     uint32_t nlay = 0;
     uint32_t version = VK_API_VERSION_1_0;
@@ -206,6 +224,14 @@ static int make_instance(VkFns *f, int surface, int validation, Validation *vsta
         exts[next++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
         debug = 1;
     }
+    memset(&vf, 0, sizeof vf);
+    if (debug && has_layer_ext(f, "VK_LAYER_KHRONOS_validation", VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME)) {
+        /* synchronization validation too: missing barriers and subpass dependencies are errors */
+        exts[next++] = VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME;
+        vf.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+        vf.enabledValidationFeatureCount = 1;
+        vf.pEnabledValidationFeatures = &vf_enable;
+    }
     memset(&app, 0, sizeof app);
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "sutekh";
@@ -218,6 +244,7 @@ static int make_instance(VkFns *f, int surface, int validation, Validation *vsta
     ci.ppEnabledExtensionNames = exts;
     ci.enabledLayerCount = nlay;
     ci.ppEnabledLayerNames = layers;
+    ci.pNext = vf.sType == VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT ? &vf : NULL;
     vr = f->vkCreateInstance(&ci, NULL, inst);
     if (vr != VK_SUCCESS) {
         set_msg(msg, "vkCreateInstance failed (VkResult %d)", (int)vr);
@@ -575,7 +602,7 @@ static int make_scene_pass(SuRenderer *r) {
     at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     at[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL; /* as the effects subpass leaves it: no transition */
     cref.attachment = 0;
     cref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     dref.attachment = 1;
@@ -613,12 +640,16 @@ static int make_scene_pass(SuRenderer *r) {
     /* scene depth and colour of subpass 0 before the effects test, read and blend over them */
     dep[2].srcSubpass = 0;
     dep[2].dstSubpass = 1;
-    dep[2].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep[2].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+    /* early tests too: the depth clear (loadOp) is the last write when subpass 0 draws nothing */
+    dep[2].srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[2].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     dep[2].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dep[2].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT |
-                           VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    /* the depth attachment's store (DONT_CARE) at the end of subpass 1 is a write in the late tests stage */
+    dep[2].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dep[2].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
     memset(&pi, 0, sizeof pi);
     pi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
