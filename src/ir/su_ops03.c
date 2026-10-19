@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 admiraly
  * SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
  *
- * IR 0.3 operation table. See su_ops03.h. */
+ * IR 0.3 and 0.4 operation table. See su_ops03.h. */
 #include "ir/su_ops03.h"
 
 #include <string.h>
@@ -102,11 +102,47 @@ static const SuOp03 OPS03[] = {
      {R("cond", BOOL, SU_S_A), R("on_true", QUAT, SU_S_B), R("on_false", QUAT, SU_S_C)}},
 };
 
+/* IR 0.4 rows (valid only in "0.4" modules). */
+static const SuOp03 OPS04[] = {
+    /* u32 bit operations and division */
+    {"and_u32", SU_OP_AND_U32, U32, 2, {R("a", U32, SU_S_A), R("b", U32, SU_S_B)}},
+    {"or_u32", SU_OP_OR_U32, U32, 2, {R("a", U32, SU_S_A), R("b", U32, SU_S_B)}},
+    {"xor_u32", SU_OP_XOR_U32, U32, 2, {R("a", U32, SU_S_A), R("b", U32, SU_S_B)}},
+    {"not_u32", SU_OP_NOT_U32, U32, 1, {R("a", U32, SU_S_A)}},
+    {"shl_u32", SU_OP_SHL_U32, U32, 2, {R("a", U32, SU_S_A), R("n", U32, SU_S_B)}},
+    {"shr_u32", SU_OP_SHR_U32, U32, 2, {R("a", U32, SU_S_A), R("n", U32, SU_S_B)}},
+    {"div_u32", SU_OP_DIV_U32, U32, 2, {R("a", U32, SU_S_A), R("b", U32, SU_S_B)}},
+    {"rem_u32", SU_OP_REM_U32, U32, 2, {R("a", U32, SU_S_A), R("b", U32, SU_S_B)}},
+    /* i64 bit operations */
+    {"and_i64", SU_OP_AND_I64, I64, 2, {R("a", I64, SU_S_A), R("b", I64, SU_S_B)}},
+    {"or_i64", SU_OP_OR_I64, I64, 2, {R("a", I64, SU_S_A), R("b", I64, SU_S_B)}},
+    {"xor_i64", SU_OP_XOR_I64, I64, 2, {R("a", I64, SU_S_A), R("b", I64, SU_S_B)}},
+    {"not_i64", SU_OP_NOT_I64, I64, 1, {R("a", I64, SU_S_A)}},
+    /* cross-row reads of the entry state */
+    {"gather_u32", SU_OP_GATHER_U32, U32, 2, {{"field", SU_O_FGATHER, U32, SU_S_A}, R("slot", U32, SU_S_B)}},
+    {"gather_i32", SU_OP_GATHER_I32, I32, 2, {{"field", SU_O_FGATHER, I32, SU_S_A}, R("slot", U32, SU_S_B)}},
+    {"gather_i64", SU_OP_GATHER_I64, I64, 2, {{"field", SU_O_FGATHER, I64, SU_S_A}, R("slot", U32, SU_S_B)}},
+    {"gather_q32", SU_OP_GATHER_Q32, Q32, 2, {{"field", SU_O_FGATHER, Q32, SU_S_A}, R("slot", U32, SU_S_B)}},
+    {"find_eq_u32", SU_OP_FIND_EQ_U32, U32, 3,
+     {{"field", SU_O_FGATHER, U32, SU_S_A}, R("key", U32, SU_S_B), {"span", SU_O_CSPAN, 0, SU_S_C}}},
+};
+
+#define N03 (sizeof OPS03 / sizeof OPS03[0])
+#define N04 (sizeof OPS04 / sizeof OPS04[0])
+
+const SuOp03 *su_op03_at(size_t i) {
+    if (i < N03) {
+        return &OPS03[i];
+    }
+    return i < N03 + N04 ? &OPS04[i - N03] : NULL;
+}
+
 const SuOp03 *su_op03_by_name(const char *name, size_t len) {
     size_t i;
-    for (i = 0; i < sizeof OPS03 / sizeof OPS03[0]; i++) {
-        if (strlen(OPS03[i].name) == len && memcmp(OPS03[i].name, name, len) == 0) {
-            return &OPS03[i];
+    for (i = 0; i < N03 + N04; i++) {
+        const SuOp03 *o = su_op03_at(i);
+        if (strlen(o->name) == len && memcmp(o->name, name, len) == 0) {
+            return o;
         }
     }
     return NULL;
@@ -114,20 +150,27 @@ const SuOp03 *su_op03_by_name(const char *name, size_t len) {
 
 const SuOp03 *su_op03_by_code(uint32_t code) {
     size_t i;
-    for (i = 0; i < sizeof OPS03 / sizeof OPS03[0]; i++) {
-        if (OPS03[i].code == code) {
-            return &OPS03[i];
+    for (i = 0; i < N03 + N04; i++) {
+        const SuOp03 *o = su_op03_at(i);
+        if (o->code == code) {
+            return o;
         }
     }
     return NULL;
 }
 
 size_t su_op03_count(void) {
-    return sizeof OPS03 / sizeof OPS03[0];
+    return N03 + N04;
 }
 
-const SuOp03 *su_op03_at(size_t i) {
-    return i < su_op03_count() ? &OPS03[i] : NULL;
+uint32_t su_op_min_minor(const SuOp03 *op) {
+    size_t i;
+    for (i = 0; i < N04; i++) {
+        if (op == &OPS04[i]) {
+            return 4u;
+        }
+    }
+    return 3u;
 }
 
 uint32_t su_type_lanes(uint32_t value_type) {

@@ -50,6 +50,15 @@ uint32_t su_vm_context_set_entity_view(SuExecContext *ctx, const uint8_t *alive,
                                        const uint32_t *generations, uint32_t base_slot,
                                        uint32_t tick_low, const SuVmEmitter *emitter);
 
+/* IR 0.4 (2026-10-19). Whole-table view for the cross-row reads gather_* and find_eq_u32, used by the NEXT
+ * invocations until replaced (NULL clears it). table holds exactly the module's READABLE fields, like an
+ * SuInvocation over the whole table (row index = slot), and is checked at each invocation of a module that
+ * gathers: shape, generation, one row count, no overlap with staging. The struct is copied; its bindings stay
+ * borrowed. Without a view the invocation itself is the table, which requires base_slot 0 (a chunk at another
+ * offset fails with SU_E_INVALID_ARGUMENT). Gathers read entry state only, so results do not depend on chunking or
+ * worker count. Returns SU_E_INVALID_ARGUMENT on NULL ctx. */
+uint32_t su_vm_context_set_table_view(SuExecContext *ctx, const SuInvocation *table);
+
 /* Row limit used by the wrapper (default SU_LIMIT_ROWS). Returns
  * SU_E_INVALID_ARGUMENT on NULL ctx. */
 uint32_t su_vm_context_set_row_limit(SuExecContext *ctx, uint64_t limit);

@@ -14,7 +14,7 @@
  *     register, duplicate dst, operand type, field permission (IR 0.3: then the
  *     field value type, SU_E_TYPE)
  *   7 end of body: writable field never stored -> SU_E_MISSING_STORE
- * Stage 1 also covers the capsule field-count cap (256).
+ * Stage 1 also covers the capsule field-count cap (SU_LIMIT_FIELDS, 1024).
  */
 #ifndef SU_LIR_H
 #define SU_LIR_H
@@ -74,7 +74,7 @@ typedef struct SuLirModule {
     uint32_t register_count;
     uint32_t insn_count;
     uint64_t max_rows;           /* capsule limits.max_rows; enforced by the VM wrapper */
-    uint32_t ir_version_minor;   /* 1 for "0.1", 2 for "0.2" (IR 0.2, M2-00c2), 3 for "0.3" (fixed_q32_v1) */
+    uint32_t ir_version_minor;   /* 1 for "0.1", 2 for "0.2" (IR 0.2, M2-00c2), 3 for "0.3" (fixed_q32_v1), 4 for "0.4" */
     uint32_t max_struct_per_row; /* capsule limits.max_struct_per_row (0.2; 0 when absent) */
     uint32_t max_events_per_row; /* capsule limits.max_events_per_row (0.2; 0 when absent) */
     uint32_t uses_entity_ops;    /* 1 when any 0.2 op (slot/gen/tick/despawn_self/emit_event) appears */
@@ -89,6 +89,14 @@ typedef struct SuLirModule {
     char capsule_hash_hex[65];
     uint8_t semantic_hash[32];
     char semantic_hash_hex[65];
+    /* IR 0.4 (2026-10-19). Row filter: a live row runs the body only when (field & mask) == value, read from the
+     * system's entry state; other live rows keep their writable lanes (copied from the inputs) and emit nothing.
+     * row_filter_field is the verified-table index of a readable u32 lane. */
+    uint32_t has_row_filter;
+    uint32_t row_filter_field;
+    uint32_t row_filter_mask;
+    uint32_t row_filter_value;
+    uint32_t uses_gather;        /* 1 when any gather_* or find_eq_u32 appears (needs the whole-table view) */
 } SuLirModule;
 
 void su_diag_init(SuDiag *d);

@@ -79,9 +79,20 @@ typedef struct SuVmPlanRun {
     void *emit_user;
     int (*emit_despawn)(void *user, uint32_t slot, uint32_t seq, uint64_t expected_handle);
     int (*emit_event)(void *user, uint32_t slot, uint32_t seq, uint32_t kind, uint32_t a, uint32_t b);
+    /* IR 0.4: whole-table columns of gather_* / find_eq_u32 (per table index) and their row count. */
+    uint32_t *const *gather_cols;
+    uint64_t gather_rows;
+    /* IR 0.4 row filter: NULL filter_col = none. A live row with (filter_col[r] & mask) != value copies the
+     * writable lanes filter_lanes[0..n) from input to staging and runs nothing. */
+    const uint32_t *filter_col;
+    uint32_t filter_mask;
+    uint32_t filter_value;
+    const uint32_t *filter_lanes;
+    uint32_t n_filter_lanes;
     /* statistics of the last run (rows executed by the body, rows skipped by the guard) */
     uint64_t rows_body;
     uint64_t rows_skipped;
+    uint64_t rows_filtered; /* live rows the row filter skipped */
 } SuVmPlanRun;
 
 /* 1 when every lane the plan reads and stores is bound for this invocation. */

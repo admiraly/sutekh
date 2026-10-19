@@ -16,7 +16,7 @@
 #define SU_LIMIT_JSON_DEPTH         32u
 #define SU_LIMIT_INSTRUCTIONS       4096u
 #define SU_LIMIT_REGISTERS          4096u
-#define SU_LIMIT_FIELDS             256u
+#define SU_LIMIT_FIELDS             1024u /* 256 before 2026-10-19; no persisted format stores it */
 #define SU_LIMIT_ROWS               UINT64_C(1000000) /* default; runtime may configure it lower or higher */
 #define SU_LIMIT_PROTOCOL_MESSAGE   (1024u * 1024u)
 
@@ -119,6 +119,37 @@
 #define SU_OP_QUAT_NORMALIZE  UINT32_C(229)
 #define SU_OP_QUAT_INTEGRATE  UINT32_C(230)
 #define SU_OP_SELECT_QUAT     UINT32_C(231)
+
+/* IR 0.4 (2026-10-19; LIVE_IR_SPEC "IR 0.4"). Valid only in modules with ir_version "0.4" (numeric profile
+ * fixed_q32_v1); in older modules they are SU_E_UNKNOWN_OPCODE. Operand mapping in SuInsn is the IR 0.4 rows of
+ * the operation table in src/ir/su_ops03.c. Every 0.3 operation stays valid in 0.4.
+ *   u32 bit and division ops (dst a b): shl/shr by n >= 32 give 0; div by 0 gives 0, rem by 0 gives a.
+ *   i64 bit ops (dst a b).
+ *   gather_u32/_i32/_i64/_q32 (dst = reg, a = field index, b = slot reg): the field of the row at slot b in the
+ *     system's entry state; 0 when b is not a row of the table (b >= row count). A v3 is three gather_q32.
+ *   find_eq_u32 (dst = reg, a = field index, b = key reg, c = span constant 1..4096): lowest slot s < span with
+ *     field[s] == key in the entry state, else 0xFFFFFFFF. */
+#define SU_IR_VERSION_STRING_0_4        "0.4"
+#define SU_ARTIFACT_FORMAT_VERSION_0_4  UINT32_C(4)
+#define SU_OP_AND_U32       UINT32_C(48)
+#define SU_OP_OR_U32        UINT32_C(49)
+#define SU_OP_XOR_U32       UINT32_C(50)
+#define SU_OP_NOT_U32       UINT32_C(51)
+#define SU_OP_SHL_U32       UINT32_C(52)
+#define SU_OP_SHR_U32       UINT32_C(53)
+#define SU_OP_DIV_U32       UINT32_C(54)
+#define SU_OP_REM_U32       UINT32_C(55)
+#define SU_OP_AND_I64       UINT32_C(56)
+#define SU_OP_OR_I64        UINT32_C(57)
+#define SU_OP_XOR_I64       UINT32_C(58)
+#define SU_OP_NOT_I64       UINT32_C(59)
+#define SU_OP_GATHER_U32    UINT32_C(240)
+#define SU_OP_GATHER_I32    UINT32_C(241)
+#define SU_OP_GATHER_I64    UINT32_C(242)
+#define SU_OP_GATHER_Q32    UINT32_C(243)
+#define SU_OP_FIND_EQ_U32   UINT32_C(245)
+#define SU_FIND_SPAN_MAX    4096u
+#define SU_FIND_NONE        UINT32_C(0xFFFFFFFF)
 
 /* Register types. bool never coerces to u32. */
 #define SU_TYPE_U32   UINT32_C(1)

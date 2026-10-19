@@ -96,7 +96,7 @@
         "additionalProperties": false
       },
       "minItems": 1,
-      "maxItems": 256,
+      "maxItems": 1024,
       "description": "IR variant only (required there; refused in the host variant)"
     },
     "host": {
@@ -159,7 +159,7 @@
             "additionalProperties": false
           },
           "minItems": 1,
-          "maxItems": 256
+          "maxItems": 1024
         }
       },
       "required": [
@@ -253,7 +253,8 @@
       "enum": [
         "0.1",
         "0.2",
-        "0.3"
+        "0.3",
+        "0.4"
       ],
       "description": "optional; absent means 0.1; must equal the IR ir_version. IR variant only"
     }

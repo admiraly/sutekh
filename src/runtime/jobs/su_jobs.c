@@ -302,6 +302,7 @@ typedef struct ChunkJob {
     uint32_t nout;
     const SuColumnBinding *base_in;   /* nin entries, whole-table views */
     const SuColumnBinding *base_out;  /* nout entries, whole-table views */
+    int uses_gather;                  /* IR 0.4: the module reads other rows (whole-table view per chunk) */
     SuExecContext **ctx;              /* one per worker */
     SuColumnBinding *scr_in;          /* workers * nin */
     SuColumnBinding *scr_out;         /* workers * nout */
@@ -353,6 +354,18 @@ static void chunk_task(uint32_t chunk, uint32_t worker, void *argp) {
     outs.reserved = 0u;
     outs.bindings = so;
 
+    if (j->uses_gather) {
+        /* IR 0.4 cross-row reads see the whole table (entry state), never just this chunk. */
+        SuInvocation whole = inv;
+        uint32_t st;
+        whole.bindings = j->base_in;
+        whole.row_count = j->rows;
+        st = su_vm_context_set_table_view(j->ctx[worker], &whole);
+        if (st != SU_OK) {
+            j->status[chunk] = st;
+            return;
+        }
+    }
     j->status[chunk] = su_vm_invoke_v1(j->ctx[worker], &inv, &outs);
 }
 
@@ -531,6 +544,7 @@ uint32_t su_jobs_run_system_chunked(SuWorld *w, const SuLirModule *mod, uint32_t
     job.chunk_rows = chunk_rows;
     job.layout_generation = layout_generation;
     job.nin = nin;
+    job.uses_gather = mod->uses_gather != 0u;
     job.nout = nout;
     job.base_in = base_in;
     job.base_out = base_out;

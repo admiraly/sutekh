@@ -293,6 +293,14 @@ _Static_assert(SU_NLOW_OP_MAKE_V3 == SU_OP_MAKE_V3 && SU_NLOW_OP_V3_GET == SU_OP
                    SU_NLOW_OP_QUAT_INTEGRATE == SU_OP_QUAT_INTEGRATE && SU_NLOW_OP_SELECT_QUAT == SU_OP_SELECT_QUAT,
                "IR 0.3 vec3 and quaternion opcodes");
 
+_Static_assert(SU_NLOW_OP_AND_U32 == SU_OP_AND_U32 && SU_NLOW_OP_OR_U32 == SU_OP_OR_U32 &&
+                   SU_NLOW_OP_XOR_U32 == SU_OP_XOR_U32 && SU_NLOW_OP_NOT_U32 == SU_OP_NOT_U32 &&
+                   SU_NLOW_OP_SHL_U32 == SU_OP_SHL_U32 && SU_NLOW_OP_SHR_U32 == SU_OP_SHR_U32 &&
+                   SU_NLOW_OP_DIV_U32 == SU_OP_DIV_U32 && SU_NLOW_OP_REM_U32 == SU_OP_REM_U32 &&
+                   SU_NLOW_OP_AND_I64 == SU_OP_AND_I64 && SU_NLOW_OP_OR_I64 == SU_OP_OR_I64 &&
+                   SU_NLOW_OP_XOR_I64 == SU_OP_XOR_I64 && SU_NLOW_OP_NOT_I64 == SU_OP_NOT_I64,
+               "IR 0.4 bit operations");
+
 /* Addresses of the IR 0.3 C helpers by opcode (0 = emitted inline). */
 static void fill_helpers03(uint64_t helpers[SU_NLOW_HELPER_SLOTS]) {
     uint32_t op;
@@ -364,6 +372,12 @@ static uint32_t build_lower_input(const SuLirModule *m, SuNativeLowerInput *in, 
     in->identity_lanes = NULL;
     in->pre_count = 0u;
     in->pre_insns = NULL;
+    in->has_filter = 0u;
+    in->filter_field = 0u;
+    in->filter_mask = 0u;
+    in->filter_value = 0u;
+    in->filter_count = 0u;
+    in->filter_lanes = NULL;
     return SU_OK;
 }
 
@@ -411,6 +425,7 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
     uint32_t k;
     int use_avx2;
     int is03;
+    uint32_t *filt = NULL;
     uint64_t helpers[SU_NLOW_HELPER_SLOTS];
     char msg[160];
     void *code_ptr;
@@ -433,6 +448,12 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
     }
     /* IR 0.3 (fixed_q32_v1): scalar lowering only (su_native_lower03.cpp). An AVX2 request is refused; the
      * caller compiles with SU_NCAP_X86_64_SCALAR (world.specialize "auto" does). */
+    /* IR 0.4 cross-row reads (gather_*, find_eq_u32) need the whole-table view, which the kernel ABI does not carry:
+     * such modules stay on the VM tiers. */
+    if (m->uses_gather != 0u) {
+        diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "ir_0_4_gather_not_lowered");
+        return SU_E_CAPABILITY_DENIED;
+    }
     is03 = m->ir_version_minor >= 3u;
     if (is03 && caps != SU_NCAP_X86_64_SCALAR) {
         diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "ir_0_3_avx2_not_lowered");
@@ -481,6 +502,27 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
         uint32_t *pre = NULL;
         fill_helpers03(helpers);
         in.helpers = helpers;
+        if (m->has_row_filter) {
+            uint32_t i, nf = 0;
+            filt = calloc(m->field_count + 1u, sizeof *filt);
+            if (filt == NULL) {
+                free(words);
+                free(access);
+                diag_set(diag, SU_E_RESOURCE_LIMIT, SU_NATIVE_NO_FAILED_INSN, "allocation failed");
+                return SU_E_RESOURCE_LIMIT;
+            }
+            for (i = 0; i < m->field_count; i++) {
+                if ((m->fields[i].access & SU_ACCESS_WRITE) != 0u) {
+                    filt[nf++] = i;
+                }
+            }
+            in.has_filter = 1u;
+            in.filter_field = m->row_filter_field;
+            in.filter_mask = m->row_filter_mask;
+            in.filter_value = m->row_filter_value;
+            in.filter_count = nf;
+            in.filter_lanes = filt;
+        }
         /* The VM plan's identity-row guard, when the plan builder proves one (same analysis as the planned VM
          * tier). Without a plan or guard the kernel runs every row. */
         if (su_vm_plan_build(m, &plan) == SU_VM_PLAN_OK && plan->has_guard) {
@@ -527,6 +569,7 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
     }
     free(words);
     free(access);
+    free(filt);
     if (st != SU_OK) {
         diag_set(diag, st, failed, msg);
         lowered_free(&low);
