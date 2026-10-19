@@ -53,24 +53,37 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
         SuMat4f rot;
         float sr[9]; /* scale * rotation, column-major 3x3 */
         float s = obj->scale > 0.0f ? obj->scale : 1.0f;
+        float axis[3] = {1.0f, 1.0f, 1.0f}; /* scale3, all zero = uniform */
+        float smax;
         SuVec3f c;
         int k;
         if (ms == NULL || !(obj->tint[3] > 0.0f)) { /* unknown model, or fully transparent (or NaN) */
             r->stats.objects_culled++;
             continue;
         }
+        if (obj->scale3[0] != 0.0f || obj->scale3[1] != 0.0f || obj->scale3[2] != 0.0f) {
+            if (!(obj->scale3[0] > 0.0f && obj->scale3[1] > 0.0f && obj->scale3[2] > 0.0f) ||
+                !(obj->scale3[0] < 1e30f && obj->scale3[1] < 1e30f && obj->scale3[2] < 1e30f)) {
+                r->stats.objects_culled++; /* a zero, negative or non-finite axis: not drawn */
+                continue;
+            }
+            axis[0] = obj->scale3[0];
+            axis[1] = obj->scale3[1];
+            axis[2] = obj->scale3[2];
+        }
+        smax = s * (axis[0] > axis[1] ? (axis[0] > axis[2] ? axis[0] : axis[2]) : (axis[1] > axis[2] ? axis[1] : axis[2]));
         model = &ms->u.model;
         rel = su_wpos_delta(obj->pos, f->camera.pos);
         rot = su_mat4f_from_quat(obj->rot);
-        for (k = 0; k < 3; k++) {
-            sr[k] = rot.m[k] * s;
-            sr[3 + k] = rot.m[4 + k] * s;
-            sr[6 + k] = rot.m[8 + k] * s;
+        for (k = 0; k < 3; k++) { /* R * diag(s * scale3): column j of R times the scale of local axis j */
+            sr[k] = rot.m[k] * s * axis[0];
+            sr[3 + k] = rot.m[4 + k] * s * axis[1];
+            sr[6 + k] = rot.m[8 + k] * s * axis[2];
         }
         c.x = rel.x + sr[0] * model->center[0] + sr[3] * model->center[1] + sr[6] * model->center[2];
         c.y = rel.y + sr[1] * model->center[0] + sr[4] * model->center[1] + sr[7] * model->center[2];
         c.z = rel.z + sr[2] * model->center[0] + sr[5] * model->center[1] + sr[8] * model->center[2];
-        if (!su_frustum_sphere(&fru, c, model->radius * s)) {
+        if (!su_frustum_sphere(&fru, c, model->radius * smax)) {
             r->stats.objects_culled++;
             continue;
         }
@@ -79,7 +92,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
             const float *nc = &model->node_center[i * 4u];
             const float *t = nd->transform;
             float ncw[3];
-            float nr = nc[3] * s;
+            float nr = nc[3] * smax;
             uint32_t lod;
             uint32_t pick = UINT32_MAX;
             uint32_t mesh_index = 0;

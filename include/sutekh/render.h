@@ -636,6 +636,12 @@ typedef struct SuRenderObject {
     float emissive;                    /* multiplies emission; 1 = as authored */
     SuRenderHandle model;
     uint32_t reserved[2];
+    float scale3[3];                   /* per-axis scale in the object's own frame, multiplying scale: the model is
+                                        * scaled by scale * scale3 along its local x, y, z, then rotated by rot. All
+                                        * zero = (1, 1, 1), uniform as before; otherwise each must be > 0. Normals use
+                                        * the inverse transpose (correct shading under stretch); culling and LOD use the
+                                        * largest axis scale for the bounding spheres. */
+    uint32_t reserved2;
 } SuRenderObject;
 
 /* Post processing on the HDR scene (RGBA16F), before the tonemap. Zero-initialised = everything off, so existing
