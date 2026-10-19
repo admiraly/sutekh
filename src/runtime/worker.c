@@ -163,8 +163,13 @@ typedef struct WorkerFail {
 } WorkerFail;
 
 static void fail(WorkerFail *f, uint32_t code, const char *msg) {
+    size_t n = strlen(msg);
     f->code = code;
-    snprintf(f->msg, sizeof f->msg, "%s", msg);
+    if (n >= sizeof f->msg) {
+        n = sizeof f->msg - 1; /* longer messages are cut, as snprintf did */
+    }
+    memcpy(f->msg, msg, n);
+    f->msg[n] = '\0';
 }
 
 /* Failure of a capsule verification: the verifier's location of the first error becomes error.detail
