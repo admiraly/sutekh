@@ -123,6 +123,7 @@
     X(vkEndCommandBuffer)              \
     X(vkCmdBeginRenderPass)            \
     X(vkCmdEndRenderPass)              \
+    X(vkCmdNextSubpass)                \
     X(vkCmdBindPipeline)               \
     X(vkCmdBindVertexBuffers)          \
     X(vkCmdBindIndexBuffer)            \
@@ -370,7 +371,23 @@ typedef struct FxBatchDraw {
     VkDescriptorSet set;
     uint32_t first, count;
     uint32_t pipe;            /* index into fxtex_pipe */
+    float soft;               /* 1 / soft distance, 0 = hard */
 } FxBatchDraw;
+
+/* A quad of a sorted textured-effects batch. */
+typedef struct FxQuad {
+    float d2;                 /* squared distance of its centre from the camera */
+    uint32_t src;             /* index into the sorted batches' templates */
+    uint32_t first;           /* first vertex in SuRenderFrameDesc.fx_tex */
+    uint32_t seq;             /* submission order, for stable ties */
+} FxQuad;
+
+/* Push constants of the textured-effects fragment shaders. */
+typedef struct FxPush {
+    float soft;               /* 1 / soft distance, 0 = hard */
+    float near_z;             /* reversed-Z near plane: view depth = near_z / depth */
+    float pad[2];
+} FxPush;
 
 /* One draw item of the scene: an instance of a submesh with a material. */
 typedef struct DrawItem {
@@ -418,7 +435,9 @@ struct SuRenderer {
     VkPipeline fx_pipe;
     VkPipeline fxtex_pipe[2];           /* textured effects: additive, premultiplied alpha */
     VkPipeline skycube_pipe;
-    VkPipelineLayout fxtex_layout;      /* frame, one sampler */
+    VkPipelineLayout fxtex_layout;      /* frame, one sampler, scene depth (input attachment), FxPush */
+    VkDescriptorSetLayout depth_in_dsl; /* the scene depth as an input attachment (textured effects subpass) */
+    VkDescriptorSet depth_in_set;
     VkPipelineLayout skycube_layout;    /* frame, one cube sampler, SkyPush */
     VkPipeline pbr_pipe[PIPE_PBR_COUNT];
     VkPipeline paint_pipe[PIPE_PBR_COUNT];
@@ -497,7 +516,10 @@ struct SuRenderer {
     uint32_t max_hud;
     uint32_t max_fx_tex;
     uint32_t max_fx_batches;
-    FxBatchDraw *fxb;
+    FxBatchDraw *fxb;                   /* fxb_cap: batches plus the runs of sorted quads */
+    uint32_t fxb_cap;
+    FxBatchDraw *fxs;                   /* templates of the sorted batches (max_fx_batches) */
+    FxQuad *fxq;                        /* sorted quads (max_fx_tex / 6) */
     uint32_t budget;
     SuRenderInstance *sorted;
     DrawItem *items;

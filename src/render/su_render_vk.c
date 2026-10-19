@@ -539,8 +539,9 @@ static int make_scene_pass(SuRenderer *r) {
     VkAttachmentDescription at[2];
     VkAttachmentReference cref;
     VkAttachmentReference dref;
-    VkSubpassDescription sub;
-    VkSubpassDependency dep[2];
+    VkAttachmentReference dro;
+    VkSubpassDescription sub[2];
+    VkSubpassDependency dep[3];
     VkRenderPassCreateInfo pi;
     memset(at, 0, sizeof at);
     at[0].format = HDR_FORMAT;
@@ -563,11 +564,18 @@ static int make_scene_pass(SuRenderer *r) {
     cref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     dref.attachment = 1;
     dref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    memset(&sub, 0, sizeof sub);
-    sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    sub.colorAttachmentCount = 1;
-    sub.pColorAttachments = &cref;
-    sub.pDepthStencilAttachment = &dref;
+    dro.attachment = 1;
+    dro.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    memset(sub, 0, sizeof sub);
+    sub[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub[0].colorAttachmentCount = 1;
+    sub[0].pColorAttachments = &cref;
+    sub[0].pDepthStencilAttachment = &dref;
+    /* subpass 1, textured effects: depth tested read-only and read as an input attachment (soft particles) */
+    sub[1] = sub[0];
+    sub[1].pDepthStencilAttachment = &dro;
+    sub[1].inputAttachmentCount = 1;
+    sub[1].pInputAttachments = &dro;
     memset(dep, 0, sizeof dep);
     /* The previous frame's output pass read the HDR image (fragment shader) and its depth writes; both finish
      * before this frame's layout transitions and writes. */
@@ -580,19 +588,29 @@ static int make_scene_pass(SuRenderer *r) {
     dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
     /* HDR colour writes before the output pass samples it. */
-    dep[1].srcSubpass = 0;
+    dep[1].srcSubpass = 1;
     dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
     dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    /* scene depth and colour of subpass 0 before the effects test, read and blend over them */
+    dep[2].srcSubpass = 0;
+    dep[2].dstSubpass = 1;
+    dep[2].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[2].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[2].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[2].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT |
+                           VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[2].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
     memset(&pi, 0, sizeof pi);
     pi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     pi.attachmentCount = 2;
     pi.pAttachments = at;
-    pi.subpassCount = 1;
-    pi.pSubpasses = &sub;
-    pi.dependencyCount = 2;
+    pi.subpassCount = 2;
+    pi.pSubpasses = sub;
+    pi.dependencyCount = 3;
     pi.pDependencies = dep;
     return r->f.vkCreateRenderPass(r->dev, &pi, NULL, &r->scene_pass) == VK_SUCCESS;
 }
@@ -829,6 +847,7 @@ typedef struct PipeSpec {
     int bloom;         /* 1: bloom downsample, 3: bloom upsample, 2: bloom output pass (all without depth) */
     int paint;         /* 1: the layered paint layout (frame, paint material, environment) */
     int layout;        /* 1: the textured-effects layout (frame, one sampler), 2: the cube sky layout */
+    int subpass;       /* scene pass subpass: 0, or 1 for the textured effects */
 } PipeSpec;
 
 static void attr(VkVertexInputAttributeDescription *a, uint32_t *n, uint32_t loc, uint32_t binding, VkFormat fmt,
@@ -1017,6 +1036,7 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         gi.layout = r->skycube_layout;
     }
     gi.renderPass = s->post ? r->post_pass : r->scene_pass;
+    gi.subpass = (uint32_t)s->subpass;
     if (s->bloom == 1 || s->bloom == 3) { /* 1: downsample (one sampler), 3: upsample (three samplers) */
         gi.layout = s->bloom == 1 ? r->bloom_layout : r->bloom3_layout;
         gi.renderPass = r->bloom_pass;
@@ -1074,8 +1094,9 @@ static int make_pipelines(SuRenderer *r) {
     s.depth_test = 1;
     s.blend = BLEND_ADD;
     ok = ok && make_pipe(r, &s, &r->fx_pipe);
-    /* textured effects: additive and premultiplied alpha */
+    /* textured effects: additive and premultiplied alpha, in the effects subpass */
     s.layout = 1;
+    s.subpass = 1;
     s.fs = su_shader_fx_tex_add_frag;
     s.fs_bytes = sizeof su_shader_fx_tex_add_frag;
     ok = ok && make_pipe(r, &s, &r->fxtex_pipe[0]);
@@ -1177,7 +1198,7 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
     VkDescriptorSetLayout sets[2];
     VkPushConstantRange pcr;
     VkPipelineLayoutCreateInfo pli;
-    VkDescriptorPoolSize ps[2];
+    VkDescriptorPoolSize ps[3];
     VkDescriptorPoolCreateInfo pi;
     uint32_t i;
     memset(b, 0, sizeof b);
@@ -1206,6 +1227,11 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
     if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->tex_dsl) != VK_SUCCESS) {
         return 0;
     }
+    b[0].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->depth_in_dsl) != VK_SUCCESS) {
+        return 0;
+    }
+    b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     {
         /* layered paint: eight samplers and the layer parameters; the environment cube */
         VkDescriptorSetLayoutBinding pb[SU_PAINT_SLOT_COUNT + 1u];
@@ -1268,19 +1294,28 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
         return 0;
     }
     {
-        /* textured effects (frame + one sampler, no push constants) and the cube sky (frame + cube + SkyPush) */
-        VkDescriptorSetLayout fsets[2];
+        /* textured effects (frame + one sampler + scene depth, FxPush) and the cube sky (frame + cube + SkyPush) */
+        VkDescriptorSetLayout fsets[3];
         VkPushConstantRange spc;
         VkPipelineLayoutCreateInfo fli;
         fsets[0] = r->frame_dsl;
         fsets[1] = r->tex_dsl;
+        fsets[2] = r->depth_in_dsl;
+        memset(&spc, 0, sizeof spc);
+        spc.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        spc.size = sizeof(FxPush);
         memset(&fli, 0, sizeof fli);
         fli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        fli.setLayoutCount = 2;
+        fli.setLayoutCount = 3;
         fli.pSetLayouts = fsets;
+        fli.pushConstantRangeCount = 1;
+        fli.pPushConstantRanges = &spc;
         if (r->f.vkCreatePipelineLayout(r->dev, &fli, NULL, &r->fxtex_layout) != VK_SUCCESS) {
             return 0;
         }
+        fli.setLayoutCount = 2;
+        fli.pushConstantRangeCount = 0;
+        fli.pPushConstantRanges = NULL;
         fsets[1] = r->env_dsl;
         memset(&spc, 0, sizeof spc);
         spc.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -1335,10 +1370,12 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
     ps[0].descriptorCount = FRAMES_IN_FLIGHT;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     ps[1].descriptorCount = 2;
+    ps[2].type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    ps[2].descriptorCount = 1;
     memset(&pi, 0, sizeof pi);
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = FRAMES_IN_FLIGHT + 2u;
-    pi.poolSizeCount = 2;
+    pi.maxSets = FRAMES_IN_FLIGHT + 3u;
+    pi.poolSizeCount = 3;
     pi.pPoolSizes = ps;
     if (r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &r->pool_frame) != VK_SUCCESS) {
         return 0;
@@ -1421,8 +1458,8 @@ static int make_fx_pool(SuRenderer *r, Frame *fr) {
 }
 
 static int make_frame_sets(SuRenderer *r) {
-    VkDescriptorSetLayout l[FRAMES_IN_FLIGHT + 2u];
-    VkDescriptorSet sets[FRAMES_IN_FLIGHT + 2u];
+    VkDescriptorSetLayout l[FRAMES_IN_FLIGHT + 3u];
+    VkDescriptorSet sets[FRAMES_IN_FLIGHT + 3u];
     VkDescriptorSetAllocateInfo ai;
     uint32_t i;
     for (i = 0; i < FRAMES_IN_FLIGHT; i++) {
@@ -1430,10 +1467,11 @@ static int make_frame_sets(SuRenderer *r) {
     }
     l[FRAMES_IN_FLIGHT] = r->tex_dsl;
     l[FRAMES_IN_FLIGHT + 1u] = r->tex_dsl;
+    l[FRAMES_IN_FLIGHT + 2u] = r->depth_in_dsl;
     memset(&ai, 0, sizeof ai);
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = r->pool_frame;
-    ai.descriptorSetCount = FRAMES_IN_FLIGHT + 2u;
+    ai.descriptorSetCount = FRAMES_IN_FLIGHT + 3u;
     ai.pSetLayouts = l;
     if (r->f.vkAllocateDescriptorSets(r->dev, &ai, sets) != VK_SUCCESS) {
         return 0;
@@ -1455,6 +1493,7 @@ static int make_frame_sets(SuRenderer *r) {
     }
     r->post_set = sets[FRAMES_IN_FLIGHT];
     r->font_set = sets[FRAMES_IN_FLIGHT + 1u];
+    r->depth_in_set = sets[FRAMES_IN_FLIGHT + 2u];
     return 1;
 }
 
@@ -1747,7 +1786,8 @@ static int make_framebuffers(SuRenderer *r) {
     uint32_t i;
     VkImageView att[2];
     VkFramebufferCreateInfo fi;
-    if (!make_image(r, r->width, r->height, r->depth_format, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+    if (!make_image(r, r->width, r->height, r->depth_format,
+                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
                     VK_IMAGE_ASPECT_DEPTH_BIT, &r->depth_img, &r->depth_mem, &r->depth_view) ||
         !make_image(r, r->width, r->height, HDR_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                     VK_IMAGE_ASPECT_COLOR_BIT, &r->hdr_img, &r->hdr_mem, &r->hdr_view)) {
@@ -1767,6 +1807,20 @@ static int make_framebuffers(SuRenderer *r) {
         return 0;
     }
     write_image_set(r, r->post_set, r->hdr_view, r->nearest);
+    {
+        VkDescriptorImageInfo ii;
+        VkWriteDescriptorSet w;
+        ii.sampler = VK_NULL_HANDLE;
+        ii.imageView = r->depth_view;
+        ii.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        memset(&w, 0, sizeof w);
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = r->depth_in_set;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+        w.pImageInfo = &ii;
+        r->f.vkUpdateDescriptorSets(r->dev, 1, &w, 0, NULL);
+    }
     make_bloom_targets(r);
     for (i = 0; i < r->image_count; i++) {
         VkSemaphoreCreateInfo si;
@@ -2021,6 +2075,9 @@ void su_render_destroy(SuRenderer *r) {
         if (r->fxtex_layout != VK_NULL_HANDLE) {
             r->f.vkDestroyPipelineLayout(r->dev, r->fxtex_layout, NULL);
         }
+        if (r->depth_in_dsl != VK_NULL_HANDLE) {
+            r->f.vkDestroyDescriptorSetLayout(r->dev, r->depth_in_dsl, NULL);
+        }
         if (r->skycube_layout != VK_NULL_HANDLE) {
             r->f.vkDestroyPipelineLayout(r->dev, r->skycube_layout, NULL);
         }
@@ -2073,6 +2130,8 @@ void su_render_destroy(SuRenderer *r) {
     free(r->items);
     free(r->order);
     free(r->fxb);
+    free(r->fxs);
+    free(r->fxq);
     free(r);
 }
 
@@ -2152,7 +2211,10 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
     r->max_hud = DESC_FIELD(desc, max_hud_vertices, DEFAULT_HUD_VERTICES);
     r->max_fx_tex = DESC_FIELD(desc, max_fx_tex_vertices, DEFAULT_FX_TEX_VERTICES);
     r->max_fx_batches = DESC_FIELD(desc, max_fx_batches, DEFAULT_FX_BATCHES);
-    r->fxb = malloc((size_t)r->max_fx_batches * sizeof *r->fxb);
+    r->fxb_cap = r->max_fx_batches + r->max_fx_tex / 6u + 1u;
+    r->fxb = malloc((size_t)r->fxb_cap * sizeof *r->fxb);
+    r->fxs = malloc((size_t)r->max_fx_batches * sizeof *r->fxs);
+    r->fxq = malloc(((size_t)r->max_fx_tex / 6u + 1u) * sizeof *r->fxq);
     max_res = DESC_FIELD(desc, max_resources, DEFAULT_RESOURCES);
     if (desc->struct_size == sizeof *desc && desc->pipeline_cache_path != NULL) {
         snprintf(r->cache_path, sizeof r->cache_path, "%s", desc->pipeline_cache_path);
@@ -2162,7 +2224,7 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
     r->sorted = malloc((size_t)r->max_instances * sizeof *r->sorted);
     r->items = malloc((size_t)r->max_draw * sizeof *r->items);
     r->order = malloc((size_t)r->max_draw * sizeof *r->order);
-    if (r->sorted == NULL || r->items == NULL || r->order == NULL || r->fxb == NULL) {
+    if (r->sorted == NULL || r->items == NULL || r->order == NULL || r->fxb == NULL || r->fxs == NULL || r->fxq == NULL) {
         return create_fail(r, SU_E_RESOURCE_LIMIT, message, "allocation failed");
     }
     if (!load_loader(&r->f, message)) {
@@ -2272,7 +2334,8 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
                                 host, &fr->draw_inst) ||
             !su_rvk_make_buffer(r, (VkDeviceSize)r->max_fx * sizeof(SuFxVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, host,
                                 &fr->fx) ||
-            !su_rvk_make_buffer(r, (VkDeviceSize)r->max_fx_tex * sizeof(SuFxVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            /* two halves: the frame's vertices as given, then the sorted quads */
+            !su_rvk_make_buffer(r, (VkDeviceSize)r->max_fx_tex * 2u * sizeof(SuFxVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                 host, &fr->fx_tex) ||
             !make_fx_pool(r, fr) ||
             !su_rvk_make_buffer(r, (VkDeviceSize)r->max_hud * sizeof(SuHudVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -2409,6 +2472,16 @@ typedef struct FrameIn {
     float proj_y;
 } FrameIn;
 
+/* Farther quads first; equal distances keep submission order. */
+static int cmp_fx_quads(const void *a, const void *b) {
+    const FxQuad *x = (const FxQuad *)a;
+    const FxQuad *y = (const FxQuad *)b;
+    if (x->d2 != y->d2) {
+        return x->d2 > y->d2 ? -1 : 1;
+    }
+    return x->seq < y->seq ? -1 : x->seq > y->seq;
+}
+
 static void viewport(SuRenderer *r, VkCommandBuffer cmd) {
     VkViewport vpt;
     VkRect2D sc;
@@ -2446,6 +2519,12 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     uint32_t n_hud;
     uint32_t n_fxt = 0;
     uint32_t n_fxb = 0;
+    uint32_t n_batches = 0;
+    uint32_t n_sorted = 0;
+    uint32_t n_quads = 0;
+    uint32_t n_sort_draws = 0;
+    uint32_t sort_at = UINT32_MAX;
+    FxPush fxp;
     uint32_t skipped = 0;
     VkDescriptorSet sky_set = VK_NULL_HANDLE;
     uint32_t n_items = 0;
@@ -2516,6 +2595,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     for (i = 0; i < in->batch_count; i++) {
         const SuFxBatch *bt = &in->batches[i];
         Res *tr = su_rvk_get(r, bt->texture, RES_TEXTURE, NULL);
+        FxBatchDraw tmpl;
         uint32_t first = bt->first_vertex;
         uint32_t count = bt->vertex_count;
         VkDescriptorSetAllocateInfo dai;
@@ -2531,7 +2611,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         }
         count -= count % 3u;
         if (tr == NULL || tr->state != SU_RENDER_STATE_READY || tr->u.tex.layers != 1u || count == 0u || first % 3u != 0u ||
-            bt->blend > SU_FX_BLEND_PREMUL || n_fxb >= r->max_fx_batches) {
+            bt->blend > SU_FX_BLEND_PREMUL || n_batches >= r->max_fx_batches) {
             skipped++;
             continue;
         }
@@ -2547,11 +2627,65 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         write_image_set(r, set, tr->u.tex.view,
                         r->samplers[wrap_index[bt->wrap_u > 2u ? 0u : bt->wrap_u] * 3u +
                                     wrap_index[bt->wrap_v > 2u ? 0u : bt->wrap_v]]);
-        r->fxb[n_fxb].set = set;
-        r->fxb[n_fxb].first = first;
-        r->fxb[n_fxb].count = count;
-        r->fxb[n_fxb].pipe = bt->blend;
-        n_fxb++;
+        tmpl.set = set;
+        tmpl.first = first;
+        tmpl.count = count;
+        tmpl.pipe = bt->blend;
+        tmpl.soft = bt->soft_distance > 0.0f && bt->soft_distance < 1e30f ? 1.0f / bt->soft_distance : 0.0f;
+        n_batches++;
+        if ((bt->flags & SU_FX_BATCH_SORT) != 0u && count % 6u == 0u && n_quads + count / 6u <= r->max_fx_tex / 6u &&
+            n_sorted < r->max_fx_batches) {
+            /* collect the quads; drawn later, sorted, where the first sorted batch stands */
+            uint32_t q;
+            if (sort_at == UINT32_MAX) {
+                sort_at = n_fxb;
+            }
+            r->fxs[n_sorted] = tmpl;
+            for (q = 0; q < count / 6u; q++) {
+                const SuFxVertex *v = in->fx_tex + first + q * 6u;
+                float c[3] = {0.0f, 0.0f, 0.0f};
+                uint32_t k;
+                for (k = 0; k < 6u; k++) {
+                    c[0] += v[k].pos[0];
+                    c[1] += v[k].pos[1];
+                    c[2] += v[k].pos[2];
+                }
+                r->fxq[n_quads].d2 = c[0] * c[0] + c[1] * c[1] + c[2] * c[2];
+                r->fxq[n_quads].src = n_sorted;
+                r->fxq[n_quads].first = first + q * 6u;
+                r->fxq[n_quads].seq = n_quads;
+                n_quads++;
+            }
+            n_sorted++;
+            continue;
+        }
+        r->fxb[n_fxb++] = tmpl;
+    }
+    if (n_quads > 0u) {
+        /* back to front, written into the second half of the vertex buffer, one draw per run of the same batch */
+        SuFxVertex *dst = (SuFxVertex *)fr->fx_tex.map + r->max_fx_tex;
+        uint32_t runs = 0;
+        uint32_t q;
+        qsort(r->fxq, n_quads, sizeof *r->fxq, cmp_fx_quads);
+        for (q = 0; q < n_quads; q++) {
+            memcpy(dst + (size_t)q * 6u, in->fx_tex + r->fxq[q].first, 6u * sizeof *dst);
+            if (q == 0u || r->fxq[q].src != r->fxq[q - 1u].src) {
+                runs++;
+            }
+        }
+        memmove(&r->fxb[sort_at + runs], &r->fxb[sort_at], (size_t)(n_fxb - sort_at) * sizeof *r->fxb);
+        runs = 0;
+        for (q = 0; q < n_quads; q++) {
+            if (q == 0u || r->fxq[q].src != r->fxq[q - 1u].src) {
+                r->fxb[sort_at + runs] = r->fxs[r->fxq[q].src];
+                r->fxb[sort_at + runs].first = r->max_fx_tex + q * 6u;
+                r->fxb[sort_at + runs].count = 0;
+                runs++;
+            }
+            r->fxb[sort_at + runs - 1u].count += 6u;
+        }
+        n_fxb += runs;
+        n_sort_draws = runs;
     }
     if (in->sky && in->sky_cube != 0u) {
         Res *cr = su_rvk_get(r, in->sky_cube, RES_TEXTURE, NULL);
@@ -2707,18 +2841,25 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         r->f.vkCmdDraw(cmd, n_fx, 1, 0, 0);
         r->stats.draws++;
     }
+    /* subpass 1: textured effects, with the scene depth readable for soft particles */
+    r->f.vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
     if (n_fxb > 0u) {
         uint32_t last_pipe = UINT32_MAX;
+        memset(&fxp, 0, sizeof fxp);
+        fxp.near_z = in->scene != NULL && in->scene->camera.near_z > 0.0f ? in->scene->camera.near_z : 1.0f;
         r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->fx_tex.buf, &zero);
         for (i = 0; i < n_fxb; i++) {
-            VkDescriptorSet two[2];
+            VkDescriptorSet three[3];
             if (r->fxb[i].pipe != last_pipe) {
                 r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fxtex_pipe[r->fxb[i].pipe]);
                 last_pipe = r->fxb[i].pipe;
             }
-            two[0] = fr->frame_set;
-            two[1] = r->fxb[i].set;
-            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fxtex_layout, 0, 2, two, 0, NULL);
+            three[0] = fr->frame_set;
+            three[1] = r->fxb[i].set;
+            three[2] = r->depth_in_set;
+            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fxtex_layout, 0, 3, three, 0, NULL);
+            fxp.soft = r->fxb[i].soft;
+            r->f.vkCmdPushConstants(cmd, r->fxtex_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof fxp, &fxp);
             r->f.vkCmdDraw(cmd, r->fxb[i].count, 1, r->fxb[i].first, 0);
             r->stats.draws++;
         }
@@ -2917,7 +3058,9 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     r->stats.line_vertices = n_lines;
     r->stats.fx_vertices = n_fx;
     r->stats.fx_tex_vertices = n_fxt;
-    r->stats.fx_batches_drawn = n_fxb;
+    r->stats.fx_batches_drawn = n_batches;
+    r->stats.fx_quads_sorted = n_quads;
+    r->stats.fx_sort_draws = n_sort_draws;
     r->stats.fx_batches_skipped = skipped;
     r->stats.hud_vertices = n_hud;
     r->stats.width = r->width;

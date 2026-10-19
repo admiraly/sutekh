@@ -92,6 +92,9 @@ HDR, so intensities above 1 feed bloom). The texture's format decides sRGB or li
 `su_fx_sprite_axis` (a quad along a world axis that turns about it to face the camera: flames and plumes; end-on it
 degrades to a sliver), `su_fx_atlas_rect` (frame to uv; keep a texel of padding between atlas cells, sampling is
 bilinear), `su_trail_build_tex` (U along the trail by age or by distance, with a scroll offset and wrap `REPEAT`; V across).
+Batches can fade softly into the geometry behind them (`SuFxBatch.soft_distance`: the scene depth is read as an input
+attachment in a second subpass of the scene pass) and can be sorted back to front across batches (`SU_FX_BATCH_SORT`,
+per quad).
 
 `include/sutekh/dds.h` parses DDS files in memory (2D and cube, mips, BC1 to BC7 including BC6H, RGBA8, RGBA16F) and
 `su_render_texture_create_dds` uploads them natively when the device supports BCn (`SuRenderDeviceInfo.bc_textures`);
