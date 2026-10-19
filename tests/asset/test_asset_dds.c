@@ -531,7 +531,7 @@ static void test_bc_ldr(void) {
     /* six-value mode (50 <= 150): index 2 = (4 * 50 + 150 + 2) / 5, 6 = 0, 7 = 255 */
     blk[0] = 50;
     blk[1] = 150;
-    blk[2] = (uint8_t)(2u | (6u << 3) | (7u << 6)); /* texel 2's index straddles into byte 3 */
+    blk[2] = (uint8_t)((2u | (6u << 3) | (7u << 6)) & 0xFFu); /* texel 2's index straddles into byte 3 */
     blk[3] = (uint8_t)(7u >> 2);
     CHECK(su_bc_decode_block(SU_TEX_BC3_UNORM, blk, out) == SU_OK);
     CHECK(out[3] == 70 && out[7] == 0 && out[11] == 255);
