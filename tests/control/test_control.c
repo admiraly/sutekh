@@ -1108,8 +1108,7 @@ int main(int argc, char **argv) {
     {
         int n = snprintf(scratch_dir, sizeof scratch_dir, "%s/sutekh-control-%ld", scratch, (long)getpid());
         if (n < 0 || (size_t)n >= sizeof scratch_dir) {
-            fprintf(stderr, "scratch path too long
-");
+            fprintf(stderr, "scratch path too long\n");
             return 2;
         }
     }
