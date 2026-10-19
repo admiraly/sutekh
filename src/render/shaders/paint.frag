@@ -21,7 +21,7 @@ layout(set = 1, binding = 1) uniform sampler2D t_normal;     // linear, rg
 layout(set = 1, binding = 2) uniform sampler2D t_rough;      // linear
 layout(set = 1, binding = 3) uniform sampler2D t_material;   // linear
 layout(set = 1, binding = 4) uniform sampler2D t_mask;       // linear, rgba = layers 0..3
-layout(set = 1, binding = 5) uniform sampler2D t_glow;       // sRGB
+layout(set = 1, binding = 5) uniform sampler2D t_glow;       // sRGB rgb, or a linear one-channel mask
 layout(set = 1, binding = 6) uniform sampler2D t_dirt;       // linear
 layout(set = 1, binding = 7) uniform sampler2D t_ao;         // linear
 
@@ -33,7 +33,8 @@ struct Layer {
 
 layout(set = 1, binding = 8) uniform Paint {
     vec4 a;            // specular, dirt amount, dirt darken, dirt roughen
-    uvec4 b;           // layer count, order (byte i = i-th layer), channels rough|metal<<8|spec<<16|dirt<<24, ao channel
+    uvec4 b;           // layer count, order (byte i = i-th layer), channels rough|metal<<8|spec<<16|dirt<<24,
+                       // ao channel | glow channel << 8 | glow is a linear mask << 16
     Layer layer[4];
 } pt;
 
@@ -113,7 +114,9 @@ void main() {
     rough = clamp(rough, 0.04, 1.0);
     metallic = clamp(metallic, 0.0, 1.0);
 
-    vec3 emit = texture(t_glow, uv_of(5u)).rgb * glow_c * glow_i * v_emissive;
+    vec4 gtex = texture(t_glow, uv_of(5u));
+    vec3 gmap = ((pt.b.w >> 16) & 1u) != 0u ? vec3(pick(gtex, (pt.b.w >> 8) & 0xFFu)) : gtex.rgb;
+    vec3 emit = gmap * glow_c * glow_i * v_emissive;
 
     vec3 n = normalize(v_normal);
     if (!gl_FrontFacing) {

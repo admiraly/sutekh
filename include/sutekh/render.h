@@ -465,7 +465,10 @@ typedef struct SuRenderMaterialDesc {
  * Texture slots (SU_PAINT_SLOT_*, colour space per slot, enforced at creation: SRGB slots refuse non-sRGB formats and
  * LINEAR slots refuse sRGB ones, SU_E_INVALID_ARGUMENT):
  *   albedo sRGB | normal linear (BC5 or RG; z rebuilt) | roughness linear | material linear | mask linear |
- *   glow sRGB | dirt linear | ao linear.
+ *   glow sRGB or linear | dirt linear | ao linear.
+ * The glow slot's format picks its meaning: an sRGB texture is an RGB glow map (as always); a linear one (BC4, R8,
+ * RGBA8 UNORM...) is a one-channel intensity mask read from channel[SU_PAINT_CH_GLOW] (0..3; NONE reads 1), so the
+ * colour comes from the material: glow map.rgb below becomes vec3(mask channel).
  * A slot without a texture (or whose texture is still uploading) reads: albedo, roughness, material, glow, dirt, ao
  * white (so the factor alone decides), normal flat, mask all zero (no layer shows).
  *

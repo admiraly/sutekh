@@ -782,11 +782,17 @@ static void cook_paint(Cook *c, const cgltf_material *gm, const char *ext, SuAss
     paint_slot_json(c, p, SU_PAINT_SLOT_MATERIAL, ext, "materialTexture", 1, st);
     paint_slot_json(c, p, SU_PAINT_SLOT_MASK, ext, "maskTexture", 1, st);
     paint_slot_json(c, p, SU_PAINT_SLOT_DIRT, ext, "dirtTexture", 1, st);
+    if (j_get(ext, "glowMaskTexture") != NULL) { /* a linear one-channel mask replaces the sRGB emissive map */
+        p->texture[SU_PAINT_SLOT_GLOW] = 0;
+        p->tex_info[SU_PAINT_SLOT_GLOW] = 0;
+        paint_slot_json(c, p, SU_PAINT_SLOT_GLOW, ext, "glowMaskTexture", 1, st);
+    }
     paint_channel(c, p, chs, "roughness", SU_PAINT_CH_ROUGHNESS);
     paint_channel(c, p, chs, "metal", SU_PAINT_CH_METAL);
     paint_channel(c, p, chs, "specular", SU_PAINT_CH_SPECULAR);
     paint_channel(c, p, chs, "dirt", SU_PAINT_CH_DIRT);
     paint_channel(c, p, chs, "ao", SU_PAINT_CH_AO);
+    paint_channel(c, p, chs, "glow", SU_PAINT_CH_GLOW);
     if (j_num(j_get(ext, "specular"), &f) && f >= 0.0f) {
         p->specular = f;
     }

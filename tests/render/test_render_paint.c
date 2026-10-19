@@ -687,6 +687,64 @@ static void test_glow(void) {
     CHECK(fabs(v[0] - lin(128) * 2.0) < 0.012 && v[1] < 0.01 && v[2] < 0.01);
 }
 
+/* A linear texture in the glow slot is a one-channel mask: glow = mask channel x colour x intensity. */
+static void test_glow_mask(void) {
+    static uint8_t m8[16 * 16 * 4];
+    static uint8_t bc4[4 * 4 * 8];
+    static uint8_t img[W * H * 4];
+    SuRenderDeviceInfo dev;
+    Scene sc;
+    Pm p;
+    double v[3];
+    double want = 128.0 / 255.0 * 1.5;
+    uint32_t i;
+    fill_rgba(m8, 16 * 16, 0, 128, 255, 0); /* channel g = 0.502 (linear: no sRGB decode) */
+    scene_init(&sc);
+    sc.sun_intensity = 0.0f;
+    sc.ambient = 0.0f;
+    pm_init(&p, 0.0f);
+    p.d.factors.emissive[0] = 1.0f;
+    p.d.factors.emissive[1] = 0.5f;
+    p.d.factors.emissive[2] = 0.0f;
+    p.d.factors.emissive_strength = 1.5f;
+    p.d.textures[SU_PAINT_SLOT_GLOW] = mk_tex(SU_TEX_RGBA8_UNORM, 16, 16, m8);
+    p.d.paint.channel[SU_PAINT_CH_GLOW] = 1;
+    CHECK(shoot(&sc, &p, img));
+    lin_px(img, 0.5f, 0.5f, v);
+    printf("glow mask: RGBA8 channel g -> %.4f %.4f %.4f (want %.4f %.4f 0)\n", v[0], v[1], v[2], want, want * 0.5);
+    CHECK(fabs(v[0] - want) < 0.012 && fabs(v[1] - want * 0.5) < 0.012 && v[2] < 0.005);
+    p.d.paint.channel[SU_PAINT_CH_GLOW] = 3; /* alpha is 0: no glow */
+    CHECK(shoot(&sc, &p, img));
+    lin_px(img, 0.5f, 0.5f, v);
+    CHECK(v[0] < 0.005 && v[1] < 0.005);
+    p.d.paint.channel[SU_PAINT_CH_GLOW] = SU_PAINT_CH_NONE; /* the map is not read: 1 */
+    CHECK(shoot(&sc, &p, img));
+    lin_px(img, 0.5f, 0.5f, v);
+    CHECK(v[0] > 0.99 && fabs(v[1] - 0.75) < 0.012);
+    p.d.paint.channel[SU_PAINT_CH_GLOW] = 6;
+    {
+        SuRenderHandle m = 0;
+        CHECK(su_render_paint_material_create(g_r, &p.d, &m) == SU_E_INVALID_ARGUMENT);
+    }
+    /* BC4 (a constant block: both endpoints 128, every index 0, so any decoder gives exactly 128 / 255) */
+    CHECK(su_render_device(g_r, &dev) == SU_OK);
+    if (!dev.bc_textures) {
+        printf("glow mask: BC4 skipped (no native BC sampling)\n");
+        return;
+    }
+    memset(bc4, 0, sizeof bc4);
+    for (i = 0; i < 16; i++) {
+        bc4[i * 8] = 128;
+        bc4[i * 8 + 1] = 128;
+    }
+    p.d.textures[SU_PAINT_SLOT_GLOW] = mk_tex(SU_TEX_BC4_UNORM, 16, 16, bc4);
+    p.d.paint.channel[SU_PAINT_CH_GLOW] = 0;
+    CHECK(shoot(&sc, &p, img));
+    lin_px(img, 0.5f, 0.5f, v);
+    printf("glow mask: BC4 -> %.4f %.4f %.4f (want %.4f %.4f 0)\n", v[0], v[1], v[2], want, want * 0.5);
+    CHECK(fabs(v[0] - want) < 0.012 && fabs(v[1] - want * 0.5) < 0.012 && v[2] < 0.005);
+}
+
 static void test_dirt_ao(void) {
     static uint8_t dirt[16 * 16 * 4];
     static uint8_t ao[16 * 16 * 4];
@@ -943,7 +1001,12 @@ static void test_color_spaces(void) {
         pm_init(&p, 1.0f);
         p.d.textures[s] = wants_srgb ? unorm : srgb;
         m = 0;
-        CHECK(su_render_paint_material_create(g_r, &p.d, &m) == SU_E_INVALID_ARGUMENT && m == 0u);
+        if (s == SU_PAINT_SLOT_GLOW) { /* either kind: a linear glow texture is a mask */
+            CHECK(su_render_paint_material_create(g_r, &p.d, &m) == SU_OK && m != 0u);
+            CHECK(su_render_release(g_r, m) == SU_OK);
+        } else {
+            CHECK(su_render_paint_material_create(g_r, &p.d, &m) == SU_E_INVALID_ARGUMENT && m == 0u);
+        }
         p.d.textures[s] = wants_srgb ? srgb : unorm;
         CHECK(su_render_paint_material_create(g_r, &p.d, &m) == SU_OK && m != 0u);
         CHECK(su_render_release(g_r, m) == SU_OK);
@@ -1153,6 +1216,7 @@ int main(int argc, char **argv) {
     test_blend_order();
     test_zero_layers();
     test_glow();
+    test_glow_mask();
     test_dirt_ao();
     test_environment();
     test_color_spaces();
