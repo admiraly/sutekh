@@ -6,6 +6,7 @@
 // BRDF for specular), tangent-space normal maps, occlusion, emissive. Output is linear HDR.
 #version 450
 #extension GL_GOOGLE_include_directive : require
+#define SU_SHADOW_RECEIVER
 #include "frame.glsl"
 
 layout(location = 0) in vec3 v_pos;
@@ -86,6 +87,9 @@ void main() {
     float vis = 0.5 / max(nl * sqrt(nv * nv * (1.0 - a2) + a2) + nv * sqrt(nl * nl * (1.0 - a2) + a2), 1e-6);
     vec3 diffuse = (1.0 - f) * (1.0 - metallic) * base.rgb / PI;
     vec3 direct = (diffuse + d * vis * f) * fr.sun_color.rgb * nl;
+    if (nl > 0.0) {
+        direct *= sun_shadow(v_pos, normalize(v_normal) * (gl_FrontFacing ? 1.0 : -1.0));
+    }
 
     // ambient: analytic environment BRDF (Karis, mobile approximation)
     vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);

@@ -189,6 +189,7 @@ typedef struct Frame {
     Buffer draw_inst;     /* object draw instances (DrawInstance) */
     Buffer fx;
     Buffer fx_tex;        /* textured effects */
+    Buffer shadow_inst;   /* shadow caster instances (DrawInstance) */
     VkDescriptorPool fx_pool; /* one sampler set per textured batch, reset every frame */
     Buffer hud;
     Buffer ubo;           /* FrameUbo */
@@ -333,6 +334,8 @@ typedef struct FrameUbo {
     float sky_nadir[4];
     float up[4];
     float params[4];
+    float shadow_vp[16];      /* camera-relative position -> shadow map clip space (x, y in -1..1, depth 0..1) */
+    float shadow_params[4];   /* x: strength (0 = no shadow), y: depth bias, z: 1 / map size, w: normal offset (units) */
 } FrameUbo;
 
 typedef struct MatPush {
@@ -388,6 +391,14 @@ typedef struct FxPush {
     float near_z;             /* reversed-Z near plane: view depth = near_z / depth */
     float pad[2];
 } FxPush;
+
+/* One caster of the shadow pass: an instance of a submesh. */
+typedef struct ShadowItem {
+    uint64_t key;             /* mesh << 16 | submesh */
+    uint32_t mesh;
+    uint32_t sub;
+    DrawInstance inst;
+} ShadowItem;
 
 /* One draw item of the scene: an instance of a submesh with a material. */
 typedef struct DrawItem {
@@ -507,6 +518,19 @@ struct SuRenderer {
     VkImage depth_img;
     VkDeviceMemory depth_mem;
     VkImageView depth_view;
+    /* sun shadows: a depth map sampled by the lit materials through the frame set (binding 1) */
+    VkFormat shadow_format;
+    VkRenderPass shadow_pass;
+    VkPipeline shadow_pipe;
+    VkSampler shadow_sampler;           /* compare LESS_OR_EQUAL, clamp to border (lit) */
+    VkImage shadow_img;
+    VkDeviceMemory shadow_mem;
+    VkImageView shadow_view;
+    VkFramebuffer shadow_fb;
+    uint32_t shadow_size;               /* texels per side (1 until shadows are first used) */
+    int shadow_fresh;                   /* the image has never been through the shadow pass (layout undefined) */
+    ShadowItem *sitems;                 /* max_draw */
+    uint32_t *sorder;
     Buffer readback;
     /* capacities */
     uint32_t max_instances;
@@ -575,5 +599,12 @@ uint32_t su_rvk_internal_textures(SuRenderer *r);
 void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, const SuMat4f *view_proj, float proj_y,
                         uint32_t *item_count);
 void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t item_count, int blend_pass);
+/* Fits the sun's shadow map to the frame (see SuRenderShadow), writes the shadow matrix and parameters into ubo and the
+ * caster instances into fr->shadow_inst; returns the number of caster instances (0: no shadow this frame, the
+ * parameters say so). cam_world: the camera position in world units (for texel snapping). */
+uint32_t su_rvk_shadow_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, const SuMat4f *view_proj, float proj_y,
+                             FrameUbo *ubo);
+/* Records the caster draws (inside the shadow pass). */
+void su_rvk_shadow_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t count);
 
 #endif

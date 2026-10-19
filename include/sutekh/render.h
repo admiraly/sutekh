@@ -641,8 +641,35 @@ typedef struct SuRenderObject {
                                         * zero = (1, 1, 1), uniform as before; otherwise each must be > 0. Normals use
                                         * the inverse transpose (correct shading under stretch); culling and LOD use the
                                         * largest axis scale for the bounding spheres. */
-    uint32_t reserved2;
+    uint32_t flags;                    /* SU_RENDER_OBJECT_*; 0 = default (casts sun shadows when they are on) */
 } SuRenderObject;
+
+#define SU_RENDER_OBJECT_NO_SHADOW 0x1u /* never casts a sun shadow (effects, tiny objects); it still receives them */
+
+/* Directional sun shadows (optional, off by default): one shadow map fitted each frame in the sun's frame.
+ *
+ * Fit: the receivers are the objects that pass view culling (and, when distance > 0, the slice of the view frustum
+ * from the near plane to distance, so close-ups keep detail on huge hulls); the map covers their bounding spheres
+ * across the light, snapped to whole texels in world space (no shimmer while the camera moves). Casters are the
+ * objects without SU_RENDER_OBJECT_NO_SHADOW, fully opaque (tint[3] >= 1), whose bounding sphere reaches into that
+ * box from the sun's side, drawn at the LOD the camera selects. Opaque and masked materials cast (masked ones as
+ * solid), blended ones do not; debug instances, effects and the sky neither cast nor receive.
+ * Receiving: PBR-lite and paint materials multiply the sun's direct light (never the ambient or glow) by
+ * 1 - strength * (1 - lit), where lit is a 3 x 3 percentage-closer filter of the map (hardware-filtered when the depth
+ * format allows). Points outside the map are lit.
+ * Cost: one extra depth-only pass over the casters plus nine shadow taps per lit pixel; size 2048 is 16 MiB, allocated on
+ * the first frame that asks for it (changing size later waits for the device once). */
+#define SU_SHADOW_ON 0x1u
+
+typedef struct SuRenderShadow {
+    uint32_t flags;                    /* SU_SHADOW_ON; 0 = no shadows: nothing extra is drawn, the image is as before */
+    uint32_t size;                     /* texels per side, a power of two in 256..8192; 0 = 2048 */
+    float distance;                    /* > 0: fit to the view frustum slice up to this distance (units) as well; 0 = fit
+                                        * every visible object */
+    float strength;                    /* 0..1, the fraction of the sun a full shadow removes; 0 = 1 */
+    float bias;                        /* receiver depth bias in texels of the map's width; 0 = 1.5 */
+    float normal_offset;               /* receiver offset along its normal in texels; 0 = 1.5 */
+} SuRenderShadow;
 
 /* Post processing on the HDR scene (RGBA16F), before the tonemap. Zero-initialised = everything off, so existing
  * frames render exactly as before.
@@ -703,6 +730,7 @@ typedef struct SuRenderFrameDesc {
     SuQuatf sky_rot;                   /* orientation of the cube in the world (all zero = identity); rotate around
                                         * light.up with su_quatf_axis_angle */
     float sky_lod;                     /* mip level sampled (0 = sharpest); a prefiltered env cube gets blurrier with it */
+    SuRenderShadow shadow;             /* all zero: no sun shadows (see SuRenderShadow) */
 } SuRenderFrameDesc;
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object
@@ -759,6 +787,11 @@ typedef struct SuRenderStats {
     uint32_t fx_batches_skipped;   /* texture not READY, not 2D, or bad range */
     uint32_t fx_quads_sorted;      /* quads of SU_FX_BATCH_SORT batches sorted in the last frame */
     uint32_t fx_sort_draws;        /* draw calls those sorted quads took (one per run of quads of the same batch) */
+    /* ---- sun shadows ---- */
+    uint32_t shadow_size;          /* texels per side of the shadow map used by the last frame, 0 when off */
+    uint32_t shadow_casters;       /* caster instances (node x submesh) drawn into it */
+    uint32_t shadow_draws;         /* draw calls of the shadow pass */
+    float shadow_texel;            /* world units per shadow texel in the last frame */
 } SuRenderStats;
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given
