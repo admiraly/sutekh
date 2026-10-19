@@ -89,6 +89,8 @@ static void scene_init(Scene *s) {
     s->emissive = 1.0f;
 }
 
+static const SuRenderObject *g_obj = NULL; /* when set, render() draws this object instead of the default one */
+
 static int render(const Scene *s, SuRenderHandle model, uint8_t *out) {
     SuRenderFrameDesc f;
     SuRenderObject o;
@@ -114,7 +116,7 @@ static int render(const Scene *s, SuRenderHandle model, uint8_t *out) {
     f.light.no_sky = 1;
     f.light.exposure = s->exposure;
     f.light.clear_color[3] = 1.0f;
-    f.objects = &o;
+    f.objects = g_obj != NULL ? g_obj : &o;
     f.object_count = 1;
     f.post = s->post;
     f.env = s->env;
@@ -745,6 +747,128 @@ static void test_glow_mask(void) {
     CHECK(fabs(v[0] - want) < 0.012 && fabs(v[1] - want * 0.5) < 0.012 && v[2] < 0.005);
 }
 
+/* Per-object non-uniform scale (SuRenderObject.scale3). */
+static void test_scale3(void) {
+    static uint8_t a[W * H * 4];
+    static uint8_t b[W * H * 4];
+    Scene sc;
+    Pm p;
+    SuRenderObject o;
+    SuRenderHandle mat = 0;
+    SuRenderHandle model;
+    SuRenderHandle stretched = 0;
+    SuRenderStats st;
+    SuRenderModelNode mn;
+    int x;
+    int y;
+    int x0 = W;
+    int x1 = -1;
+    int y0 = H;
+    int y1 = -1;
+    scene_init(&sc);
+    sc.sun_dir[0] = 0.5f; /* oblique light, so the normal matters */
+    sc.sun_dir[2] = -0.8f;
+    sc.ambient = 0.2f;
+    sc.sky[0] = sc.sky[1] = sc.sky[2] = 0.5f;
+    pm_init(&p, 0.8f);
+    CHECK(su_render_paint_material_create(g_r, &p.d, &mat) == SU_OK);
+    model = quad_model(mat);
+    memset(&o, 0, sizeof o);
+    o.pos = su_wpos(0.0, 0.0, -6.0);
+    o.rot = su_quatf_axis_angle(v3(0, 1, 0), 0.6f);
+    o.scale = 1.0f;
+    o.tint[0] = o.tint[1] = o.tint[2] = o.tint[3] = 1.0f;
+    o.emissive = 1.0f;
+    o.model = model;
+    g_obj = &o;
+    /* scale3 (2, 2, 2) at scale 1 is exactly scale 2 */
+    o.scale = 2.0f;
+    CHECK(render(&sc, model, a));
+    o.scale = 1.0f;
+    o.scale3[0] = o.scale3[1] = o.scale3[2] = 2.0f;
+    CHECK(render(&sc, model, b));
+    CHECK(memcmp(a, b, sizeof a) == 0);
+    /* stretch along the local x axis: the same image as a model whose node carries diag(2.5, 0.5, 1), which the
+     * renderer already draws with the inverse-transpose normals */
+    o.scale3[0] = 2.5f;
+    o.scale3[1] = 0.5f;
+    o.scale3[2] = 1.0f;
+    CHECK(render(&sc, model, a));
+    memset(&mn, 0, sizeof mn);
+    {
+        SuAssetVertex v[4];
+        uint32_t idx[6];
+        SuAssetSubmesh sm;
+        SuRenderMeshDesc mesh;
+        SuRenderHandle msh = 0;
+        quad_mesh(v, idx);
+        memset(&sm, 0, sizeof sm);
+        sm.index_count = 6;
+        sm.radius = 1.5f;
+        memset(&mesh, 0, sizeof mesh);
+        mesh.vertices = v;
+        mesh.vertex_count = 4;
+        mesh.indices = idx;
+        mesh.index_count = 6;
+        mesh.submeshes = &sm;
+        mesh.submesh_count = 1;
+        mesh.materials = &mat;
+        mesh.radius = 1.5f;
+        mesh.flags = SU_RENDER_UPLOAD_COPY;
+        CHECK(su_render_mesh_create(g_r, &mesh, &msh) == SU_OK);
+        mn.transform[0] = 2.5f;
+        mn.transform[5] = 0.5f;
+        mn.transform[10] = mn.transform[15] = 1.0f;
+        mn.lod_mesh[0] = msh;
+        mn.lod_screen[0] = 1.0f;
+        mn.lod_count = 1;
+        CHECK(su_render_model_create(g_r, &mn, 1, &stretched) == SU_OK);
+    }
+    o.scale3[0] = o.scale3[1] = o.scale3[2] = 0.0f;
+    o.model = stretched;
+    CHECK(render(&sc, stretched, b));
+    CHECK(memcmp(a, b, sizeof a) == 0);
+    o.model = model;
+    /* facing the camera, the covered box is 2.5 x 0.5 of the unit quad's (73.9 px per unit at z = -3; here z = -6) */
+    o.rot.x = o.rot.y = o.rot.z = 0.0f;
+    o.rot.w = 1.0f;
+    o.scale3[0] = 2.5f;
+    o.scale3[1] = 0.5f;
+    o.scale3[2] = 1.0f;
+    CHECK(render(&sc, model, a));
+    for (y = 0; y < (int)H; y++) {
+        for (x = 0; x < (int)W; x++) {
+            if (px(a, x, y)[0] > 0) {
+                x0 = x < x0 ? x : x0;
+                x1 = x > x1 ? x : x1;
+                y0 = y < y0 ? y : y0;
+                y1 = y > y1 ? y : y1;
+            }
+        }
+    }
+    printf("scale3: (2.5, 0.5, 1) covers x %d..%d, y %d..%d (expected %.1f x %.1f px)\n", x0, x1, y0, y1,
+           2.5 * 73.9, 0.5 * 73.9);
+    CHECK(abs((x1 - x0 + 1) - (int)(2.5 * 73.9 + 0.5)) <= 2);
+    CHECK(abs((y1 - y0 + 1) - (int)(0.5 * 73.9 + 0.5)) <= 2);
+    /* culling uses the largest axis: a quad centred off screen but stretched into view is drawn */
+    o.pos = su_wpos(4.5, 0.0, -3.0);
+    o.scale3[0] = 4.0f;
+    o.scale3[1] = 1.0f;
+    CHECK(render(&sc, model, a));
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.objects_culled == 0u);
+    CHECK(px(a, W - 4, H / 2)[0] > 0);
+    o.scale3[0] = o.scale3[1] = o.scale3[2] = 0.0f; /* uniform: its bounding sphere is outside, culled */
+    CHECK(render(&sc, model, a));
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.objects_culled == 1u);
+    /* a zero or negative axis (with another one set) is not drawn */
+    o.pos = su_wpos(0.0, 0.0, -3.0);
+    o.scale3[0] = -1.0f;
+    o.scale3[1] = o.scale3[2] = 1.0f;
+    CHECK(render(&sc, model, a));
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.objects_culled == 1u);
+    g_obj = NULL;
+}
+
 static void test_dirt_ao(void) {
     static uint8_t dirt[16 * 16 * 4];
     static uint8_t ao[16 * 16 * 4];
@@ -1217,6 +1341,7 @@ int main(int argc, char **argv) {
     test_zero_layers();
     test_glow();
     test_glow_mask();
+    test_scale3();
     test_dirt_ao();
     test_environment();
     test_color_spaces();
