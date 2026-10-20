@@ -103,6 +103,8 @@
     X(vkCreatePipelineLayout)          \
     X(vkDestroyPipelineLayout)         \
     X(vkCreateGraphicsPipelines)       \
+    X(vkCreateComputePipelines)        \
+    X(vkCmdDispatch)                  \
     X(vkDestroyPipeline)               \
     X(vkCreatePipelineCache)           \
     X(vkDestroyPipelineCache)          \
@@ -195,6 +197,11 @@ typedef struct Frame {
     Buffer fx;
     Buffer fx_tex;        /* textured effects */
     Buffer flames;
+    Buffer particle_params, particle_states, particle_vertices, particle_keys, particle_readback;
+    VkDescriptorPool particle_pool;
+    VkDescriptorSet particle_set;
+    uint32_t particle_offsets[SU_PARTICLE_EMITTER_MAX], particle_counts[SU_PARTICLE_EMITTER_MAX];
+    uint32_t particle_emitter_count;
     Buffer shadow_inst;   /* shadow caster instances (DrawInstance) */
     VkDescriptorPool fx_pool; /* one sampler set per textured batch, reset every frame */
     Buffer hud;
@@ -467,6 +474,9 @@ struct SuRenderer {
     VkPipeline sky_pipe;
     VkPipeline fx_pipe;
     VkPipeline flame_pipe;
+    VkPipeline particle_pipe;
+    VkPipelineLayout particle_layout;
+    VkDescriptorSetLayout particle_dsl;
     VkPipelineLayout flame_layout;
     VkPipeline fxtex_pipe[2];           /* textured effects: additive, premultiplied alpha */
     VkPipeline fxmesh_pipe[4];
@@ -606,6 +616,11 @@ struct SuRenderer {
 
 /* su_render_vk.c */
 #define SU_FLAME_MAX 4096u
+int su_rvk_particles_valid(const SuRenderFrameDesc *frame);
+int su_rvk_particles_init(SuRenderer *renderer);
+int su_rvk_particles_prepare(SuRenderer *renderer, Frame *slot, const SuRenderFrameDesc *frame);
+void su_rvk_particles_compute(SuRenderer *renderer, Frame *slot, VkCommandBuffer cmd, const SuRenderFrameDesc *frame);
+void su_rvk_particles_draw(SuRenderer *renderer, Frame *slot, VkCommandBuffer cmd, const SuRenderFrameDesc *frame);
 int su_rvk_flames_valid(const SuRenderFrameDesc *frame);
 void su_rvk_flames(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, const SuRenderFrameDesc *frame);
 uint32_t su_rvk_fail(SuRenderer *r, uint32_t code, const char *fmt, ...);
