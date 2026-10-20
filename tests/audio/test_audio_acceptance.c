@@ -62,7 +62,7 @@ typedef struct EmitterFrame {
 } EmitterFrame;
 
 static EmitterFrame emitter_frames[BLOCKS];
-static const float silence[BLOCK];
+static const float silence[BLOCK] = {0.0f};
 static Voice voices[MAX_VOICES];
 static uint32_t voice_count;
 static float event_pcm[LENGTH * 2u];
