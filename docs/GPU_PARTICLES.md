@@ -1,7 +1,8 @@
 # Deterministic GPU particles
 
 `SuRenderFrameDesc.particle_emitters` submits up to 16 bounded cosmetic emitters.
-API generation 8 appends fields; recompile native callers and continue to
+API generation 9 appends fields after the generation-8 point-light extension;
+recompile native callers and continue to
 zero-initialize descriptors. No emitters means the previous rendering behavior.
 Headless programs can use the CPU reference from `su_render_util` without Vulkan.
 

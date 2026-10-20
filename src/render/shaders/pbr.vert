@@ -17,6 +17,7 @@ layout(location = 6) in vec4 i_r1;
 layout(location = 7) in vec4 i_r2;
 layout(location = 8) in vec4 i_tint;
 layout(location = 9) in vec4 i_extra;
+layout(location = 10) in uvec4 i_light_mask;
 
 layout(location = 0) out vec3 v_pos;
 layout(location = 1) out vec3 v_normal;
@@ -24,6 +25,7 @@ layout(location = 2) out vec4 v_tangent;
 layout(location = 3) out vec4 v_uv;
 layout(location = 4) out vec4 v_tint;
 layout(location = 5) out float v_emissive;
+layout(location = 6) flat out uvec4 v_light_mask;
 
 void main() {
     mat3 m = mat3(vec3(i_r0.x, i_r1.x, i_r2.x), vec3(i_r0.y, i_r1.y, i_r2.y), vec3(i_r0.z, i_r1.z, i_r2.z));
@@ -38,5 +40,6 @@ void main() {
     v_uv = vec4(in_uv0, in_uv1);
     v_tint = i_tint;
     v_emissive = i_extra.x;
+    v_light_mask = i_light_mask;
     gl_Position = fr.view_proj * vec4(p, 1.0);
 }

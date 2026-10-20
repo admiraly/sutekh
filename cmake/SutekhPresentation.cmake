@@ -29,7 +29,7 @@ if(WIN32)
 endif()
 
 # ---- presentation (M5 first slice): portable helpers always, the Vulkan backend when headers exist ----
-add_library(su_render_util STATIC src/render/su_render_util.c src/render/su_render_haze.c src/render/su_particles.c)
+add_library(su_render_util STATIC src/render/su_render_util.c src/render/su_render_haze.c src/render/su_render_lights.c src/render/su_particles.c)
 target_include_directories(su_render_util PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
 if(NOT WIN32)
     target_link_libraries(su_render_util PUBLIC m)
@@ -47,6 +47,11 @@ add_executable(test_particles tests/render/test_particles.c)
 target_link_libraries(test_particles PRIVATE su_render_util)
 sutekh_apply_warnings(test_particles)
 add_test(NAME particles COMMAND test_particles)
+add_executable(test_point_lights tests/render/test_point_lights.c)
+target_include_directories(test_point_lights PRIVATE src)
+target_link_libraries(test_point_lights PRIVATE su_render_util)
+sutekh_apply_warnings(test_point_lights)
+add_test(NAME point_lights_math COMMAND test_point_lights)
 # The embedded SPIR-V (src/render/su_render_shaders.h) must match the GLSL sources (hash check; no compiler needed).
 add_test(NAME render_shaders_fresh COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CURRENT_SOURCE_DIR}/tools/compile_shaders.py" --check)
 
