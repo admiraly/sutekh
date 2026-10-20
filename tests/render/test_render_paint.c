@@ -80,6 +80,9 @@ typedef struct Scene {
     float env_intensity;
     SuRenderPost post;
     SuRenderShadow shadow;
+    const SuRenderPointLight *point_lights;
+    uint32_t point_light_count;
+    SuWorldPos origin;
 } Scene;
 
 static void scene_init(Scene *s) {
@@ -98,7 +101,7 @@ static int render(const Scene *s, SuRenderHandle model, uint8_t *out) {
     SuRenderObject o;
     int k;
     memset(&o, 0, sizeof o);
-    o.pos = su_wpos(0.0, 0.0, -3.0);
+    o.pos = su_wpos_add(s->origin, v3(0, 0, -3));
     o.rot.w = 1.0f;
     o.scale = 1.0f;
     o.tint[0] = o.tint[1] = o.tint[2] = o.tint[3] = 1.0f;
@@ -109,6 +112,9 @@ static int render(const Scene *s, SuRenderHandle model, uint8_t *out) {
     f.camera.rot.w = 1.0f;
     f.camera.fov_y = FOV;
     f.camera.near_z = 0.05f;
+    f.camera.pos = s->origin;
+    f.point_lights = s->point_lights;
+    f.point_light_count = s->point_light_count;
     f.light.sun_dir = v3(s->sun_dir[0], s->sun_dir[1], s->sun_dir[2]);
     f.light.sun_intensity = s->sun_intensity;
     f.light.sun_color = v3(1, 1, 1);
@@ -2121,6 +2127,272 @@ static void test_overlay(void) {
     g_obj_count = 1;
 }
 
+static void test_point_lights(void) {
+    Scene scene;
+    Pm paint;
+    SuRenderMaterialDesc material;
+    SuRenderPointLight lights[SU_RENDER_MAX_POINT_LIGHTS];
+    SuRenderHandle pbr_material = 0, paint_material = 0, pbr_model, paint_model;
+    SuRenderFrameDesc invalid;
+    uint32_t index, kind;
+    int near_code, far_code;
+    scene_init(&scene);
+    scene.sun_intensity = 0;
+    pm_init(&paint, 0.3f);
+    CHECK(su_render_paint_material_create(g_r, &paint.d, &paint_material) == SU_OK);
+    memset(&material, 0, sizeof material);
+    material.factors = paint.d.factors;
+    CHECK(su_render_material_create(g_r, &material, &pbr_material) == SU_OK);
+    pbr_model = quad_model(pbr_material);
+    paint_model = quad_model(paint_material);
+    memset(lights, 0, sizeof lights);
+    for (index = 0; index < SU_RENDER_MAX_POINT_LIGHTS; index++) {
+        lights[index].pos = su_wpos(0, 0, -1);
+        lights[index].color[0] = 1;
+        lights[index].color[1] = 0.5f;
+        lights[index].color[2] = 0.25f;
+        lights[index].intensity = 4;
+        lights[index].radius = 8;
+    }
+    for (kind = 0; kind < 2u; kind++) {
+        SuRenderHandle model = kind == 0u ? pbr_model : paint_model;
+        scene.point_lights = NULL;
+        scene.point_light_count = 0;
+        scene.sun_intensity = 1;
+        CHECK(render(&scene, model, g_ref));
+        scene.point_lights = lights;
+        CHECK(render(&scene, model, g_img));
+        CHECK(memcmp(g_ref, g_img, sizeof g_ref) == 0);
+        scene.sun_intensity = 0;
+        scene.point_light_count = 1;
+        CHECK(render(&scene, model, g_img));
+        CHECK(px(g_img, 128, 128)[0] > px(g_img, 128, 128)[1]);
+        CHECK(px(g_img, 128, 128)[1] > px(g_img, 128, 128)[2]);
+        CHECK(fabs(lin(px(g_img, 128, 128)[0]) - 0.09412) < 0.003);
+        memcpy(g_ref, g_img, sizeof g_ref);
+        lights[0].intensity = 0;
+        CHECK(render(&scene, model, g_img));
+        CHECK(px(g_img, 128, 128)[0] == 0);
+        lights[0].intensity = 4;
+        lights[0].radius = 2;
+        CHECK(render(&scene, model, g_img));
+        CHECK(px(g_img, 128, 128)[0] == 0);
+        lights[0].radius = 8;
+        lights[0].pos = su_wpos(0, 0, -4);
+        CHECK(render(&scene, model, g_img));
+        CHECK(px(g_img, 128, 128)[0] == 0);
+        lights[0].pos = su_wpos(100, 0, -1);
+        CHECK(render(&scene, model, g_img));
+        CHECK(px(g_img, 128, 128)[0] == 0);
+        lights[0].pos = su_wpos(0, 0, -3);
+        CHECK(render(&scene, model, g_img));
+        CHECK(px(g_img, 128, 128)[0] == 0);
+        lights[0].pos = su_wpos(0, 0, -2);
+        CHECK(render(&scene, model, g_img));
+        near_code = px(g_img, 128, 128)[0];
+        lights[0].pos = su_wpos(0, 0, -1);
+        CHECK(render(&scene, model, g_img));
+        far_code = px(g_img, 128, 128)[0];
+        CHECK(lin(near_code) > 3.8 * lin(far_code) && lin(near_code) < 4.2 * lin(far_code));
+        lights[0].radius = 2.1f;
+        CHECK(render(&scene, model, g_img));
+        CHECK(px(g_img, 128, 128)[0] > 0 && px(g_img, 128, 128)[0] < far_code / 2);
+        lights[0].radius = 8;
+        scene.origin = su_wpos(1000000000.125, -1000000000.25, 1000000000.5);
+        lights[0].pos = su_wpos_add(scene.origin, v3(0, 0, -1));
+        CHECK(render(&scene, model, g_img));
+        CHECK(memcmp(g_ref, g_img, sizeof g_ref) == 0);
+        scene.origin = su_wpos(0, 0, 0);
+        lights[0].pos = su_wpos(0, 0, -1);
+        for (index = 1; index < SU_RENDER_MAX_POINT_LIGHTS; index++) lights[index].intensity = 0;
+        lights[127] = lights[0];
+        lights[0].intensity = 0;
+        scene.point_light_count = SU_RENDER_MAX_POINT_LIGHTS;
+        CHECK(render(&scene, model, g_img));
+        CHECK(memcmp(g_ref, g_img, sizeof g_ref) == 0);
+        for (index = 0; index < SU_RENDER_MAX_POINT_LIGHTS; index++) lights[index].intensity = 4.0f / 128.0f;
+        CHECK(render(&scene, model, g_img));
+        CHECK(abs((int)px(g_img, 128, 128)[0] - (int)px(g_ref, 128, 128)[0]) <= 1);
+        scene.point_light_count = 1;
+        lights[0].intensity = 4;
+        scene.shadow.flags = SU_SHADOW_ON;
+        scene.shadow.size = 256;
+        CHECK(render(&scene, model, g_img));
+        CHECK(memcmp(g_ref, g_img, sizeof g_ref) == 0);
+        memset(&scene.shadow, 0, sizeof scene.shadow);
+    }
+    scene.point_light_count = 1;
+    CHECK(render(&scene, pbr_model, g_ref));
+    CHECK(render(&scene, paint_model, g_img));
+    CHECK(memcmp(g_ref, g_img, sizeof g_ref) == 0);
+    pm_init(&paint, 0.3f);
+    paint.d.textures[SU_PAINT_SLOT_AO] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, (const uint8_t[]){0, 0, 0, 255});
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(memcmp(g_ref, g_img, sizeof g_ref) == 0);
+    paint.d.textures[SU_PAINT_SLOT_NORMAL] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, (const uint8_t[]){255, 128, 0, 255});
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(px(g_img, 128, 128)[0] < px(g_ref, 128, 128)[0] / 4);
+    for (kind = 0; kind < 2u; kind++) {
+        uint32_t mode;
+        SuRenderHandle reference = overlay_model(kind, 0, 0, SU_ASSET_ALPHA_OPAQUE, 0.3f, 0.3f, 0.3f, 0);
+        CHECK(render(&scene, reference, g_ref));
+        for (mode = 0; mode <= SU_ASSET_ALPHA_BLEND; mode++) {
+            SuRenderHandle model = overlay_model(kind, mode == SU_ASSET_ALPHA_BLEND, 0, mode, 0.3f, 0.3f, 0.3f, 0);
+            CHECK(render(&scene, model, g_img));
+            CHECK(memcmp(g_ref, g_img, sizeof g_ref) == 0);
+        }
+    }
+    scene.point_light_count = 0;
+    scene.sun_intensity = 1;
+    CHECK(render(&scene, pbr_model, g_ref));
+    scene.sun_intensity = 0;
+    scene.point_light_count = 1;
+    lights[0].pos = su_wpos(0, 0, 1000);
+    lights[0].intensity = 1006009;
+    lights[0].radius = 1e9f;
+    lights[0].color[1] = lights[0].color[2] = 1;
+    CHECK(render(&scene, pbr_model, g_img));
+    CHECK(abs((int)px(g_ref, 128, 128)[0] - (int)px(g_img, 128, 128)[0]) <= 1);
+    lights[0].pos = su_wpos(0, 0, -1);
+    lights[0].intensity = 4;
+    lights[0].radius = 8;
+    lights[0].color[1] = 0.5f;
+    lights[0].color[2] = 0.25f;
+    for (kind = 0; kind < 2u; kind++) {
+        SuRenderObject objects[2];
+        memset(objects, 0, sizeof objects);
+        for (index = 0; index < 2u; index++) {
+            objects[index].pos = su_wpos(index == 0u ? -1 : 1, 0, -3);
+            objects[index].rot.w = 1;
+            objects[index].scale = 0.45f;
+            objects[index].model = kind == 0u ? pbr_model : paint_model;
+            objects[index].tint[0] = objects[index].tint[1] = objects[index].tint[2] = objects[index].tint[3] = 1;
+        }
+        g_obj = objects;
+        g_obj_count = 2;
+        lights[0].pos = su_wpos(-1, 0, -2);
+        lights[0].radius = 1.2f;
+        CHECK(render(&scene, objects[0].model, g_img));
+        CHECK(px(g_img, 54, 128)[0] > 0 && px(g_img, 202, 128)[0] == 0);
+        lights[0].pos = su_wpos(1, 0, -2);
+        CHECK(render(&scene, objects[0].model, g_img));
+        CHECK(px(g_img, 54, 128)[0] == 0 && px(g_img, 202, 128)[0] > 0);
+        g_obj = NULL;
+        g_obj_count = 1;
+    }
+    lights[0].pos = su_wpos(0, 0, -1);
+    lights[0].radius = 8;
+    pm_init(&paint, 0);
+    paint.d.textures[SU_PAINT_SLOT_SPECULAR] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, (const uint8_t[]){255, 255, 255, 255});
+    paint.d.specular_channels = 0x00020100u;
+    paint.d.specular_factor[0] = 0.8f;
+    paint.d.specular_factor[1] = 0.2f;
+    paint.d.specular_factor[2] = 0.0f;
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(px(g_img, 128, 128)[0] > 2 * px(g_img, 128, 128)[1]);
+    CHECK(px(g_img, 128, 128)[2] <= 1);
+    material.factors.unlit = 1;
+    CHECK(su_render_material_create(g_r, &material, &pbr_material) == SU_OK);
+    pbr_model = quad_model(pbr_material);
+    CHECK(render(&scene, pbr_model, g_ref));
+    scene.point_light_count = 0;
+    CHECK(render(&scene, pbr_model, g_img));
+    CHECK(memcmp(g_ref, g_img, sizeof g_ref) == 0);
+    memset(&invalid, 0, sizeof invalid);
+    invalid.struct_size = sizeof invalid;
+    invalid.camera.fov_y = FOV;
+    invalid.camera.near_z = 0.05f;
+    invalid.camera.rot.w = 1;
+    invalid.point_light_count = 1;
+    CHECK(su_render_frame_ex(g_r, &invalid) == SU_E_INVALID_ARGUMENT);
+    invalid.point_lights = lights;
+    invalid.point_light_count = SU_RENDER_MAX_POINT_LIGHTS + 1u;
+    CHECK(su_render_frame_ex(g_r, &invalid) == SU_E_INVALID_ARGUMENT);
+    invalid.point_light_count = 1;
+    lights[0].radius = NAN;
+    CHECK(su_render_frame_ex(g_r, &invalid) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_render_frame_ex(g_r, &(SuRenderFrameDesc){0}) == SU_E_INVALID_ARGUMENT);
+}
+
+static void bench_point_lights(void) {
+    static const uint32_t counts[4] = {0, 8, 32, 128};
+    SuRenderer *saved = g_r;
+    SuRenderDesc desc;
+    SuRenderFrameDesc frame;
+    SuRenderObject object;
+    SuRenderPointLight lights[SU_RENDER_MAX_POINT_LIGHTS];
+    SuRenderDeviceInfo device;
+    SuRenderStats stats;
+    char message[256];
+    uint32_t kind, layout, mode, index, sample;
+    memset(&desc, 0, sizeof desc);
+    desc.struct_size = sizeof desc;
+    desc.width = 1280;
+    desc.height = 720;
+    desc.device_index = -1;
+    if (su_render_create(&desc, &g_r, message) != SU_OK) {
+        CHECK(0);
+        g_r = saved;
+        return;
+    }
+    CHECK(su_render_device(g_r, &device) == SU_OK);
+    printf("point light benchmark: %s; driver=%u; 1280x720 fullscreen quad; validation off; GPU timestamps; ms\n",
+           device.name, device.driver_version);
+    memset(&frame, 0, sizeof frame);
+    memset(&object, 0, sizeof object);
+    memset(lights, 0, sizeof lights);
+    frame.struct_size = sizeof frame;
+    frame.camera.rot.w = 1;
+    frame.camera.fov_y = FOV;
+    frame.camera.near_z = 0.05f;
+    frame.light.sun_dir = v3(0, 0, -1);
+    frame.light.sun_color = v3(1, 1, 1);
+    frame.light.sun_intensity = 1;
+    frame.light.no_sky = 1;
+    frame.light.exposure = 1;
+    frame.objects = &object;
+    frame.object_count = 1;
+    frame.point_lights = lights;
+    object.pos = su_wpos(0, 0, -3);
+    object.rot.w = 1;
+    object.scale = 4;
+    object.tint[0] = object.tint[1] = object.tint[2] = object.tint[3] = 1;
+    for (kind = 0; kind < 2u; kind++) {
+        object.model = overlay_model(kind, 0, 0, SU_ASSET_ALPHA_OPAQUE, 0.3f, 0.3f, 0.3f, 0);
+        for (layout = 0; layout < 2u; layout++) {
+            for (index = 0; index < SU_RENDER_MAX_POINT_LIGHTS; index++) {
+                lights[index].pos = su_wpos(layout == 0 ? 0 : 1000, 0, -1);
+                lights[index].color[0] = lights[index].color[1] = lights[index].color[2] = 1;
+                lights[index].intensity = 0.1f;
+                lights[index].radius = 8;
+            }
+            for (mode = 0; mode < 4u; mode++) {
+                double gpu[100], cpu[100];
+                uint32_t count = 0;
+                frame.point_light_count = counts[mode];
+                for (sample = 0; sample < 140u; sample++) {
+                    CHECK(su_render_frame_ex(g_r, &frame) == SU_OK);
+                    CHECK(su_render_stats(g_r, &stats) == SU_OK);
+                    if (sample >= 40u && stats.gpu_ms >= 0) {
+                        gpu[count] = stats.gpu_ms;
+                        cpu[count++] = stats.cpu_ms;
+                    }
+                }
+                CHECK(count == 100u);
+                if (count != 0u) {
+                    qsort(gpu, count, sizeof gpu[0], timing_cmp);
+                    qsort(cpu, count, sizeof cpu[0], timing_cmp);
+                    printf("kind=%s layout=%s lights=%u n=%u gpu_median=%.6f gpu_p95=%.6f cpu_median=%.6f cpu_p95=%.6f\n",
+                           kind ? "paint" : "pbr", layout ? "culled" : "overlapping", counts[mode], count,
+                           gpu[count / 2u], gpu[count * 95u / 100u], cpu[count / 2u], cpu[count * 95u / 100u]);
+                }
+            }
+        }
+    }
+    su_render_destroy(g_r);
+    g_r = saved;
+}
+
 int main(int argc, char **argv) {
     int validation = 1;
     SuRenderDeviceInfo devs[8];
@@ -2164,12 +2436,18 @@ int main(int argc, char **argv) {
     }
     CHECK(su_render_device(g_r, &used) == SU_OK);
     printf("rendering on: %s (%s)\n", used.name, type_name(used.type));
+    if (getenv("SUTEKH_POINT_LIGHT_BENCH") != NULL) {
+        bench_point_lights();
+        su_render_destroy(g_r);
+        return g_fail ? 1 : 0;
+    }
     if (getenv("SUTEKH_PAINT_BENCH") != NULL) {
         bench_paint();
         su_render_destroy(g_r);
         return g_fail ? 1 : 0;
     }
     test_mask_channels();
+    test_point_lights();
     test_overlay();
     test_blend_order();
     test_zero_layers();

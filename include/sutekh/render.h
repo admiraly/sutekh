@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 7u
+#define SU_RENDER_API_VERSION 8u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -804,6 +804,15 @@ typedef struct SuRenderFlame {
     SuRenderHandle shape_atlas, gradient, noise_volume;
 } SuRenderFlame;
 
+#define SU_RENDER_MAX_POINT_LIGHTS 128u
+
+typedef struct SuRenderPointLight {
+    SuWorldPos pos;
+    float color[3];
+    float intensity;
+    float radius;
+} SuRenderPointLight;
+
 typedef struct SuRenderFrameDesc {
     uint32_t struct_size;            /* sizeof(SuRenderFrameDesc) */
     SuRenderCamera camera;
@@ -842,6 +851,8 @@ typedef struct SuRenderFrameDesc {
     uint32_t haze_count;
     const SuRenderFlame *flames;
     uint32_t flame_count;
+    const SuRenderPointLight *point_lights;
+    uint32_t point_light_count;
 } SuRenderFrameDesc;
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object
