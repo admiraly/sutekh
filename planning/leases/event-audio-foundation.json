@@ -9,7 +9,7 @@
   "heartbeat": "2026-10-20",
   "steps": {
     "A01": "local_validated_pending_ci",
-    "A02": "implementation",
+    "A02": "local_validated_pending_ci",
     "A03": "implementation",
     "A04": "implementation"
   },
