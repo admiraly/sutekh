@@ -129,6 +129,23 @@ runtime and are then driven only by it:
   (`knee + (1 - knee) tanh((|x| - knee) / (1 - knee))`, never beyond full
   scale) when the knee is in [0.1, 1); 0 keeps the hard clamp.
 
+## Pull rendering (device-driven)
+
+With `desc.render = SU_AUDIO_RENDER_PULL` (RING or DEVICE output) the reader
+renders: `su_audio_system_ring_read`, which the device thread calls, first
+renders the quanta it is missing under the system lock, then copies them out.
+The owner brackets each batch of calls (posts, parameters, emitters, queries,
+component reads) with `su_audio_system_lock` / `su_audio_system_unlock`, and
+`su_audio_system_update` does nothing. Rendering therefore never waits for the
+owner's frame: an owner stall of any length does not starve the device. Latency
+is one device period plus less than a quantum, instead of the render-ahead
+ring. Commands still land at their journal positions, so the journal replay
+equals the live stream (`test_pull_render`: a device-paced reader, an owner
+with a 150 ms stall, zero underruns, identical PCM). Host bus inputs run on the
+reader's thread under the lock. Never hold the lock across
+`su_audio_system_destroy`; it closes the device first. OWNER mode (the default)
+is unchanged.
+
 ## Doppler, host bus inputs and bus-filtered bindings
 
 - `doppler` (hook and `SuAudioSystemDesc`, in [0, 1]; 0 = off) multiplies

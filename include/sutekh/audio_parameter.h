@@ -76,7 +76,12 @@ typedef struct SuAudioBindingPoint {
 } SuAudioBindingPoint;
 
 /* Maps one parameter through a clamped piecewise-linear curve onto a control.
- * Gains add in dB, pitch ratios multiply, low-pass cutoffs take the minimum. */
+ * Gains add in dB, pitch ratios multiply, low-pass cutoffs take the minimum.
+ * Sum groups combine several parameters additively: bindings with the same nonzero sum_group and control add their
+ * outputs first (GAIN_DB bindings in a group output linear amplitude, PITCH a ratio term, LOWPASS_HZ hertz; all
+ * >= 0), and the sum then joins the other bindings as one value (amplitude converted to dB, a ratio <= 0 or a
+ * cutoff of 0 ignored). Example: gain = 0.08 + 0.40 throttle + 0.35 strafe as three bindings in one group.
+ * BUS_GAIN_DB bindings cannot be grouped. */
 typedef struct SuAudioParamBinding {
     SuAudioParamId param_id;
     uint32_t control;
@@ -85,7 +90,9 @@ typedef struct SuAudioParamBinding {
                        * SuAudioParamVoice have no voice bus and apply every binding) */
     const SuAudioBindingPoint *points;
     uint32_t point_count;
+    uint32_t sum_group;  /* 0 = none; see above */
 } SuAudioParamBinding;
+#define SU_AUDIO_PARAM_SUM_GROUPS 16u /* distinct (group, control) sums per evaluation; more are rejected */
 
 typedef struct SuAudioParamsDesc {
     uint32_t struct_size;

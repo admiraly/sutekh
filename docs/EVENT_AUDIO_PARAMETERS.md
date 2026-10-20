@@ -59,6 +59,13 @@ switches use the instance start).
 (up to 16 strictly increasing points) to `GAIN_DB` (added), `PITCH` (ratio,
 multiplied, output in (0, 64]), `LOWPASS_HZ` (minimum wins, default Nyquist) or
 `BUS_GAIN_DB` (first bound bus ID, gains on that bus added).
+Sum groups: bindings with the same nonzero `sum_group` and control add their
+outputs before joining the other bindings. `GAIN_DB` members output linear
+amplitude, `PITCH` members ratio terms, and `LOWPASS_HZ` members hertz, all
+>= 0. So `gain = 0.08 + 0.40 throttle + 0.35 strafe` is three bindings in one
+group, and the sum is converted to dB once. At most
+`SU_AUDIO_PARAM_SUM_GROUPS` (16) distinct groups are allowed; `BUS_GAIN_DB`
+bindings cannot be grouped.
 `su_audio_param_controls` evaluates them for a target at a sample time. In
 the integrated runtime a voice-control binding with a nonzero `bus_id`
 applies only to voices on that bus (see

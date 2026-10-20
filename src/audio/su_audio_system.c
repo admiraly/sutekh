@@ -8,6 +8,7 @@
 #include "sutekh/audio_system.h"
 #include "ir/su_sha256.h"
 #include "su_audio_int.h"
+#include "platform/su_thread.h"
 
 #define QUANTUM SU_AUDIO_EVENT_QUANTUM
 #define SYSTEM_MAGIC 0x53415553u /* "SUAS" little-endian */
@@ -36,6 +37,8 @@ struct SuAudioSystem {
     _Atomic uint64_t write_pos;
     _Atomic uint64_t read_pos;
     _Atomic uint64_t underruns;
+    SuMutex lock;                  /* PULL render: serializes the owner's calls with the reader's renders */
+    int lock_ready;
     float scratch[1024u * 2u];
     SuAudioInspectInstance *inspect_instances;
     SuAudioInspectVoice *inspect_voices;
@@ -72,6 +75,9 @@ void su_audio_system_destroy(SuAudioSystem *system) {
         return;
     }
     su_audio_device_close(system->device);
+    if (system->lock_ready) {
+        su_mutex_destroy(&system->lock);
+    }
     su_audio_events_destroy(system->events);
     su_audio_music_destroy(system->music);
     su_audio_cluster_destroy(system->cluster);
@@ -104,7 +110,8 @@ uint32_t su_audio_system_create(const SuAudioSystemDesc *desc, SuAudioSystem **o
     if (desc == NULL || desc->struct_size != sizeof *desc || desc->assets == NULL || desc->graph == NULL
         || desc->output > SU_AUDIO_OUTPUT_DEVICE || (desc->curve_count != 0u && desc->curves == NULL)
         || (desc->segment_count != 0u && (desc->segments == NULL || desc->music == NULL))
-        || desc->journal_capacity > 16777216u || desc->telemetry_capacity > SU_AUDIO_TELEMETRY_MAX) {
+        || desc->journal_capacity > 16777216u || desc->telemetry_capacity > SU_AUDIO_TELEMETRY_MAX
+        || desc->render > SU_AUDIO_RENDER_PULL) {
         message_set(message, "invalid system descriptor");
         return SU_E_INVALID_ARGUMENT;
     }
@@ -123,6 +130,11 @@ uint32_t su_audio_system_create(const SuAudioSystemDesc *desc, SuAudioSystem **o
     atomic_init(&system->write_pos, 0u);
     atomic_init(&system->read_pos, 0u);
     atomic_init(&system->underruns, 0u);
+    if (su_mutex_init(&system->lock) != 0) {
+        free(system);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    system->lock_ready = 1;
     status = su_audio_scene_create(&desc->scene, &system->scene);
     for (index = 0; status == SU_OK && index < desc->curve_count; index++) {
         SuAudioCurveId id = 0u;
@@ -551,10 +563,50 @@ uint32_t su_audio_system_render(SuAudioSystem *system, float *out, uint32_t fram
     return su_audio_events_render(system->events, out, frames);
 }
 
+static int pull_mode(const SuAudioSystem *system) {
+    return system->desc.render == SU_AUDIO_RENDER_PULL && system->desc.output != SU_AUDIO_OUTPUT_OFFLINE;
+}
+
+void su_audio_system_lock(SuAudioSystem *system) {
+    if (system != NULL && pull_mode(system)) {
+        su_mutex_lock(&system->lock);
+    }
+}
+
+void su_audio_system_unlock(SuAudioSystem *system) {
+    if (system != NULL && pull_mode(system)) {
+        su_mutex_unlock(&system->lock);
+    }
+}
+
+/* PULL: renders quanta until at least `frames` are buffered (at most the ring capacity). The reader is the only
+ * writer in this mode; the lock keeps the owner's calls out of the render. */
+static void pull_render(SuAudioSystem *system, uint32_t frames) {
+    uint64_t write;
+    su_mutex_lock(&system->lock);
+    write = atomic_load_explicit(&system->write_pos, memory_order_relaxed);
+    for (;;) {
+        uint64_t read = atomic_load_explicit(&system->read_pos, memory_order_acquire);
+        if (write - read >= frames || write - read + QUANTUM > system->ring_frames) {
+            break;
+        }
+        if (su_audio_events_render(system->events, system->ring + (size_t)(write % system->ring_frames) * 2u,
+                QUANTUM) != SU_OK) {
+            break;
+        }
+        write += QUANTUM;
+        atomic_store_explicit(&system->write_pos, write, memory_order_release);
+    }
+    su_mutex_unlock(&system->lock);
+}
+
 uint32_t su_audio_system_update(SuAudioSystem *system) {
     uint64_t write;
     if (system == NULL || system->ring == NULL) {
         return SU_E_INVALID_ARGUMENT;
+    }
+    if (pull_mode(system)) {
+        return SU_OK;
     }
     write = atomic_load_explicit(&system->write_pos, memory_order_relaxed);
     for (;;) {
@@ -581,6 +633,9 @@ uint32_t su_audio_system_ring_read(SuAudioSystem *system, float *out, uint32_t f
     uint32_t done = 0u;
     if (system == NULL || system->ring == NULL || (out == NULL && frames != 0u)) {
         return 0u;
+    }
+    if (pull_mode(system)) {
+        pull_render(system, frames);
     }
     read = atomic_load_explicit(&system->read_pos, memory_order_relaxed);
     write = atomic_load_explicit(&system->write_pos, memory_order_acquire);

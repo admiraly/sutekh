@@ -7,6 +7,9 @@
 
 #include "sutekh/audio_system.h"
 #include "ir/su_sha256.h"
+#include "platform/su_platform.h"
+#include "platform/su_thread.h"
+#include <stdatomic.h>
 
 #ifdef SU_AUDIO_SYSTEM_ALLOC_TEST
 size_t sys_allocations;
@@ -464,6 +467,143 @@ static void test_control_methods(void) {
     setup_free(&s);
 }
 
+/* Sum groups: bindings with one sum_group add their outputs (linear gain, pitch terms, hertz) before joining the
+ * rest; a grouped BUS_GAIN_DB binding is refused. */
+static void test_sum_groups(void) {
+    SuAudioParamDef defs[2];
+    SuAudioBindingPoint pa[2], pb[2], la[2], lb[2], qa[2], qb[2];
+    SuAudioParamBinding b[6];
+    SuAudioParamsDesc d;
+    SuAudioParams *params = NULL;
+    SuAudioParamControls c;
+    SuAudioParamTarget t = {0u, 0u};
+    SuAudioParamScope g = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+    uint32_t i;
+    memset(defs, 0, sizeof defs);
+    defs[0].id = 1u;
+    defs[0].max_value = 1.0f;
+    defs[1].id = 2u;
+    defs[1].max_value = 1.0f;
+    /* gain = 0.1 + 0.4 p1 + 0.5 p2; pitch = 0.8 + 0.4 p1 + 0 p2; low-pass = 1000 + 9000 p1 + 2000 p2 */
+    pa[0].value = 0.0f; pa[0].output = 0.1f; pa[1].value = 1.0f; pa[1].output = 0.5f;
+    pb[0].value = 0.0f; pb[0].output = 0.0f; pb[1].value = 1.0f; pb[1].output = 0.5f;
+    qa[0].value = 0.0f; qa[0].output = 0.8f; qa[1].value = 1.0f; qa[1].output = 1.2f;
+    qb[0].value = 0.0f; qb[0].output = 0.0f; qb[1].value = 1.0f; qb[1].output = 0.0f;
+    la[0].value = 0.0f; la[0].output = 1000.0f; la[1].value = 1.0f; la[1].output = 10000.0f;
+    lb[0].value = 0.0f; lb[0].output = 0.0f; lb[1].value = 1.0f; lb[1].output = 2000.0f;
+    memset(b, 0, sizeof b);
+    b[0].param_id = 1u; b[0].control = SU_AUDIO_CONTROL_GAIN_DB; b[0].points = pa; b[0].point_count = 2u; b[0].sum_group = 7u;
+    b[1].param_id = 2u; b[1].control = SU_AUDIO_CONTROL_GAIN_DB; b[1].points = pb; b[1].point_count = 2u; b[1].sum_group = 7u;
+    b[2].param_id = 1u; b[2].control = SU_AUDIO_CONTROL_PITCH; b[2].points = qa; b[2].point_count = 2u; b[2].sum_group = 7u;
+    b[3].param_id = 2u; b[3].control = SU_AUDIO_CONTROL_PITCH; b[3].points = qb; b[3].point_count = 2u; b[3].sum_group = 7u;
+    b[4].param_id = 1u; b[4].control = SU_AUDIO_CONTROL_LOWPASS_HZ; b[4].points = la; b[4].point_count = 2u; b[4].sum_group = 3u;
+    b[5].param_id = 2u; b[5].control = SU_AUDIO_CONTROL_LOWPASS_HZ; b[5].points = lb; b[5].point_count = 2u; b[5].sum_group = 3u;
+    memset(&d, 0, sizeof d);
+    d.struct_size = sizeof d;
+    d.sample_rate = RATE;
+    d.params = defs;
+    d.param_count = 2u;
+    d.bindings = b;
+    d.binding_count = 6u;
+    d.max_scoped_values = 4u;
+    CHECK(su_audio_params_create(&d, &params) == SU_OK);
+    CHECK(su_audio_param_set_at(params, g, 1u, 0.5f, 0u) == SU_OK);
+    CHECK(su_audio_param_set_at(params, g, 2u, 1.0f, 0u) == SU_OK);
+    CHECK(su_audio_param_controls(params, t, 10u, &c) == SU_OK);
+    CHECK(fabsf(c.gain_db - 20.0f * log10f(0.8f)) < 1e-3f); /* 0.1 + 0.2 + 0.5 */
+    CHECK(fabsf(c.pitch - 1.0f) < 1e-5f);                   /* 0.8 + 0.2 + 0 */
+    CHECK(fabsf(c.lowpass_hz - 7500.0f) < 0.5f);            /* 1000 + 4500 + 2000 */
+    su_audio_params_destroy(params);
+    b[1].control = SU_AUDIO_CONTROL_BUS_GAIN_DB;
+    b[1].bus_id = 30u;
+    CHECK(su_audio_params_create(&d, &params) != SU_OK && params == NULL);
+    for (i = 0; i < 6u; i++) {
+        b[i].sum_group = 0u;
+    }
+    printf("audio_system: sum groups add gain, pitch and low-pass terms\n");
+}
+
+/* PULL render: a reader thread paced like a device (480 frames every 10 ms) renders what it reads; the owner issues
+ * its game frames under the system lock and stalls for 150 ms once. The reader never underruns, and the stream is
+ * the journal replay bit for bit. */
+typedef struct PullReader {
+    SuAudioSystem *system;
+    float *out;
+    uint32_t frames;
+    _Atomic uint32_t done;
+    uint32_t short_reads;
+} PullReader;
+
+static void *pull_reader_main(void *arg) {
+    PullReader *reader = (PullReader *)arg;
+    uint64_t start = 0u;
+    uint32_t position = 0u;
+    (void)su_platform_monotonic_ns(&start);
+    while (position < reader->frames) {
+        uint32_t take = reader->frames - position < 480u ? reader->frames - position : 480u;
+        uint64_t now = 0u;
+        uint64_t due = start + (uint64_t)(position / 480u) * 10000000u;
+        do {
+            (void)su_platform_monotonic_ns(&now);
+        } while (now < due);
+        reader->short_reads += su_audio_system_ring_read(reader->system, reader->out + (size_t)position * 2u, take)
+            != take;
+        position += take;
+    }
+    atomic_store(&reader->done, 1u);
+    return NULL;
+}
+
+static void test_pull_render(void) {
+    Setup s;
+    SuAudioSystem *system = NULL;
+    SuAudioSystem *replayed = NULL;
+    SuAudioSystemStats stats;
+    const SuAudioSystemCommand *journal = NULL;
+    uint32_t count = 0u;
+    PullReader reader;
+    SuThread thread;
+    Session a;
+    uint32_t frame = 0u;
+    const uint32_t frames = 48000u;
+    setup_init(&s, SU_AUDIO_OUTPUT_RING);
+    s.desc.render = SU_AUDIO_RENDER_PULL;
+    s.desc.ring_frames = 1024u;
+    s.desc.journal_capacity = 4096u;
+    CHECK(su_audio_system_create(&s.desc, &system, NULL) == SU_OK);
+    memset(&a, 0, sizeof a);
+    memset(&reader, 0, sizeof reader);
+    reader.system = system;
+    reader.out = ring_pcm;
+    reader.frames = frames;
+    su_audio_system_lock(system);
+    game_frame(system, &a, frame++);
+    su_audio_system_unlock(system);
+    CHECK(su_audio_system_update(system) == SU_OK); /* a no-op in PULL mode */
+    CHECK(su_thread_create(&thread, pull_reader_main, &reader) == 0);
+    while (!atomic_load(&reader.done)) {
+        su_audio_system_lock(system);
+        if (su_audio_system_clock(system) + 4800u < frames) { /* stop posting near the end of the read */
+            game_frame(system, &a, frame);
+        }
+        su_audio_system_unlock(system);
+        frame++;
+        su_platform_sleep_ms(frame == 10u ? 150u : 16u); /* one long owner stall */
+    }
+    CHECK(su_thread_join(thread) == 0);
+    su_audio_system_stats(system, &stats);
+    CHECK(reader.short_reads == 0u && stats.underrun_frames == 0u);
+    CHECK(su_audio_system_journal(system, &journal, &count) == SU_OK && count > 10u);
+    s.desc.output = SU_AUDIO_OUTPUT_OFFLINE;
+    CHECK(su_audio_system_create(&s.desc, &replayed, NULL) == SU_OK);
+    CHECK(su_audio_system_replay(replayed, journal, count, frames, offline_pcm) == SU_OK);
+    CHECK(memcmp(offline_pcm, ring_pcm, (size_t)frames * 2u * sizeof(float)) == 0);
+    printf("audio_system: PULL render, %u owner frames with a 150 ms stall, 0 underruns, replay identical\n", frame);
+    su_audio_system_destroy(replayed);
+    su_audio_system_destroy(system);
+    setup_free(&s);
+}
+
 static void test_device_output(void) {
     Setup s;
     SuAudioSystem *system = NULL;
@@ -752,6 +892,8 @@ int main(void) {
     test_control_methods();
     test_device_output();
     test_host_extensions();
+    test_pull_render();
+    test_sum_groups();
 #endif
     printf("audio_system: %u checks, %u failures\n", checks, failures);
     return failures == 0u ? 0 : 1;
