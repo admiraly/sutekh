@@ -25,6 +25,10 @@ layout(set = 1, binding = 4) uniform sampler2D t_mask;       // linear, rgba = l
 layout(set = 1, binding = 5) uniform sampler2D t_glow;       // sRGB rgb, or a linear one-channel mask
 layout(set = 1, binding = 6) uniform sampler2D t_dirt;       // linear
 layout(set = 1, binding = 7) uniform sampler2D t_ao;         // linear
+layout(set = 1, binding = 9) uniform sampler2D t_specular;
+layout(set = 1, binding = 10) uniform sampler2D t_detail_material;
+layout(set = 1, binding = 11) uniform sampler2D t_detail_normal;
+layout(set = 1, binding = 12) uniform sampler2D t_detail_mask;
 
 struct Layer {
     vec4 color_rough;  // rgb colour, roughness
@@ -37,6 +41,10 @@ layout(set = 1, binding = 8) uniform Paint {
     uvec4 b;           // layer count, order (byte i = i-th layer), channels rough|metal<<8|spec<<16|dirt<<24,
                        // ao channel | glow channel << 8 | glow is a linear mask << 16
     Layer layer[4];
+    vec4 specular_factor;
+    vec4 detail;
+    vec4 rotation;
+    uvec4 extra;
 } pt;
 
 layout(set = 2, binding = 0) uniform samplerCube t_env;
@@ -62,6 +70,16 @@ float pick(vec4 t, uint c) {
     return c == 0u ? t.r : c == 1u ? t.g : c == 2u ? t.b : c == 3u ? t.a : 1.0;
 }
 
+vec2 detail_uv(uint slot) {
+    vec2 uv = uv_of(slot) * pt.detail.yz;
+    return mat2(pt.rotation.x, pt.rotation.y, -pt.rotation.y, pt.rotation.x) * uv;
+}
+
+float spec_channel(vec4 texel, uint component) {
+    uint channel = (pt.extra.w >> (component * 8u)) & 255u;
+    return channel == 0u ? texel[component] : pick(texel, channel - 1u);
+}
+
 void main() {
     vec4 albedo = texture(t_albedo, uv_of(0u));
     vec4 base = mat.base_color * v_tint * albedo;
@@ -77,12 +95,29 @@ void main() {
     vec3 a = base.rgb;
     float rough = mat.mr.y * pick(texture(t_rough, uv_of(2u)), ch_rough);
     vec4 mtex = texture(t_material, uv_of(3u));
+    vec4 mask = texture(t_mask, uv_of(4u));
+    bool detail_on = pt.detail.x > 0.0 && (pt.extra.x & 6u) != 0u;
+    float detail_weight = 0.0;
+    if (detail_on) {
+        float selected = 1.0;
+        if (pt.extra.z != 0u) {
+            selected = 0.0;
+            for (uint layer = 0u; layer < 4u; layer++) {
+                if ((pt.extra.z & (1u << layer)) != 0u) selected += mask[layer];
+            }
+            if ((pt.extra.z & 16u) != 0u) selected += 1.0 - clamp(dot(mask, vec4(1.0)), 0.0, 1.0);
+        }
+        detail_weight = pt.detail.x * clamp(selected, 0.0, 1.0);
+        if ((pt.extra.x & 2u) != 0u) {
+            float unpainted = 1.0 - clamp(dot(mask, vec4(1.0)), 0.0, 1.0);
+            mtex = mix(mtex, texture(t_detail_material, detail_uv(9u)), detail_weight * unpainted);
+        }
+    }
     float metallic = mat.mr.x * pick(mtex, ch_metal);
     float spec = pt.a.x * pick(mtex, ch_spec);
     vec3 glow_c = mat.emissive.rgb;
     float glow_i = mat.misc.z;
 
-    vec4 mask = texture(t_mask, uv_of(4u));
     for (uint i = 0u; i < pt.b.x; i++) {
         uint k = (pt.b.y >> (8u * i)) & 0xFFu;
         float w = clamp(mask[k], 0.0, 1.0) * clamp(pt.layer[k].mop.y, 0.0, 1.0);
@@ -109,6 +144,10 @@ void main() {
         }
     }
 
+    if (detail_on && (pt.extra.x & 4u) != 0u) {
+        a *= 1.0 - detail_weight * texture(t_detail_mask, detail_uv(11u)).r;
+    }
+
     float dirt = clamp(pt.a.y * pick(texture(t_dirt, uv_of(6u)), ch_dirt), 0.0, 1.0);
     a *= 1.0 - dirt * pt.a.z;
     rough = mix(rough, 1.0, dirt * pt.a.w);
@@ -123,16 +162,21 @@ void main() {
     if (!gl_FrontFacing) {
         n = -n;
     }
-    if (mat.misc.w != 0.0) {
+    if (mat.misc.w != 0.0 || (detail_on && (pt.extra.x & 4u) != 0u)) {
         vec3 t = v_tangent.xyz - n * dot(n, v_tangent.xyz);
         float tl = dot(t, t);
         if (tl > 1e-12) {
             t *= inversesqrt(tl);
             vec3 b = cross(n, t) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
             vec3 tn;
-            tn.xy = texture(t_normal, uv_of(1u)).xy * 2.0 - 1.0;
-            tn.z = sqrt(max(1.0 - dot(tn.xy, tn.xy), 0.0));
+            tn.xy = mat.misc.w != 0.0 ? texture(t_normal, uv_of(1u)).xy * 2.0 - 1.0 : vec2(0.0);
+            tn.z = (pt.extra.x & 1u) != 0u ? 1.0 : sqrt(max(1.0 - dot(tn.xy, tn.xy), 0.0));
             tn.xy *= mat.mr.z;
+            if (detail_on && (pt.extra.x & 4u) != 0u && pt.rotation.z != 0.0) {
+                vec2 dn = texture(t_detail_normal, detail_uv(10u)).xy * 2.0 - 1.0;
+                dn = mat2(pt.rotation.x, -pt.rotation.y, pt.rotation.y, pt.rotation.x) * dn;
+                tn.xy += dn * detail_weight;
+            }
             n = normalize(t * tn.x + b * tn.y + n * tn.z);
         }
     }
@@ -148,11 +192,17 @@ void main() {
     float al = rough * rough;
     float a2 = al * al;
     vec3 f0 = mix(vec3(0.08 * spec), a, metallic);
+    bool specular_workflow = pt.extra.y != 0u;
+    if (specular_workflow) {
+        vec4 stex = texture(t_specular, uv_of(8u));
+        f0 = clamp(vec3(spec_channel(stex, 0u), spec_channel(stex, 1u), spec_channel(stex, 2u)) *
+                   pt.specular_factor.rgb, 0.0, 1.0);
+    }
     vec3 f = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
     float dd = nh * nh * (a2 - 1.0) + 1.0;
     float d = a2 / (PI * dd * dd);
     float vis = 0.5 / max(nl * sqrt(nv * nv * (1.0 - a2) + a2) + nv * sqrt(nl * nl * (1.0 - a2) + a2), 1e-6);
-    vec3 diffuse = (1.0 - f) * (1.0 - metallic) * a / PI;
+    vec3 diffuse = (1.0 - f) * (specular_workflow ? 1.0 : 1.0 - metallic) * a / PI;
     vec3 direct = (diffuse + d * vis * f) * fr.sun_color.rgb * nl;
     if (nl > 0.0) {
         direct *= sun_shadow(v_pos, normalize(v_normal) * (gl_FrontFacing ? 1.0 : -1.0));
@@ -175,6 +225,10 @@ void main() {
         spec_env = mix(sky_radiance(refl), sky_base(n), rough * rough);
     }
     vec3 amb = (diff_env * (1.0 - metallic) * a + spec_env * (f0 * ab.x + ab.y)) * fr.sky_zenith.w * ao;
+    if (specular_workflow) {
+        vec3 env_brdf = f0 * ab.x + ab.y;
+        amb = (diff_env * a * (1.0 - env_brdf) + spec_env * env_brdf) * fr.sky_zenith.w * ao;
+    }
 
     o_color = vec4(direct + amb + emit, mat.misc.y == 2.0 ? base.a : 1.0);
 }
