@@ -76,6 +76,10 @@ noise. Occlusion-style extra filtering maps to a `LOWPASS_HZ` parameter binding
 
 ## Things to keep in mind
 
+- Leave `desc.voices.sample_rate` at 0 when clips have other rates than the
+  output: a nonzero pool rate makes the pool refuse every clip of another
+  rate (the leaf then never plays), while the runtime resamples by pitch.
+
 - Timing is in output sample frames: post at `su_audio_system_clock(system)`
   or later. With device output that clock leads the speaker by the ring fill.
 - Everything the system references (assets, graph, descriptor tables) must

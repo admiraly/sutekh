@@ -618,6 +618,10 @@ static uint32_t leaf_controls(SuAudioEvents *events, const EventInstance *instan
         distance = sqrtf(rel.x * rel.x + rel.y * rel.y + rel.z * rel.z);
         attenuation = su_audio_attenuation(distance, desc.min_distance, desc.max_distance, desc.rolloff);
         su_audio_pan(local, &left, &right);
+        /* cos/sin of the pan angle round to tiny negatives at the hard sides (cosf(pi/2) < 0); the pool rejects
+         * negative gains, which used to leave such a voice uncontrolled at unit gain */
+        left = left > 0.0f ? left : 0.0f;
+        right = right > 0.0f ? right : 0.0f;
         if (events->doppler > 0.0f) {
             SuVec3f origin = {0.0f, 0.0f, 0.0f};
             pitch *= su_audio_doppler(origin, listener->vel, rel, desc.vel, events->speed_of_sound, events->doppler);

@@ -626,6 +626,33 @@ static void test_host_extensions(void) {
         s.desc.default_policy.limit_scope = 0u;
     }
 
+    /* an emitter exactly to the right: the left gain rounds to a tiny negative (cosf(pi/2)); it must be clamped, not
+     * leave the voice uncontrolled (unit gain, centred) */
+    {
+        SuAudioTrigger trigger;
+        SuAudioInstance instance;
+        SuAudioEmitterSnapshot emitter;
+        double left = 0.0, right = 0.0;
+        CHECK(su_audio_system_create(&s.desc, &system, message) == SU_OK);
+        memset(&emitter, 0, sizeof emitter);
+        emitter.pos = meters(10.0, 0.0);
+        emitter.scale = 1.0f;
+        memset(&trigger, 0, sizeof trigger);
+        trigger.struct_size = sizeof trigger;
+        trigger.event_id = 2u;
+        trigger.commit_seq = 1u;
+        trigger.session_generation = 1u;
+        CHECK(su_audio_system_emitter_create(system, &emitter, &trigger.emitter) == SU_OK);
+        CHECK(su_audio_system_post(system, &trigger, &instance, NULL) == SU_OK);
+        CHECK(su_audio_system_render(system, offline_pcm, 4800u) == SU_OK);
+        for (index = 1200u; index < 4800u; index++) {
+            left += fabs(offline_pcm[index * 2u]);
+            right += fabs(offline_pcm[index * 2u + 1u]);
+        }
+        CHECK(left < 1e-3 && right > 1.0 && right / 3600.0 < 0.3 * 0.2); /* quiet: 1/10 m distance law, panned */
+        su_audio_system_destroy(system);
+    }
+
     /* Doppler: 200 Hz approaching at a tenth of the speed of sound plays at 343 / (343 - 34.3) = 1.111x */
     render_loop(&s, 1, &plain_rms, &plain_count);
     s.desc.doppler = 1.0f;
