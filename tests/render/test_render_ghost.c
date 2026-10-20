@@ -170,6 +170,88 @@ static int draw(SuRenderer *r, const SuRenderObject *o, uint32_t n) {
     return 1;
 }
 
+static void test_sampler(SuRenderer *r) {
+    static const uint8_t white[16] = {255, 255, 255, 255, 255, 255, 255, 255,
+                                      255, 255, 255, 255, 255, 255, 255, 255};
+    static const uint32_t indices[3] = {0, 1, 2};
+    const uint8_t *mips[1] = {white};
+    SuRenderTextureDesc td = {0};
+    SuRenderHandle tex = 0;
+    SuRenderStats stats;
+    uint32_t textured;
+    td.width = td.height = 2;
+    td.format = SU_TEX_RGBA8_UNORM;
+    td.mip_count = 1;
+    td.mip_data = mips;
+    td.flags = SU_RENDER_UPLOAD_COPY;
+    CHECK(su_render_texture_create(r, &td, &tex) == SU_OK);
+    for (textured = 0; textured < 2u; textured++) {
+        SuRenderMaterialDesc md = {0};
+        SuRenderHandle mat = 0;
+        uint32_t uv_mode;
+        su_asset_material_default(&md.factors);
+        md.factors.unlit = 1;
+        md.textures[SU_ASSET_SLOT_BASE_COLOR] = textured ? tex : 0;
+        CHECK(su_render_material_create(r, &md, &mat) == SU_OK);
+        for (uv_mode = 0; uv_mode < 3u; uv_mode++) {
+            SuAssetVertex vertices[3] = {0};
+            SuAssetSubmesh submesh = {0};
+            SuRenderMeshDesc mesh_desc = {0};
+            SuRenderModelNode node = {0};
+            SuRenderHandle mesh = 0;
+            SuRenderHandle model = 0;
+            SuRenderObject object;
+            uint32_t vertex;
+            vertices[0].pos[0] = vertices[0].pos[1] = -1.0f;
+            vertices[1].pos[0] = 1.0f;
+            vertices[1].pos[1] = -1.0f;
+            vertices[2].pos[1] = 1.0f;
+            for (vertex = 0; vertex < 3u; vertex++) {
+                vertices[vertex].normal[2] = 1.0f;
+                vertices[vertex].tangent[0] = vertices[vertex].tangent[3] = 1.0f;
+                vertices[vertex].uv0[0] = uv_mode == 0u ? 0.0f : vertices[vertex].pos[0];
+                vertices[vertex].uv0[1] = uv_mode == 1u ? vertices[vertex].pos[1] : 0.0f;
+            }
+            submesh.index_count = 3;
+            submesh.radius = 2.0f;
+            mesh_desc.vertices = vertices;
+            mesh_desc.vertex_count = 3;
+            mesh_desc.indices = indices;
+            mesh_desc.index_count = 3;
+            mesh_desc.submeshes = &submesh;
+            mesh_desc.submesh_count = 1;
+            mesh_desc.materials = &mat;
+            mesh_desc.radius = 2.0f;
+            mesh_desc.flags = SU_RENDER_UPLOAD_COPY;
+            CHECK(su_render_mesh_create(r, &mesh_desc, &mesh) == SU_OK);
+            node.transform[0] = node.transform[5] = node.transform[10] = node.transform[15] = 1.0f;
+            node.lod_mesh[0] = mesh;
+            node.lod_screen[0] = 1.0f;
+            node.lod_count = 1;
+            CHECK(su_render_model_create(r, &node, 1, &model) == SU_OK);
+            object = obj(model, -3, 1.0f, 0, 1, 0, 1);
+            (void)draw(r, &object, 1);
+            printf("sampler: %s, UV mode %u (constant / varying / one-axis)\n",
+                   textured ? "2x2 texture" : "1x1 fallback", (unsigned)uv_mode);
+            if (draw(r, &object, 1)) {
+                CHECK(su_render_resource_state(r, model) == SU_RENDER_STATE_READY);
+                CHECK(is(center(), 0, 255, 0));
+            }
+            object.tint[3] = 0.5f;
+            if (draw(r, &object, 1)) {
+                CHECK(is(center(), 0, srgb8(0.5), 0));
+            }
+            CHECK(su_render_release(r, model) == SU_OK);
+            CHECK(su_render_release(r, mesh) == SU_OK);
+        }
+        CHECK(su_render_release(r, mat) == SU_OK);
+    }
+    CHECK(su_render_release(r, tex) == SU_OK);
+    CHECK(su_render_stats(r, &stats) == SU_OK);
+    CHECK(getenv("SUTEKH_REQUIRE_VALIDATION") == NULL || stats.validation_enabled != 0u);
+    CHECK(stats.validation_errors == 0u && stats.validation_warnings == 0u);
+}
+
 int main(int argc, char **argv) {
     SuRenderDesc d;
     SuRenderer *r = NULL;
@@ -188,9 +270,8 @@ int main(int argc, char **argv) {
     SuRenderObject o[4];
     int g50 = srgb8(0.5);
     int g25 = srgb8(0.25);
-    (void)argv;
-    if (argc != 2) {
-        fprintf(stderr, "usage: test_render_ghost WORKDIR\n");
+    if (argc != 2 && !(argc == 3 && strcmp(argv[2], "--sampler-repro") == 0)) {
+        fprintf(stderr, "usage: test_render_ghost WORKDIR [--sampler-repro]\n");
         return 2;
     }
     memset(&d, 0, sizeof d);
@@ -208,6 +289,13 @@ int main(int argc, char **argv) {
         return status == SU_E_UNSUPPORTED_METHOD ? 77 : 1;
     }
     g_cam = su_wpos(250000.0, -1200.0, 90000.0);
+    if (argc == 3) {
+        g_cam = su_wpos(0, 0, 0);
+        test_sampler(r);
+        su_render_destroy(r);
+        printf("test_render_sampler: %ld checks, %ld failures\n", g_checks, g_fail);
+        return g_fail == 0 ? 0 : 1;
+    }
 
     CHECK(su_asset_writer_create(&w) == SU_OK);
     add_model(w, "opaque", SU_ASSET_ALPHA_OPAQUE, 1.0f);

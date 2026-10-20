@@ -1668,6 +1668,21 @@ static int make_shadow_sampler(SuRenderer *r) {
     return r->f.vkCreateSampler(r->dev, &si, NULL, &r->shadow_sampler) == VK_SUCCESS;
 }
 
+static int broken_anisotropy(SuRenderer *r) {
+    VkPhysicalDeviceDriverProperties driver = {0};
+    VkPhysicalDeviceProperties2 props = {0};
+    unsigned major = 0;
+    unsigned minor = 0;
+    unsigned patch = 0;
+    driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    props.pNext = &driver;
+    r->f.vkGetPhysicalDeviceProperties2(r->pd, &props);
+    return driver.driverID == VK_DRIVER_ID_MESA_LLVMPIPE &&
+           sscanf(driver.driverInfo, "Mesa %u.%u.%u", &major, &minor, &patch) == 3 &&
+           major == 25u && minor == 0u && patch == 7u;
+}
+
 static int make_samplers(SuRenderer *r) {
     static const VkSamplerAddressMode modes[3] = {VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
                                                   VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT};
@@ -1679,7 +1694,7 @@ static int make_samplers(SuRenderer *r) {
     si.minFilter = VK_FILTER_LINEAR;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     si.maxLod = VK_LOD_CLAMP_NONE;
-    if (r->anisotropy) {
+    if (r->anisotropy && !broken_anisotropy(r)) {
         si.anisotropyEnable = VK_TRUE;
         si.maxAnisotropy = r->props.limits.maxSamplerAnisotropy < 8.0f ? r->props.limits.maxSamplerAnisotropy : 8.0f;
     }
