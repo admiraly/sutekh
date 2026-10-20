@@ -524,9 +524,54 @@ void su_audio_params_counts(const SuAudioParams *params, uint32_t *param_count, 
     *bus_binding_count = buses;
 }
 
+/* A voice's own scoped slots (its instance and emitter), gathered in one pass over the scoped pool so each binding
+ * then resolves among a few entries instead of scanning the pool again (same instance -> emitter -> global order). */
+#define VOICE_SCOPED_MAX 64u
+
+static float voice_value(const SuAudioParams *params, const ParamSlot *const *mine, uint32_t count,
+                         SuAudioParamTarget target, uint32_t def_index, uint64_t t) {
+    uint32_t pass;
+    uint32_t k;
+    for (pass = 0u; pass < 2u; pass++) {
+        uint32_t kind = pass == 0u ? SU_AUDIO_SCOPE_INSTANCE : SU_AUDIO_SCOPE_EMITTER;
+        for (k = 0u; k < count; k++) {
+            int index;
+            if (mine[k]->kind != kind || mine[k]->def_index != def_index) {
+                continue;
+            }
+            index = slot_segment(mine[k], t);
+            if (index >= 0) {
+                return mine[k]->seg[index].start > t ? mine[k]->seg[index].from
+                                                     : segment_value(&mine[k]->seg[index], t);
+            }
+        }
+    }
+    target.instance = 0u;
+    target.emitter = 0u;
+    return param_value(params, target, def_index, t);
+}
+
 uint32_t su_audio_param_voice_controls(const SuAudioParams *params, SuAudioParamTarget target, uint32_t bus_id,
                                        uint64_t sample_time, float *gain_db, float *pitch, float *lowpass_hz) {
+    const ParamSlot *mine[VOICE_SCOPED_MAX];
+    uint32_t count = 0u;
+    int gathered = 1;
     uint32_t i;
+    if (params->stats.scoped_values != 0u && (target.instance != 0u || target.emitter != 0u)) {
+        for (i = 0u; i < params->desc.max_scoped_values; i++) {
+            const ParamSlot *slot = &params->scoped[i];
+            if (!slot->used || slot->is_switch
+                || !((slot->kind == SU_AUDIO_SCOPE_INSTANCE && target.instance != 0u && slot->key == target.instance)
+                    || (slot->kind == SU_AUDIO_SCOPE_EMITTER && target.emitter != 0u && slot->key == target.emitter))) {
+                continue;
+            }
+            if (count == VOICE_SCOPED_MAX) {
+                gathered = 0; /* more than fit: fall back to the pool scan per binding */
+                break;
+            }
+            mine[count++] = slot;
+        }
+    }
     *gain_db = 0.0f;
     *pitch = 1.0f;
     *lowpass_hz = (float)params->desc.sample_rate * 0.5f;
@@ -537,7 +582,9 @@ uint32_t su_audio_param_voice_controls(const SuAudioParams *params, SuAudioParam
             || (binding->desc.bus_id != 0u && binding->desc.bus_id != bus_id)) {
             continue;
         }
-        mapped = binding_eval(binding, param_value(params, target, binding->def_index, sample_time));
+        mapped = binding_eval(binding, gathered
+            ? voice_value(params, mine, count, target, binding->def_index, sample_time)
+            : param_value(params, target, binding->def_index, sample_time));
         if (binding->desc.control == SU_AUDIO_CONTROL_GAIN_DB) {
             *gain_db += mapped;
         } else if (binding->desc.control == SU_AUDIO_CONTROL_PITCH) {

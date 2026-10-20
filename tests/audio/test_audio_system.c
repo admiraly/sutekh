@@ -512,6 +512,8 @@ static uint32_t crossings(const float *pcm, uint32_t frames) {
 
 /* Renders the looping 200 Hz tone (event 2, bus 30) for one second, optionally on an emitter approaching the
  * listener at 34.3 m/s; returns the left-channel RMS and the zero-crossing count. */
+static float scoped_db = 0.0f; /* nonzero: param 2 set to it in the voice's instance scope (and -6 dB globally) */
+
 static void render_loop(Setup *s, int spatial, double *rms, uint32_t *count) {
     SuAudioSystem *system = NULL;
     SuAudioTrigger trigger;
@@ -534,6 +536,13 @@ static void render_loop(Setup *s, int spatial, double *rms, uint32_t *count) {
         CHECK(su_audio_system_emitter_create(system, &emitter, &trigger.emitter) == SU_OK);
     }
     CHECK(su_audio_system_post(system, &trigger, &instance, NULL) == SU_OK);
+    if (scoped_db != 0.0f) {
+        SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+        SuAudioParamScope mine = {SU_AUDIO_SCOPE_INSTANCE, 0u};
+        mine.key = instance;
+        CHECK(su_audio_system_param_set(system, global, 2u, -6.0f, 0u) == SU_OK);
+        CHECK(su_audio_system_param_set(system, mine, 2u, scoped_db, 0u) == SU_OK);
+    }
     for (position = 0u; position < 48000u; position += 4800u) {
         CHECK(su_audio_system_render(system, offline_pcm + position * 2u, 4800u) == SU_OK);
     }
@@ -626,6 +635,17 @@ static void test_host_extensions(void) {
     bindings[1].bus_id = 0u; /* every voice */
     render_loop(&s, 0, &rms, &count);
     CHECK(fabs(rms / plain_rms - 0.1) < 0.005);
+    /* an identity binding: the instance-scoped value wins over the global one */
+    params[1].min_value = -60.0f;
+    params[1].max_value = 0.0f;
+    quiet[0].value = -60.0f;
+    quiet[0].output = -60.0f;
+    quiet[1].value = 0.0f;
+    quiet[1].output = 0.0f;
+    scoped_db = -20.0f;
+    render_loop(&s, 0, &rms, &count);
+    CHECK(fabs(rms / plain_rms - 0.1) < 0.005);
+    scoped_db = 0.0f;
     setup_free(&s);
 }
 
