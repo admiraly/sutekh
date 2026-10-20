@@ -1,6 +1,6 @@
 # Mesh overlay materials: issue #67
 
-Status: implemented and locally validated; cross-platform PR checks pending.
+Status: implemented and locally validated. PR #77 tracks CI and merge state.
 Date: 2026-10-20. Initial base: `478c736`. Branch: `feat/decal-overlay`.
 
 ## Implementation
@@ -38,6 +38,8 @@ All commands run only in the isolated worktree after `tools/env-windows.ps1`.
 - `ctest --test-dir build-win --output-on-failure -j 4`: 112 tests, zero
   failures, 43.04 s; two POSIX-only tests skipped. Validation required and
   synchronization validation enabled for the renderer tests.
+- Rebased cleanly onto `d5b98fe` (latest main at submission); rebuilt and reran
+  all 112 tests: zero failures, the same two skips, 42.77 s.
 - `build-win/test_render_paint.exe`: 2776 checks, zero failures on both the
   P600 and Mesa lavapipe 25.0.7 (`VK_DRIVER_FILES` selecting the local software
   ICD). Vulkan validation and synchronization validation: zero errors/warnings.
@@ -95,8 +97,8 @@ SHA-256 of the locally validated implementation and Clang test executable:
 
 ## Remaining / next
 
-- Rebase on current main, rerun affected gates, publish PR, resolve all CI jobs,
-  merge only when green, then remove worktree junctions before worktree cleanup.
+- PR #77 owns the remaining remote integration gates and cleanup. Main must be
+  checked again before merging, and junctions removed before worktree removal.
 - Fixed bias is intended for coplanar geometry, not projected volume decals.
   Sorted-alpha intersections and same-depth overlapping decal order retain the
   normal renderer limitations. No custom bias controls or import extension added.
