@@ -129,6 +129,29 @@ runtime and are then driven only by it:
   (`knee + (1 - knee) tanh((|x| - knee) / (1 - knee))`, never beyond full
   scale) when the knee is in [0.1, 1); 0 keeps the hard clamp.
 
+## Doppler, host bus inputs and bus-filtered bindings
+
+- `doppler` (hook and `SuAudioSystemDesc`, in [0, 1]; 0 = off) multiplies
+  the pitch of every spatial voice by the legacy `su_audio_doppler` law
+  (listener and emitter velocities, `speed_of_sound`, 0 = 343 m/s), evaluated
+  per quantum with the other controls, so the pitch glides like a `PITCH`
+  binding.
+- `inputs` / `input_count` (at most `SU_AUDIO_EVENTS_MAX_INPUTS`) are host bus
+  inputs: once per quantum, inside the render on the owner's thread, each
+  `SuAudioBusInput.render(user, stereo, 128, sample_time)` fills a cleared
+  stereo buffer that is mixed into its `bus_id` (0: the root; without a bus
+  tree: the output) before the tree runs. The input therefore gets the bus
+  faders, ducking (as a target and as a sidechain source), meters and the
+  master limiter. This is how a game keeps long tracks on the legacy
+  `SuAudioStream` path (the music player only plays resident segments) while
+  mixing them through the system. Host input is not journaled: replays,
+  `audio.render.offline` and checkpoint verification build their systems
+  without inputs, so their PCM lacks it.
+- Voice-control bindings (`GAIN_DB`, `PITCH`, `LOWPASS_HZ`) with a nonzero
+  `bus_id` apply only to voices whose graph leaf `bus_id` equals it, so one
+  parameter can drive several layers through different curves (one bus per
+  layer). `bus_id` 0 keeps the previous behaviour (every voice).
+
 ## Clustering
 
 `cluster` and `cluster_inputs` in the hook feed an A08 cluster once per
@@ -211,7 +234,10 @@ with no underruns; an empty ring delivers counted silence; a checkpoint
 restored directly continues like the uninterrupted render and passes the
 replay verifier, while a corrupted one fails it; all four control methods,
 including the offline render's PCM digest against the live stream; device
-output either opens or reports why not. The `_alloc` build compiles every
+output either opens or reports why not; a host bus input is called once per
+quantum in order and mixed through its bus (and absent from the offline
+replay); an approaching emitter plays 200 Hz at 1.111x with Doppler 1; and a
+bus-filtered `GAIN_DB` binding lowers only its bus's voice. The `_alloc` build compiles every
 integrated-runtime source with counting allocators and requires zero
 allocations after creation over ten seconds of posts, emitter moves,
 parameter changes, clustering, telemetry, journaling and checkpoint saves

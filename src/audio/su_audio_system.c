@@ -184,6 +184,10 @@ uint32_t su_audio_system_create(const SuAudioSystemDesc *desc, SuAudioSystem **o
     hook.limiter_knee = desc->limiter_knee;
     hook.cluster = system->cluster;
     hook.cluster_inputs = desc->cluster_inputs;
+    hook.doppler = desc->doppler;
+    hook.speed_of_sound = desc->speed_of_sound;
+    hook.inputs = desc->inputs;
+    hook.input_count = desc->input_count;
     status = su_audio_events_attach(system->events, &hook);
     if (status != SU_OK) {
         message_set(message, "components rejected by the event runtime (rates, capacities, clocks or knee)");
@@ -790,6 +794,8 @@ uint32_t su_audio_system_checkpoint_verify(const SuAudioSystemDesc *desc, const 
     offline.output = SU_AUDIO_OUTPUT_OFFLINE;
     offline.journal_capacity = 0u;
     offline.telemetry_capacity = 0u;
+    offline.inputs = NULL; /* host input is not journaled */
+    offline.input_count = 0u;
     a = calloc((size_t)verify_frames * 2u, sizeof *a);
     b = calloc((size_t)verify_frames * 2u, sizeof *b);
     status = a == NULL || b == NULL ? SU_E_RESOURCE_LIMIT : SU_OK;
@@ -1019,6 +1025,8 @@ static uint32_t method_render_offline(SuAudioSystem *system, const char *params,
     offline.output = SU_AUDIO_OUTPUT_OFFLINE;
     offline.journal_capacity = 0u;
     offline.telemetry_capacity = 0u;
+    offline.inputs = NULL; /* host input is not journaled */
+    offline.input_count = 0u;
     pcm = calloc((size_t)frames * 2u, sizeof *pcm);
     if (pcm == NULL) {
         return SU_E_RESOURCE_LIMIT;

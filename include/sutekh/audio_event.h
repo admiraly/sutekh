@@ -92,6 +92,20 @@ typedef struct SuAudioVoicePolicyRule {
     SuAudioVoicePolicy policy;
 } SuAudioVoicePolicyRule;
 
+/* Host bus input: PCM the owner supplies into a bus once per 128-frame quantum, from inside the runtime's render
+ * (so on the owner's thread), for sources the runtime does not play itself (for example a long track decoded by a
+ * legacy SuAudioStream). render receives interleaved stereo cleared to zero, the frame count and the sample time
+ * of the quantum's first frame; it must not call back into the runtime. The input then passes the bus tree like
+ * any voice (faders, ducking, meters, the master limiter). Host input is not journaled: replays render it as
+ * silence. */
+typedef void (*SuAudioBusInputFn)(void *user, float *stereo, uint32_t frames, uint64_t sample_time);
+typedef struct SuAudioBusInput {
+    uint32_t bus_id;                       /* 0 or an unknown-free bus ID; 0 = the root (without buses: the output) */
+    SuAudioBusInputFn render;
+    void *user;
+} SuAudioBusInput;
+#define SU_AUDIO_EVENTS_MAX_INPUTS 16u
+
 typedef struct SuAudioEventsHook {
     uint32_t struct_size;
     uint32_t version;                      /* SU_AUDIO_EVENTS_HOOK_VERSION */
@@ -107,6 +121,11 @@ typedef struct SuAudioEventsHook {
     float limiter_knee;                    /* master soft limiter knee in [0.1, 1); 0 = hard clamp */
     SuAudioCluster *cluster;               /* optional: fed every quantum from cluster_inputs */
     uint32_t cluster_inputs;               /* SU_AUDIO_EVENTS_CLUSTER_* */
+    float doppler;                         /* spatial voices: Doppler amount in [0, 1] (0 = none), su_audio_doppler law
+                                            * from the emitter and listener velocities, applied to the pitch */
+    float speed_of_sound;                  /* metres/second for the Doppler law; 0 = 343 */
+    const SuAudioBusInput *inputs;         /* copied; at most SU_AUDIO_EVENTS_MAX_INPUTS */
+    uint32_t input_count;
 } SuAudioEventsHook;
 
 /* Clustering inputs: rendered voices as objects (ID = logical voice handle, steal tails with bit 63 set;
