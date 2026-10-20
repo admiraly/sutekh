@@ -547,3 +547,12 @@ uint32_t su_audio_bus_tree_state(SuAudioBusTree *tree, SuAudioStateIo *io) {
     }
     return io->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
+
+uint32_t su_audio_bus_parent(const SuAudioBusTree *tree, SuAudioBusId id, SuAudioBusId *parent) {
+    uint32_t b;
+    if (!tree || !parent) return SU_E_INVALID_ARGUMENT;
+    b = find(tree, id);
+    if (b == NONE) return SU_E_INVALID_ARGUMENT;
+    *parent = tree->buses[b].desc.parent;
+    return SU_OK;
+}

@@ -49,8 +49,10 @@ else `SU_E_SCHEMA_MISMATCH`. Event cursors, no-repeat histories, voice
 positions, release ramps, low-pass state and any later bus/parameter/cluster
 state are therefore restored exactly, including features added after this
 step, without serializing private runtime structures. Restore cost is linear in
-the saved position (measured below). A direct state blob would need hooks in
-the shared runtime and is left to integrator coordination.
+the saved position (measured below). The integrated runtime adds direct state
+checkpoints whose restore cost does not depend on the position, and keeps
+replay as their verifier; see
+[EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md).
 
 ## Measurement and export
 

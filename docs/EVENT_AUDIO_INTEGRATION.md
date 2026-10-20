@@ -76,6 +76,65 @@ runtime and are then driven only by it:
   (`knee + (1 - knee) tanh((|x| - knee) / (1 - knee))`, never beyond full
   scale) when the knee is in [0.1, 1); 0 keeps the hard clamp.
 
+## Clustering
+
+`cluster` and `cluster_inputs` in the hook feed an A08 cluster once per
+quantum, after the bus tree has run:
+
+- `SU_AUDIO_EVENTS_CLUSTER_VOICES`: every rendered voice and steal tail
+  becomes an object. Its ID is the logical voice handle (tails set bit 63),
+  its direction and distance are the listener-relative values the runtime
+  computed for that voice, its PCM is the pool's mono capture after envelope
+  and low-pass and before the channel gains, and its RMS is measured from that
+  block. Non-spatial voices are beds; `metadata` is the leaf bus ID.
+- `SU_AUDIO_EVENTS_CLUSTER_BUSES`: every pre-master bus (a direct child of the
+  root) is a stereo bed object with ID `bit 62 | bus_id`, read from the bus
+  tree's capture of its processed output.
+
+The cluster's `max_objects` must cover `max_physical + transition_reserve`
+plus the pre-master buses. Clustering describes an object representation for
+an object renderer (read it with `su_audio_cluster_outputs`/`assoc`/`stats`);
+its CPU stereo reference advances the crossfades, and the runtime's stereo
+output does not depend on it (`test_cluster_feed` compares both bit for bit).
+
+## Direct checkpoints
+
+`su_audio_events_checkpoint_save(events, out, capacity, &written)` (size
+query with `out == NULL`) and `su_audio_events_checkpoint_load(events, data,
+bytes)` save and restore the whole integrated state, not a command replay:
+
+| Section | Contents |
+| --- | --- |
+| Runtime | instance slots and generations, leaves (graph leaf, timing, state, controls, logical voice), queued stops, commit cursor, stats, the partially consumed quantum |
+| Voice pool | free list, every live logical voice (policy, cursor, virtual time, fades, release, start/stop frames, filter and gain ramps) and steal tails |
+| Bus tree | faders and ramps, window gains, meters, duck envelopes and holds, delayed sidechain rings |
+| Parameters / music | timeline slots and clock; players, pending transition, stingers (as asset references) |
+| Cluster / scene | assignments, cluster slots, IDs and clock; emitters and the listener |
+
+Clips are written as asset `(id, generation)` and re-pinned on load; no
+pointers are written. A 64-byte header carries a magic, version, a layout
+fingerprint of the configuration (capacities, bus IDs, parameter counts,
+attached components, limiter knee), the body size, an FNV-1a checksum and the
+saved clock. Load checks all of them and that every pinned generation is still
+resident before it changes anything (`SU_E_SCHEMA_MISMATCH`). The target must
+be a runtime attached to identically configured components; the owner restores
+its own presentation state (instance handles it kept, its commit sequence).
+Restore cost depends on the configured capacities only, never on the position.
+The layout is the build's in-memory numeric representation (profile
+`audio_float_local_v1`): a checkpoint is valid within the build that wrote it.
+Legacy (unattached) runtimes return `SU_E_UNSUPPORTED_METHOD`; their A09
+replay checkpoints are unchanged.
+
+Replay stays as the verifier: `test_checkpoints` renders a scripted session
+(posts with spatial emitters, switch and parameter changes, a listener turn, an
+emitter move, a stop with release, pitch and gain glides, music, ducking,
+clustering and virtualisation with three physical voices) once uninterrupted.
+Then, at 12 positions including 1, 127 and 128 frames and other positions
+inside quanta, it replays to the position, saves, loads into a fresh runtime
+and requires the restored continuation to equal the uninterrupted render bit
+for bit. The replayed runtime's own continuation must match too. Checkpoint
+size varies only with live voices, never with elapsed time.
+
 ## Tests
 
 `ctest -R '^audio_runtime$'` (`tests/audio/test_audio_runtime.c`, synthetic
@@ -88,3 +147,5 @@ and after a timed change, exact blend weights, `GAIN_DB` and `PITCH` bindings
 on every voice, sidechain ducking of an ambience bus by shots on another bus,
 a `BUS_GAIN_DB` binding reaching -12 dB on its fader, music metered on its own
 bus, and the soft limiter bending an 18 dB overdrive to at most full scale.
+Clustering and checkpoint cases are described above. The suite also passes
+under clang AddressSanitizer.

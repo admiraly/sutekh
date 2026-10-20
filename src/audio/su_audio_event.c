@@ -8,6 +8,8 @@
 #include "su_audio_voice_int.h"
 #include "su_audio_bus_int.h"
 #include "su_audio_parameter_int.h"
+#include "su_audio_cluster_int.h"
+#include "su_audio_state.h"
 
 typedef struct EventLeaf {
     SuAudioGraphLeaf data;
@@ -20,6 +22,8 @@ typedef struct EventLeaf {
     const SuAudioClip *clip;
     float ctl_gain;
     float ctl_pitch;
+    SuVec3f ctl_dir;               /* listener-relative direction (zero when not spatial) */
+    float ctl_distance;
 } EventLeaf;
 
 typedef struct EventInstance {
@@ -79,6 +83,19 @@ struct SuAudioEvents {
     uint32_t music_bus_id;
     float limiter_knee;
     float music_buffer[SU_AUDIO_EVENT_QUANTUM * 2u];
+    SuAudioCluster *cluster;
+    uint32_t cluster_inputs;
+    SuAudioVoiceCapture *captures;
+    float *capture_mem;
+    uint32_t capture_count;
+    SuAudioClusterObject *objects;
+    uint32_t object_capacity;
+    SuAudioBusId *bed_ids;
+    float *bed_mem;
+    uint32_t bed_count;
+    EventLeaf **leaf_by_voice;
+    uint32_t leaf_map_size;
+    float cluster_mix[SU_AUDIO_EVENT_QUANTUM * 2u];
 };
 
 static SuAudioInstance instance_handle(uint32_t slot, uint32_t generation) {
@@ -183,6 +200,21 @@ void su_audio_events_destroy(SuAudioEvents *events) {
     if (events->graph != NULL) {
         su_audio_graph_release(events->graph);
     }
+    if (events->buses != NULL && events->bed_ids != NULL) {
+        uint32_t bed;
+        for (bed = 0; bed < events->bed_count; bed++) {
+            (void)su_audio_bus_capture(events->buses, events->bed_ids[bed], NULL);
+        }
+    }
+    if (events->pool != NULL && events->captures != NULL) {
+        (void)su_audio_voice_pool_capture(events->pool, NULL, 0u);
+    }
+    free(events->captures);
+    free(events->capture_mem);
+    free(events->objects);
+    free(events->bed_ids);
+    free(events->bed_mem);
+    free(events->leaf_by_voice);
     free(events->param_values);
     free(events->switch_values);
     free(events->bus_gains);
@@ -581,9 +613,13 @@ static uint32_t leaf_controls(SuAudioEvents *events, const EventInstance *instan
         out->gain_left = left * gain;
         out->gain_right = right * gain;
         out->mono_mix = 1u;
+        leaf->ctl_dir = local;
+        leaf->ctl_distance = distance;
     } else {
         out->gain_left = gain;
         out->gain_right = gain;
+        leaf->ctl_dir.x = leaf->ctl_dir.y = leaf->ctl_dir.z = 0.0f;
+        leaf->ctl_distance = 0.0f;
     }
     if (events->params != NULL) {
         SuAudioParamTarget target;
@@ -674,6 +710,8 @@ static void pooled_start(SuAudioEvents *events, uint64_t now, uint64_t end) {
             leaf->state = status == SU_OK ? 1u : 2u;
             if (status != SU_OK) {
                 events->stats.render_failures++;
+            } else if (events->leaf_by_voice != NULL) {
+                events->leaf_by_voice[(uint32_t)leaf->logical - 1u] = leaf;
             }
         }
     }
@@ -774,6 +812,63 @@ static void pooled_collect(SuAudioEvents *events) {
     }
 }
 
+static float block_rms(const float *pcm, uint32_t samples) {
+    double sum = 0.0;
+    uint32_t index;
+    for (index = 0; index < samples; index++) {
+        sum += (double)pcm[index] * pcm[index];
+    }
+    return (float)sqrt(sum / (double)samples);
+}
+
+/* Objects for the clustering stage: rendered voices (logical identity, listener direction, mono pre-pan
+ * signal) and pre-master bus outputs as beds. The stereo output does not depend on it. */
+static uint32_t feed_cluster(SuAudioEvents *events) {
+    uint32_t count = 0u;
+    uint32_t index;
+    if ((events->cluster_inputs & SU_AUDIO_EVENTS_CLUSTER_VOICES) != 0u) {
+        uint32_t captured = su_audio_voice_pool_captured(events->pool);
+        for (index = 0; index < captured && count < events->object_capacity; index++) {
+            const SuAudioVoiceCapture *capture = &events->captures[index];
+            SuAudioClusterObject *object = &events->objects[count++];
+            uint32_t slot = (uint32_t)capture->voice - 1u;
+            const EventLeaf *leaf = slot < events->leaf_map_size ? events->leaf_by_voice[slot] : NULL;
+            memset(object, 0, sizeof *object);
+            object->id = capture->voice | (capture->tail ? UINT64_C(1) << 63 : 0u);
+            if (leaf != NULL && leaf->logical == capture->voice) {
+                object->direction = leaf->ctl_dir;
+                object->distance_m = leaf->ctl_distance;
+                object->metadata = leaf->data.bus_id;
+                object->flags = leaf->ctl_dir.x == 0.0f && leaf->ctl_dir.y == 0.0f && leaf->ctl_dir.z == 0.0f
+                    ? SU_AUDIO_CLUSTER_BED : 0u;
+            } else {
+                object->flags = SU_AUDIO_CLUSTER_BED;
+            }
+            object->rms = block_rms(capture->mono, SU_AUDIO_EVENT_QUANTUM);
+            object->channels = 1u;
+            object->pcm = capture->mono;
+        }
+    }
+    if ((events->cluster_inputs & SU_AUDIO_EVENTS_CLUSTER_BUSES) != 0u) {
+        for (index = 0; index < events->bed_count && count < events->object_capacity; index++) {
+            SuAudioClusterObject *object = &events->objects[count++];
+            const float *pcm = events->bed_mem + (size_t)index * SU_AUDIO_EVENT_QUANTUM * 2u;
+            memset(object, 0, sizeof *object);
+            object->id = (UINT64_C(1) << 62) | events->bed_ids[index];
+            object->flags = SU_AUDIO_CLUSTER_BED;
+            object->metadata = events->bed_ids[index];
+            object->rms = block_rms(pcm, SU_AUDIO_EVENT_QUANTUM * 2u);
+            object->channels = 2u;
+            object->pcm = pcm;
+        }
+    }
+    if (su_audio_cluster_update(events->cluster, events->objects, count) != SU_OK) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    return su_audio_cluster_render(events->cluster, events->objects, count, SU_AUDIO_EVENT_QUANTUM,
+        events->cluster_mix);
+}
+
 static uint32_t render_quantum_pooled(SuAudioEvents *events) {
     uint64_t now = events->stats.render_clock;
     uint64_t end;
@@ -834,6 +929,9 @@ static uint32_t render_quantum_pooled(SuAudioEvents *events) {
             }
         }
     }
+    if (events->cluster != NULL && feed_cluster(events) != SU_OK) {
+        events->stats.render_failures++;
+    }
     if (events->limiter_knee > 0.0f) {
         float knee = events->limiter_knee;
         for (index = 0; index < SU_AUDIO_EVENT_QUANTUM * 2u; index++) {
@@ -854,6 +952,95 @@ static uint32_t render_quantum_pooled(SuAudioEvents *events) {
     events->stats.render_clock = end;
     events->cached = SU_AUDIO_EVENT_QUANTUM;
     events->consumed = 0u;
+    return SU_OK;
+}
+
+static void cluster_detach(SuAudioEvents *events) {
+    free(events->captures);
+    free(events->capture_mem);
+    free(events->objects);
+    free(events->bed_ids);
+    free(events->bed_mem);
+    free(events->leaf_by_voice);
+    events->captures = NULL;
+    events->capture_mem = NULL;
+    events->objects = NULL;
+    events->bed_ids = NULL;
+    events->bed_mem = NULL;
+    events->leaf_by_voice = NULL;
+    events->cluster = NULL;
+}
+
+static uint32_t cluster_attach(SuAudioEvents *events, SuAudioVoicePool *pool, SuAudioBusTree *buses,
+                               SuAudioCluster *cluster, uint32_t inputs) {
+    SuAudioVoicePoolDesc pool_desc;
+    uint32_t captures = 0u;
+    uint32_t beds = 0u;
+    uint32_t index;
+    if (inputs == 0u || (inputs & ~(SU_AUDIO_EVENTS_CLUSTER_VOICES | SU_AUDIO_EVENTS_CLUSTER_BUSES)) != 0u
+        || ((inputs & SU_AUDIO_EVENTS_CLUSTER_BUSES) != 0u && buses == NULL)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    su_audio_voice_pool_desc(pool, &pool_desc);
+    if ((inputs & SU_AUDIO_EVENTS_CLUSTER_VOICES) != 0u) {
+        captures = pool_desc.max_physical + pool_desc.transition_reserve;
+    }
+    if ((inputs & SU_AUDIO_EVENTS_CLUSTER_BUSES) != 0u) {
+        for (index = 0; index < su_audio_bus_count(buses); index++) {
+            SuAudioBusId id = 0u;
+            SuAudioBusId parent = 0u;
+            if (su_audio_bus_order(buses, index, &id) == SU_OK && su_audio_bus_parent(buses, id, &parent) == SU_OK
+                && parent != SU_AUDIO_BUS_ROOT) {
+                SuAudioBusId grand = 0u;
+                if (su_audio_bus_parent(buses, parent, &grand) == SU_OK && grand == SU_AUDIO_BUS_ROOT) {
+                    beds++;
+                }
+            }
+        }
+    }
+    if (captures + beds == 0u || captures + beds > su_audio_cluster_capacity(cluster)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    events->captures = calloc(captures + 1u, sizeof *events->captures);
+    events->capture_mem = calloc(((size_t)captures + 1u) * SU_AUDIO_EVENT_QUANTUM, sizeof *events->capture_mem);
+    events->objects = calloc(captures + beds, sizeof *events->objects);
+    events->bed_ids = calloc(beds + 1u, sizeof *events->bed_ids);
+    events->bed_mem = calloc(((size_t)beds + 1u) * SU_AUDIO_EVENT_QUANTUM * 2u, sizeof *events->bed_mem);
+    events->leaf_by_voice = calloc(pool_desc.max_logical, sizeof *events->leaf_by_voice);
+    if (events->captures == NULL || events->capture_mem == NULL || events->objects == NULL || events->bed_ids == NULL
+        || events->bed_mem == NULL || events->leaf_by_voice == NULL) {
+        cluster_detach(events);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (index = 0; index < captures; index++) {
+        events->captures[index].mono = events->capture_mem + (size_t)index * SU_AUDIO_EVENT_QUANTUM;
+    }
+    events->bed_count = 0u;
+    for (index = 0; beds != 0u && index < su_audio_bus_count(buses); index++) {
+        SuAudioBusId id = 0u;
+        SuAudioBusId parent = 0u;
+        SuAudioBusId grand = 0u;
+        if (su_audio_bus_order(buses, index, &id) == SU_OK && su_audio_bus_parent(buses, id, &parent) == SU_OK
+            && parent != SU_AUDIO_BUS_ROOT && su_audio_bus_parent(buses, parent, &grand) == SU_OK
+            && grand == SU_AUDIO_BUS_ROOT) {
+            events->bed_ids[events->bed_count] = id;
+            (void)su_audio_bus_capture(buses, id, events->bed_mem + (size_t)events->bed_count * SU_AUDIO_EVENT_QUANTUM * 2u);
+            events->bed_count++;
+        }
+    }
+    if (captures != 0u && su_audio_voice_pool_capture(pool, events->captures, captures) != SU_OK) {
+        cluster_detach(events);
+        return SU_E_INVALID_ARGUMENT;
+    }
+    events->capture_count = captures;
+    events->object_capacity = captures + beds;
+    events->leaf_map_size = pool_desc.max_logical;
+    events->cluster = cluster;
+    events->cluster_inputs = inputs;
+    events->stats.runtime_bytes += (uint64_t)(captures + 1u) * (sizeof *events->captures
+        + SU_AUDIO_EVENT_QUANTUM * sizeof(float)) + (uint64_t)(captures + beds) * sizeof *events->objects
+        + (uint64_t)(beds + 1u) * (sizeof(SuAudioBusId) + SU_AUDIO_EVENT_QUANTUM * 2u * sizeof(float))
+        + (uint64_t)pool_desc.max_logical * sizeof(EventLeaf *);
     return SU_OK;
 }
 
@@ -910,6 +1097,13 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     if (SU_AUDIO_EVENTS_HOOK_HAS(hook, limiter_knee)) {
         knee = hook->limiter_knee;
     }
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, cluster) && hook->cluster != NULL) {
+        uint32_t inputs = SU_AUDIO_EVENTS_HOOK_HAS(hook, cluster_inputs) ? hook->cluster_inputs : 0u;
+        status = cluster_attach(events, hook->voices, hook->buses, hook->cluster, inputs);
+        if (status != SU_OK) {
+            return status;
+        }
+    }
     if (!(knee == 0.0f || (knee >= 0.1f && knee < 1.0f))) {
         return SU_E_INVALID_ARGUMENT;
     }
@@ -956,6 +1150,14 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
         status = SU_E_INVALID_ARGUMENT;
     }
     if (status != SU_OK) {
+        if (events->cluster != NULL) {
+            uint32_t bed;
+            for (bed = 0; bed < events->bed_count; bed++) {
+                (void)su_audio_bus_capture(buses, events->bed_ids[bed], NULL);
+            }
+            (void)su_audio_voice_pool_capture(hook->voices, NULL, 0u);
+            cluster_detach(events);
+        }
         free(route_mem);
         free(routes);
         free(route_ids);
@@ -1135,4 +1337,377 @@ uint32_t su_audio_events_view(const SuAudioEvents *events, uint32_t slot, SuAudi
         leaves[index].lowpass_hz = leaf->lowpass_hz;
     }
     return SU_OK;
+}
+
+/* ---- direct checkpoints ---- */
+
+#define CHECKPOINT_MAGIC 0x45415553u /* "SUAE" little-endian */
+
+static uint64_t fnv_bytes(uint64_t hash, const void *data, size_t bytes) {
+    const uint8_t *p = (const uint8_t *)data;
+    size_t index;
+    for (index = 0; index < bytes; index++) {
+        hash ^= p[index];
+        hash *= UINT64_C(0x100000001b3);
+    }
+    return hash;
+}
+
+static uint64_t fnv_u64(uint64_t hash, uint64_t value) {
+    uint8_t bytes[8];
+    uint32_t index;
+    for (index = 0; index < 8u; index++) {
+        bytes[index] = (uint8_t)(value >> (8u * index));
+    }
+    return fnv_bytes(hash, bytes, sizeof bytes);
+}
+
+static void put_u32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+static void put_u64(uint8_t *p, uint64_t v) {
+    put_u32(p, (uint32_t)v);
+    put_u32(p + 4, (uint32_t)(v >> 32));
+}
+
+static uint32_t get_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint64_t get_u64(const uint8_t *p) {
+    return (uint64_t)get_u32(p) | ((uint64_t)get_u32(p + 4) << 32);
+}
+
+/* Configuration that must match between save and load. */
+static uint64_t layout_fingerprint(const SuAudioEvents *events) {
+    SuAudioVoicePoolDesc pool_desc;
+    uint64_t hash = UINT64_C(0xcbf29ce484222325);
+    uint32_t emitters = 0u;
+    uint32_t curves = 0u;
+    uint32_t curve_count = 0u;
+    uint32_t params = 0u;
+    uint32_t switches = 0u;
+    uint32_t bus_bindings = 0u;
+    uint32_t index;
+    uint32_t knee_bits;
+    su_audio_voice_pool_desc(events->pool, &pool_desc);
+    hash = fnv_u64(hash, sizeof(EventLeaf));
+    hash = fnv_u64(hash, events->desc.sample_rate);
+    hash = fnv_u64(hash, events->desc.max_instances);
+    hash = fnv_u64(hash, events->desc.max_leaves_per_instance);
+    hash = fnv_u64(hash, events->desc.max_logical_voices);
+    hash = fnv_u64(hash, events->desc.command_capacity);
+    hash = fnv_u64(hash, events->desc.project_seed);
+    hash = fnv_u64(hash, pool_desc.max_logical);
+    hash = fnv_u64(hash, pool_desc.max_physical);
+    hash = fnv_u64(hash, pool_desc.hero_reserve);
+    hash = fnv_u64(hash, pool_desc.transition_reserve);
+    hash = fnv_u64(hash, events->policy_count);
+    hash = fnv_u64(hash, events->route_count);
+    for (index = 0; events->route_ids != NULL && index < events->route_count; index++) {
+        hash = fnv_u64(hash, events->route_ids[index]);
+    }
+    su_audio_params_counts(events->params, &params, &switches, &bus_bindings);
+    hash = fnv_u64(hash, events->params != NULL);
+    hash = fnv_u64(hash, ((uint64_t)params << 32) | switches);
+    hash = fnv_u64(hash, bus_bindings);
+    hash = fnv_u64(hash, events->music != NULL);
+    hash = fnv_u64(hash, events->cluster != NULL ? su_audio_cluster_capacity(events->cluster) : 0u);
+    hash = fnv_u64(hash, events->cluster_inputs);
+    hash = fnv_u64(hash, events->bed_count);
+    su_audio_scene_capacity(events->scene, &emitters, &curves, &curve_count);
+    hash = fnv_u64(hash, ((uint64_t)emitters << 32) | curves);
+    hash = fnv_u64(hash, curve_count);
+    memcpy(&knee_bits, &events->limiter_knee, sizeof knee_bits);
+    hash = fnv_u64(hash, knee_bits);
+    return hash;
+}
+
+static void instance_io(SuAudioStateIo *io, EventInstance *instance) {
+    SU_STATE(io, instance->generation);
+    SU_STATE(io, instance->state);
+    SU_STATE(io, instance->count);
+    SU_STATE(io, instance->scope);
+    SU_STATE(io, instance->order);
+    SU_STATE(io, instance->emitter);
+}
+
+static void leaf_io(SuAudioStateIo *io, EventLeaf *leaf) {
+    SU_STATE(io, leaf->data);
+    SU_STATE(io, leaf->voice_desc.gain);
+    SU_STATE(io, leaf->voice_desc.pitch);
+    SU_STATE(io, leaf->voice_desc.flags);
+    SU_STATE(io, leaf->voice_desc.pos);
+    SU_STATE(io, leaf->voice_desc.vel);
+    SU_STATE(io, leaf->voice_desc.min_distance);
+    SU_STATE(io, leaf->voice_desc.max_distance);
+    SU_STATE(io, leaf->voice_desc.rolloff);
+    SU_STATE(io, leaf->voice_desc.doppler);
+    SU_STATE(io, leaf->at);
+    SU_STATE(io, leaf->state);
+    SU_STATE(io, leaf->lowpass_hz);
+    SU_STATE(io, leaf->logical);
+    SU_STATE(io, leaf->ctl_gain);
+    SU_STATE(io, leaf->ctl_pitch);
+    SU_STATE(io, leaf->ctl_dir);
+    SU_STATE(io, leaf->ctl_distance);
+}
+
+/* Runtime section. On load, leaves get their clips from fresh pins. */
+static uint32_t events_io(SuAudioEvents *events, SuAudioStateIo *io) {
+    uint32_t slot;
+    uint32_t index;
+    SU_STATE(io, events->order);
+    SU_STATE(io, events->trigger_seq);
+    SU_STATE(io, events->cursor);
+    SU_STATE(io, events->stats);
+    SU_STATE(io, events->stop_count);
+    if (io->failed || events->stop_count > events->desc.command_capacity) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    for (index = 0; index < events->stop_count; index++) {
+        SU_STATE(io, events->stops[index]);
+    }
+    SU_STATE(io, events->cached);
+    SU_STATE(io, events->consumed);
+    SU_STATE(io, events->quantum);
+    for (slot = 0; slot < events->desc.max_instances; slot++) {
+        EventInstance *instance = &events->instances[slot];
+        instance_io(io, instance);
+        if (io->failed || instance->count > events->desc.max_leaves_per_instance) {
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        if (instance->state == 0u) {
+            if (!io->save && io->data != NULL) {
+                instance->count = 0u;
+            }
+            continue;
+        }
+        for (index = 0; index < instance->count; index++) {
+            EventLeaf *leaf = &instance->leaves[index];
+            leaf_io(io, leaf);
+            if (!io->save && io->data != NULL && !io->failed) {
+                const SuAudioClip *clip = NULL;
+                if (su_audio_asset_acquire(events->assets, leaf->data.asset, &clip) != SU_OK) {
+                    return SU_E_SCHEMA_MISMATCH;
+                }
+                leaf->clip = clip;
+                leaf->voice_desc.clip = clip;
+                leaf->voice_desc.stream = NULL;
+                if (events->leaf_by_voice != NULL && leaf->state != 0u && leaf->state != 2u && leaf->logical != 0u
+                    && (uint32_t)leaf->logical - 1u < events->leaf_map_size) {
+                    events->leaf_by_voice[(uint32_t)leaf->logical - 1u] = leaf;
+                }
+            }
+        }
+    }
+    return io->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
+}
+
+/* Walks the runtime section of a blob into temporaries and checks every leaf asset is resident. */
+static uint32_t scan_assets(SuAudioEvents *events, const uint8_t *body, size_t bytes) {
+    SuAudioStateIo io;
+    SuAudioEvents copy = *events;
+    EventStop stop;
+    EventInstance instance;
+    EventLeaf leaf;
+    float quantum[SU_AUDIO_EVENT_QUANTUM * 2u];
+    uint32_t slot;
+    uint32_t index;
+    memset(&io, 0, sizeof io);
+    io.data = (uint8_t *)(uintptr_t)body;
+    io.capacity = bytes;
+    SU_STATE(&io, copy.order);
+    SU_STATE(&io, copy.trigger_seq);
+    SU_STATE(&io, copy.cursor);
+    SU_STATE(&io, copy.stats);
+    SU_STATE(&io, copy.stop_count);
+    if (io.failed || copy.stop_count > events->desc.command_capacity) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    for (index = 0; index < copy.stop_count; index++) {
+        SU_STATE(&io, stop);
+    }
+    SU_STATE(&io, copy.cached);
+    SU_STATE(&io, copy.consumed);
+    SU_STATE(&io, quantum);
+    for (slot = 0; slot < events->desc.max_instances; slot++) {
+        instance_io(&io, &instance);
+        if (io.failed || instance.count > events->desc.max_leaves_per_instance) {
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        if (instance.state == 0u) {
+            continue;
+        }
+        for (index = 0; index < instance.count; index++) {
+            const SuAudioClip *clip = NULL;
+            leaf_io(&io, &leaf);
+            if (io.failed || su_audio_asset_acquire(events->assets, leaf.data.asset, &clip) != SU_OK) {
+                return SU_E_SCHEMA_MISMATCH;
+            }
+            (void)su_audio_asset_release(events->assets, leaf.data.asset);
+        }
+    }
+    return io.failed ? SU_E_SCHEMA_MISMATCH : SU_OK;
+}
+
+static const SuAudioClip *resolve_tag(void *user, uint64_t tag) {
+    SuAudioEvents *events = (SuAudioEvents *)user;
+    SuAudioAssetRef ref;
+    const SuAudioClip *clip = NULL;
+    ref.id = (uint32_t)tag;
+    ref.generation = (uint32_t)(tag >> 32);
+    if (su_audio_asset_acquire(events->assets, ref, &clip) != SU_OK) {
+        return NULL;
+    }
+    (void)su_audio_asset_release(events->assets, ref); /* the owning leaf holds the pin */
+    return clip;
+}
+
+static uint32_t body_io(SuAudioEvents *events, SuAudioStateIo *io) {
+    uint32_t status = events_io(events, io);
+    if (status == SU_OK) {
+        status = su_audio_voice_pool_state(events->pool, io, resolve_tag, events);
+    }
+    if (status == SU_OK && events->buses != NULL) {
+        status = su_audio_bus_tree_state(events->buses, io);
+    }
+    if (status == SU_OK && events->params != NULL) {
+        status = su_audio_params_state(events->params, io);
+    }
+    if (status == SU_OK && events->music != NULL) {
+        status = su_audio_music_state_io(events->music, io);
+    }
+    if (status == SU_OK && events->cluster != NULL) {
+        status = su_audio_cluster_state(events->cluster, io);
+    }
+    if (status == SU_OK && events->scene != NULL) {
+        status = su_audio_scene_state(events->scene, io);
+    }
+    return status;
+}
+
+uint32_t su_audio_events_checkpoint_save(SuAudioEvents *events, void *out, size_t capacity, size_t *written) {
+    SuAudioStateIo io;
+    uint8_t *p = (uint8_t *)out;
+    uint32_t status;
+    size_t body;
+    if (written != NULL) {
+        *written = 0u;
+    }
+    if (events == NULL || written == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (events->pool == NULL) {
+        return SU_E_UNSUPPORTED_METHOD;
+    }
+    memset(&io, 0, sizeof io);
+    io.save = 1;
+    status = body_io(events, &io);
+    if (status != SU_OK) {
+        return status;
+    }
+    body = io.pos;
+    *written = SU_AUDIO_EVENTS_CHECKPOINT_HEADER + body;
+    if (out == NULL) {
+        return SU_OK;
+    }
+    if (capacity < *written) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memset(p, 0, SU_AUDIO_EVENTS_CHECKPOINT_HEADER);
+    memset(&io, 0, sizeof io);
+    io.save = 1;
+    io.data = p + SU_AUDIO_EVENTS_CHECKPOINT_HEADER;
+    io.capacity = body;
+    status = body_io(events, &io);
+    if (status != SU_OK) {
+        return status;
+    }
+    put_u32(p, CHECKPOINT_MAGIC);
+    put_u32(p + 4, SU_AUDIO_EVENTS_CHECKPOINT_VERSION);
+    put_u32(p + 8, SU_AUDIO_EVENTS_CHECKPOINT_HEADER);
+    put_u64(p + 16, layout_fingerprint(events));
+    put_u64(p + 24, body);
+    put_u64(p + 32, fnv_bytes(UINT64_C(0xcbf29ce484222325), p + SU_AUDIO_EVENTS_CHECKPOINT_HEADER, body));
+    put_u64(p + 40, events->stats.render_clock);
+    put_u64(p + 48, events->stats.delivered_frames);
+    return SU_OK;
+}
+
+uint32_t su_audio_events_checkpoint_info(const void *data, size_t bytes, SuAudioEventsCheckpointInfo *out) {
+    const uint8_t *p = (const uint8_t *)data;
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memset(out, 0, sizeof *out);
+    if (p == NULL || bytes < SU_AUDIO_EVENTS_CHECKPOINT_HEADER || get_u32(p) != CHECKPOINT_MAGIC
+        || get_u32(p + 8) != SU_AUDIO_EVENTS_CHECKPOINT_HEADER) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    out->version = get_u32(p + 4);
+    out->fingerprint = get_u64(p + 16);
+    out->body_bytes = get_u64(p + 24);
+    out->clock = get_u64(p + 40);
+    out->delivered_frames = get_u64(p + 48);
+    if (out->version != SU_AUDIO_EVENTS_CHECKPOINT_VERSION
+        || out->body_bytes != (uint64_t)(bytes - SU_AUDIO_EVENTS_CHECKPOINT_HEADER)
+        || get_u64(p + 32) != fnv_bytes(UINT64_C(0xcbf29ce484222325), p + SU_AUDIO_EVENTS_CHECKPOINT_HEADER,
+            bytes - SU_AUDIO_EVENTS_CHECKPOINT_HEADER)) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    return SU_OK;
+}
+
+uint32_t su_audio_events_checkpoint_load(SuAudioEvents *events, const void *data, size_t bytes) {
+    SuAudioEventsCheckpointInfo info;
+    SuAudioStateIo io;
+    const uint8_t *p = (const uint8_t *)data;
+    uint32_t status;
+    uint32_t slot;
+    if (events == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (events->pool == NULL) {
+        return SU_E_UNSUPPORTED_METHOD;
+    }
+    status = su_audio_events_checkpoint_info(data, bytes, &info);
+    if (status != SU_OK) {
+        return status;
+    }
+    if (info.fingerprint != layout_fingerprint(events)) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    status = scan_assets(events, p + SU_AUDIO_EVENTS_CHECKPOINT_HEADER, (size_t)info.body_bytes);
+    if (status != SU_OK) {
+        return status;
+    }
+    /* drop the current pins; the load pins the saved leaves */
+    for (slot = 0; slot < events->desc.max_instances; slot++) {
+        EventInstance *instance = &events->instances[slot];
+        uint32_t index;
+        for (index = 0; instance->state != 0u && index < instance->count; index++) {
+            (void)su_audio_asset_release(events->assets, instance->leaves[index].data.asset);
+        }
+        instance->count = 0u;
+        instance->state = 0u;
+    }
+    if (events->leaf_by_voice != NULL) {
+        memset(events->leaf_by_voice, 0, (size_t)events->leaf_map_size * sizeof *events->leaf_by_voice);
+    }
+    memset(&io, 0, sizeof io);
+    io.data = (uint8_t *)(uintptr_t)(p + SU_AUDIO_EVENTS_CHECKPOINT_HEADER);
+    io.capacity = (size_t)info.body_bytes;
+    status = body_io(events, &io);
+    if (status == SU_OK && io.pos != io.capacity) {
+        status = SU_E_SCHEMA_MISMATCH;
+    }
+    if (status != SU_OK) {
+        events->stats.render_failures++;
+    }
+    return status;
 }
