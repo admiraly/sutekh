@@ -143,6 +143,35 @@ uint32_t su_audio_voice_pool_render(SuAudioVoicePool *pool, float *out, uint32_t
 void su_audio_voice_pool_stats(const SuAudioVoicePool *pool, SuAudioVoiceStats *out);
 const char *su_audio_voice_reason_name(uint32_t reason);
 
+/* ---- Integrated playback controls (versioned additions) ----
+ * A voice given controls renders through a fractional cursor (linear
+ * interpolation), an optional one-pole low-pass and per-channel gains instead
+ * of the 1x balance-pan path above. Gains ramp linearly across each quantum
+ * from the previous values, the pitch glides across the quantum and the
+ * low-pass coefficient glides over 10 ms, so control changes never step.
+ * Steal fade tails carry the same state. Voices without controls are
+ * unchanged. */
+typedef struct SuAudioVoiceControls {
+    uint32_t struct_size;
+    float gain_left;               /* linear, includes desc.gain, attenuation and pan */
+    float gain_right;
+    float pitch;                   /* source frames per output frame, (0, 64] */
+    float lowpass_hz;              /* 0 or >= Nyquist: off */
+    uint32_t mono_mix;             /* nonzero: stereo sources are downmixed before the gains (spatial voices) */
+} SuAudioVoiceControls;
+
+uint32_t su_audio_voice_set_controls(SuAudioVoicePool *pool, SuAudioLogicalVoice voice,
+                                     const SuAudioVoiceControls *controls);
+/* Admits a voice that starts exactly at absolute pool frame start_frame (>= the pool clock). It is ranked at
+ * the boundary of the quantum containing start_frame and renders from that frame on. */
+uint32_t su_audio_voice_add_at(SuAudioVoicePool *pool, const SuAudioLogicalDesc *desc, uint64_t start_frame,
+                               SuAudioLogicalVoice *out);
+/* Stops a voice exactly at absolute pool frame (>= the pool clock): audio up to that frame is unchanged, then
+ * the release (0 = policy release; with a zero policy release the voice ends at that frame) begins. A stop at or
+ * before the voice's start removes it silently. */
+uint32_t su_audio_voice_stop_at(SuAudioVoicePool *pool, SuAudioLogicalVoice voice, uint64_t frame,
+                                uint32_t release_frames);
+
 #ifdef __cplusplus
 }
 #endif

@@ -73,6 +73,9 @@ cursors and filter state, never pointers from native prepared views.
 
 ## Acceptance boundaries
 
+The integrated runtime that wires these components together is described in
+[EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md).
+
 Component notes contain exact APIs and tests. Synthetic PCM is the only public
 fixture source. Offline mastering is separate from the final safety limiter.
 Device/decoder availability, unsupported DSP controls, remaining policy work
