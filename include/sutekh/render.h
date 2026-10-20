@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 8u
+#define SU_RENDER_API_VERSION 9u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -298,6 +298,49 @@ typedef struct SuRenderFxMaterialDesc {
     float soft_distance;
 } SuRenderFxMaterialDesc;
 
+#define SU_PARTICLE_MAX 131072u
+#define SU_PARTICLE_EMITTER_MAX 16u
+#define SU_PARTICLE_POINT 0u
+#define SU_PARTICLE_BOX 1u
+#define SU_PARTICLE_SPHERE 2u
+#define SU_PARTICLE_CONE 3u
+#define SU_PARTICLE_LOCAL 1u
+#define SU_PARTICLE_AXIS 2u
+#define SU_PARTICLE_ATTRACTOR_MAX 4u
+
+typedef struct SuParticleAttractor {
+    SuVec3f position;
+    float strength, radius;
+} SuParticleAttractor;
+
+typedef struct SuParticleEmitter {
+    uint32_t seed, capacity, time_tick, lifetime_ticks;
+    uint32_t rate, burst, shape, flags;
+    SuWorldPos origin;
+    SuMat4f transform_start, transform_end;
+    uint32_t transform_ticks;
+    SuVec3f extent, velocity, velocity_random, gravity;
+    float drag, turbulence;
+    SuParticleAttractor attractors[SU_PARTICLE_ATTRACTOR_MAX];
+    uint32_t attractor_count;
+    float size[4];
+    float colour[4][4];
+    SuVec3f axis;
+    float aspect;
+    uint32_t atlas_cols, atlas_rows, atlas_ticks;
+    SuFxBatch material;
+} SuParticleEmitter;
+
+typedef struct SuParticleState {
+    SuVec3f position, velocity;
+    float size, colour[4];
+    uint32_t id, age_ticks, alive;
+} SuParticleState;
+
+SU_RENDER_API uint32_t su_particle_validate(const SuParticleEmitter *emitter);
+SU_RENDER_API uint32_t su_particle_count(const SuParticleEmitter *emitter, uint32_t *first_id, uint32_t *dropped);
+SU_RENDER_API uint32_t su_particle_evaluate(const SuParticleEmitter *emitter, uint32_t id, SuParticleState *out);
+
 /* A batch covering the vertices written to buffer since first_vertex (take first_vertex = buffer->count before
  * adding the sprites of one texture). soft_distance and flags are 0; set them on the result. */
 SU_RENDER_API SuFxBatch su_fx_batch(SuRenderHandle texture, uint32_t blend, uint32_t wrap_u, uint32_t wrap_v,
@@ -404,6 +447,7 @@ typedef struct SuRenderDeviceInfo {
                                     * exposure need. 0: SuRenderPost requests are ignored (plain tonemap). */
     uint32_t bc_textures;          /* 1: BC1..BC7 (BC6H included) textures are sampled natively; 0: decode on the CPU
                                     * (su_bc6h_decode_block, su_dds_decode_rgba32f) and upload RGBA16F */
+    uint32_t gpu_particles;
 } SuRenderDeviceInfo;
 
 /* Lists the Vulkan physical devices. *count receives the number found (all of them, even beyond cap).
@@ -853,6 +897,8 @@ typedef struct SuRenderFrameDesc {
     uint32_t flame_count;
     const SuRenderPointLight *point_lights;
     uint32_t point_light_count;
+    const SuParticleEmitter *particle_emitters;
+    uint32_t particle_emitter_count;
 } SuRenderFrameDesc;
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object
@@ -922,6 +968,7 @@ typedef struct SuRenderStats {
     float shadow_cascade_texel[4]; /* world units per texel of each cascade */
     uint32_t haze_volumes_drawn;
     uint32_t flames_drawn, flames_skipped, flame_draws;
+    uint32_t particles_alive, particles_dropped, particle_emitters_drawn, particle_draws;
 } SuRenderStats;
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given
@@ -935,6 +982,8 @@ SU_RENDER_API const char *su_render_last_error(const SuRenderer *r);
 
 /* Offscreen only: copies the last frame's colour (RGBA8, rows top to bottom, width * height * 4 bytes). */
 SU_RENDER_API uint32_t su_render_readback(SuRenderer *r, uint8_t *rgba, size_t cap);
+SU_RENDER_API uint32_t su_render_particles_readback(SuRenderer *r, uint32_t emitter_index,
+                                                   SuParticleState *states, uint32_t capacity, uint32_t *count);
 /* Writes RGBA8 pixels as a binary PPM (P6, alpha dropped). */
 SU_RENDER_API uint32_t su_render_write_ppm(const char *path, const uint8_t *rgba, uint32_t width, uint32_t height);
 
