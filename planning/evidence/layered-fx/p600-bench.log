@@ -1,0 +1,8 @@
+rendering on: Quadro P600 (discrete)
+layered_fx_bench: 1024x1024, 16 full-screen overlapping quads/instances, 128x128 RGBA8 textures, 20 warmup + 120 samples per mode, GPU timestamps, no readback
+empty gpu_ms min=0.524640 median=0.963232 p95=2.873952 cpu_ms median=0.055700 p95=0.124800
+quad_1_layer gpu_ms min=3.628320 median=4.057920 p95=29.591232 cpu_ms median=0.098700 p95=0.165700
+quad_3_layers gpu_ms min=5.446240 median=6.157632 p95=31.223360 cpu_ms median=0.127450 p95=0.184300
+mesh_1_layer gpu_ms min=3.634496 median=4.051200 p95=29.581600 cpu_ms median=0.116050 p95=0.189800
+mesh_3_layers gpu_ms min=5.435488 median=6.111232 p95=31.508416 cpu_ms median=0.117450 p95=0.180900
+test_render_texfx: 2740 checks, 0 failures

@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 4u
+#define SU_RENDER_API_VERSION 7u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -266,6 +266,19 @@ typedef uint64_t SuRenderHandle;   /* a renderer resource (see "GPU resources" b
 #define SU_FX_WRAP_MIRROR 2u
 #define SU_FX_BATCH_SORT 0x1u              /* sort this batch's quads back to front with the other sorted batches */
 
+typedef struct SuFxUvTransform {
+    float scale[2];
+    float offset[2];
+    float speed[2];
+} SuFxUvTransform;
+
+typedef struct SuFxLayers {
+    SuRenderHandle textures[3];
+    SuFxUvTransform uv[3];
+    uint32_t atlas_cols, atlas_rows, atlas_frame;
+    float angular_fade;
+} SuFxLayers;
+
 typedef struct SuFxBatch {
     SuRenderHandle texture;            /* a READY 2D texture */
     uint32_t blend;                    /* SU_FX_BLEND_* */
@@ -274,7 +287,16 @@ typedef struct SuFxBatch {
     uint32_t vertex_count;             /* a multiple of 3 */
     float soft_distance;               /* world units; > 0: soft particles (see above); 0 = hard, as before */
     uint32_t flags;                    /* SU_FX_BATCH_*; 0 = drawn in batch order, as before */
+    SuFxLayers layers;
 } SuFxBatch;
+
+typedef struct SuRenderFxMaterialDesc {
+    SuFxLayers layers;
+    uint32_t blend;
+    uint32_t two_sided;
+    uint32_t wrap_u, wrap_v;
+    float soft_distance;
+} SuRenderFxMaterialDesc;
 
 /* A batch covering the vertices written to buffer since first_vertex (take first_vertex = buffer->count before
  * adding the sprites of one texture). soft_distance and flags are 0; set them on the result. */
@@ -509,7 +531,7 @@ typedef struct SuRenderMaterialDesc {
  *   direct light: the same GGX / Smith / Schlick / Lambert terms as PBR-lite, with A, R, M, F0 above
  *   ambient = (diffuse_env(n) * A * (1 - M) + specular_env(reflect) * (F0 * ab.x + ab.y)) * light.ambient * ao
  *   glow    = glow map.rgb * T * I * object.emissive      (HDR, so bloom picks it up; AO, dirt and light do not touch it)
- * With layer_count 0 and dirt_amount 0 the result is the PBR-lite result for the same A, R, M (zero layers = base).
+ * With runtime extensions disabled, layer_count 0 and dirt_amount 0 give the PBR-lite result for the same A, R, M.
  * (ab.x, ab.y) is the split-sum environment BRDF scale and bias, Karis' analytic fit (the same as PBR-lite).
  *
  * Image-based ambient: with SuRenderFrameDesc.env set, diffuse_env is the cube's roughest mip (a GGX alpha = 1
@@ -519,11 +541,28 @@ typedef struct SuRenderMaterialDesc {
  * PBR-lite does. Both are multiplied by env_intensity (0 = 1).
  *
  * object.emissive multiplies the glow (a per-instance glow multiplier: pulse lights and engines with it); 0 = no glow. */
+#define SU_PAINT_SLOT_SPECULAR 8u
+#define SU_PAINT_SLOT_DETAIL_MATERIAL 9u
+#define SU_PAINT_SLOT_DETAIL_NORMAL 10u
+#define SU_PAINT_SLOT_DETAIL_MASK 11u
+#define SU_RENDER_PAINT_SLOT_COUNT 12u
+#define SU_PAINT_NORMAL_Z_ONE 1u
+#define SU_PAINT_DETAIL_MATERIAL 2u
+#define SU_PAINT_DETAIL_NORMAL_DARKEN 4u
+
 typedef struct SuRenderPaintDesc {
     SuAssetMaterial factors;           /* base_color, metallic, roughness, normal_scale, occlusion_strength, emissive,
                                         * emissive_strength, alpha_mode, alpha_cutoff, double_sided; texture ids unused */
     SuAssetPaint paint;                /* texture ids unused; tex_info selects UV set and wrap modes */
-    SuRenderHandle textures[SU_PAINT_SLOT_COUNT]; /* 0 = none */
+    SuRenderHandle textures[SU_RENDER_PAINT_SLOT_COUNT]; /* 0 = none */
+    uint32_t extra_tex_info[4];
+    float specular_factor[3];
+    uint32_t specular_channels;
+    uint32_t flags;
+    float detail_strength;
+    float detail_uv_scale[2];
+    float detail_rotation;
+    uint32_t detail_layer_mask;
     uint32_t overlay;
 } SuRenderPaintDesc;
 
@@ -555,6 +594,7 @@ typedef struct SuRenderModelNode {
 SU_RENDER_API uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_texture_create(SuRenderer *r, const SuRenderTextureDesc *d, SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d, SuRenderHandle *out);
+SU_RENDER_API uint32_t su_render_fx_material_create(SuRenderer *r, const SuRenderFxMaterialDesc *d, SuRenderHandle *out);
 /* A layered paint material (see above). SU_E_INVALID_ARGUMENT for an unknown texture handle, a texture of the wrong
  * colour space for its slot, or invalid paint parameters (layer count, order, channels, non-finite values). */
 SU_RENDER_API uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc *d, SuRenderHandle *out);
@@ -726,6 +766,34 @@ typedef struct SuRenderPost {
     float exposure_max;                /* 0 = 32 */
 } SuRenderPost;
 
+#define SU_HAZE_ELLIPSOID 0u
+#define SU_HAZE_BOX 1u
+#define SU_HAZE_ADDITIVE 0u
+#define SU_HAZE_OVER 1u
+#define SU_HAZE_SHADOW 1u
+#define SU_HAZE_SCATTER 0u
+#define SU_HAZE_CHORD 1u
+#define SU_HAZE_MAX_VOLUMES 1024u
+
+typedef struct SuHazeVolume {
+    SuWorldPos pos;
+    SuMat4f transform;
+    float color[3];
+    float density;
+    float falloff;
+    float sun;
+    uint32_t shape;
+    uint32_t blend;
+    uint32_t flags;
+    uint32_t response;
+    float chord_power;
+    float source_brightness;
+    float source_size;
+} SuHazeVolume;
+
+SU_RENDER_API float su_haze_optical_depth(const SuHazeVolume *volume, SuWorldPos eye, SuVec3f direction,
+                                         float max_distance);
+
 typedef struct SuRenderFlame {
     SuMat4f transform;
     float colour[4];
@@ -769,6 +837,9 @@ typedef struct SuRenderFrameDesc {
                                         * light.up with su_quatf_axis_angle */
     float sky_lod;                     /* mip level sampled (0 = sharpest); a prefiltered env cube gets blurrier with it */
     SuRenderShadow shadow;             /* all zero: no sun shadows (see SuRenderShadow) */
+    float time_seconds;
+    const SuHazeVolume *haze;
+    uint32_t haze_count;
     const SuRenderFlame *flames;
     uint32_t flame_count;
 } SuRenderFrameDesc;
@@ -838,6 +909,7 @@ typedef struct SuRenderStats {
     /* ---- sun shadow cascades ---- */
     uint32_t shadow_cascades;      /* cascades of the last frame (1 for the single map, 0 when off) */
     float shadow_cascade_texel[4]; /* world units per texel of each cascade */
+    uint32_t haze_volumes_drawn;
     uint32_t flames_drawn, flames_skipped, flame_draws;
 } SuRenderStats;
 

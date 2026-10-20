@@ -985,6 +985,33 @@
         "Differential against reference VM across row tails and dead rows; capability fallback. Requires M1 owner acceptance (OD-11)."
       ],
       "status": "planned"
+    },
+    {
+      "id": "M5-69",
+      "milestone": "M5",
+      "goal": "Analytic depth-clipped haze volumes with camera-relative transforms (issue #69).",
+      "depends_on": [],
+      "base_revision": "478c7366c2cab7c85b8b1983a4b501d53af2aec9",
+      "write_scope": [
+        "include/sutekh/render.h",
+        "src/render/",
+        "tests/render/",
+        "cmake/SutekhPresentation.cmake",
+        "tools/compile_shaders.py",
+        "docs/ANALYTIC_HAZE.md",
+        "docs/RENDERING_AND_ASSETS.md",
+        "planning/handoffs/2026-10-20-haze-volume.md",
+        "planning/evidence/haze/"
+      ],
+      "read_scope": ["AGENTS.md", "ENGINE_CONSTITUTION.md", "docs/RENDERING_AND_ASSETS.md"],
+      "change_class": "render_assets",
+      "requires_native_validation": true,
+      "acceptance": [
+        "Closed-form sphere/ellipsoid/box density integration, scene-depth clipping, additive/over and optional sun shadows.",
+        "CPU and Vulkan pixel tests, P600 and Mesa lavapipe, zero validation messages; zero-count frames unchanged.",
+        "P600 1280x720 measurements for 1, 8 and 32 volumes, with source/artifact hashes and limitations recorded."
+      ],
+      "status": "verified"
     }
   ]
 }

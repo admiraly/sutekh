@@ -11,6 +11,9 @@
 
 static const DrawItem *g_sort_items; /* qsort context (one renderer per thread) */
 
+static void fx_mesh_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t first, uint32_t run,
+                         const SuRenderFrameDesc *frame);
+
 static int cmp_items(const void *a, const void *b) {
     const DrawItem *x = &g_sort_items[*(const uint32_t *)a];
     const DrawItem *y = &g_sort_items[*(const uint32_t *)b];
@@ -210,8 +213,8 @@ static void paint_push(SuRenderer *r, uint32_t mat_index, uint32_t forced, MatPu
     p->misc[1] = forced != 0u ? 2.0f : (float)m->f.alpha_mode;
     p->misc[2] = m->f.emissive_strength;
     p->misc[3] = (m->bound_ready & (1u << SU_PAINT_SLOT_NORMAL)) != 0u ? 1.0f : 0.0f;
-    for (k = 0; k < SU_PAINT_SLOT_COUNT; k++) {
-        if ((m->paint.tex_info[k] & 0xFFu) == 1u) {
+    for (k = 0; k < SU_RENDER_PAINT_SLOT_COUNT; k++) {
+        if ((m->paint_tex_info[k] & 0xFFu) == 1u) {
             p->uvset[0] |= 1u << k;
         }
     }
@@ -253,7 +256,8 @@ static void mat_push(SuRenderer *r, uint32_t mat_index, uint32_t forced, MatPush
     }
 }
 
-void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t item_count, int blend_pass) {
+void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t item_count, int blend_pass,
+                       const SuRenderFrameDesc *frame) {
     uint32_t i = 0;
     uint32_t bound_pipe = UINT32_MAX;
     uint32_t bound_kind = UINT32_MAX;
@@ -276,9 +280,18 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
             }
             run++;
         }
+        if (it->kind == 2u) {
+            fx_mesh_draw(r, fr, cmd, i, run, frame);
+            bound_kind = bound_pipe = bound_mesh = UINT32_MAX;
+            bound_mat = UINT32_MAX - 1u;
+            i += run;
+            continue;
+        }
         if (it->pipe != bound_pipe || it->kind != bound_kind) {
+            VkPipelineLayout layout = it->kind != 0u ? r->paint_layout : r->scene_layout;
             r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                    it->kind != 0u ? r->paint_pipe[it->pipe] : r->pbr_pipe[it->pipe]);
+            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &fr->frame_set, 0, NULL);
             if (it->kind != bound_kind) {
                 bound_mat = UINT32_MAX - 1u; /* the layouts differ from set 1 on: bind the material again */
             }
@@ -319,6 +332,39 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
 }
 
 /* ---------- sun shadows ---------- */
+
+static void fx_mesh_draw(SuRenderer *renderer, Frame *fr, VkCommandBuffer cmd, uint32_t first, uint32_t run,
+                         const SuRenderFrameDesc *frame) {
+    const DrawItem *draw = &renderer->items[renderer->order[first]];
+    const SuRenderFxMaterialDesc *material;
+    const MeshRes *mesh;
+    const SubGpu *sub;
+    VkDescriptorSet sets[3];
+    VkBuffer buffers[2];
+    VkDeviceSize offsets[2] = {0, 0};
+    FxPush push;
+    material = &renderer->res[draw->mat].u.mat.fx;
+    sets[0] = fr->frame_set;
+    sets[1] = su_rvk_fx_set(renderer, fr, &material->layers, 0, material->wrap_u, material->wrap_v);
+    sets[2] = renderer->depth_in_set;
+    if (sets[1] == VK_NULL_HANDLE) {
+        renderer->stats.fx_batches_skipped++;
+        return;
+    }
+    su_rvk_fx_push(&push, &material->layers, frame->time_seconds, material->soft_distance, frame->camera.near_z,
+                   material->wrap_u, material->wrap_v);
+    mesh = &renderer->res[draw->mesh].u.mesh;
+    sub = &mesh->subs[draw->sub];
+    buffers[0] = mesh->vb.buf;
+    buffers[1] = fr->draw_inst.buf;
+    renderer->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer->fxmesh_pipe[draw->pipe - PIPE_BLEND]);
+    renderer->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer->fxtex_layout, 0, 3, sets, 0, NULL);
+    renderer->f.vkCmdPushConstants(cmd, renderer->fxtex_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);
+    renderer->f.vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+    renderer->f.vkCmdBindIndexBuffer(cmd, mesh->ib.buf, 0, VK_INDEX_TYPE_UINT32);
+    renderer->f.vkCmdDrawIndexed(cmd, sub->index_count, run, sub->first_index, 0, first);
+    renderer->stats.draws++;
+}
 
 /* The object's scale * rotation (column-major 3x3), its camera-relative position, and its bounding sphere. 0 when the
  * object is not drawn at all (unknown model, invisible, invalid scale3). */
@@ -637,6 +683,32 @@ uint32_t su_rvk_shadow_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *
             b[2 * k + 1] = p[k] + rad > b[2 * k + 1] ? p[k] + rad : b[2 * k + 1];
         }
         far_t = dot3(cc, fwd) + rad > far_t ? dot3(cc, fwd) + rad : far_t;
+    }
+    for (o = 0; o < f->haze_count; o++) {
+        const SuHazeVolume *volume = &f->haze[o];
+        SuVec3f offset;
+        uint32_t corner;
+        if (volume->density <= 0.0f || (volume->flags & SU_HAZE_SHADOW) == 0u) continue;
+        offset = su_wpos_delta(volume->pos, f->camera.pos);
+        for (corner = 0; corner < 8u; corner++) {
+            SuVec3f point = {(corner & 1u) != 0u ? 1.0f : -1.0f, (corner & 2u) != 0u ? 1.0f : -1.0f,
+                            (corner & 4u) != 0u ? 1.0f : -1.0f};
+            float position[3];
+            float projected[3];
+            int axis;
+            point = su_mat4f_transform_point(volume->transform, point, NULL);
+            position[0] = point.x + offset.x;
+            position[1] = point.y + offset.y;
+            position[2] = point.z + offset.z;
+            projected[0] = dot3(position, lx);
+            projected[1] = dot3(position, ly);
+            projected[2] = dot3(position, lz);
+            for (axis = 0; axis < 3; axis++) {
+                b[2 * axis] = fminf(b[2 * axis], projected[axis]);
+                b[2 * axis + 1] = fmaxf(b[2 * axis + 1], projected[axis]);
+            }
+            far_t = fmaxf(far_t, dot3(position, fwd));
+        }
     }
     if (b[0] > b[1]) {
         return 0; /* nothing visible receives a shadow */

@@ -1,0 +1,5 @@
+device=Quadro P600 driver=2441347072 timestamps=1 validation=off size=1280x720 samples=120 warmup=20
+volumes=0 gpu_ms[min/median/p95/max]=0.357984/0.358848/0.374080/0.883456 cpu_ms[median/p95]=0.104350/0.166900
+volumes=1 gpu_ms[min/median/p95/max]=0.606688/0.996352/1.007072/27.540672 cpu_ms[median/p95]=0.113100/0.194100
+volumes=8 gpu_ms[min/median/p95/max]=1.686720/2.096384/2.777856/3.968160 cpu_ms[median/p95]=0.114800/0.156300
+volumes=32 gpu_ms[min/median/p95/max]=5.209920/5.793664/30.604640/33.923680 cpu_ms[median/p95]=0.140250/0.190400
