@@ -18,9 +18,18 @@ read-only view (`src/audio/su_audio_event_view.h`, one appended accessor in
 `su_audio_event.c`); no runtime behaviour changes. Call it from the owner that
 serializes rendering, not from a device callback.
 
-Bus entries describe authored `bus_id` routing tags. No bus mixing, meters per
-bus, voice virtualisation, parameters or clustering exist in this build; the
-acceptance manifest records those as gaps until their components integrate.
+Bus entries describe authored `bus_id` routing tags of event voices. The voice
+pool (A05), bus tree (A06), parameters/music (A07) and clustering (A08) are
+standalone components composed by the owner; they are not wired into the event
+runtime, and the acceptance manifest says so.
+
+Component diagnostics: `su_audio_inspect_bus_json` (per-bus peak, RMS, true
+peak, fader, duck and window attenuation in execution order),
+`su_audio_inspect_voice_pool_json` (physical/virtual counts, peaks, steals,
+wakes and per-reason transitions), `su_audio_inspect_cluster_json` (cluster
+stats and outputs) and `su_audio_inspect_params_json` (set/clamp/reject/late
+counts). Trace reason codes are `SU_AUDIO_TRACE_REASON_*` so this header
+coexists with the voice-policy reason enum.
 
 ## Telemetry
 
@@ -65,6 +74,22 @@ duplicate, unknown event and late reasons), truncated snapshots, matching
 source/artifact manifests and tamper rejection, no pointer/path text in
 serialized output, and one complete admitted event -> camera-spatialised ->
 bus-tagged -> offline export path.
+
+## Composed acceptance
+
+`test_audio_acceptance [export_dir]` runs the full owner-composed slice: the
+event stage renders committed events offline with camera spatialisation,
+telemetry and per-quantum inspection; the inspected voices (start sample, bus,
+asset, spatial gain, emitter distance) then drive one voice pool per bus with
+two physical shot voices (forcing virtualisation), a global parameter bound to
+the ambience bus fader (-12 dB from 0.5 s), a bus tree where shots duck
+ambience by up to 9 dB, and clustering of live emitter directions into at most
+two outputs. Pool rendering is chunked at 128 and 37 frames; both mixes are
+bit-identical. Exports: `event_trace.csv`, `event_stage.wav`,
+`acceptance.json`, `bus_meters.json`, `voice_pool_shots.json`,
+`clusters.json`, `params.json`, `composed.wav` and `composed.json`. Voice-pool
+admission aligns starts to 128-frame quanta, so the composed mix is not
+sample-identical to the event-stage mix.
 
 Measured on Windows 11 x64, Core i5-12400F, Clang 23.1.3 Debug: about 0.5 us
 per snapshot with 4 instances, 5 voices, 3 emitters and 3 buses; 2.2 KB JSON.

@@ -6,6 +6,10 @@
  * never pointers or file paths. Nothing here writes files. */
 
 #include "sutekh/audio_offline.h"
+#include "sutekh/audio_bus.h"
+#include "sutekh/audio_cluster.h"
+#include "sutekh/audio_parameter.h"
+#include "sutekh/audio_voice_policy.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,14 +20,14 @@ extern "C" {
 
 /* Stable reason codes for trace entries. */
 enum {
-    SU_AUDIO_REASON_OK = 0,
-    SU_AUDIO_REASON_POOL_FULL = 1,      /* instance pool, voice budget or stop queue full */
-    SU_AUDIO_REASON_DUPLICATE = 2,      /* commit sequence at or below the watermark */
-    SU_AUDIO_REASON_LATE = 3,           /* targets already rendered audio */
-    SU_AUDIO_REASON_STALE_HANDLE = 4,   /* instance/emitter handle no longer valid */
-    SU_AUDIO_REASON_GRAPH = 5,          /* unknown event, expansion or asset failure */
-    SU_AUDIO_REASON_INVALID = 6,
-    SU_AUDIO_REASON_COUNT = 7
+    SU_AUDIO_TRACE_REASON_OK = 0,
+    SU_AUDIO_TRACE_REASON_POOL_FULL = 1,      /* instance pool, voice budget or stop queue full */
+    SU_AUDIO_TRACE_REASON_DUPLICATE = 2,      /* commit sequence at or below the watermark */
+    SU_AUDIO_TRACE_REASON_LATE = 3,           /* targets already rendered audio */
+    SU_AUDIO_TRACE_REASON_STALE_HANDLE = 4,   /* instance/emitter handle no longer valid */
+    SU_AUDIO_TRACE_REASON_GRAPH = 5,          /* unknown event, expansion or asset failure */
+    SU_AUDIO_TRACE_REASON_INVALID = 6,
+    SU_AUDIO_TRACE_REASON_COUNT = 7
 };
 
 /* Telemetry entry kinds reuse SU_AUDIO_TRACE_* command kinds. */
@@ -47,7 +51,7 @@ typedef struct SuAudioTelemetryStats {
     uint64_t recorded;
     uint64_t dropped;
     uint64_t drained;
-    uint64_t reasons[SU_AUDIO_REASON_COUNT];
+    uint64_t reasons[SU_AUDIO_TRACE_REASON_COUNT];
 } SuAudioTelemetryStats;
 
 uint32_t su_audio_trace_begin(uint32_t capacity, SuAudioTelemetry **out);
@@ -59,8 +63,8 @@ uint32_t su_audio_trace_record(SuAudioTelemetry *telemetry, SuAudioTelemetryEntr
 uint32_t su_audio_trace_drain(SuAudioTelemetry *telemetry, SuAudioTelemetryEntry *out, uint32_t capacity,
     uint32_t *count);
 void su_audio_trace_stats(const SuAudioTelemetry *telemetry, SuAudioTelemetryStats *out);
-uint32_t su_audio_reason(uint32_t kind, uint32_t status, uint64_t sample_time, uint64_t render_clock);
-const char *su_audio_reason_name(uint32_t reason);
+uint32_t su_audio_trace_reason(uint32_t kind, uint32_t status, uint64_t sample_time, uint64_t render_clock);
+const char *su_audio_trace_reason_name(uint32_t reason);
 
 /* Posting wrapper that records the outcome. */
 uint32_t su_audio_inspect_post(SuAudioEvents *events, SuAudioTelemetry *telemetry, const SuAudioTrigger *trigger,
@@ -145,6 +149,16 @@ uint32_t su_audio_trace_json(const SuAudioTelemetryEntry *entries, uint32_t coun
     size_t *written);
 uint32_t su_audio_trace_csv(const SuAudioTelemetryEntry *entries, uint32_t count, char *out, size_t capacity,
     size_t *written);
+
+/* Component diagnostics. Bus meters are read in execution order (reset != 0
+ * restarts each meter window); voice pools and parameters report their stats
+ * with stable reason names. These components are composed by the owner; they
+ * are not wired into the event runtime. */
+uint32_t su_audio_inspect_bus_json(SuAudioBusTree *tree, int reset, char *out, size_t capacity, size_t *written);
+uint32_t su_audio_inspect_voice_pool_json(const SuAudioVoicePool *pool, char *out, size_t capacity,
+    size_t *written);
+uint32_t su_audio_inspect_cluster_json(const SuAudioCluster *cluster, char *out, size_t capacity, size_t *written);
+uint32_t su_audio_inspect_params_json(const SuAudioParams *params, char *out, size_t capacity, size_t *written);
 
 /* Source/artifact manifest for an offline export. Verifies that the WAV payload
  * is exactly the session's PCM (SU_E_SCHEMA_MISMATCH otherwise) and lists the
