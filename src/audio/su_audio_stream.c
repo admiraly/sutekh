@@ -1,7 +1,8 @@
 /* Streamed clips (sutekh/audio.h): a decoder (WAV or Ogg Vorbis, from a file or borrowed memory) plus a bounded
  * window of decoded frames. The mixer's render thread pulls frames through su_stream_frame; decoding happens in
  * chunks on that thread, so memory is the window plus the decoder state no matter how long the clip is, and the
- * output is a pure function of the command sequence (no worker timing). */
+ * output is a pure function of the command sequence (no worker timing). Opt-in async mode transfers decoder
+ * ownership to a worker; rendering only reads fixed PCM windows and publishes an atomic demand. */
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #define _POSIX_C_SOURCE 200809L /* fseeko/ftello under -std=c17 */
@@ -14,6 +15,9 @@
 #include <string.h>
 
 #include "su_audio_int.h"
+#include "sutekh/audio_stream_async.h"
+#include "platform/su_platform.h"
+#include "platform/su_thread.h"
 
 #ifdef _WIN32
 #define SU_FSEEK(f, o) _fseeki64((f), (long long)(o), SEEK_SET)
@@ -26,6 +30,16 @@
 #define DECODE_CHUNK 1024u
 #define DEFAULT_RING 16384u
 #define MIN_RING 2048u
+#define ASYNC_WINDOWS 2u
+#define WINDOW_EMPTY 0u
+#define WINDOW_READY 1u
+#define WINDOW_HELD 2u
+
+typedef struct SuAsyncWindow {
+    _Atomic uint32_t state;
+    _Atomic uint64_t base;
+    uint32_t count;
+} SuAsyncWindow;
 
 static void msgf(char *msg, const char *fmt, ...) {
     if (msg != NULL) {
@@ -235,7 +249,20 @@ struct SuAudioStream {
     _Atomic int in_use;
     _Atomic uint64_t decoded;
     _Atomic uint32_t seeks;
+    uint32_t mode;
+    SuThread worker;
+    _Atomic int worker_stop;
+    _Atomic uint64_t demand;
+    _Atomic uint64_t loop_demand;
+    _Atomic uint64_t underruns;
+    _Atomic uint64_t underrun_frames;
+    _Atomic uint64_t decode_errors;
+    int sample_missed;
+    SuAsyncWindow windows[ASYNC_WINDOWS];
+    SuAsyncWindow loop_window;
 };
+
+static void *stream_worker(void *arg);
 
 static uint32_t stream_make(SuAudioStream **out, uint32_t ring_frames, SuReader *r) {
     SuAudioStream *s;
@@ -268,6 +295,21 @@ static uint32_t stream_make(SuAudioStream **out, uint32_t ring_frames, SuReader 
     atomic_init(&s->in_use, 0);
     atomic_init(&s->decoded, 0u);
     atomic_init(&s->seeks, 0u);
+    atomic_init(&s->worker_stop, 0);
+    atomic_init(&s->demand, 0u);
+    atomic_init(&s->loop_demand, UINT64_MAX);
+    atomic_init(&s->underruns, 0u);
+    atomic_init(&s->underrun_frames, 0u);
+    atomic_init(&s->decode_errors, 0u);
+    {
+        uint32_t index;
+        for (index = 0; index < ASYNC_WINDOWS; index++) {
+            atomic_init(&s->windows[index].state, WINDOW_EMPTY);
+            atomic_init(&s->windows[index].base, UINT64_MAX);
+        }
+        atomic_init(&s->loop_window.state, WINDOW_EMPTY);
+        atomic_init(&s->loop_window.base, UINT64_MAX);
+    }
     *out = s;
     return SU_OK;
 }
@@ -337,6 +379,12 @@ uint32_t su_audio_stream_close(SuAudioStream *s) {
     }
     if (su_audio_stream_in_use(s)) {
         return SU_E_INVALID_ARGUMENT;
+    }
+    if (s->mode == SU_STREAM_ASYNC) {
+        atomic_store_explicit(&s->worker_stop, 1, memory_order_release);
+        if (su_thread_join(s->worker) != 0) {
+            return SU_E_WORKER_FAILED;
+        }
     }
     s->r.close(s->r.ctx);
     free(s->ring);
@@ -419,6 +467,10 @@ static void decode_more(SuAudioStream *s) {
 void su_stream_prepare_loop(SuAudioStream *s, uint64_t loop_start) {
     uint64_t resume = s->wend;
     uint32_t i;
+    if (s->mode == SU_STREAM_ASYNC) {
+        atomic_store_explicit(&s->loop_demand, loop_start, memory_order_release);
+        return;
+    }
     if (s->head_valid && s->head_start == loop_start) {
         return;
     }
@@ -437,11 +489,221 @@ void su_stream_prepare_loop(SuAudioStream *s, uint64_t loop_start) {
     atomic_fetch_add_explicit(&s->seeks, 1u, memory_order_relaxed);
 }
 
+static int async_read(SuAudioStream *s, SuAsyncWindow *window, const float *pcm, uint64_t idx,
+                      float *left, float *right) {
+    uint32_t expected = WINDOW_READY;
+    int found = 0;
+    if (atomic_compare_exchange_strong_explicit(&window->state, &expected, WINDOW_HELD,
+                                                memory_order_acquire, memory_order_relaxed)) {
+        uint64_t base = atomic_load_explicit(&window->base, memory_order_relaxed);
+        if (idx >= base && idx - base < window->count) {
+            const float *sample = pcm + (size_t)(idx - base) * s->channels;
+            *left = sample[0];
+            *right = s->channels == 2u ? sample[1] : sample[0];
+            found = 1;
+        }
+        atomic_store_explicit(&window->state, WINDOW_READY, memory_order_release);
+    }
+    return found;
+}
+
+static int async_has_base(const SuAsyncWindow *window, uint64_t base) {
+    return atomic_load_explicit(&window->state, memory_order_acquire) != WINDOW_EMPTY &&
+           atomic_load_explicit(&window->base, memory_order_relaxed) == base;
+}
+
+static void async_decode(SuAudioStream *s, SuAsyncWindow *window, float *pcm, uint64_t base, uint32_t capacity) {
+    uint32_t count = s->frames - base < capacity ? (uint32_t)(s->frames - base) : capacity;
+    uint32_t got = 0u;
+    atomic_fetch_add_explicit(&s->seeks, 1u, memory_order_relaxed);
+    if (s->r.seek(s->r.ctx, base)) {
+        got = s->r.read(s->r.ctx, pcm, count);
+    }
+    if (got < count) {
+        memset(pcm + (size_t)got * s->channels, 0, (size_t)(count - got) * s->channels * sizeof(float));
+        atomic_fetch_add_explicit(&s->decode_errors, 1u, memory_order_relaxed);
+    }
+    atomic_fetch_add_explicit(&s->decoded, got, memory_order_relaxed);
+    window->count = count;
+    atomic_store_explicit(&window->base, base, memory_order_relaxed);
+    atomic_store_explicit(&window->state, WINDOW_READY, memory_order_release);
+}
+
+static int async_fill(SuAudioStream *s, uint64_t base, uint64_t keep) {
+    uint32_t index;
+    uint32_t capacity = s->ring_frames / ASYNC_WINDOWS;
+    if (base >= s->frames) {
+        return 0;
+    }
+    for (index = 0; index < ASYNC_WINDOWS; index++) {
+        if (async_has_base(&s->windows[index], base)) {
+            return 0;
+        }
+    }
+    for (index = 0; index < ASYNC_WINDOWS; index++) {
+        SuAsyncWindow *window = &s->windows[index];
+        uint32_t expected = atomic_load_explicit(&window->state, memory_order_acquire);
+        if (expected == WINDOW_HELD ||
+            (expected == WINDOW_READY && atomic_load_explicit(&window->base, memory_order_relaxed) == keep)) {
+            continue;
+        }
+        if (atomic_compare_exchange_strong_explicit(&window->state, &expected, WINDOW_HELD,
+                                                    memory_order_acquire, memory_order_relaxed)) {
+            async_decode(s, window, s->ring + (size_t)index * capacity * s->channels, base, capacity);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void *stream_worker(void *arg) {
+    SuAudioStream *s = arg;
+    uint32_t capacity = s->ring_frames / ASYNC_WINDOWS;
+    while (!atomic_load_explicit(&s->worker_stop, memory_order_acquire)) {
+        uint64_t frame = atomic_load_explicit(&s->demand, memory_order_acquire);
+        uint64_t base = frame - frame % capacity;
+        uint64_t loop = atomic_load_explicit(&s->loop_demand, memory_order_acquire);
+        int worked = async_fill(s, base, UINT64_MAX);
+        if (loop < s->frames && !async_has_base(&s->loop_window, loop)) {
+            uint32_t expected = atomic_load_explicit(&s->loop_window.state, memory_order_acquire);
+            if (expected != WINDOW_HELD &&
+                atomic_compare_exchange_strong_explicit(&s->loop_window.state, &expected, WINDOW_HELD,
+                                                        memory_order_acquire, memory_order_relaxed)) {
+                async_decode(s, &s->loop_window, s->head, loop, HEAD_FRAMES);
+                worked = 1;
+            }
+        }
+        worked |= async_fill(s, base + capacity, base);
+        if (!worked) {
+            su_platform_sleep_ms(1u);
+        }
+    }
+    return NULL;
+}
+
+uint32_t su_audio_stream_mode(SuAudioStream *s, uint32_t mode) {
+    uint32_t index;
+    if (s == NULL || (mode != SU_STREAM_ASYNC && mode != SU_STREAM_OFFLINE_SYNC) || su_audio_stream_in_use(s)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (s->mode == mode) {
+        return SU_OK;
+    }
+    if (mode == SU_STREAM_ASYNC) {
+        if (!atomic_is_lock_free(&s->demand) || !atomic_is_lock_free(&s->loop_demand) ||
+            !atomic_is_lock_free(&s->underruns) || !atomic_is_lock_free(&s->underrun_frames) ||
+            !atomic_is_lock_free(&s->windows[0].state) ||
+            !atomic_is_lock_free(&s->windows[0].base)) {
+            return SU_E_UNSUPPORTED_METHOD;
+        }
+        atomic_store_explicit(&s->worker_stop, 0, memory_order_relaxed);
+        s->sample_missed = 0;
+        atomic_store_explicit(&s->demand, 0u, memory_order_relaxed);
+        atomic_store_explicit(&s->loop_demand, UINT64_MAX, memory_order_relaxed);
+        for (index = 0; index < ASYNC_WINDOWS; index++) {
+            atomic_store_explicit(&s->windows[index].state, WINDOW_EMPTY, memory_order_relaxed);
+        }
+        atomic_store_explicit(&s->loop_window.state, WINDOW_EMPTY, memory_order_relaxed);
+        if (su_thread_create(&s->worker, stream_worker, s) != 0) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        s->mode = mode;
+        return SU_OK;
+    }
+    atomic_store_explicit(&s->worker_stop, 1, memory_order_release);
+    if (su_thread_join(s->worker) != 0) {
+        return SU_E_WORKER_FAILED;
+    }
+    s->wbase = s->wend = 0u;
+    s->sample_missed = 0;
+    s->head_valid = 0;
+    if (!s->r.seek(s->r.ctx, 0u)) {
+        s->mode = SU_STREAM_OFFLINE_SYNC;
+        return SU_E_IO;
+    }
+    atomic_fetch_add_explicit(&s->seeks, 1u, memory_order_relaxed);
+    s->mode = mode;
+    return SU_OK;
+}
+
+uint32_t su_audio_stream_prime(SuAudioStream *s, uint64_t frame, uint32_t timeout_ms) {
+    uint64_t start;
+    uint64_t now;
+    uint64_t base;
+    if (s == NULL || s->mode != SU_STREAM_ASYNC || frame >= s->frames || su_audio_stream_in_use(s)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (!su_platform_monotonic_ns(&start)) {
+        return SU_E_INTERNAL;
+    }
+    base = frame - frame % (s->ring_frames / ASYNC_WINDOWS);
+    atomic_store_explicit(&s->demand, frame, memory_order_release);
+    for (;;) {
+        uint32_t index;
+        for (index = 0; index < ASYNC_WINDOWS; index++) {
+            SuAsyncWindow *window = &s->windows[index];
+            uint64_t loop = atomic_load_explicit(&s->loop_demand, memory_order_acquire);
+            if (atomic_load_explicit(&window->state, memory_order_acquire) == WINDOW_READY &&
+                atomic_load_explicit(&window->base, memory_order_relaxed) == base &&
+                (loop >= s->frames ||
+                 (atomic_load_explicit(&s->loop_window.state, memory_order_acquire) == WINDOW_READY &&
+                  atomic_load_explicit(&s->loop_window.base, memory_order_relaxed) == loop))) {
+                return SU_OK;
+            }
+        }
+        if (!su_platform_monotonic_ns(&now)) {
+            return SU_E_INTERNAL;
+        }
+        if (now - start >= (uint64_t)timeout_ms * UINT64_C(1000000)) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        su_platform_sleep_ms(1u);
+    }
+}
+
+void su_audio_stream_stats_ex(const SuAudioStream *s, SuAudioStreamStatsEx *out) {
+    SuAudioStreamInfo info;
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, sizeof *out);
+    if (s == NULL) {
+        return;
+    }
+    su_audio_stream_info(s, &info);
+    out->mode = s->mode;
+    out->resident_bytes = info.resident_bytes;
+    out->window_count = s->mode == SU_STREAM_ASYNC ? ASYNC_WINDOWS : 1u;
+    out->window_frames = s->ring_frames / out->window_count;
+    out->underrun_reads = atomic_load_explicit(&s->underruns, memory_order_relaxed);
+    out->underrun_frames = atomic_load_explicit(&s->underrun_frames, memory_order_relaxed);
+    out->decode_errors = atomic_load_explicit(&s->decode_errors, memory_order_relaxed);
+}
+
 void su_stream_frame(SuAudioStream *s, uint64_t idx, float *l, float *r) {
     const float *p;
     uint32_t ch = s->channels;
     if (idx >= s->frames) {
         *l = *r = 0.0f;
+        return;
+    }
+    if (s->mode == SU_STREAM_ASYNC) {
+        uint32_t index;
+        uint32_t capacity = s->ring_frames / ASYNC_WINDOWS;
+        for (index = 0; index < ASYNC_WINDOWS; index++) {
+            if (async_read(s, &s->windows[index], s->ring + (size_t)index * capacity * ch, idx, l, r)) {
+                atomic_store_explicit(&s->demand, idx, memory_order_release);
+                return;
+            }
+        }
+        if (async_read(s, &s->loop_window, s->head, idx, l, r)) {
+            atomic_store_explicit(&s->demand, idx, memory_order_release);
+            return;
+        }
+        *l = *r = 0.0f;
+        atomic_fetch_add_explicit(&s->underruns, 1u, memory_order_relaxed);
+        s->sample_missed = 1;
+        atomic_store_explicit(&s->demand, idx, memory_order_release);
         return;
     }
     if (!(idx >= s->wbase && idx < s->wend)) {
@@ -461,4 +723,22 @@ void su_stream_frame(SuAudioStream *s, uint64_t idx, float *l, float *r) {
     p = s->ring + (size_t)(idx % s->ring_frames) * ch;
     *l = p[0];
     *r = ch == 2u ? p[1] : p[0];
+}
+
+int su_stream_sample_missed(SuAudioStream *s) {
+    if (s == NULL) {
+        return 0;
+    }
+    int missed = s->sample_missed;
+    s->sample_missed = 0;
+    if (missed) {
+        atomic_fetch_add_explicit(&s->underrun_frames, 1u, memory_order_relaxed);
+    }
+    return missed;
+}
+
+void su_stream_sample_begin(SuAudioStream *s) {
+    if (s != NULL) {
+        s->sample_missed = 0;
+    }
 }
