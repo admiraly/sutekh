@@ -252,6 +252,7 @@ float su_audio_doppler(SuVec3f lp, SuVec3f lv, SuVec3f sp, SuVec3f sv, float c, 
 #define CMD_SEEK 6u
 #define CMD_PITCH 7u
 #define CMD_GAIN 8u
+#define CMD_LIMIT 9u
 
 typedef struct Cmd {
     uint32_t type;
@@ -311,6 +312,7 @@ struct SuAudioMixer {
     SuQuatf lrot;
     SuVec3f lvel;
     float master;
+    float knee;               /* soft limiter threshold; 0 = off (hard clamp) */
     /* game side */
     GtSlot *gt;
     uint64_t order;
@@ -652,6 +654,17 @@ uint32_t su_audio_master_gain(SuAudioMixer *m, float gain) {
     return push_cmd(m, &c) ? SU_OK : SU_E_RESOURCE_LIMIT;
 }
 
+uint32_t su_audio_master_limiter(SuAudioMixer *m, float knee) {
+    Cmd c;
+    if (m == NULL || !(knee == 0.0f || (knee >= 0.1f && knee < 1.0f))) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memset(&c, 0, sizeof c);
+    c.type = CMD_LIMIT;
+    c.a = knee;
+    return push_cmd(m, &c) ? SU_OK : SU_E_RESOURCE_LIMIT;
+}
+
 void su_audio_update(SuAudioMixer *m) {
     uint32_t head;
     uint32_t tail;
@@ -758,6 +771,9 @@ static void apply_commands(SuAudioMixer *m) {
             break;
         case CMD_MASTER:
             m->master = c->a;
+            break;
+        case CMD_LIMIT:
+            m->knee = c->a;
             break;
         default:
             break;
@@ -926,7 +942,17 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
     for (i = 0; i < frames * 2u; i++) {
         float a = fabsf(out[i]);
         peak = a > peak ? a : peak;
-        if (out[i] > 1.0f) {
+        if (m->knee > 0.0f) {
+            /* soft limiter: linear up to the knee, then tanh towards 1 (continuous slope, never reaches 1) */
+            if (a > 1.0f) {
+                clipped++; /* would have clamped */
+            }
+            if (a > m->knee) {
+                float room = 1.0f - m->knee;
+                float y = m->knee + room * tanhf((a - m->knee) / room);
+                out[i] = out[i] < 0.0f ? -y : y;
+            }
+        } else if (out[i] > 1.0f) {
             out[i] = 1.0f;
             clipped++;
         } else if (out[i] < -1.0f) {
