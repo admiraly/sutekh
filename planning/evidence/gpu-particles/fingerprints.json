@@ -1,0 +1,29 @@
+{
+    "task":  "issue-85-gpu-particles",
+    "date":  "2026-10-20",
+    "platform":  "Windows 11, Quadro P600 over remote desktop",
+    "toolchains":  "Clang 23.1.3; MSVC 19.44.35229; glslang 16.6.0",
+    "base_commit":  "9971957eacf5379abcdb35dbd4ce809b985d5592",
+    "implementation_commit":  "efbb8af3349cb733c690db55cd698983b5fc7f69",
+    "sources_sha256":  {
+                           "cmake/SutekhPresentation.cmake":  "1543c144402fbed105c48fa6e64d857032eb73793b902407931ee3914efc713e",
+                           "include/sutekh/render.h":  "2866dd802c0c29e5ff0b94a76428803c213886f36b3aa72cc1007616de131be1",
+                           "src/render/su_particles.c":  "04448b18fd7d4b792cee7a6943a12f1d2f111c32958a1f4a7ab65e952aaa199f",
+                           "src/render/su_render_particles.c":  "9e563a326722cab100551374ecc6e72df331234839151d535f1809d5252b968c",
+                           "src/render/su_render_vk.c":  "c48571596893f61ec69ac9c8b8c7aadb4891c599981036def8b3bcd223d40283",
+                           "src/render/su_render_vk_int.h":  "86b315542d9e16f4332da44714269b28d07b859a8454cf25fe665cdeb3903fd3",
+                           "src/render/shaders/particles.comp":  "0552287a36dc669d592e503cf0e7b58f31f305c7adfb5a24c44c0253dadf69ff",
+                           "src/render/su_render_shaders.h":  "722cb32c564899d20f280aac738de4b59e193f6a8f5c78573f82e2f502bc1c19",
+                           "tools/compile_shaders.py":  "9849e6919e5fab531143e9de65ccf7ec6ff21773c2d077072a94c447faff6a59",
+                           "tests/render/test_particles.c":  "bfef88b8cc1a5da06620a5c8ca43ff4f2e85dd19d468556d93858ca1c4c9c2c4",
+                           "tests/render/test_render_particles.c":  "5eb2e3a0b1eb522e00cd29b4ead9a7b09251439383a5b3a40bc382e118a5de7e",
+                           "docs/GPU_PARTICLES.md":  "73665fd8992081e8523aa1055ab08997d21c73783b386d6c2f768d715c2880cc",
+                           "docs/RENDERING_AND_ASSETS.md":  "6879a2192a0c38b347df6eb8126f86eb4a3832216826611010cafb8a5b761d6b"
+                       },
+    "artifacts_sha256":  {
+                             "build-particles/test_particles.exe":  "b89897e6ced2293d4dea4ce3cd0e6f492e2db01bb1a80ef8e57226d038fb917d",
+                             "build-particles/test_render_particles.exe":  "fa40323d22480a57432882524b4e9cf8a0104ae9dbd19cda7c03e3037ca42b8d",
+                             "build-particles-msvc/test_particles.exe":  "b091517ea74dfe2f56de148d3fc35f5a4a649b7eb2a2ea1fbecf80786275ed15",
+                             "build-particles-msvc/test_render_particles.exe":  "912fa086934fa338e0389072f3ebae07d6ad51a4fe701cf27e8bbfefa06fa750"
+                         }
+}

@@ -1,0 +1,19 @@
+{
+  "task": "issue-85-gpu-particles",
+  "date": "2026-10-20",
+  "state": "verified_local_remote_ci_pending",
+  "write_scope": "isolated feat/gpu-particles worktree",
+  "base_commit": "7e3c6eb",
+  "integration_base_commit": "9971957",
+  "local_tests": {
+    "clang_full_suite": {"status": "passed", "total": 121, "skipped": 2},
+    "p600_sync_validation": {"status": "passed", "errors": 0, "warnings": 0},
+    "lavapipe_sync_validation": {"status": "passed", "errors": 0, "warnings": 0},
+    "msvc_targeted": "passed",
+    "shader_freshness": "passed",
+    "repository_license_metadata": "passed",
+    "independent_review": "passed_after_two_allocation_recovery_fixes"
+  },
+  "not_run": ["interactive windowed allocation-failure injection"],
+  "next_work": ["remote CI", "merge after current-base green checks", "remove junctions and worktree"]
+}
