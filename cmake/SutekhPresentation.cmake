@@ -318,10 +318,11 @@ add_executable(test_audio_cluster tests/audio/test_audio_cluster.c $<TARGET_OBJE
 target_link_libraries(test_audio_cluster PRIVATE su_audio)
 sutekh_apply_warnings(test_audio_cluster)
 add_test(NAME audio_cluster COMMAND test_audio_cluster)
-# The event runtime drives the voice pool, so both live in one library; su_audio_voice_policy remains as an
-# interface alias for existing consumers.
+# The event runtime drives the voice pool, bus tree, parameters and music, so they live in one library;
+# su_audio_voice_policy, su_audio_bus and su_audio_parameter remain as interface aliases for existing consumers.
 add_library(su_audio_events STATIC src/audio/su_audio_graph.c src/audio/su_audio_event.c
-    src/audio/su_audio_voice_policy.c)
+    src/audio/su_audio_voice_policy.c src/audio/su_audio_bus.c src/audio/su_audio_parameter.c
+    src/audio/su_audio_music.c)
 target_include_directories(su_audio_events PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
 target_link_libraries(su_audio_events PUBLIC su_audio su_ir)
 sutekh_apply_warnings(su_audio_events)
@@ -347,18 +348,14 @@ target_link_libraries(test_audio_event PRIVATE su_audio_events)
 sutekh_apply_warnings(test_audio_event)
 add_test(NAME audio_event COMMAND test_audio_event)
 # A07 scoped parameters, switches and interactive music (component-owned files).
-add_library(su_audio_parameter STATIC src/audio/su_audio_parameter.c src/audio/su_audio_music.c)
-target_include_directories(su_audio_parameter PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
-target_link_libraries(su_audio_parameter PUBLIC su_audio_events)
-sutekh_apply_warnings(su_audio_parameter)
+add_library(su_audio_parameter INTERFACE)
+target_link_libraries(su_audio_parameter INTERFACE su_audio_events)
 add_executable(test_audio_parameter tests/audio/test_audio_parameter.c)
 target_link_libraries(test_audio_parameter PRIVATE su_audio_parameter)
 sutekh_apply_warnings(test_audio_parameter)
 add_test(NAME audio_parameter COMMAND test_audio_parameter)
-add_library(su_audio_bus STATIC src/audio/su_audio_bus.c)
-target_include_directories(su_audio_bus PUBLIC "${SUTEKH_CONTRACT_INCLUDE}")
-target_link_libraries(su_audio_bus PUBLIC su_audio)
-sutekh_apply_warnings(su_audio_bus)
+add_library(su_audio_bus INTERFACE)
+target_link_libraries(su_audio_bus INTERFACE su_audio_events)
 add_executable(test_audio_bus tests/audio/test_audio_bus.c)
 target_link_libraries(test_audio_bus PRIVATE su_audio_bus)
 sutekh_apply_warnings(test_audio_bus)

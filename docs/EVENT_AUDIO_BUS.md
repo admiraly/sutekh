@@ -5,9 +5,10 @@
 including processing, is serialized by its owner. Creation validates the tree,
 assigns the execution order and allocates every buffer in one block, so
 `su_audio_bus_mix`, `su_audio_bus_process` and the setters never allocate. The
-legacy `su_audio` mixer is unchanged. Feeding A04/A05 voices into buses is the
-owner's (or a later integrator's) job: render each source into its bus with
-`su_audio_bus_mix`, then call `su_audio_bus_process` once per block.
+legacy `su_audio` mixer is unchanged. A standalone owner renders each source
+into its bus with `su_audio_bus_mix`, then calls `su_audio_bus_process` once
+per block; the integrated event runtime does this itself for its voices and
+music (see [EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md)).
 
 ## API
 

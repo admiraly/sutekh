@@ -6,6 +6,8 @@
 #include "su_audio_event_int.h"
 #include "su_audio_event_view.h"
 #include "su_audio_voice_int.h"
+#include "su_audio_bus_int.h"
+#include "su_audio_parameter_int.h"
 
 typedef struct EventLeaf {
     SuAudioGraphLeaf data;
@@ -63,6 +65,20 @@ struct SuAudioEvents {
     float *route_mem;
     float **routes;
     uint32_t route_count;
+    SuAudioParams *params;
+    SuAudioGraphParameter *param_values;
+    SuAudioGraphSwitch *switch_values;
+    uint32_t param_count;
+    uint32_t switch_count;
+    SuAudioBusGain *bus_gains;
+    uint32_t bus_gain_capacity;
+    SuAudioBusTree *buses;
+    SuAudioBusId *route_ids;
+    uint32_t root_route;
+    SuAudioMusic *music;
+    uint32_t music_bus_id;
+    float limiter_knee;
+    float music_buffer[SU_AUDIO_EVENT_QUANTUM * 2u];
 };
 
 static SuAudioInstance instance_handle(uint32_t slot, uint32_t generation) {
@@ -167,6 +183,10 @@ void su_audio_events_destroy(SuAudioEvents *events) {
     if (events->graph != NULL) {
         su_audio_graph_release(events->graph);
     }
+    free(events->param_values);
+    free(events->switch_values);
+    free(events->bus_gains);
+    free(events->route_ids);
     free(events->routes);
     free(events->route_mem);
     free(events->policies);
@@ -190,6 +210,12 @@ void su_audio_events_update(SuAudioEvents *events) {
         }
         for (index = 0; index < instance->count; index++) {
             (void)su_audio_asset_release(events->assets, instance->leaves[index].data.asset);
+        }
+        if (events->params != NULL) {
+            SuAudioParamScope scope;
+            scope.kind = SU_AUDIO_SCOPE_INSTANCE;
+            scope.key = instance_handle(slot, instance->generation);
+            (void)su_audio_param_scope_clear(events->params, scope);
         }
         events->stats.logical_voices -= instance->count;
         events->stats.instances--;
@@ -232,8 +258,24 @@ uint32_t su_audio_event_post(SuAudioEvents *events, const SuAudioTrigger *trigge
         events->stats.refused++;
         return SU_E_RESOURCE_LIMIT;
     }
-    status = su_audio_graph_expand(events->graph, trigger->event_id, events->desc.project_seed,
-        trigger->emitter, trigger->commit_seq, events->scratch, events->desc.max_leaves_per_instance, &count, diagnostic);
+    if (events->params != NULL) {
+        SuAudioGraphExpandState state;
+        SuAudioParamTarget target;
+        target.emitter = trigger->emitter;
+        target.instance = instance_handle(slot,
+            instance->generation + 1u == 0u ? 1u : instance->generation + 1u);
+        status = su_audio_param_expand_state(events->params, target, trigger->sample_time, trigger->sample_time,
+            events->param_values, events->param_count, events->switch_values, events->switch_count, &state);
+        if (status == SU_OK) {
+            status = su_audio_graph_expand_ex(events->graph, trigger->event_id, events->desc.project_seed,
+                trigger->emitter, trigger->commit_seq, &state, events->scratch, events->desc.max_leaves_per_instance,
+                &count, diagnostic);
+        }
+    } else {
+        status = su_audio_graph_expand(events->graph, trigger->event_id, events->desc.project_seed,
+            trigger->emitter, trigger->commit_seq, events->scratch, events->desc.max_leaves_per_instance, &count,
+            diagnostic);
+    }
     if (status != SU_OK) {
         events->stats.refused++;
         return status;
@@ -278,6 +320,9 @@ uint32_t su_audio_event_post(SuAudioEvents *events, const SuAudioTrigger *trigge
         return status != SU_OK ? status : SU_E_SCHEMA_MISMATCH;
     }
     instance->generation++;
+    if (instance->generation == 0u) {
+        instance->generation = 1u;
+    }
     instance->state = 1u;
     instance->scope = trigger->scope_id;
     instance->emitter = trigger->emitter;
@@ -540,6 +585,27 @@ static uint32_t leaf_controls(SuAudioEvents *events, const EventInstance *instan
         out->gain_left = gain;
         out->gain_right = gain;
     }
+    if (events->params != NULL) {
+        SuAudioParamTarget target;
+        float gain_db = 0.0f;
+        float ratio = 1.0f;
+        float cutoff = 0.0f;
+        target.emitter = instance->emitter;
+        target.instance = instance_handle((uint32_t)(instance - events->instances), instance->generation);
+        (void)su_audio_param_voice_controls(events->params, target,
+            events->stats.render_clock + SU_AUDIO_EVENT_QUANTUM, &gain_db, &ratio, &cutoff);
+        if (gain_db != 0.0f) {
+            float scale = powf(10.0f, gain_db / 20.0f);
+            gain *= scale;
+            out->gain_left *= scale;
+            out->gain_right *= scale;
+        }
+        pitch *= ratio;
+        if (cutoff < (float)events->desc.sample_rate * 0.5f
+            && (leaf->lowpass_hz <= 0.0f || cutoff < leaf->lowpass_hz)) {
+            leaf->lowpass_hz = cutoff > 0.0f ? cutoff : 1.0f;
+        }
+    }
     if (pitch > 64.0f) {
         pitch = 64.0f;
     }
@@ -593,6 +659,17 @@ static void pooled_start(SuAudioEvents *events, uint64_t now, uint64_t end) {
             if (status == SU_OK) {
                 status = su_audio_voice_set_tag(events->pool, leaf->logical,
                     ((uint64_t)leaf->data.asset.generation << 32) | leaf->data.asset.id);
+            }
+            if (status == SU_OK && events->buses != NULL) {
+                uint32_t route = events->root_route;
+                uint32_t r;
+                for (r = 0; r < events->route_count; r++) {
+                    if (events->route_ids[r] == leaf->data.bus_id) {
+                        route = r;
+                        break;
+                    }
+                }
+                status = su_audio_voice_set_route(events->pool, leaf->logical, route);
             }
             leaf->state = status == SU_OK ? 1u : 2u;
             if (status != SU_OK) {
@@ -707,6 +784,9 @@ static uint32_t render_quantum_pooled(SuAudioEvents *events) {
         return SU_E_RESOURCE_LIMIT;
     }
     end = now + SU_AUDIO_EVENT_QUANTUM;
+    if (events->params != NULL && su_audio_params_advance(events->params, now) != SU_OK) {
+        events->stats.render_failures++;
+    }
     pooled_start(events, now, end);
     pooled_stops(events, end);
     pooled_controls(events);
@@ -715,15 +795,60 @@ static uint32_t render_quantum_pooled(SuAudioEvents *events) {
     if (status != SU_OK) {
         return status;
     }
-    memcpy(events->quantum, events->routes[0], sizeof events->quantum);
-    for (route = 1u; route < events->route_count; route++) {
-        for (index = 0; index < SU_AUDIO_EVENT_QUANTUM * 2u; index++) {
-            events->quantum[index] += events->routes[route][index];
+    if (events->music != NULL) {
+        status = su_audio_music_render(events->music, events->music_buffer, SU_AUDIO_EVENT_QUANTUM);
+        if (status != SU_OK) {
+            return status;
         }
     }
-    for (index = 0; index < SU_AUDIO_EVENT_QUANTUM * 2u; index++) {
-        float sample = events->quantum[index];
-        events->quantum[index] = sample > 1.0f ? 1.0f : sample < -1.0f ? -1.0f : sample;
+    if (events->buses != NULL) {
+        for (route = 0u; route < events->route_count && status == SU_OK; route++) {
+            status = su_audio_bus_mix(events->buses, events->route_ids[route], events->routes[route],
+                SU_AUDIO_EVENT_QUANTUM);
+        }
+        if (events->music != NULL && status == SU_OK) {
+            status = su_audio_bus_mix(events->buses, events->music_bus_id, events->music_buffer,
+                SU_AUDIO_EVENT_QUANTUM);
+        }
+        if (events->params != NULL && events->bus_gain_capacity != 0u && status == SU_OK) {
+            uint32_t count = 0u;
+            status = su_audio_param_bus_gains(events->params, end, events->bus_gains, events->bus_gain_capacity,
+                &count);
+            for (index = 0; index < count && status == SU_OK; index++) {
+                float db = events->bus_gains[index].gain_db;
+                status = su_audio_bus_set_gain(events->buses, events->bus_gains[index].bus_id,
+                    db > 120.0f ? 120.0f : db, SU_AUDIO_EVENT_QUANTUM);
+            }
+        }
+        if (status == SU_OK) {
+            status = su_audio_bus_process(events->buses, events->quantum, SU_AUDIO_EVENT_QUANTUM);
+        }
+        if (status != SU_OK) {
+            return status;
+        }
+    } else {
+        memcpy(events->quantum, events->routes[0], sizeof events->quantum);
+        if (events->music != NULL) {
+            for (index = 0; index < SU_AUDIO_EVENT_QUANTUM * 2u; index++) {
+                events->quantum[index] += events->music_buffer[index];
+            }
+        }
+    }
+    if (events->limiter_knee > 0.0f) {
+        float knee = events->limiter_knee;
+        for (index = 0; index < SU_AUDIO_EVENT_QUANTUM * 2u; index++) {
+            float sample = events->quantum[index];
+            float magnitude = fabsf(sample);
+            if (magnitude > knee) {
+                float bent = knee + (1.0f - knee) * tanhf((magnitude - knee) / (1.0f - knee));
+                events->quantum[index] = sample < 0.0f ? -bent : bent;
+            }
+        }
+    } else {
+        for (index = 0; index < SU_AUDIO_EVENT_QUANTUM * 2u; index++) {
+            float sample = events->quantum[index];
+            events->quantum[index] = sample > 1.0f ? 1.0f : sample < -1.0f ? -1.0f : sample;
+        }
     }
     pooled_collect(events);
     events->stats.render_clock = end;
@@ -736,9 +861,25 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     SuAudioVoiceStats pool_stats;
     SuAudioVoicePoolDesc pool_desc;
     SuAudioVoicePolicyRule *policies = NULL;
+    SuAudioParams *params = NULL;
+    SuAudioBusTree *buses = NULL;
+    SuAudioMusic *music = NULL;
+    SuAudioGraphParameter *param_values;
+    SuAudioGraphSwitch *switch_values;
+    SuAudioBusGain *bus_gains;
+    SuAudioBusId *route_ids;
+    uint32_t music_bus_id = 0u;
+    uint32_t route_count = 1u;
+    uint32_t param_count = 0u;
+    uint32_t switch_count = 0u;
+    uint32_t bus_bindings = 0u;
+    uint32_t index;
+    uint32_t status;
+    float knee = 0.0f;
     float *route_mem;
     float **routes;
-    if (events == NULL || hook == NULL || hook->struct_size < sizeof *hook || hook->version != SU_AUDIO_EVENTS_HOOK_VERSION
+    if (events == NULL || hook == NULL || hook->struct_size < offsetof(SuAudioEventsHook, params)
+        || hook->struct_size > sizeof *hook || hook->version != SU_AUDIO_EVENTS_HOOK_VERSION
         || hook->voices == NULL || hook->policy_count > 4096u || (hook->policy_count != 0u && hook->policies == NULL)
         || events->pool != NULL) {
         return SU_E_INVALID_ARGUMENT;
@@ -754,35 +895,105 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
         || pool_stats.logical != 0u) {
         return SU_E_RESOURCE_LIMIT;
     }
-    route_mem = calloc(SU_AUDIO_EVENT_QUANTUM * 2u, sizeof *route_mem);
-    routes = calloc(1u, sizeof *routes);
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, params)) {
+        params = hook->params;
+    }
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, buses)) {
+        buses = hook->buses;
+    }
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, music)) {
+        music = hook->music;
+    }
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, music_bus_id)) {
+        music_bus_id = hook->music_bus_id;
+    }
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, limiter_knee)) {
+        knee = hook->limiter_knee;
+    }
+    if (!(knee == 0.0f || (knee >= 0.1f && knee < 1.0f))) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (buses != NULL) {
+        route_count = su_audio_bus_count(buses);
+        if (su_audio_bus_max_block(buses) < SU_AUDIO_EVENT_QUANTUM) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    if (music != NULL) {
+        SuAudioMusicState music_state;
+        su_audio_music_state(music, &music_state);
+        if (music_state.clock != events->stats.render_clock) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    if (params != NULL) {
+        su_audio_params_counts(params, &param_count, &switch_count, &bus_bindings);
+    }
+    route_mem = calloc((size_t)route_count * SU_AUDIO_EVENT_QUANTUM * 2u, sizeof *route_mem);
+    routes = calloc(route_count, sizeof *routes);
+    route_ids = calloc(route_count, sizeof *route_ids);
+    param_values = calloc(param_count + 1u, sizeof *param_values);
+    switch_values = calloc(switch_count + 1u, sizeof *switch_values);
+    bus_gains = calloc(bus_bindings + 1u, sizeof *bus_gains);
     if (hook->policy_count != 0u) {
         policies = calloc(hook->policy_count, sizeof *policies);
     }
-    if (route_mem == NULL || routes == NULL || (hook->policy_count != 0u && policies == NULL)) {
-        free(route_mem);
-        free(routes);
-        free(policies);
-        return SU_E_RESOURCE_LIMIT;
+    status = route_mem == NULL || routes == NULL || route_ids == NULL || param_values == NULL
+        || switch_values == NULL || bus_gains == NULL || (hook->policy_count != 0u && policies == NULL)
+        ? SU_E_RESOURCE_LIMIT : SU_OK;
+    for (index = 0; status == SU_OK && buses != NULL && index < route_count; index++) {
+        status = su_audio_bus_order(buses, index, &route_ids[index]);
     }
-    if (su_audio_voice_pool_set_clock(hook->voices, events->stats.render_clock) != SU_OK) {
+    if (status == SU_OK && music != NULL && buses != NULL) {
+        if (music_bus_id == 0u) {
+            music_bus_id = route_ids[route_count - 1u];
+        }
+        for (index = 0; index < route_count && route_ids[index] != music_bus_id; index++) {
+        }
+        status = index == route_count ? SU_E_INVALID_ARGUMENT : SU_OK;
+    }
+    if (status == SU_OK && su_audio_voice_pool_set_clock(hook->voices, events->stats.render_clock) != SU_OK) {
+        status = SU_E_INVALID_ARGUMENT;
+    }
+    if (status != SU_OK) {
         free(route_mem);
         free(routes);
+        free(route_ids);
+        free(param_values);
+        free(switch_values);
+        free(bus_gains);
         free(policies);
-        return SU_E_INVALID_ARGUMENT;
+        return status;
     }
     if (policies != NULL) {
         memcpy(policies, hook->policies, (size_t)hook->policy_count * sizeof *policies);
     }
-    routes[0] = route_mem;
+    for (index = 0; index < route_count; index++) {
+        routes[index] = route_mem + (size_t)index * SU_AUDIO_EVENT_QUANTUM * 2u;
+    }
+    events->params = params;
+    events->param_values = param_values;
+    events->switch_values = switch_values;
+    events->param_count = param_count;
+    events->switch_count = switch_count;
+    events->bus_gains = bus_gains;
+    events->bus_gain_capacity = bus_bindings;
+    events->buses = buses;
+    events->route_ids = route_ids;
+    events->root_route = route_count - 1u; /* execution order ends with the root */
+    events->music = music;
+    events->music_bus_id = music_bus_id;
+    events->limiter_knee = knee;
     events->policies = policies;
     events->policy_count = hook->policy_count;
     events->default_policy = hook->default_policy;
     events->route_mem = route_mem;
     events->routes = routes;
-    events->route_count = 1u;
+    events->route_count = route_count;
     events->pool = hook->voices;
-    events->stats.runtime_bytes += SU_AUDIO_EVENT_QUANTUM * 2u * sizeof *route_mem + sizeof *routes
+    events->stats.runtime_bytes += (uint64_t)route_count * (SU_AUDIO_EVENT_QUANTUM * 2u * sizeof *route_mem
+        + sizeof *routes + sizeof *route_ids) + (uint64_t)(param_count + 1u) * sizeof *param_values
+        + (uint64_t)(switch_count + 1u) * sizeof *switch_values + (uint64_t)(bus_bindings + 1u) * sizeof *bus_gains
         + (uint64_t)hook->policy_count * sizeof *policies;
     return SU_OK;
 }

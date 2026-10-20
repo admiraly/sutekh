@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "sutekh/audio_event.h"
+#include "sutekh/audio_parameter.h"
 
 static unsigned checks;
 static unsigned failures;
@@ -407,8 +408,325 @@ static void test_attach_validation(void) {
     su_audio_voice_pool_destroy(pool);
 }
 
+/* ---- parameters, switches, buses, music and the master limiter ---- */
+
+static const char mix_json[] =
+    "{\"schema\":\"su_audio_events_v1\",\"numeric_profile\":\"audio_float_local_v1\","
+    "\"seed_policy\":\"event_emitter_sequence_v1\",\"sample_rate\":48000,\"nodes\":["
+    "{\"id\":1,\"type\":\"sound\",\"asset\":{\"id\":1,\"generation\":1},\"bus_id\":10},"
+    "{\"id\":2,\"type\":\"sound\",\"asset\":{\"id\":2,\"generation\":2},\"bus_id\":30,\"flags\":1},"
+    "{\"id\":3,\"type\":\"sound\",\"asset\":{\"id\":3,\"generation\":3},\"bus_id\":10},"
+    "{\"id\":4,\"type\":\"switch\",\"switch_id\":5,\"default\":1,\"cases\":[{\"value\":2,\"node\":3}]},"
+    "{\"id\":5,\"type\":\"blend\",\"parameter_id\":9,\"points\":[{\"value\":0,\"node\":1},{\"value\":1,\"node\":3}]}],"
+    "\"events\":[{\"id\":1,\"root\":1},{\"id\":2,\"root\":2},{\"id\":3,\"root\":4},{\"id\":4,\"root\":5}]}";
+
+enum { MIX_GAIN = 1, MIX_BUS_GAIN = 2, MIX_MUSIC = 4, MIX_PITCH = 8 };
+
+typedef struct MixRig {
+    SuAudioAssets *assets;
+    SuAudioGraph *graph;
+    SuAudioEvents *events;
+    SuAudioVoicePool *pool;
+    SuAudioParams *params;
+    SuAudioBusTree *tree;
+    SuAudioMusic *music;
+    uint64_t seq;
+} MixRig;
+
+static void mix_create(MixRig *rig, uint32_t flags, float knee) {
+    static const SuAudioBindingPoint identity[2] = {{-24.0f, -24.0f}, {0.0f, 0.0f}};
+    static const SuAudioBindingPoint fader[2] = {{0.0f, 0.0f}, {1.0f, -12.0f}};
+    static const SuAudioBindingPoint octave[2] = {{0.0f, 1.0f}, {1.0f, 2.0f}};
+    SuAudioGraphLimits limits = {16u, 32u, 8u, 16u, 8192u};
+    SuAudioGraphDiagnostic diagnostic;
+    SuAudioEventsDesc desc;
+    SuAudioClip clip;
+    SuAudioAssetRef ref;
+    SuAudioParamDef defs[3];
+    SuAudioSwitchDef sw;
+    SuAudioParamBinding bindings[3];
+    SuAudioParamsDesc params_desc;
+    SuAudioBusDesc buses[4];
+    SuAudioDuckRule duck;
+    SuAudioBusTreeDesc tree_desc;
+    SuAudioBusDiagnostic bus_diag;
+    SuAudioVoicePoolDesc pool_desc;
+    SuAudioEventsHook hook;
+    uint32_t binding_count = 0u;
+    uint32_t index;
+    memset(rig, 0, sizeof *rig);
+    CHECK(su_audio_assets_create(8u, 1u << 20, &rig->assets) == SU_OK);
+    clip.channels = 1u;
+    clip.sample_rate = RATE;
+    clip.samples = tone;
+    clip.frames = TONE;
+    CHECK(su_audio_asset_prepare(rig->assets, 1u, &clip, &ref) == SU_OK);
+    clip.samples = loop_tone;
+    clip.frames = LOOP;
+    CHECK(su_audio_asset_prepare(rig->assets, 2u, &clip, &ref) == SU_OK);
+    clip.samples = ramp;
+    clip.frames = TONE;
+    CHECK(su_audio_asset_prepare(rig->assets, 3u, &clip, &ref) == SU_OK);
+    CHECK(su_audio_graph_prepare(mix_json, sizeof mix_json - 1u, rig->assets, &limits, &rig->graph,
+        &diagnostic) == SU_OK);
+    memset(&desc, 0, sizeof desc);
+    desc.struct_size = sizeof desc;
+    desc.sample_rate = RATE;
+    desc.max_instances = 16u;
+    desc.max_leaves_per_instance = 4u;
+    desc.max_logical_voices = 64u;
+    desc.command_capacity = 16u;
+    desc.project_seed = 5u;
+    desc.session_generation = 1u;
+    CHECK(su_audio_events_create(&desc, rig->assets, NULL, rig->graph, &rig->events) == SU_OK);
+    memset(defs, 0, sizeof defs);
+    defs[0].id = 9u;
+    defs[0].max_value = 1.0f;
+    defs[1].id = 1u;
+    defs[1].min_value = -24.0f;
+    defs[2].id = 2u;
+    defs[2].max_value = 1.0f;
+    defs[2].smoothing_frames = 4800u;
+    memset(&sw, 0, sizeof sw);
+    sw.id = 5u;
+    sw.default_value = 1u;
+    sw.policy = SU_AUDIO_SWITCH_CONTINUE;
+    memset(bindings, 0, sizeof bindings);
+    if (flags & MIX_GAIN) {
+        bindings[binding_count].param_id = 1u;
+        bindings[binding_count].control = SU_AUDIO_CONTROL_GAIN_DB;
+        bindings[binding_count].points = identity;
+        bindings[binding_count++].point_count = 2u;
+    }
+    if (flags & MIX_BUS_GAIN) {
+        bindings[binding_count].param_id = 2u;
+        bindings[binding_count].control = SU_AUDIO_CONTROL_BUS_GAIN_DB;
+        bindings[binding_count].bus_id = 30u;
+        bindings[binding_count].points = fader;
+        bindings[binding_count++].point_count = 2u;
+    }
+    if (flags & MIX_PITCH) {
+        bindings[binding_count].param_id = 9u;
+        bindings[binding_count].control = SU_AUDIO_CONTROL_PITCH;
+        bindings[binding_count].points = octave;
+        bindings[binding_count++].point_count = 2u;
+    }
+    memset(&params_desc, 0, sizeof params_desc);
+    params_desc.struct_size = sizeof params_desc;
+    params_desc.sample_rate = RATE;
+    params_desc.params = defs;
+    params_desc.param_count = 3u;
+    params_desc.switches = &sw;
+    params_desc.switch_count = 1u;
+    params_desc.bindings = bindings;
+    params_desc.binding_count = binding_count;
+    params_desc.max_scoped_values = 16u;
+    CHECK(su_audio_params_create(&params_desc, &rig->params) == SU_OK);
+    memset(buses, 0, sizeof buses);
+    buses[0].id = 1u;
+    buses[0].parent = SU_AUDIO_BUS_ROOT;
+    buses[1].id = 10u;
+    buses[2].id = 30u;
+    buses[3].id = 40u;
+    for (index = 1u; index < 4u; index++) {
+        buses[index].parent = 1u;
+    }
+    memset(&duck, 0, sizeof duck);
+    duck.source = 10u;
+    duck.target = 30u;
+    duck.threshold_db = -30.0f;
+    duck.ratio = 4.0f;
+    duck.attack_ms = 5.0f;
+    duck.hold_ms = 20.0f;
+    duck.release_ms = 100.0f;
+    duck.max_attenuation_db = 12.0f;
+    memset(&tree_desc, 0, sizeof tree_desc);
+    tree_desc.struct_size = sizeof tree_desc;
+    tree_desc.sample_rate = RATE;
+    tree_desc.max_block_frames = 128u;
+    tree_desc.buses = buses;
+    tree_desc.bus_count = 4u;
+    tree_desc.rules = &duck;
+    tree_desc.rule_count = 1u;
+    CHECK(su_audio_bus_tree_create(&tree_desc, &rig->tree, &bus_diag) == SU_OK);
+    memset(&pool_desc, 0, sizeof pool_desc);
+    pool_desc.struct_size = sizeof pool_desc;
+    pool_desc.sample_rate = RATE;
+    pool_desc.max_logical = 64u;
+    pool_desc.max_physical = 16u;
+    pool_desc.transition_reserve = 4u;
+    CHECK(su_audio_voice_pool_create(&pool_desc, &rig->pool) == SU_OK);
+    memset(&hook, 0, sizeof hook);
+    hook.struct_size = sizeof hook;
+    hook.version = SU_AUDIO_EVENTS_HOOK_VERSION;
+    hook.voices = rig->pool;
+    hook.default_policy.release_frames = 64u;
+    hook.params = rig->params;
+    hook.buses = rig->tree;
+    hook.limiter_knee = knee;
+    if (flags & MIX_MUSIC) {
+        static const SuAudioAssetRef stems[1] = {{2u, 2u}};
+        static const SuAudioTempoPoint tempo[1] = {{0u, 120000u}};
+        SuAudioMusicDesc music_desc;
+        SuAudioMusicSegmentDesc seg;
+        SuMusicTransition move;
+        uint64_t boundary = 0u;
+        memset(&music_desc, 0, sizeof music_desc);
+        music_desc.struct_size = sizeof music_desc;
+        music_desc.sample_rate = RATE;
+        music_desc.max_segments = 2u;
+        CHECK(su_audio_music_create(&music_desc, rig->assets, &rig->music) == SU_OK);
+        memset(&seg, 0, sizeof seg);
+        seg.struct_size = sizeof seg;
+        seg.segment_id = 1u;
+        seg.stems = stems;
+        seg.stem_count = 1u;
+        seg.tempo = tempo;
+        seg.tempo_count = 1u;
+        seg.beats_per_bar = 4u;
+        seg.length_frames = LOOP;
+        seg.loop = 1u;
+        CHECK(su_audio_music_segment_add(rig->music, &seg) == SU_OK);
+        memset(&move, 0, sizeof move);
+        move.struct_size = sizeof move;
+        move.segment_id = 1u;
+        move.sync = SU_AUDIO_MUSIC_IMMEDIATE;
+        CHECK(su_audio_music_transition(rig->music, &move, 0u, &boundary) == SU_OK);
+        hook.music = rig->music;
+        hook.music_bus_id = 40u;
+    }
+    CHECK(su_audio_events_attach(rig->events, &hook) == SU_OK);
+}
+
+static void mix_destroy(MixRig *rig) {
+    su_audio_events_destroy(rig->events);
+    su_audio_music_destroy(rig->music);
+    su_audio_voice_pool_destroy(rig->pool);
+    su_audio_params_destroy(rig->params);
+    su_audio_bus_tree_destroy(rig->tree);
+    su_audio_graph_release(rig->graph);
+    CHECK(su_audio_assets_destroy(rig->assets) == SU_OK);
+}
+
+static void mix_post(MixRig *rig, uint32_t event_id, uint64_t at) {
+    SuAudioTrigger trigger;
+    SuAudioInstance instance = 0u;
+    memset(&trigger, 0, sizeof trigger);
+    trigger.struct_size = sizeof trigger;
+    trigger.event_id = event_id;
+    trigger.sample_time = at;
+    trigger.commit_seq = rig->seq++;
+    trigger.session_generation = 1u;
+    CHECK(su_audio_event_post(rig->events, &trigger, &instance, NULL) == SU_OK);
+}
+
+/* Switch and blend nodes expand from the parameter state at the trigger time. */
+static void test_switch_blend(void) {
+    MixRig rig;
+    SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+    uint32_t index;
+    int exact = 1;
+    float worst = 0.0f;
+    mix_create(&rig, 0u, 0.0f);
+    CHECK(su_audio_switch_set_at(rig.params, global, 5u, 2u, 2000u) == SU_OK);
+    CHECK(su_audio_param_set_at(rig.params, global, 9u, 0.25f, 0u) == SU_OK);
+    mix_post(&rig, 3u, 100u);   /* before the switch change: default case, tone */
+    mix_post(&rig, 3u, 6000u);  /* after: ramp */
+    mix_post(&rig, 4u, 12000u); /* blend 0.75 tone + 0.25 ramp */
+    CHECK(su_audio_events_render(rig.events, out_a, FRAMES) == SU_OK);
+    for (index = 0; index < 1000u; index++) {
+        exact &= out_a[(100u + index) * 2u] == tone[index];
+        exact &= out_a[(6000u + index) * 2u] == ramp[index];
+    }
+    CHECK(exact);
+    for (index = 0; index < 4000u; index++) {
+        float expected = tone[index] * 0.75f + ramp[index] * 0.25f;
+        float error = fabsf(out_a[(12000u + index) * 2u] - expected);
+        worst = error > worst ? error : worst;
+    }
+    CHECK(worst < 1.0e-6f);
+    mix_destroy(&rig);
+}
+
+/* GAIN_DB and PITCH bindings modulate every voice of the runtime. */
+static void test_voice_bindings(void) {
+    MixRig rig;
+    SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+    uint32_t index;
+    float worst = 0.0f;
+    float scale = powf(10.0f, -6.0f / 20.0f);
+    mix_create(&rig, MIX_GAIN | MIX_PITCH, 0.0f);
+    CHECK(su_audio_param_set_at(rig.params, global, 1u, -6.0f, 0u) == SU_OK);
+    CHECK(su_audio_param_set_at(rig.params, global, 9u, 1.0f, 0u) == SU_OK); /* pitch x2 */
+    mix_post(&rig, 1u, 256u);
+    CHECK(su_audio_events_render(rig.events, out_a, 4096u) == SU_OK);
+    for (index = 0; index < 2000u; index++) {
+        float error = fabsf(out_a[(256u + index) * 2u] - tone[index * 2u] * scale);
+        worst = error > worst ? error : worst;
+    }
+    CHECK(worst < 1.0e-6f);
+    mix_destroy(&rig);
+}
+
+/* Shots on bus 10 duck the ambience bus through its real signal; a BUS_GAIN_DB binding owns the ambience
+ * fader; music renders through its own bus; the soft limiter bends the master. */
+static void test_buses_music_limiter(void) {
+    MixRig rig;
+    SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+    SuAudioBusMeter meter;
+    float before = 1.0f;
+    float during = 1.0f;
+    float peak = 0.0f;
+    uint32_t done;
+    mix_create(&rig, MIX_BUS_GAIN | MIX_MUSIC, 0.0f);
+    mix_post(&rig, 2u, 0u);
+    mix_post(&rig, 1u, 12000u);
+    CHECK(su_audio_param_set_at(rig.params, global, 2u, 1.0f, 18000u) == SU_OK);
+    for (done = 0u; done < FRAMES; done += 128u) {
+        float gain = 0.0f;
+        CHECK(su_audio_events_render(rig.events, out_a + (size_t)done * 2u, 128u) == SU_OK);
+        CHECK(su_audio_bus_gain_at(rig.tree, 30u, &gain) == SU_OK);
+        if (done >= 4000u && done < 11900u && gain < before) {
+            before = gain;
+        }
+        if (done >= 12200u && done < 16000u && gain < during) {
+            during = gain;
+        }
+    }
+    CHECK(before > 0.999f);
+    CHECK(during < 0.7f);
+    CHECK(su_audio_bus_meter_read(rig.tree, 30u, &meter, 0) == SU_OK);
+    CHECK(fabsf(meter.fader_db + 12.0f) < 0.01f);
+    CHECK(su_audio_bus_meter_read(rig.tree, 40u, &meter, 0) == SU_OK);
+    CHECK(meter.peak > 0.4f);
+    mix_destroy(&rig);
+    /* the limiter: bus 10 boosted by 18 dB drives the master far over full scale */
+    mix_create(&rig, 0u, 0.5f);
+    CHECK(su_audio_bus_set_gain(rig.tree, 10u, 18.0f, 0u) == SU_OK);
+    mix_post(&rig, 1u, 0u);
+    CHECK(su_audio_events_render(rig.events, out_a, 4800u) == SU_OK);
+    for (done = 0u; done < 4800u * 2u; done++) {
+        float magnitude = fabsf(out_a[done]);
+        peak = magnitude > peak ? magnitude : peak;
+    }
+    /* tanh saturates to exactly full scale in float for inputs this far over the knee, never beyond */
+    CHECK(peak <= 1.0f && peak > 0.95f);
+    {
+        uint32_t bent = 0u;
+        for (done = 0u; done < 4800u * 2u; done++) {
+            float magnitude = fabsf(out_a[done]);
+            bent += magnitude > 0.55f && magnitude < 0.99f;
+        }
+        CHECK(bent > 100u);
+    }
+    mix_destroy(&rig);
+}
+
 int main(void) {
     synthesize();
+    test_switch_blend();
+    test_voice_bindings();
+    test_buses_music_limiter();
     test_attach_validation();
     test_legacy_equivalence();
     test_pitch();

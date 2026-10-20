@@ -2,6 +2,8 @@
 #include <string.h>
 
 #include "sutekh/audio_parameter.h"
+#include "su_audio_parameter_int.h"
+#include "su_audio_state.h"
 
 typedef struct MusicSegment {
     uint32_t segment_id;
@@ -576,4 +578,49 @@ void su_audio_music_state(const SuAudioMusic *music, SuAudioMusicState *out) {
     for (i = 0u; i < SU_AUDIO_MUSIC_STINGERS; i++) {
         out->stingers += music->stingers[i].state == 1u;
     }
+}
+
+/* Checkpoint state: players, pending transition, stingers (as asset references) and the clock. Segments are
+ * configuration and must have been added identically before a load. */
+uint32_t su_audio_music_state_io(SuAudioMusic *music, SuAudioStateIo *io) {
+    uint32_t s;
+    uint32_t segments;
+    MusicStinger loaded[SU_AUDIO_MUSIC_STINGERS];
+    if (music == NULL || io == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    segments = music->segment_count;
+    SU_STATE(io, segments);
+    if (!io->failed && segments != music->segment_count) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    SU_STATE(io, music->clock);
+    SU_STATE(io, music->current);
+    SU_STATE(io, music->outgoing);
+    SU_STATE(io, music->pending);
+    memcpy(loaded, music->stingers, sizeof loaded);
+    for (s = 0u; s < SU_AUDIO_MUSIC_STINGERS; s++) {
+        SU_STATE(io, loaded[s].state);
+        SU_STATE(io, loaded[s].ref);
+        SU_STATE(io, loaded[s].start);
+        SU_STATE(io, loaded[s].gain);
+    }
+    if (io->failed) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    if (!io->save && io->data != NULL) {
+        for (s = 0u; s < SU_AUDIO_MUSIC_STINGERS; s++) {
+            if (music->stingers[s].state != 0u) {
+                (void)su_audio_asset_release(music->assets, music->stingers[s].ref);
+            }
+            music->stingers[s] = loaded[s];
+            music->stingers[s].clip = NULL;
+            if (loaded[s].state != 0u
+                && su_audio_asset_acquire(music->assets, loaded[s].ref, &music->stingers[s].clip) != SU_OK) {
+                music->stingers[s].state = 0u;
+                return SU_E_SCHEMA_MISMATCH;
+            }
+        }
+    }
+    return SU_OK;
 }

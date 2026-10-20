@@ -118,10 +118,10 @@ with three stems during a crossfade about 0.4 ms per 48,000 frames.
 
 ## Not covered
 
-The event runtime does not yet call these APIs: `su_audio_event_post` expands
-without a parameter/switch snapshot and its voices are not modulated by
-bindings. Wiring them (for example a versioned post with an expand state and
-per-voice control application) is an integrator change to the shared runtime.
-Bus gain controls are evaluated values only until A06 buses consume them.
-Music does not resample, time-stretch, or support entry offsets other than
-frame 0 of the destination segment.
+The integrated event runtime consumes these APIs (expansion snapshots, voice
+and bus-gain bindings, music through a bus); see
+[EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md). Switch and blend
+choices are made when an instance is expanded: `CONTINUE`/`FADE` changes and
+blend parameter moves do not re-select the branches of an instance that is
+already playing. Music does not resample, time-stretch, or support entry
+offsets other than frame 0 of the destination segment.

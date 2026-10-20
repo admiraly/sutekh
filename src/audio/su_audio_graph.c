@@ -485,8 +485,8 @@ static uint32_t validate_state(const SuAudioGraph *graph, const SuAudioGraphExpa
     if ((state->switch_count && !state->switches) || (state->parameter_count && !state->parameters) ||
         (state->history_count && !state->history))
         return fail(diagnostic, SU_E_INVALID_ARGUMENT, 0, 0, "snapshot", "null snapshot storage");
-    if (state->switch_count > graph->node_count || state->parameter_count > graph->node_count || state->history_count > graph->node_count)
-        return fail(diagnostic, SU_E_RESOURCE_LIMIT, 0, 0, "snapshot", "snapshot count exceeds node count");
+    if (state->switch_count > 4096u || state->parameter_count > 4096u || state->history_count > graph->node_count)
+        return fail(diagnostic, SU_E_RESOURCE_LIMIT, 0, 0, "snapshot", "snapshot count exceeds its bound");
     for (index = 0; index < state->switch_count; index++) {
         if (!state->switches[index].switch_id) return fail(diagnostic, SU_E_SCHEMA_MISMATCH, 0, 0, "snapshot", "invalid switch ID");
         for (prior = 0; prior < index; prior++) if (state->switches[index].switch_id == state->switches[prior].switch_id)
