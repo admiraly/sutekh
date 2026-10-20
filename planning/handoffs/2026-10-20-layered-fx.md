@@ -34,7 +34,7 @@ at this checkpoint; no unchecked merge is claimed here.
 
 ## Implemented
 
-API generation 4: `SuFxLayers`, `SuFxUvTransform`, `SuFxBatch.layers`,
+API generation 5 (after flame volumes took 4): `SuFxLayers`, `SuFxUvTransform`, `SuFxBatch.layers`,
 `SuRenderFrameDesc.time_seconds`, `SuRenderFxMaterialDesc`,
 `su_render_fx_material_create`. Source-compatible zero defaults; native callers
 must recompile for larger structures. Three samples multiply RGBA; transforms

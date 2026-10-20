@@ -1,6 +1,6 @@
 # Layered unlit effects
 
-Rendering API generation 4 adds source-compatible fields to `SuFxBatch` and
+Rendering API generation 5 (4 after the flame-volume change) adds source-compatible fields to `SuFxBatch` and
 `SuRenderFrameDesc`, and `su_render_fx_material_create`. Recompile native
 callers: structures are larger. Zero-initialize descriptors as before; all new
 fields zero preserve the previous single-texture quad behavior. Analytic
