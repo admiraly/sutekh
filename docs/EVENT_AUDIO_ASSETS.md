@@ -92,6 +92,16 @@ I/O, allocates, locks, or wakes a condition variable. The worker cannot overwrit
 PCM while the callback holds it. After reading, the callback release-publishes
 READY. Worker fills are published only after PCM and bounds are complete.
 
+The existing `su_stream_sample_begin`/`su_stream_sample_missed` pair bounds an
+output-sample demand latch. The first source fetch publishes the primary demand;
+later interpolation fetches in that sample cannot replace it, regardless of
+whether either fetch succeeded. This keeps the primary aligned window and its
+adjacent prefetch resident instead of letting a successful partner continually
+evict a missing primary. Loop partners use the separately prepared loop-head
+cache without redirecting the primary demand. Finishing the sample releases the
+latch. Unguarded internal `su_stream_frame` calls retain their original behavior:
+every fetch publishes its demand, including after a completed guarded sample.
+
 Demands use one atomic latest-position mailbox, not a FIFO: rapid seeks and
 misses coalesce, stale work is bounded to the worker's current pass, and there
 is no allocating backlog. A `decode_queue_full` FIFO metric is not claimed.
@@ -208,15 +218,15 @@ Direct executable results, all exit zero:
 
 | Executable | Checks | Failures |
 | --- | ---: | ---: |
-| Asset/async, no Ogg dependency | 33090 | 0 |
-| Asset/async, synthetic Ogg reference | 77223 | 0 |
-| Instrumented asset/async with forced decoder pause | 77234 | 0 |
+| Asset/async, no Ogg dependency | 33153 | 0 |
+| Asset/async, synthetic Ogg reference | 77286 | 0 |
+| Instrumented asset/async with forced decoder pause | 77297 | 0 |
 | Existing synchronous WAV/Ogg stream | 339 | 0 |
 | Existing mixer with Ogg | 245 | 0 |
 | Existing lowpass | 865040 | 0 |
 | Existing ADPCM | 135 | 0 |
 
-Five consecutive final instrumented runs each passed all 77234 checks. Each
+Five consecutive final instrumented runs each passed all 77297 checks. Each
 reported zero guarded allocation/free, file, mutex/condition-wait, and sleep
 calls, while its legacy synchronous positive control detected two file calls.
 The standard underrun scenarios reported exactly two missing source reads and
@@ -231,8 +241,8 @@ exclude the OS worker stack. Asset metadata layout measured by Clang is 40
 bytes per registry plus 48 bytes per capacity slot, excluding allocator overhead.
 Asset ABI sizes are ID 4, generation 4, reference 8, and stats 16 bytes. The
 registry lifetime scenario measured 16 owned PCM bytes and three refusals.
-Final asset/Ogg executable file size is 442368 bytes; instrumented executable
-is 445952 bytes. These are local file sizes, not distribution/performance budgets.
+Final asset/Ogg repair executable file size is 446464 bytes; instrumented repair
+executable is 450048 bytes. These are local file sizes, not distribution/performance budgets.
 No callback latency distribution or throughput benchmark is claimed.
 
 Source and artifact SHA-256 evidence:
@@ -242,11 +252,50 @@ Source and artifact SHA-256 evidence:
 | `include/sutekh/audio_asset.h` | `3DFB955BE739B24863984B0B340E904B07EE4671CB2089DE9A3B3670FDB1B10B` |
 | `include/sutekh/audio_stream_async.h` | `C5C29563147B259881842D0EA53F00175354305E0379A1C20A8B5D4CB7768BF1` |
 | `src/audio/su_audio_asset.c` | `C37608ADD0D0030CC15631F8425B8AC587E93631F29ED0ECF1C05EABBBB3F5F5` |
-| `src/audio/su_audio_stream.c` | `80894138D2978F24F96BEBD5BAA7E85E0389F8EAF7E5213D13DFD365E420965F` |
+| `src/audio/su_audio_stream.c` | `7312FEABF8029C96D83F5DEC6BDDF598B9583DEDBA344A733F7AA95BE8D19082` |
 | `src/audio/su_audio_int.h` | `273527F86C72B3766A1FBF628207E689B18E30C7F03FD8C146F92562DB84F5E4` |
-| `tests/audio/test_audio_asset.c` | `30108EDA0BFA3E49E395DCA5FB2B3A5643E281E31043358F9119A40201E487EA` |
-| `build-a01/test_audio_asset_final.exe` | `112865AD5461493F8EF8389DC5ABC1EF1534CABB194B34C22E87FFB5D15ECDD3` |
-| `build-a01/test_audio_asset_instrumented.exe` | `1137D6DAD85C28BD57616CA80C5098059D737B8E22EB07FEFC288CF710922E47` |
+| `tests/audio/test_audio_asset.c` | `4B262C663A4E5EE240DB3721C80DA92AAA7E7B6099A2D5EF941D96FF3E937FDE` |
+| `build-a01/test_audio_asset_repair.exe` | `20B831C433B002E1F8783D3796E989A78D9F44DDEEC9E697AFAAE3F22BA23352` |
+| `build-a01/test_audio_asset_repair_instrumented.exe` | `06620271FD21217527643FF99F5E545AECD23584409E6857ECA7068BA94EAA04` |
+
+### Fractional-boundary repair evidence
+
+The review follow-up changes only `src/audio/su_audio_stream.c`,
+`tests/audio/test_audio_asset.c`, and this document. No additional mixer/header
+or build registration changes are required. Targeted validation used dependency
+snapshot `bb2850f1a8314d6ca6c98dfad0d78669267db49a` plus these local edits and
+the existing integration-worktree edits; it is not validation of a future merge.
+
+The initial regression reproduced 25 failing assertions before the repair.
+Its synthetic mono source contains 8192 constant nonzero frames with a 2048-frame
+ring. Eight repeated guarded pairs fetch 1023 then 1024, allowing ten milliseconds
+of worker progress between both fetches and pairs; eight more pairs fetch 3071
+then loop-head frame 7. Both primary and partner must remain exactly 0.25 and
+each pair must report no miss. A cold-primary case subsequently requires eight
+consecutive recovered pairs without explicit re-priming, and a final unguarded
+far fetch must independently request and recover its own window. This covers
+successful partners overwriting primary misses, adjacent-window prefetch,
+loop-wrap starvation, and direct-fetch compatibility.
+
+All final targeted direct builds used the strict flags and sources documented
+above. The final repair executables were run as:
+
+```powershell
+& ./build-a01/test_audio_asset_repair_noogg.exe
+& ./build-a01/test_audio_asset_repair.exe tests/fixtures/audio/tone440_stereo.ogg
+& ./build-a01/test_audio_asset_repair_instrumented.exe tests/fixtures/audio/tone440_stereo.ogg
+& ./build-a01/test_audio_stream_repair.exe build-a01 tests/fixtures/audio/tone440_stereo.ogg
+& ./build-a01/test_audio_repair.exe tests/fixtures/audio/tone440_stereo.ogg
+& ./build-a01/test_audio_lowpass_repair.exe
+& ./build-a01/test_audio_adpcm_repair.exe
+```
+
+All returned zero; the instrumented repair executable passed five consecutive
+runs. The fixed latch fits existing stream-structure padding on this target,
+so measured stream residency and ring bounds are unchanged. The follow-up did
+not run device output, sanitizers, alternate-platform checks, or the integrator's
+full-suite/merged-tree CI gates. Existing staging and unrelated implementation
+files were not changed by this repair.
 
 Remaining acceptance gaps: device output validation, OS-wide callback profiling,
 forced thread/allocator/decoder errors, reference/generation exhaustion,

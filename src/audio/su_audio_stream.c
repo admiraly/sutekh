@@ -34,6 +34,9 @@
 #define WINDOW_EMPTY 0u
 #define WINDOW_READY 1u
 #define WINDOW_HELD 2u
+#define SAMPLE_UNGUARDED 0u
+#define SAMPLE_PRIMARY_PENDING 1u
+#define SAMPLE_PRIMARY_LATCHED 2u
 
 typedef struct SuAsyncWindow {
     _Atomic uint32_t state;
@@ -258,6 +261,7 @@ struct SuAudioStream {
     _Atomic uint64_t underrun_frames;
     _Atomic uint64_t decode_errors;
     int sample_missed;
+    uint32_t sample_demand_state;
     SuAsyncWindow windows[ASYNC_WINDOWS];
     SuAsyncWindow loop_window;
 };
@@ -598,6 +602,7 @@ uint32_t su_audio_stream_mode(SuAudioStream *s, uint32_t mode) {
         }
         atomic_store_explicit(&s->worker_stop, 0, memory_order_relaxed);
         s->sample_missed = 0;
+        s->sample_demand_state = SAMPLE_UNGUARDED;
         atomic_store_explicit(&s->demand, 0u, memory_order_relaxed);
         atomic_store_explicit(&s->loop_demand, UINT64_MAX, memory_order_relaxed);
         for (index = 0; index < ASYNC_WINDOWS; index++) {
@@ -616,6 +621,7 @@ uint32_t su_audio_stream_mode(SuAudioStream *s, uint32_t mode) {
     }
     s->wbase = s->wend = 0u;
     s->sample_missed = 0;
+    s->sample_demand_state = SAMPLE_UNGUARDED;
     s->head_valid = 0;
     if (!s->r.seek(s->r.ctx, 0u)) {
         s->mode = SU_STREAM_OFFLINE_SYNC;
@@ -680,6 +686,15 @@ void su_audio_stream_stats_ex(const SuAudioStream *s, SuAudioStreamStatsEx *out)
     out->decode_errors = atomic_load_explicit(&s->decode_errors, memory_order_relaxed);
 }
 
+static void async_publish_demand(SuAudioStream *s, uint64_t frame) {
+    if (s->sample_demand_state != SAMPLE_PRIMARY_LATCHED) {
+        atomic_store_explicit(&s->demand, frame, memory_order_release);
+        if (s->sample_demand_state == SAMPLE_PRIMARY_PENDING) {
+            s->sample_demand_state = SAMPLE_PRIMARY_LATCHED;
+        }
+    }
+}
+
 void su_stream_frame(SuAudioStream *s, uint64_t idx, float *l, float *r) {
     const float *p;
     uint32_t ch = s->channels;
@@ -692,18 +707,18 @@ void su_stream_frame(SuAudioStream *s, uint64_t idx, float *l, float *r) {
         uint32_t capacity = s->ring_frames / ASYNC_WINDOWS;
         for (index = 0; index < ASYNC_WINDOWS; index++) {
             if (async_read(s, &s->windows[index], s->ring + (size_t)index * capacity * ch, idx, l, r)) {
-                atomic_store_explicit(&s->demand, idx, memory_order_release);
+                async_publish_demand(s, idx);
                 return;
             }
         }
         if (async_read(s, &s->loop_window, s->head, idx, l, r)) {
-            atomic_store_explicit(&s->demand, idx, memory_order_release);
+            async_publish_demand(s, idx);
             return;
         }
         *l = *r = 0.0f;
         atomic_fetch_add_explicit(&s->underruns, 1u, memory_order_relaxed);
         s->sample_missed = 1;
-        atomic_store_explicit(&s->demand, idx, memory_order_release);
+        async_publish_demand(s, idx);
         return;
     }
     if (!(idx >= s->wbase && idx < s->wend)) {
@@ -731,6 +746,7 @@ int su_stream_sample_missed(SuAudioStream *s) {
     }
     int missed = s->sample_missed;
     s->sample_missed = 0;
+    s->sample_demand_state = SAMPLE_UNGUARDED;
     if (missed) {
         atomic_fetch_add_explicit(&s->underrun_frames, 1u, memory_order_relaxed);
     }
@@ -740,5 +756,6 @@ int su_stream_sample_missed(SuAudioStream *s) {
 void su_stream_sample_begin(SuAudioStream *s) {
     if (s != NULL) {
         s->sample_missed = 0;
+        s->sample_demand_state = SAMPLE_PRIMARY_PENDING;
     }
 }

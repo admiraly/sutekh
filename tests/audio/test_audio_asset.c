@@ -335,6 +335,103 @@ static void put32(uint8_t *out, uint32_t value) {
     out[3] = (uint8_t)(value >> 24);
 }
 
+static void fractional_demand(void) {
+    uint8_t wav[44u + 8192u * 2u] = {0};
+    SuAudioStream *stream = NULL;
+    SuAudioStreamStatsEx stats;
+    SuAudioStreamInfo info;
+    float left;
+    float right;
+    uint32_t index;
+    uint32_t phase;
+    uint32_t recovered = 0u;
+    char message[256];
+    memcpy(wav, "RIFF", 4u);
+    put32(wav + 4u, sizeof wav - 8u);
+    memcpy(wav + 8u, "WAVEfmt ", 8u);
+    put32(wav + 16u, 16u);
+    wav[20] = 1u;
+    wav[22] = 1u;
+    put32(wav + 24u, 48000u);
+    put32(wav + 28u, 96000u);
+    wav[32] = 2u;
+    wav[34] = 16u;
+    memcpy(wav + 36u, "data", 4u);
+    put32(wav + 40u, sizeof wav - 44u);
+    for (index = 0u; index < 8192u; index++) {
+        wav[45u + index * 2u] = 32u;
+    }
+    CHECK(su_audio_stream_open_memory(wav, sizeof wav, 2048u, &stream, message) == SU_OK);
+    if (stream == NULL) {
+        return;
+    }
+    CHECK(su_audio_stream_mode(stream, SU_STREAM_ASYNC) == SU_OK);
+    CHECK(su_audio_stream_prime(stream, 0u, 2000u) == SU_OK);
+    for (index = 0u; index < 2000u; index++) {
+        su_audio_stream_info(stream, &info);
+        if (info.frames_decoded >= 2048u) {
+            break;
+        }
+        su_platform_sleep_ms(1u);
+    }
+    CHECK(info.frames_decoded >= 2048u);
+    for (phase = 0u; phase < 2u; phase++) {
+        uint64_t primary = phase == 0u ? 1023u : 3071u;
+        uint64_t partner = phase == 0u ? 1024u : 7u;
+        if (phase != 0u) {
+            su_stream_prepare_loop(stream, partner);
+            CHECK(su_audio_stream_prime(stream, primary, 2000u) == SU_OK);
+        }
+        for (index = 0u; index < 8u; index++) {
+            su_stream_sample_begin(stream);
+            guarded_frame(stream, primary, &left, &right);
+            CHECK(left == 0.25f && right == 0.25f);
+            su_platform_sleep_ms(10u);
+            guarded_frame(stream, partner, &left, &right);
+            CHECK(left == 0.25f && right == 0.25f);
+            CHECK(su_stream_sample_missed(stream) == 0);
+            su_platform_sleep_ms(10u);
+        }
+    }
+    su_audio_stream_stats_ex(stream, &stats);
+    CHECK(stats.underrun_frames == 0u && stats.underrun_reads == 0u);
+    CHECK(su_audio_stream_prime(stream, 4096u, 2000u) == SU_OK);
+    CHECK(su_audio_stream_prime(stream, 1024u, 2000u) == SU_OK);
+    su_stream_sample_begin(stream);
+    guarded_frame(stream, 1023u, &left, &right);
+    CHECK(left == 0.0f && right == 0.0f);
+    guarded_frame(stream, 1024u, &left, &right);
+    CHECK(su_stream_sample_missed(stream) != 0);
+    for (index = 0u; index < 2000u && recovered < 8u; index++) {
+        int ready;
+        su_platform_sleep_ms(10u);
+        su_stream_sample_begin(stream);
+        guarded_frame(stream, 1023u, &left, &right);
+        ready = left == 0.25f && right == 0.25f;
+        guarded_frame(stream, 1024u, &left, &right);
+        ready = ready && left == 0.25f && right == 0.25f;
+        if (su_stream_sample_missed(stream) == 0 && ready) {
+            recovered++;
+        } else {
+            recovered = 0u;
+        }
+    }
+    CHECK(recovered == 8u);
+    guarded_frame(stream, 7000u, &left, &right);
+    CHECK(left == 0.0f && right == 0.0f);
+    for (index = 0u; index < 2000u; index++) {
+        su_platform_sleep_ms(1u);
+        guarded_frame(stream, 7000u, &left, &right);
+        if (left == 0.25f && right == 0.25f) {
+            break;
+        }
+    }
+    CHECK(index < 2000u);
+    CHECK(su_stream_sample_missed(stream) != 0);
+    CHECK(su_audio_stream_close(stream) == SU_OK);
+    printf("fractional demand: adjacent-window and loop-head partners retain primary across worker progress\n");
+}
+
 static void async_stream(void) {
     uint8_t wav[44u + 32768u * 2u] = {0};
     SuAudioStream *stream = NULL;
@@ -591,6 +688,7 @@ int main(int argc, char **argv) {
     resident_render();
     finite_pcm();
     async_stream();
+    fractional_demand();
     if (argc > 1 && su_audio_ogg_available()) {
         async_ogg(argv[1]);
     }
