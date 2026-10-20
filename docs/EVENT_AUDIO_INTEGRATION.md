@@ -1,4 +1,4 @@
-﻿# Integrated event-audio runtime
+# Integrated event-audio runtime
 
 The A01-A10 components are wired into one runtime here. Without a hook, the
 event runtime still mixes through its private legacy mixer exactly as before
