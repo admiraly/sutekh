@@ -1,0 +1,8 @@
+device=Quadro P600 driver=2441347072 Vulkan=4211000 timestamps=1 resolution=1280x720
+particles=0 sorted=0 age_ticks=60 gpu_median_ms=0.816800 gpu_p95_ms=3.039872 cpu_median_ms=0.037100 cpu_p95_ms=0.124800
+particles=10000 sorted=0 age_ticks=60 gpu_median_ms=2.086592 gpu_p95_ms=28.016128 cpu_median_ms=0.062600 cpu_p95_ms=0.099300
+particles=100000 sorted=0 age_ticks=60 gpu_median_ms=12.027008 gpu_p95_ms=38.991296 cpu_median_ms=0.121300 cpu_p95_ms=0.179400
+particles=0 sorted=1 age_ticks=60 gpu_median_ms=0.817120 gpu_p95_ms=3.011712 cpu_median_ms=0.057800 cpu_p95_ms=0.117900
+particles=10000 sorted=1 age_ticks=60 gpu_median_ms=2.996864 gpu_p95_ms=28.298912 cpu_median_ms=0.128300 cpu_p95_ms=0.165800
+particles=100000 sorted=1 age_ticks=60 gpu_median_ms=49.119296 gpu_p95_ms=51.875584 cpu_median_ms=0.222500 cpu_p95_ms=0.284900
+validation_enabled=0 errors=0 warnings=0 failures=0
