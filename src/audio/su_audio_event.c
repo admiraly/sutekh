@@ -4,6 +4,7 @@
 
 #include "sutekh/audio_event.h"
 #include "su_audio_event_int.h"
+#include "su_audio_event_view.h"
 
 typedef struct EventLeaf {
     SuAudioGraphLeaf data;
@@ -562,5 +563,37 @@ uint32_t su_audio_events_session(SuAudioEvents *events, uint64_t session_generat
     }
     events->cursor.session_generation = session_generation;
     events->cursor.next_seq = 0u;
+    return SU_OK;
+}
+
+uint32_t su_audio_events_view(const SuAudioEvents *events, uint32_t slot, SuAudioEventsDesc *desc,
+    SuAudioEventInstanceView *instance, SuAudioEventLeafView *leaves, uint32_t capacity) {
+    const EventInstance *source;
+    uint32_t index;
+    if (events == NULL || desc == NULL || instance == NULL || (leaves == NULL && capacity != 0u)
+        || slot >= events->desc.max_instances) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *desc = events->desc;
+    source = &events->instances[slot];
+    memset(instance, 0, sizeof *instance);
+    instance->state = source->state;
+    if (source->state == 0u) {
+        return SU_OK;
+    }
+    instance->handle = instance_handle(slot, source->generation);
+    instance->emitter = source->emitter;
+    instance->order = source->order;
+    instance->scope = source->scope;
+    instance->count = source->count;
+    for (index = 0; index < source->count && index < capacity; index++) {
+        const EventLeaf *leaf = &source->leaves[index];
+        leaves[index].data = leaf->data;
+        leaves[index].start_sample = leaf->at;
+        leaves[index].state = leaf->state;
+        leaves[index].gain = leaf->voice_desc.gain;
+        leaves[index].pitch = leaf->voice_desc.pitch;
+        leaves[index].lowpass_hz = leaf->lowpass_hz;
+    }
     return SU_OK;
 }

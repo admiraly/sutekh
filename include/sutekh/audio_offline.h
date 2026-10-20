@@ -118,6 +118,15 @@ uint32_t su_audio_offline_metrics(const SuAudioOffline *offline, SuAudioOfflineM
 /* Writes a JSON report (NUL-terminated); written excludes the terminator. */
 uint32_t su_audio_offline_report_json(const SuAudioOffline *offline, char *out, size_t capacity, size_t *written);
 
+/* Borrowed scene owned by the session (valid until end). */
+SuAudioScene *su_audio_offline_scene(const SuAudioOffline *offline);
+/* Optional observer called once per submitted trace command, after the
+ * runtime accepted or refused it. Commands replayed while restoring a
+ * checkpoint are not reported. Pass NULL to detach. */
+typedef void (*SuAudioOfflineObserver)(void *user, uint32_t trace_index, const SuAudioTraceCommand *command,
+    uint32_t status, uint64_t render_clock, SuAudioInstance instance);
+uint32_t su_audio_offline_observe(SuAudioOffline *offline, SuAudioOfflineObserver observer, void *user);
+
 /* IEEE float32 stereo WAV encoding into caller memory (44-byte header). */
 uint32_t su_audio_wav_encode_f32(const float *stereo, uint64_t frames, uint32_t sample_rate,
     void *out, size_t capacity, size_t *written);

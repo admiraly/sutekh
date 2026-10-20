@@ -60,6 +60,8 @@ struct SuAudioOffline {
     uint32_t failed;
     uint32_t replayed;
     double render_seconds;
+    SuAudioOfflineObserver observer;
+    void *observer_user;
 };
 
 static double now_seconds(void) {
@@ -448,6 +450,11 @@ static void apply_command(SuAudioOffline *off, uint32_t index) {
     } else {
         off->failed++;
     }
+    if (off->observer != NULL) {
+        off->observer(off->observer_user, index, c, status, su_audio_events_clock(off->events),
+            c->kind == SU_AUDIO_TRACE_POST ? off->handles[index]
+            : c->kind == SU_AUDIO_TRACE_STOP_INSTANCE ? off->handles[c->target] : 0u);
+    }
 }
 
 static uint32_t refill(SuAudioOffline *off) {
@@ -651,6 +658,19 @@ const SuAudioEvents *su_audio_offline_events(const SuAudioOffline *offline) {
     return offline != NULL ? offline->events : NULL;
 }
 
+SuAudioScene *su_audio_offline_scene(const SuAudioOffline *offline) {
+    return offline != NULL ? offline->scene : NULL;
+}
+
+uint32_t su_audio_offline_observe(SuAudioOffline *offline, SuAudioOfflineObserver observer, void *user) {
+    if (offline == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    offline->observer = observer;
+    offline->observer_user = user;
+    return SU_OK;
+}
+
 /* ---- checkpoints ----
  * 0 magic, 4 version, 8 header bytes, 12 asset ref count, 16 position,
  * 24 trace_next, 28 reserved, 32 cursor (generation, next_seq), 48 source
@@ -831,9 +851,15 @@ uint32_t su_audio_offline_report_json(const SuAudioOffline *offline, char *out, 
     json_number(tpeak, sizeof tpeak, m.true_peak_dbtp);
     for (index = 0; toolchain()[index] != '\0' && j + 1u < sizeof tool; index++) {
         char c = toolchain()[index];
+        if (c == '(') {
+            break; /* drop vendor/repository suffixes */
+        }
         if (c != '"' && c != '\\' && (unsigned char)c >= 0x20u) {
             tool[j++] = c;
         }
+    }
+    while (j > 0u && tool[j - 1u] == ' ') {
+        j--;
     }
     tool[j] = '\0';
     n = snprintf(out, out != NULL ? capacity : 0u,
