@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "sutekh/audio_cluster.h"
+#include "su_audio_cluster_int.h"
+#include "su_audio_state.h"
 
 #define CLUSTER_PI 3.14159265358979323846
 #define DOWNMIX_GAIN 0.70710678f
@@ -737,4 +739,37 @@ void su_audio_cluster_stats(const SuAudioCluster *cluster, SuAudioClusterStats *
     }
     *out = cluster->stats;
     out->clock = cluster->clock;
+}
+
+uint32_t su_audio_cluster_capacity(const SuAudioCluster *cluster) {
+    return cluster != NULL ? cluster->desc.max_objects : 0u;
+}
+
+/* Checkpoint state between updates: current object assignments, cluster slots, IDs, clock and stats. */
+uint32_t su_audio_cluster_state(SuAudioCluster *cluster, SuAudioStateIo *io) {
+    uint32_t i;
+    uint32_t count;
+    if (cluster == NULL || io == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    SU_STATE(io, cluster->current);
+    count = cluster->counts[cluster->current & 1u];
+    SU_STATE(io, count);
+    if (io->failed || cluster->current > 1u || count > cluster->desc.max_objects) {
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    cluster->counts[cluster->current] = count;
+    for (i = 0u; i < count; i++) {
+        SU_STATE(io, cluster->states[cluster->current][i]);
+    }
+    for (i = 0u; i < cluster->desc.max_objects; i++) {
+        SU_STATE(io, cluster->clusters[i].used);
+        if (cluster->clusters[i].used) {
+            SU_STATE(io, cluster->clusters[i]);
+        }
+    }
+    SU_STATE(io, cluster->next_id);
+    SU_STATE(io, cluster->clock);
+    SU_STATE(io, cluster->stats);
+    return io->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }

@@ -7,6 +7,7 @@
 
 #include "sutekh/audio_event.h"
 #include "sutekh/audio_parameter.h"
+#include "sutekh/audio_cluster.h"
 
 static unsigned checks;
 static unsigned failures;
@@ -684,7 +685,8 @@ static void test_buses_music_limiter(void) {
     CHECK(su_audio_param_set_at(rig.params, global, 2u, 1.0f, 18000u) == SU_OK);
     for (done = 0u; done < FRAMES; done += 128u) {
         float gain = 0.0f;
-        CHECK(su_audio_events_render(rig.events, out_a + (size_t)done * 2u, 128u) == SU_OK);
+        uint32_t take = FRAMES - done < 128u ? FRAMES - done : 128u;
+        CHECK(su_audio_events_render(rig.events, out_a + (size_t)done * 2u, take) == SU_OK);
         CHECK(su_audio_bus_gain_at(rig.tree, 30u, &gain) == SU_OK);
         if (done >= 4000u && done < 11900u && gain < before) {
             before = gain;
@@ -722,8 +724,445 @@ static void test_buses_music_limiter(void) {
     mix_destroy(&rig);
 }
 
+/* ---- clustering and direct checkpoints over the full runtime ---- */
+
+#define FULL_FRAMES 48000u
+
+typedef struct FullRig {
+    MixRig mix;
+    SuAudioScene *scene;
+    SuAudioCluster *cluster;
+    SuAudioEmitter emitters[2];
+    SuAudioInstance handles[64];
+    uint32_t posted;
+} FullRig;
+
+static void full_create(FullRig *rig, int with_cluster, uint32_t physical) {
+    static const SuAudioBindingPoint identity[2] = {{-24.0f, -24.0f}, {0.0f, 0.0f}};
+    static const SuAudioBindingPoint fader[2] = {{0.0f, 0.0f}, {1.0f, -12.0f}};
+    static const SuAudioBindingPoint octave[2] = {{0.0f, 1.0f}, {1.0f, 2.0f}};
+    static const SuAudioAssetRef stems[1] = {{2u, 2u}};
+    static const SuAudioTempoPoint tempo[1] = {{0u, 120000u}};
+    SuAudioGraphLimits limits = {16u, 32u, 8u, 16u, 8192u};
+    SuAudioGraphDiagnostic diagnostic;
+    SuAudioEventsDesc desc;
+    SuAudioClip clip;
+    SuAudioAssetRef ref;
+    SuAudioParamDef defs[3];
+    SuAudioSwitchDef sw;
+    SuAudioParamBinding bindings[3];
+    SuAudioParamsDesc params_desc;
+    SuAudioBusDesc buses[4];
+    SuAudioDuckRule duck;
+    SuAudioBusTreeDesc tree_desc;
+    SuAudioBusDiagnostic bus_diag;
+    SuAudioVoicePoolDesc pool_desc;
+    SuAudioEventsHook hook;
+    SuAudioSceneDesc scene_desc = {sizeof scene_desc, 4u, 2u};
+    SuAudioCurvePoint points[2];
+    SuAudioCurveDesc curve;
+    SuAudioCurveId curve_id = 0u;
+    SuAudioEmitterSnapshot emitter;
+    SuAudioCameraListener listener;
+    SuAudioMusicDesc music_desc;
+    SuAudioMusicSegmentDesc seg;
+    SuMusicTransition move;
+    uint64_t boundary = 0u;
+    uint32_t index;
+    MixRig *m = &rig->mix;
+    memset(rig, 0, sizeof *rig);
+    CHECK(su_audio_assets_create(8u, 1u << 20, &m->assets) == SU_OK);
+    clip.channels = 1u;
+    clip.sample_rate = RATE;
+    clip.samples = tone;
+    clip.frames = TONE;
+    CHECK(su_audio_asset_prepare(m->assets, 1u, &clip, &ref) == SU_OK);
+    clip.samples = loop_tone;
+    clip.frames = LOOP;
+    CHECK(su_audio_asset_prepare(m->assets, 2u, &clip, &ref) == SU_OK);
+    clip.samples = ramp;
+    clip.frames = TONE;
+    CHECK(su_audio_asset_prepare(m->assets, 3u, &clip, &ref) == SU_OK);
+    CHECK(su_audio_graph_prepare(mix_json, sizeof mix_json - 1u, m->assets, &limits, &m->graph, &diagnostic) == SU_OK);
+    CHECK(su_audio_scene_create(&scene_desc, &rig->scene) == SU_OK);
+    memset(points, 0, sizeof points);
+    points[0].distance_m = 1.0f;
+    points[0].lowpass_hz = 24000.0f;
+    points[0].scale = 1.0f;
+    points[1].distance_m = 60.0f;
+    points[1].gain_db = -18.0f;
+    points[1].lowpass_hz = 2000.0f;
+    points[1].scale = 1.0f;
+    curve.struct_size = sizeof curve;
+    curve.points = points;
+    curve.point_count = 2u;
+    CHECK(su_audio_scene_curve_add(rig->scene, &curve, &curve_id) == SU_OK);
+    memset(&emitter, 0, sizeof emitter);
+    emitter.curve = curve_id;
+    emitter.scale = 1.0f;
+    emitter.pos = meters(-6.0, -4.0);
+    CHECK(su_audio_emitter_create(rig->scene, &emitter, &rig->emitters[0]) == SU_OK);
+    emitter.pos = meters(20.0, -25.0);
+    CHECK(su_audio_emitter_create(rig->scene, &emitter, &rig->emitters[1]) == SU_OK);
+    memset(&listener, 0, sizeof listener);
+    listener.rot.w = 1.0f;
+    CHECK(su_audio_scene_listener_set(rig->scene, &listener) == SU_OK);
+    memset(&desc, 0, sizeof desc);
+    desc.struct_size = sizeof desc;
+    desc.sample_rate = RATE;
+    desc.max_instances = 24u;
+    desc.max_leaves_per_instance = 4u;
+    desc.max_logical_voices = 64u;
+    desc.command_capacity = 16u;
+    desc.project_seed = 9u;
+    desc.session_generation = 1u;
+    CHECK(su_audio_events_create(&desc, m->assets, rig->scene, m->graph, &m->events) == SU_OK);
+    memset(defs, 0, sizeof defs);
+    defs[0].id = 9u;
+    defs[0].max_value = 1.0f;
+    defs[0].smoothing_frames = 2400u;
+    defs[1].id = 1u;
+    defs[1].min_value = -24.0f;
+    defs[1].smoothing_frames = 1200u;
+    defs[2].id = 2u;
+    defs[2].max_value = 1.0f;
+    defs[2].smoothing_frames = 4800u;
+    memset(&sw, 0, sizeof sw);
+    sw.id = 5u;
+    sw.default_value = 1u;
+    sw.policy = SU_AUDIO_SWITCH_CONTINUE;
+    memset(bindings, 0, sizeof bindings);
+    bindings[0].param_id = 1u;
+    bindings[0].control = SU_AUDIO_CONTROL_GAIN_DB;
+    bindings[0].points = identity;
+    bindings[0].point_count = 2u;
+    bindings[1].param_id = 2u;
+    bindings[1].control = SU_AUDIO_CONTROL_BUS_GAIN_DB;
+    bindings[1].bus_id = 30u;
+    bindings[1].points = fader;
+    bindings[1].point_count = 2u;
+    bindings[2].param_id = 9u;
+    bindings[2].control = SU_AUDIO_CONTROL_PITCH;
+    bindings[2].points = octave;
+    bindings[2].point_count = 2u;
+    memset(&params_desc, 0, sizeof params_desc);
+    params_desc.struct_size = sizeof params_desc;
+    params_desc.sample_rate = RATE;
+    params_desc.params = defs;
+    params_desc.param_count = 3u;
+    params_desc.switches = &sw;
+    params_desc.switch_count = 1u;
+    params_desc.bindings = bindings;
+    params_desc.binding_count = 3u;
+    params_desc.max_scoped_values = 32u;
+    CHECK(su_audio_params_create(&params_desc, &m->params) == SU_OK);
+    memset(buses, 0, sizeof buses);
+    buses[0].id = 1u;
+    buses[0].parent = SU_AUDIO_BUS_ROOT;
+    buses[1].id = 10u;
+    buses[2].id = 30u;
+    buses[3].id = 40u;
+    for (index = 1u; index < 4u; index++) {
+        buses[index].parent = 1u;
+    }
+    memset(&duck, 0, sizeof duck);
+    duck.source = 10u;
+    duck.target = 30u;
+    duck.threshold_db = -30.0f;
+    duck.ratio = 4.0f;
+    duck.attack_ms = 5.0f;
+    duck.hold_ms = 20.0f;
+    duck.release_ms = 100.0f;
+    duck.max_attenuation_db = 12.0f;
+    duck.flags = SU_AUDIO_DUCK_DELAY_QUANTUM;
+    memset(&tree_desc, 0, sizeof tree_desc);
+    tree_desc.struct_size = sizeof tree_desc;
+    tree_desc.sample_rate = RATE;
+    tree_desc.max_block_frames = 128u;
+    tree_desc.buses = buses;
+    tree_desc.bus_count = 4u;
+    tree_desc.rules = &duck;
+    tree_desc.rule_count = 1u;
+    CHECK(su_audio_bus_tree_create(&tree_desc, &m->tree, &bus_diag) == SU_OK);
+    memset(&pool_desc, 0, sizeof pool_desc);
+    pool_desc.struct_size = sizeof pool_desc;
+    pool_desc.sample_rate = RATE;
+    pool_desc.max_logical = 64u;
+    pool_desc.max_physical = physical;
+    pool_desc.transition_reserve = 2u;
+    CHECK(su_audio_voice_pool_create(&pool_desc, &m->pool) == SU_OK);
+    memset(&music_desc, 0, sizeof music_desc);
+    music_desc.struct_size = sizeof music_desc;
+    music_desc.sample_rate = RATE;
+    music_desc.max_segments = 2u;
+    CHECK(su_audio_music_create(&music_desc, m->assets, &m->music) == SU_OK);
+    memset(&seg, 0, sizeof seg);
+    seg.struct_size = sizeof seg;
+    seg.segment_id = 1u;
+    seg.stems = stems;
+    seg.stem_count = 1u;
+    seg.tempo = tempo;
+    seg.tempo_count = 1u;
+    seg.beats_per_bar = 4u;
+    seg.length_frames = LOOP;
+    seg.loop = 1u;
+    CHECK(su_audio_music_segment_add(m->music, &seg) == SU_OK);
+    memset(&move, 0, sizeof move);
+    move.struct_size = sizeof move;
+    move.segment_id = 1u;
+    move.sync = SU_AUDIO_MUSIC_IMMEDIATE;
+    CHECK(su_audio_music_transition(m->music, &move, 0u, &boundary) == SU_OK);
+    memset(&hook, 0, sizeof hook);
+    hook.struct_size = sizeof hook;
+    hook.version = SU_AUDIO_EVENTS_HOOK_VERSION;
+    hook.voices = m->pool;
+    hook.default_policy.release_frames = 64u;
+    hook.default_policy.virtual_mode = SU_AUDIO_VIRTUAL_ADVANCE;
+    hook.params = m->params;
+    hook.buses = m->tree;
+    hook.music = m->music;
+    hook.music_bus_id = 40u;
+    hook.limiter_knee = 0.8f;
+    if (with_cluster) {
+        SuAudioClusterDesc cluster_desc;
+        memset(&cluster_desc, 0, sizeof cluster_desc);
+        cluster_desc.struct_size = sizeof cluster_desc;
+        cluster_desc.width_rad = 1.0f;
+        cluster_desc.leave_ratio = 1.25f;
+        cluster_desc.hold_frames = 512u;
+        cluster_desc.crossfade_frames = 256u;
+        cluster_desc.output_limit = 2u;
+        cluster_desc.max_objects = 16u;
+        CHECK(su_audio_cluster_create(&cluster_desc, &rig->cluster) == SU_OK);
+        hook.cluster = rig->cluster;
+        hook.cluster_inputs = SU_AUDIO_EVENTS_CLUSTER_VOICES | SU_AUDIO_EVENTS_CLUSTER_BUSES;
+    }
+    CHECK(su_audio_events_attach(m->events, &hook) == SU_OK);
+}
+
+static void full_destroy(FullRig *rig) {
+    mix_destroy(&rig->mix);
+    su_audio_cluster_destroy(rig->cluster);
+    su_audio_scene_destroy(rig->scene);
+}
+
+/* A deterministic presentation script: commands issued at render positions (as a game would issue them
+ * between render calls), each targeting a time at or after the position. */
+typedef struct ScriptItem {
+    uint32_t issue;
+    uint32_t kind;     /* 0 post, 1 param, 2 switch, 3 listener, 4 emitter, 5 stop */
+    uint32_t a;
+    uint32_t b;
+    float value;
+} ScriptItem;
+
+static ScriptItem script[64];
+static uint32_t script_count;
+
+static void script_add(uint32_t issue, uint32_t kind, uint32_t a, uint32_t b, float value) {
+    script[script_count].issue = issue;
+    script[script_count].kind = kind;
+    script[script_count].a = a;
+    script[script_count].b = b;
+    script[script_count].value = value;
+    script_count++;
+}
+
+static void build_script(void) {
+    uint32_t index;
+    script_count = 0u;
+    script_add(0u, 0u, 2u, 0u, 0.0f);        /* ambience loop, bus 30, handle 0 */
+    script_add(0u, 1u, 2u, 9000u, 0.6f);     /* ambience fader binding */
+    script_add(0u, 2u, 5u, 20000u, 2.0f);    /* switch to the ramp case */
+    for (index = 0; index < 14u; index++) {
+        uint32_t issue = 700u + index * 3100u;
+        script_add(issue, 0u, index % 3u == 0u ? 1u : index % 3u == 1u ? 3u : 4u, 1u + index % 2u, 0.0f);
+    }
+    script_add(15000u, 3u, 0u, 0u, 0.0f);    /* listener turns */
+    script_add(25000u, 4u, 1u, 0u, 0.0f);    /* emitter 2 approaches */
+    script_add(30000u, 5u, 0u, 40000u, 500.0f);
+    script_add(31000u, 1u, 9u, 33000u, 0.5f); /* pitch glide on every voice */
+    script_add(36000u, 1u, 1u, 36500u, -9.0f);
+    for (index = 1u; index < script_count; index++) { /* stable insertion sort by issue position */
+        ScriptItem item = script[index];
+        uint32_t at = index;
+        while (at > 0u && script[at - 1u].issue > item.issue) {
+            script[at] = script[at - 1u];
+            at--;
+        }
+        script[at] = item;
+    }
+}
+
+static void script_apply(FullRig *rig, const ScriptItem *item) {
+    MixRig *m = &rig->mix;
+    SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+    switch (item->kind) {
+    case 0u: {
+        SuAudioTrigger trigger;
+        SuAudioInstance instance = 0u;
+        memset(&trigger, 0, sizeof trigger);
+        trigger.struct_size = sizeof trigger;
+        trigger.event_id = item->a;
+        trigger.emitter = item->b ? rig->emitters[item->b - 1u] : 0u;
+        trigger.sample_time = item->issue + 200u;
+        trigger.commit_seq = m->seq++;
+        trigger.session_generation = 1u;
+        trigger.scope_id = 3u;
+        CHECK(su_audio_event_post(m->events, &trigger, &instance, NULL) == SU_OK);
+        rig->handles[rig->posted++] = instance;
+        break;
+    }
+    case 1u:
+        CHECK(su_audio_param_set_at(m->params, global, item->a, item->value, item->b) == SU_OK);
+        break;
+    case 2u:
+        CHECK(su_audio_switch_set_at(m->params, global, item->a, (uint32_t)item->value, item->b) == SU_OK);
+        break;
+    case 3u: {
+        SuAudioCameraListener listener;
+        memset(&listener, 0, sizeof listener);
+        listener.rot.y = 0.38268343f;
+        listener.rot.w = 0.92387953f;
+        listener.pos = meters(1.0, 0.0);
+        CHECK(su_audio_scene_listener_set(rig->scene, &listener) == SU_OK);
+        break;
+    }
+    case 4u: {
+        SuVec3f velocity = {0.0f, 0.0f, 0.0f};
+        CHECK(su_audio_emitter_update(rig->scene, rig->emitters[item->a], meters(4.0, -3.0), velocity) == SU_OK);
+        break;
+    }
+    default:
+        CHECK(su_audio_instance_stop(m->events, rig->handles[item->a], item->b, (uint32_t)item->value) == SU_OK);
+        break;
+    }
+}
+
+/* Renders [from, to) applying script items issued in that range; chunk sizes vary. */
+static void script_run(FullRig *rig, uint32_t from, uint32_t to, float *out) {
+    uint32_t position = from;
+    uint32_t item = 0u;
+    uint32_t chunk = 61u;
+    while (item < script_count && script[item].issue < from) {
+        item++;
+    }
+    while (position < to) {
+        uint32_t next = to;
+        uint32_t take;
+        while (item < script_count && script[item].issue == position) {
+            script_apply(rig, &script[item++]);
+        }
+        if (item < script_count && script[item].issue < next) {
+            next = script[item].issue;
+        }
+        take = next - position < chunk ? next - position : chunk;
+        chunk = chunk == 61u ? 500u : chunk == 500u ? 128u : 61u;
+        CHECK(su_audio_events_render(rig->mix.events, out + (size_t)position * 2u, take) == SU_OK);
+        position += take;
+    }
+}
+
+static float full_a[FULL_FRAMES * 2u];
+static float full_b[FULL_FRAMES * 2u];
+static uint8_t blob[1u << 20];
+
+/* Clustering consumes voice identity and pre-master buses without changing the stereo output. */
+static void test_cluster_feed(void) {
+    FullRig plain;
+    FullRig clustered;
+    SuAudioClusterStats stats;
+    build_script();
+    full_create(&plain, 0, 3u);
+    full_create(&clustered, 1, 3u);
+    script_run(&plain, 0u, FULL_FRAMES, full_a);
+    script_run(&clustered, 0u, FULL_FRAMES, full_b);
+    CHECK(memcmp(full_a, full_b, sizeof full_a) == 0);
+    su_audio_cluster_stats(clustered.cluster, &stats);
+    CHECK(stats.clock == FULL_FRAMES);
+    CHECK(stats.beds >= 3u);           /* the three pre-master buses */
+    CHECK(stats.created > 0u && stats.joins > 0u);
+    CHECK(stats.outputs <= 2u || stats.infeasible != 0u);
+    full_destroy(&plain);
+    full_destroy(&clustered);
+}
+
+/* A direct checkpoint taken at any position, loaded into a fresh runtime, continues exactly like the
+ * uninterrupted render; replaying the script from the start to the same position (the verifier path) agrees
+ * too. Checkpoint size does not grow with position. */
+static void test_checkpoints(void) {
+    static const uint32_t positions[] = {1u, 127u, 128u, 4000u, 9001u, 15000u, 20000u, 25555u, 30001u,
+                                         33333u, 40000u, 47000u};
+    FullRig reference;
+    size_t smallest = (size_t)-1;
+    size_t largest = 0u;
+    uint32_t p;
+    build_script();
+    full_create(&reference, 1, 3u);
+    script_run(&reference, 0u, FULL_FRAMES, full_a);
+    {
+        SuAudioVoiceStats stats;
+        su_audio_voice_pool_stats(reference.mix.pool, &stats);
+        CHECK(stats.stolen > 0u && stats.virtual_peak > 0u);
+    }
+    for (p = 0; p < sizeof positions / sizeof positions[0]; p++) {
+        FullRig replay;
+        FullRig restored;
+        size_t size = 0u;
+        size_t written = 0u;
+        uint32_t position = positions[p];
+        full_create(&replay, 1, 3u);
+        script_run(&replay, 0u, position, full_b);
+        CHECK(memcmp(full_a, full_b, (size_t)position * 2u * sizeof(float)) == 0);
+        CHECK(su_audio_events_checkpoint_save(replay.mix.events, NULL, 0u, &size) == SU_OK);
+        CHECK(size <= sizeof blob);
+        CHECK(su_audio_events_checkpoint_save(replay.mix.events, blob, sizeof blob, &written) == SU_OK);
+        CHECK(written == size);
+        smallest = written < smallest ? written : smallest;
+        largest = written > largest ? written : largest;
+        full_create(&restored, 1, 3u);
+        CHECK(su_audio_events_checkpoint_load(restored.mix.events, blob, written) == SU_OK);
+        /* the game restores its own presentation state: handles and the commit sequence */
+        memcpy(restored.handles, replay.handles, sizeof restored.handles);
+        restored.posted = replay.posted;
+        restored.mix.seq = replay.mix.seq;
+        CHECK(su_audio_events_clock(restored.mix.events) == su_audio_events_clock(replay.mix.events));
+        script_run(&restored, position, FULL_FRAMES, full_b);
+        CHECK(memcmp(full_a + (size_t)position * 2u, full_b + (size_t)position * 2u,
+            (size_t)(FULL_FRAMES - position) * 2u * sizeof(float)) == 0);
+        /* the replayed runtime continues identically as well */
+        script_run(&replay, position, FULL_FRAMES, full_b);
+        CHECK(memcmp(full_a, full_b, sizeof full_a) == 0);
+        full_destroy(&replay);
+        full_destroy(&restored);
+    }
+    /* sizes vary only with live voices and instances, never with elapsed time */
+    CHECK(largest < 2u * smallest);
+    {
+        FullRig other;
+        size_t written = 0u;
+        CHECK(su_audio_events_checkpoint_save(reference.mix.events, blob, sizeof blob, &written) == SU_OK);
+        full_create(&other, 1, 4u); /* different physical voice count: fingerprint differs */
+        CHECK(su_audio_events_checkpoint_load(other.mix.events, blob, written) == SU_E_SCHEMA_MISMATCH);
+        blob[written / 2u] ^= 1u;   /* corruption: checksum */
+        CHECK(su_audio_events_checkpoint_load(reference.mix.events, blob, written) == SU_E_SCHEMA_MISMATCH);
+        full_destroy(&other);
+    }
+    {
+        Rig legacy;
+        RigOptions options = default_options(0);
+        size_t written = 0u;
+        rig_create(&legacy, &options);
+        CHECK(su_audio_events_checkpoint_save(legacy.events, NULL, 0u, &written) == SU_E_UNSUPPORTED_METHOD);
+        rig_destroy(&legacy);
+    }
+    full_destroy(&reference);
+}
+
 int main(void) {
     synthesize();
+    test_cluster_feed();
+    test_checkpoints();
     test_switch_blend();
     test_voice_bindings();
     test_buses_music_limiter();

@@ -106,5 +106,6 @@ steady state does not. These are observations, not a latency distribution.
 Update cost scales with objects times cluster slots (`max_objects`), and budget
 merges are quadratic in live clusters; both are bounded by the descriptor. Only
 the CPU stereo reference exists: no object/height backend adapter is admitted.
-Integration with A05 logical identity and A06 pre-master bus outputs, and RMS
-measurement from rendered PCM, remain for the integrator.
+The integrated event runtime feeds clustering from voice identity and
+pre-master bus outputs, with RMS measured from the rendered PCM; see
+[EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md).

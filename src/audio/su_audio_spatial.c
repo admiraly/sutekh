@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include "sutekh/audio_spatial.h"
+#include "su_audio_cluster_int.h"
+#include "su_audio_state.h"
 
 typedef struct EmitterSlot {
     SuAudioEmitterSnapshot value;
@@ -402,4 +404,32 @@ uint32_t su_audio_scene_resolve_v2(const SuAudioScene *scene, const SuAudioVoice
         *out = resolved;
     }
     return status;
+}
+
+void su_audio_scene_capacity(const SuAudioScene *scene, uint32_t *emitters, uint32_t *curves, uint32_t *curve_count) {
+    *emitters = scene != NULL ? scene->emitter_capacity : 0u;
+    *curves = scene != NULL ? scene->curve_capacity : 0u;
+    *curve_count = scene != NULL ? scene->curve_count : 0u;
+}
+
+uint32_t su_audio_scene_state(SuAudioScene *scene, SuAudioStateIo *io) {
+    uint32_t index;
+    if (scene == NULL || io == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (index = 0; index < scene->emitter_capacity; index++) {
+        EmitterSlot *slot = &scene->emitters[index];
+        SU_STATE(io, slot->generation);
+        SU_STATE(io, slot->active);
+        if (slot->active) {
+            SU_STATE(io, slot->value.pos);
+            SU_STATE(io, slot->value.vel);
+            SU_STATE(io, slot->value.curve);
+            SU_STATE(io, slot->value.scale);
+        }
+    }
+    SU_STATE(io, scene->listener.pos);
+    SU_STATE(io, scene->listener.rot);
+    SU_STATE(io, scene->listener.vel);
+    return io->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }

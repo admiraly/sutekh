@@ -6,6 +6,7 @@
 #include "sutekh/audio_graph.h"
 #include "sutekh/audio_voice_policy.h"
 #include "sutekh/audio_bus.h"
+#include "sutekh/audio_cluster.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -104,7 +105,17 @@ typedef struct SuAudioEventsHook {
     struct SuAudioMusic *music;            /* optional: rendered into music_bus_id (0: root) each quantum */
     uint32_t music_bus_id;
     float limiter_knee;                    /* master soft limiter knee in [0.1, 1); 0 = hard clamp */
+    SuAudioCluster *cluster;               /* optional: fed every quantum from cluster_inputs */
+    uint32_t cluster_inputs;               /* SU_AUDIO_EVENTS_CLUSTER_* */
 } SuAudioEventsHook;
+
+/* Clustering inputs: rendered voices as objects (ID = logical voice handle, steal tails with bit 63 set;
+ * listener-relative direction and distance; mono pre-pan signal; non-spatial voices as beds) and the
+ * pre-master bus outputs (direct children of the root, ID = bit 62 | bus ID) as stereo beds. Clustering
+ * describes an object representation for an object renderer; the runtime's stereo output does not depend on
+ * it. The cluster's max_objects must cover max_physical + transition_reserve (+ pre-master buses). */
+#define SU_AUDIO_EVENTS_CLUSTER_VOICES 1u
+#define SU_AUDIO_EVENTS_CLUSTER_BUSES 2u
 
 #define SU_AUDIO_EVENTS_HOOK_HAS(hook, field) \
     ((hook)->struct_size >= offsetof(SuAudioEventsHook, field) + sizeof((hook)->field))
@@ -120,6 +131,32 @@ typedef struct SuAudioEventsHook {
  * the tree output feeds the master limiter. Music must share the runtime clock and sample rate. All referenced
  * objects must outlive the runtime and are then driven only by it (their own render calls must not be used). */
 uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *hook);
+
+/* ---- Direct checkpoints of the integrated runtime ----
+ * One blob holds the event runtime (instances, leaves, queued stops, commit cursor, stats, the partially
+ * consumed quantum), the voice pool (logical and physical voices, cursors, filters, ramps, steal tails), the
+ * bus tree (faders, ramps, duck envelopes, delayed sidechains, meters), parameters, music, clustering and the
+ * scene's emitters and listener. Assets are written as (id, generation) and re-pinned on load; no pointers are
+ * written. Loading writes that state into a runtime attached to identically configured components (a layout
+ * fingerprint is checked), so restore cost depends only on the configured capacities, never on the position.
+ * The layout is the build's in-memory numeric representation (profile audio_float_local_v1): load only in the
+ * build that saved. Save with out == NULL reports the size. Requires an attached runtime
+ * (SU_E_UNSUPPORTED_METHOD otherwise). Load validates the header, fingerprint, checksum and that every pinned
+ * asset generation is still resident before changing anything (SU_E_SCHEMA_MISMATCH otherwise). */
+#define SU_AUDIO_EVENTS_CHECKPOINT_VERSION 1u
+#define SU_AUDIO_EVENTS_CHECKPOINT_HEADER 64u
+
+typedef struct SuAudioEventsCheckpointInfo {
+    uint32_t version;
+    uint64_t fingerprint;
+    uint64_t body_bytes;
+    uint64_t clock;                        /* render clock at save */
+    uint64_t delivered_frames;
+} SuAudioEventsCheckpointInfo;
+
+uint32_t su_audio_events_checkpoint_save(SuAudioEvents *events, void *out, size_t capacity, size_t *written);
+uint32_t su_audio_events_checkpoint_load(SuAudioEvents *events, const void *data, size_t bytes);
+uint32_t su_audio_events_checkpoint_info(const void *data, size_t bytes, SuAudioEventsCheckpointInfo *out);
 
 #ifdef __cplusplus
 }
