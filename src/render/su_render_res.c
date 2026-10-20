@@ -1012,6 +1012,39 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
     return SU_OK;
 }
 
+uint32_t su_render_fx_material_create(SuRenderer *renderer, const SuRenderFxMaterialDesc *desc, SuRenderHandle *out) {
+    uint32_t idx = 0;
+    uint32_t layer;
+    Res *slot;
+    if (out != NULL) {
+        *out = 0;
+    }
+    if (renderer == NULL || desc == NULL || out == NULL || desc->blend > SU_FX_BLEND_PREMUL ||
+        desc->wrap_u > SU_FX_WRAP_MIRROR || desc->wrap_v > SU_FX_WRAP_MIRROR ||
+        !isfinite(desc->soft_distance) || desc->soft_distance < 0.0f || !su_rvk_fx_layers_valid(&desc->layers)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (layer = 0; layer < 3u; layer++) {
+        Res *texture = su_rvk_get(renderer, desc->layers.textures[layer], RES_TEXTURE, NULL);
+        if (desc->layers.textures[layer] != 0u && (texture == NULL || texture->u.tex.layers != 1u ||
+                                                        texture->u.tex.depth > 1u)) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    if (alloc_slot(renderer, RES_MATERIAL, &idx) != SU_OK) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    slot = &renderer->res[idx];
+    slot->u.mat.kind = 2u;
+    slot->u.mat.fx = *desc;
+    slot->u.mat.pipeline = PIPE_BLEND + desc->blend * 2u + (desc->two_sided != 0u ? 1u : 0u);
+    slot->u.mat.f.alpha_mode = SU_ASSET_ALPHA_BLEND;
+    slot->state = SU_RENDER_STATE_READY;
+    renderer->stats.resources++;
+    *out = make_handle(RES_MATERIAL, slot->gen, idx);
+    return SU_OK;
+}
+
 uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d, SuRenderHandle *out) {
     uint32_t idx = 0;
     uint32_t i;
@@ -1055,7 +1088,7 @@ void su_rvk_refresh_materials(SuRenderer *r) {
         Res *s = &r->res[i];
         uint32_t want = 0;
         uint32_t k;
-        if (s->type != RES_MATERIAL) {
+        if (s->type != RES_MATERIAL || s->u.mat.kind == 2u) {
             continue;
         }
         for (k = 0; k < (s->u.mat.kind != 0u ? SU_PAINT_SLOT_COUNT : SU_ASSET_SLOT_COUNT); k++) {
