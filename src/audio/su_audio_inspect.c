@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,35 +51,35 @@ void su_audio_trace_end(SuAudioTelemetry *telemetry) {
     }
 }
 
-uint32_t su_audio_reason(uint32_t kind, uint32_t status, uint64_t sample_time, uint64_t render_clock) {
+uint32_t su_audio_trace_reason(uint32_t kind, uint32_t status, uint64_t sample_time, uint64_t render_clock) {
     (void)kind;
     switch (status) {
     case SU_OK:
-        return SU_AUDIO_REASON_OK;
+        return SU_AUDIO_TRACE_REASON_OK;
     case SU_E_RESOURCE_LIMIT:
-        return SU_AUDIO_REASON_POOL_FULL;
+        return SU_AUDIO_TRACE_REASON_POOL_FULL;
     case SU_E_STALE_REVISION:
-        return SU_AUDIO_REASON_DUPLICATE;
+        return SU_AUDIO_TRACE_REASON_DUPLICATE;
     case SU_E_STALE_HANDLE:
-        return SU_AUDIO_REASON_STALE_HANDLE;
+        return SU_AUDIO_TRACE_REASON_STALE_HANDLE;
     case SU_E_INVALID_ARGUMENT:
-        return sample_time < render_clock ? SU_AUDIO_REASON_LATE : SU_AUDIO_REASON_INVALID;
+        return sample_time < render_clock ? SU_AUDIO_TRACE_REASON_LATE : SU_AUDIO_TRACE_REASON_INVALID;
     default:
-        return SU_AUDIO_REASON_GRAPH;
+        return SU_AUDIO_TRACE_REASON_GRAPH;
     }
 }
 
-const char *su_audio_reason_name(uint32_t reason) {
-    static const char *const names[SU_AUDIO_REASON_COUNT] = {
+const char *su_audio_trace_reason_name(uint32_t reason) {
+    static const char *const names[SU_AUDIO_TRACE_REASON_COUNT] = {
         "ok", "pool_full", "duplicate", "late", "stale_handle", "graph", "invalid"};
-    return reason < SU_AUDIO_REASON_COUNT ? names[reason] : "unknown";
+    return reason < SU_AUDIO_TRACE_REASON_COUNT ? names[reason] : "unknown";
 }
 
 uint32_t su_audio_trace_record(SuAudioTelemetry *telemetry, SuAudioTelemetryEntry *entry) {
     if (telemetry == NULL || entry == NULL) {
         return SU_E_INVALID_ARGUMENT;
     }
-    entry->reason = su_audio_reason(entry->kind, entry->status, entry->sample_time, entry->render_clock);
+    entry->reason = su_audio_trace_reason(entry->kind, entry->status, entry->sample_time, entry->render_clock);
     if (telemetry->queued == telemetry->capacity) {
         telemetry->pending_drops++;
         telemetry->stats.dropped++;
@@ -402,7 +403,7 @@ uint32_t su_audio_trace_json(const SuAudioTelemetryEntry *entries, uint32_t coun
             "\"render_clock\":%llu,\"instance\":%llu,\"status\":\"%s\",\"reason\":\"%s\"}", index ? "," : "",
             (unsigned long long)e->seq, (unsigned long long)e->dropped_before, e->kind, e->id,
             (unsigned long long)e->sample_time, (unsigned long long)e->render_clock,
-            (unsigned long long)e->instance, su_status_name(e->status), su_audio_reason_name(e->reason));
+            (unsigned long long)e->instance, su_status_name(e->status), su_audio_trace_reason_name(e->reason));
     }
     emit(&w, "]}");
     return finish(&w, written);
@@ -424,8 +425,88 @@ uint32_t su_audio_trace_csv(const SuAudioTelemetryEntry *entries, uint32_t count
         emit(&w, "%llu,%llu,%u,%u,%llu,%llu,%llu,%s,%s\n", (unsigned long long)e->seq,
             (unsigned long long)e->dropped_before, e->kind, e->id, (unsigned long long)e->sample_time,
             (unsigned long long)e->render_clock, (unsigned long long)e->instance, su_status_name(e->status),
-            su_audio_reason_name(e->reason));
+            su_audio_trace_reason_name(e->reason));
     }
+    return finish(&w, written);
+}
+
+/* ---- component diagnostics ---- */
+
+static double db_or_floor(double linear) {
+    return linear > 1e-10 ? 20.0 * log10(linear) : -200.0;
+}
+
+uint32_t su_audio_inspect_bus_json(SuAudioBusTree *tree, int reset, char *out, size_t capacity, size_t *written) {
+    Writer w = {out, capacity, 0u, 0};
+    uint32_t index;
+    SuAudioBusId id;
+    if (written != NULL) {
+        *written = 0u;
+    }
+    if (tree == NULL || written == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    emit(&w, "{\"schema\":\"su_audio_bus_meters_v1\",\"runtime_bytes\":%llu,\"buses\":[",
+        (unsigned long long)su_audio_bus_tree_bytes(tree));
+    for (index = 0; su_audio_bus_order(tree, index, &id) == SU_OK; index++) {
+        SuAudioBusMeter meter;
+        float gain = 0.0f;
+        if (su_audio_bus_meter_read(tree, id, &meter, reset) != SU_OK || su_audio_bus_gain_at(tree, id, &gain) != SU_OK) {
+            return SU_E_INTERNAL;
+        }
+        emit(&w, "%s{\"bus_id\":%u,\"order\":%u,\"peak_db\":%.3f,\"rms_db\":%.3f,\"true_peak_db\":%.3f,"
+            "\"fader_db\":%.3f,\"duck_db\":%.3f,\"hdr_db\":%.3f,\"gain\":%.6g,\"frames\":%llu}",
+            index ? "," : "", id, index, db_or_floor(meter.peak), db_or_floor(meter.rms),
+            db_or_floor(meter.true_peak), finite_or_zero(meter.fader_db), finite_or_zero(meter.duck_db),
+            finite_or_zero(meter.hdr_db), finite_or_zero(gain), (unsigned long long)meter.frames);
+    }
+    emit(&w, "]}");
+    return finish(&w, written);
+}
+
+uint32_t su_audio_inspect_voice_pool_json(const SuAudioVoicePool *pool, char *out, size_t capacity,
+    size_t *written) {
+    Writer w = {out, capacity, 0u, 0};
+    SuAudioVoiceStats stats;
+    uint32_t index;
+    if (written != NULL) {
+        *written = 0u;
+    }
+    if (pool == NULL || written == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    su_audio_voice_pool_stats(pool, &stats);
+    emit(&w, "{\"schema\":\"su_audio_voice_pool_v1\",\"clock\":%llu,\"logical\":%u,\"physical\":%u,"
+        "\"virtual\":%u,\"transitions\":%u,\"logical_peak\":%u,\"physical_peak\":%u,\"virtual_peak\":%u,"
+        "\"admitted\":%llu,\"refused\":%llu,\"stolen\":%llu,\"woken\":%llu,\"expired\":%llu,\"deferred\":%llu,"
+        "\"runtime_bytes\":%llu,\"reasons\":{", (unsigned long long)stats.clock, stats.logical, stats.physical,
+        stats.virtual_voices, stats.transitions, stats.logical_peak, stats.physical_peak, stats.virtual_peak,
+        (unsigned long long)stats.admitted, (unsigned long long)stats.refused, (unsigned long long)stats.stolen,
+        (unsigned long long)stats.woken, (unsigned long long)stats.expired, (unsigned long long)stats.deferred,
+        (unsigned long long)stats.runtime_bytes);
+    for (index = 0; index < SU_AUDIO_REASON_COUNT; index++) {
+        emit(&w, "%s\"%s\":%llu", index ? "," : "", su_audio_voice_reason_name(index),
+            (unsigned long long)stats.reasons[index]);
+    }
+    emit(&w, "}}");
+    return finish(&w, written);
+}
+
+uint32_t su_audio_inspect_params_json(const SuAudioParams *params, char *out, size_t capacity, size_t *written) {
+    Writer w = {out, capacity, 0u, 0};
+    SuAudioParamStats stats;
+    if (written != NULL) {
+        *written = 0u;
+    }
+    if (params == NULL || written == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    su_audio_params_stats(params, &stats);
+    emit(&w, "{\"schema\":\"su_audio_params_v1\",\"sets\":%llu,\"clamped\":%llu,\"rejected\":%llu,"
+        "\"late\":%llu,\"scoped_values\":%u,\"scoped_capacity\":%u,\"runtime_bytes\":%llu}",
+        (unsigned long long)stats.sets, (unsigned long long)stats.clamped, (unsigned long long)stats.rejected,
+        (unsigned long long)stats.late, stats.scoped_values, stats.scoped_capacity,
+        (unsigned long long)stats.runtime_bytes);
     return finish(&w, written);
 }
 
@@ -439,10 +520,10 @@ static const char *const capabilities[][2] = {
     {"event_runtime", "implemented"},
     {"offline_render", "implemented"},
     {"inspection", "implemented"},
-    {"voice_virtualisation", "gap: not integrated with the event runtime in this build"},
-    {"bus_tree_ducking", "gap: bus_id is reported but no bus mixing exists in this build"},
-    {"parameters_music", "gap: not integrated with the event runtime in this build"},
-    {"clustering", "gap: not integrated with the event runtime in this build"},
+    {"voice_virtualisation", "implemented as a standalone pool; owner-composed, not wired into the event runtime"},
+    {"bus_tree_ducking", "implemented as a standalone bus tree; owner-composed, not wired into the event runtime"},
+    {"parameters_music", "implemented as standalone parameters/music; owner-composed, not wired into the event runtime"},
+    {"clustering", "gap: not merged in this build"},
     {"bank_format_import", "out of scope: downstream adapter"},
     {"control_plane_methods", "gap: audio.inspect/audio.trace/audio.render.offline are not registered"}};
 

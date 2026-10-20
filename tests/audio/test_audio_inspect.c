@@ -259,7 +259,7 @@ static SliceResult vertical_slice(const char *dir, SuAudioTelemetryEntry *entrie
     CHECK(result.entries == s.trace_count);
     for (index = 0; index < result.entries; index++) {
         CHECK(entries[index].seq == index && entries[index].dropped_before == 0u);
-        CHECK(entries[index].reason == SU_AUDIO_REASON_OK);
+        CHECK(entries[index].reason == SU_AUDIO_TRACE_REASON_OK);
         CHECK(entries[index].sample_time >= entries[index].render_clock);
         CHECK(entries[index].sample_time - entries[index].render_clock < SU_AUDIO_EVENT_QUANTUM);
         CHECK(entries[index].kind != SU_AUDIO_TRACE_POST || entries[index].instance != 0u);
@@ -329,10 +329,10 @@ static void backpressure(void) {
     CHECK(su_audio_trace_record(telemetry, &entry) == SU_OK);
     CHECK(su_audio_trace_drain(telemetry, out, 8u, &count) == SU_OK && count == 3u);
     CHECK(out[0].seq == 2u && out[1].seq == 3u && out[2].seq == 4u);
-    CHECK(out[2].dropped_before == 6u && out[2].reason == SU_AUDIO_REASON_POOL_FULL);
+    CHECK(out[2].dropped_before == 6u && out[2].reason == SU_AUDIO_TRACE_REASON_POOL_FULL);
     su_audio_trace_stats(telemetry, &stats);
     CHECK(stats.recorded == 5u && stats.dropped == 6u && stats.drained == 5u && stats.queued == 0u);
-    CHECK(stats.reasons[SU_AUDIO_REASON_POOL_FULL] == 1u);
+    CHECK(stats.reasons[SU_AUDIO_TRACE_REASON_POOL_FULL] == 1u);
     su_audio_trace_end(telemetry);
 }
 
@@ -407,12 +407,12 @@ static void saturation(void) {
     CHECK(snap.stats.refused >= 2u && snap.stats.duplicates == 1u && snap.stats.late_commands == 1u);
     CHECK(su_audio_inspect_json(&snap, text, sizeof text, &written) == SU_OK && clean_text(text));
     CHECK(su_audio_trace_drain(telemetry, out, 16u, &count) == SU_OK && count == 7u);
-    CHECK(out[0].reason == SU_AUDIO_REASON_GRAPH && out[0].id == 99u);
-    CHECK(out[1].reason == SU_AUDIO_REASON_OK && out[2].reason == SU_AUDIO_REASON_OK);
-    CHECK(out[3].reason == SU_AUDIO_REASON_POOL_FULL);
-    CHECK(out[4].reason == SU_AUDIO_REASON_DUPLICATE);
-    CHECK(out[5].reason == SU_AUDIO_REASON_POOL_FULL && out[5].kind == SU_AUDIO_TRACE_STOP_SCOPE);
-    CHECK(out[6].reason == SU_AUDIO_REASON_LATE && out[6].render_clock == 256u);
+    CHECK(out[0].reason == SU_AUDIO_TRACE_REASON_GRAPH && out[0].id == 99u);
+    CHECK(out[1].reason == SU_AUDIO_TRACE_REASON_OK && out[2].reason == SU_AUDIO_TRACE_REASON_OK);
+    CHECK(out[3].reason == SU_AUDIO_TRACE_REASON_POOL_FULL);
+    CHECK(out[4].reason == SU_AUDIO_TRACE_REASON_DUPLICATE);
+    CHECK(out[5].reason == SU_AUDIO_TRACE_REASON_POOL_FULL && out[5].kind == SU_AUDIO_TRACE_STOP_SCOPE);
+    CHECK(out[6].reason == SU_AUDIO_TRACE_REASON_LATE && out[6].render_clock == 256u);
     CHECK(su_audio_trace_csv(out, count, text, sizeof text, &written) == SU_OK);
     CHECK(strstr(text, ",pool_full\n") != NULL && strstr(text, ",late\n") != NULL);
     su_audio_trace_end(telemetry);
