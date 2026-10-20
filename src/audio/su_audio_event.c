@@ -1101,7 +1101,7 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     float knee = 0.0f;
     float doppler = 0.0f;
     float speed_of_sound = 0.0f;
-    const SuAudioBusInput *inputs = NULL;
+    const SuAudioBusInput *host_inputs = NULL;
     uint32_t input_count = 0u;
     float *route_mem;
     float **routes;
@@ -1155,16 +1155,16 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     }
     if (SU_AUDIO_EVENTS_HOOK_HAS(hook, input_count)) {
         input_count = hook->input_count;
-        inputs = hook->inputs;
+        host_inputs = hook->inputs;
     }
     if (!(doppler >= 0.0f && doppler <= 1.0f) || !(speed_of_sound >= 0.0f && speed_of_sound <= 1e6f)
-        || input_count > SU_AUDIO_EVENTS_MAX_INPUTS || (input_count != 0u && inputs == NULL)) {
+        || input_count > SU_AUDIO_EVENTS_MAX_INPUTS || (input_count != 0u && host_inputs == NULL)) {
         return SU_E_INVALID_ARGUMENT;
     }
     for (index = 0; index < input_count; index++) {
         float probe;
-        if (inputs[index].render == NULL || (inputs[index].bus_id != 0u
-            && (buses == NULL || su_audio_bus_gain_at(buses, inputs[index].bus_id, &probe) != SU_OK))) {
+        if (host_inputs[index].render == NULL || (host_inputs[index].bus_id != 0u
+            && (buses == NULL || su_audio_bus_gain_at(buses, host_inputs[index].bus_id, &probe) != SU_OK))) {
             return SU_E_INVALID_ARGUMENT;
         }
     }
@@ -1254,7 +1254,7 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     events->doppler = doppler;
     events->speed_of_sound = speed_of_sound > 0.0f ? speed_of_sound : 343.0f;
     if (input_count != 0u) {
-        memcpy(events->inputs, inputs, (size_t)input_count * sizeof *inputs);
+        memcpy(events->inputs, host_inputs, (size_t)input_count * sizeof *host_inputs);
     }
     events->input_count = input_count;
     events->policies = policies;
