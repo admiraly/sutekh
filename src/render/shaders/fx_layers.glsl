@@ -7,6 +7,10 @@ layout(push_constant) uniform FxPush {
     float near_z;
     float angular;
     uint layers;
+#ifdef SU_DISTORTION
+    vec4 distortion;
+    vec4 ring;
+#endif
 } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 1) in vec4 v_color;

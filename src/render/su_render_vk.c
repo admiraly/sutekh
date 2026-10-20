@@ -277,7 +277,8 @@ static VkFormat pick_depth(VkFns *f, VkPhysicalDevice pd) {
     for (i = 0; i < sizeof cands / sizeof cands[0]; i++) {
         VkFormatProperties fp;
         f->vkGetPhysicalDeviceFormatProperties(pd, cands[i], &fp);
-        if ((fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0) {
+        VkFormatFeatureFlags needed = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        if ((fp.optimalTilingFeatures & needed) == needed) {
             return cands[i];
         }
     }
@@ -581,12 +582,19 @@ static void free_image(SuRenderer *r, VkImage *img, VkDeviceMemory *mem, VkImage
 /* ---------- render passes ---------- */
 
 static int make_scene_pass(SuRenderer *r) {
-    VkAttachmentDescription at[2];
+    VkAttachmentDescription at[4];
     VkAttachmentReference cref;
     VkAttachmentReference dref;
     VkAttachmentReference dro;
-    VkSubpassDescription sub[2];
-    VkSubpassDependency dep[3];
+    VkAttachmentReference scene_ref = {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference field_ref = {3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference inputs[3] = {{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+                                     {2, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                     {3, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    uint32_t preserve = 2;
+    uint32_t index;
+    VkSubpassDescription sub[4];
+    VkSubpassDependency dep[8];
     VkRenderPassCreateInfo pi;
     memset(at, 0, sizeof at);
     at[0].format = HDR_FORMAT;
@@ -600,11 +608,14 @@ static int make_scene_pass(SuRenderer *r) {
     at[1].format = r->depth_format;
     at[1].samples = VK_SAMPLE_COUNT_1_BIT;
     at[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     at[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL; /* as the effects subpass leaves it: no transition */
+    at[2] = at[0];
+    at[3] = at[0];
+    at[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
     cref.attachment = 0;
     cref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     dref.attachment = 1;
@@ -614,52 +625,49 @@ static int make_scene_pass(SuRenderer *r) {
     memset(sub, 0, sizeof sub);
     sub[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     sub[0].colorAttachmentCount = 1;
-    sub[0].pColorAttachments = &cref;
+    sub[0].pColorAttachments = &scene_ref;
     sub[0].pDepthStencilAttachment = &dref;
     /* subpass 1, textured effects: depth tested read-only and read as an input attachment (soft particles) */
     sub[1] = sub[0];
     sub[1].pDepthStencilAttachment = &dro;
     sub[1].inputAttachmentCount = 1;
     sub[1].pInputAttachments = &dro;
+    sub[1].pColorAttachments = &field_ref;
+    sub[1].preserveAttachmentCount = 1;
+    sub[1].pPreserveAttachments = &preserve;
+    sub[2].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub[2].colorAttachmentCount = 1;
+    sub[2].pColorAttachments = &cref;
+    sub[2].inputAttachmentCount = 3;
+    sub[2].pInputAttachments = inputs;
+    sub[3] = sub[1];
+    sub[3].pColorAttachments = &cref;
+    sub[3].inputAttachmentCount = 3;
+    sub[3].pInputAttachments = inputs;
+    sub[3].preserveAttachmentCount = 0;
     memset(dep, 0, sizeof dep);
-    /* The previous frame's output pass read the HDR image (fragment shader) and its depth writes; both finish
-     * before this frame's layout transitions and writes. */
-    dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    dep[0].dstSubpass = 0;
-    dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
-                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dep[0].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-    /* HDR colour writes before the output pass samples it. */
-    dep[1].srcSubpass = 1;
-    dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    /* scene depth and colour of subpass 0 before the effects test, read and blend over them */
-    dep[2].srcSubpass = 0;
-    dep[2].dstSubpass = 1;
-    /* early tests too: the depth clear (loadOp) is the last write when subpass 0 draws nothing */
-    dep[2].srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
-                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep[2].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
-                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep[2].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    /* the depth attachment's store (DONT_CARE) at the end of subpass 1 is a write in the late tests stage */
-    dep[2].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                           VK_ACCESS_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dep[2].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
     memset(&pi, 0, sizeof pi);
     pi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    pi.attachmentCount = 2;
+    for (index = 0; index < 5u; index++) {
+        dep[index].srcSubpass = index == 0u ? VK_SUBPASS_EXTERNAL : index - 1u;
+        dep[index].dstSubpass = index == 4u ? VK_SUBPASS_EXTERNAL : index;
+        dep[index].srcStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+        dep[index].dstStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+        dep[index].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        dep[index].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        dep[index].dependencyFlags = 0;
+    }
+    dep[5] = dep[0];
+    dep[5].dstSubpass = 1;
+    dep[6] = dep[0];
+    dep[6].dstSubpass = 2;
+    dep[7] = dep[4];
+    dep[7].srcSubpass = 2;
+    pi.attachmentCount = 4;
     pi.pAttachments = at;
-    pi.subpassCount = 2;
+    pi.subpassCount = 4;
     pi.pSubpasses = sub;
-    pi.dependencyCount = 3;
+    pi.dependencyCount = 8;
     pi.pDependencies = dep;
     return r->f.vkCreateRenderPass(r->dev, &pi, NULL, &r->scene_pass) == VK_SUCCESS;
 }
@@ -1289,6 +1297,9 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         gi.layout = r->flame_layout;
     } else if (s->layout == 4) {
         gi.layout = r->haze_layout;
+    } else if (s->layout == 5) {
+        gi.layout = r->distortion_resolve_layout;
+        gi.pDepthStencilState = NULL;
     }
     gi.renderPass = s->post ? r->post_pass : s->shadow ? r->shadow_pass : r->scene_pass;
     gi.subpass = (uint32_t)s->subpass;
@@ -1348,13 +1359,13 @@ static int make_pipelines(SuRenderer *r) {
     s.vin = VIN_FX;
     s.depth_test = 1;
     s.blend = BLEND_ADD;
-    s.subpass = 1;
+    s.subpass = 3;
     ok = ok && make_pipe(r, &s, &r->fx_pipe);
     /* textured effects: additive and premultiplied alpha, in the effects subpass */
     s.vs = su_shader_fx_layer_vert;
     s.vs_bytes = sizeof su_shader_fx_layer_vert;
     s.layout = 1;
-    s.subpass = 1;
+    s.subpass = 3;
     s.fs = su_shader_fx_tex_add_frag;
     s.fs_bytes = sizeof su_shader_fx_tex_add_frag;
     ok = ok && make_pipe(r, &s, &r->fxtex_pipe[0]);
@@ -1388,7 +1399,7 @@ static int make_pipelines(SuRenderer *r) {
     s.fs_bytes = sizeof su_shader_haze_frag;
     s.vin = VIN_NONE;
     s.layout = 4;
-    s.subpass = 1;
+    s.subpass = 3;
     s.blend = BLEND_ADD;
     ok = ok && make_pipe(r, &s, &r->haze_pipe[0]);
     s.blend = BLEND_PREMUL;
@@ -1415,7 +1426,7 @@ static int make_pipelines(SuRenderer *r) {
         s.depth_write = i < PIPE_OVERLAY;
         s.blend = i >= PIPE_OVERLAY ? BLEND_ALPHA : BLEND_NONE;
         s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
-        s.subpass = i >= PIPE_BLEND ? 1 : 0;
+        s.subpass = i >= PIPE_BLEND ? 3 : 0;
         ok = make_pipe(r, &s, &r->pbr_pipe[i]);
     }
     /* sun shadow casters: depth only */
@@ -1444,9 +1455,35 @@ static int make_pipelines(SuRenderer *r) {
         s.depth_write = i < PIPE_OVERLAY;
         s.blend = i >= PIPE_OVERLAY ? BLEND_ALPHA : BLEND_NONE;
         s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
-        s.subpass = i >= PIPE_BLEND ? 1 : 0;
+        s.subpass = i >= PIPE_BLEND ? 3 : 0;
         ok = make_pipe(r, &s, &r->paint_pipe[i]);
     }
+    memset(&s, 0, sizeof s);
+    s.vs = su_shader_fx_layer_vert;
+    s.vs_bytes = sizeof su_shader_fx_layer_vert;
+    s.fs = su_shader_distortion_frag;
+    s.fs_bytes = sizeof su_shader_distortion_frag;
+    s.vin = VIN_FX;
+    s.layout = 1;
+    s.depth_test = 1;
+    s.subpass = 1;
+    ok = ok && make_pipe(r, &s, &r->distortion_quad_pipe);
+    s.vs = su_shader_fx_mesh_vert;
+    s.vs_bytes = sizeof su_shader_fx_mesh_vert;
+    s.vin = VIN_FXMESH;
+    for (i = 0; i < 2u; i++) {
+        s.cull = i == 0u;
+        ok = ok && make_pipe(r, &s, &r->distortion_mesh_pipe[i]);
+    }
+    memset(&s, 0, sizeof s);
+    s.vs = su_shader_fullscreen_vert;
+    s.vs_bytes = sizeof su_shader_fullscreen_vert;
+    s.fs = su_shader_distortion_resolve_frag;
+    s.fs_bytes = sizeof su_shader_distortion_resolve_frag;
+    s.vin = VIN_NONE;
+    s.layout = 5;
+    s.subpass = 2;
+    ok = ok && make_pipe(r, &s, &r->distortion_resolve_pipe);
     /* output pass */
     memset(&s, 0, sizeof s);
     s.vs = su_shader_fullscreen_vert;
@@ -1683,6 +1720,19 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
             return 0;
         }
         {
+            VkDescriptorSetLayout resolve_sets[2] = {r->tex3_dsl, r->env_dsl};
+            VkPipelineLayoutCreateInfo resolve_info = {0};
+            VkPushConstantRange resolve_push = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PostPush)};
+            resolve_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            resolve_info.setLayoutCount = 2;
+            resolve_info.pSetLayouts = resolve_sets;
+            resolve_info.pushConstantRangeCount = 1;
+            resolve_info.pPushConstantRanges = &resolve_push;
+            if (r->f.vkCreatePipelineLayout(r->dev, &resolve_info, NULL, &r->distortion_resolve_layout) != VK_SUCCESS) {
+                return 0;
+            }
+        }
+        {
             VkDescriptorSetLayout flame_sets[3] = {r->frame_dsl, r->tex3_dsl, r->depth_in_dsl};
             VkPipelineLayoutCreateInfo flame_info;
             memset(&flame_info, 0, sizeof flame_info);
@@ -1719,12 +1769,12 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     ps[0].descriptorCount = FRAMES_IN_FLIGHT;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = 2u + FRAMES_IN_FLIGHT; /* post input, font, a shadow map per frame set */
+    ps[1].descriptorCount = 5u + FRAMES_IN_FLIGHT;
     ps[2].type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
     ps[2].descriptorCount = 1;
     memset(&pi, 0, sizeof pi);
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = FRAMES_IN_FLIGHT + 3u;
+    pi.maxSets = FRAMES_IN_FLIGHT + 4u;
     pi.poolSizeCount = 3;
     pi.pPoolSizes = ps;
     if (r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &r->pool_frame) != VK_SUCCESS) {
@@ -1844,6 +1894,24 @@ int su_rvk_fx_layers_valid(const SuFxLayers *layers) {
     return 1;
 }
 
+int su_rvk_distortion_valid(const SuFxDistortion *distortion) {
+    return isfinite(distortion->strength) && fabsf(distortion->strength) <= 4096.0f &&
+           isfinite(distortion->falloff) && distortion->falloff >= 0.0f && distortion->falloff <= 64.0f &&
+           isfinite(distortion->chromatic_split) && distortion->chromatic_split >= 0.0f && distortion->chromatic_split <= 1.0f &&
+           isfinite(distortion->ring_radius) && distortion->ring_radius >= 0.0f && distortion->ring_radius <= 1.0f &&
+           isfinite(distortion->ring_width) && distortion->ring_width >= 0.0f && distortion->ring_width <= 1.0f &&
+           distortion->mode <= SU_DISTORT_RING;
+}
+
+void su_rvk_distortion_push(FxPush *push, const SuFxDistortion *distortion) {
+    push->distortion[0] = distortion->strength;
+    push->distortion[1] = distortion->falloff;
+    push->distortion[2] = distortion->chromatic_split;
+    push->distortion[3] = (float)distortion->mode;
+    push->ring[0] = distortion->ring_radius > 0.0f ? distortion->ring_radius : 0.75f;
+    push->ring[1] = distortion->ring_width > 0.0f ? distortion->ring_width : 0.15f;
+}
+
 void su_rvk_fx_push(FxPush *push, const SuFxLayers *layers, float time, float soft, float near_z,
                     uint32_t wrap_u, uint32_t wrap_v) {
     float rect[4];
@@ -1926,8 +1994,8 @@ static int make_fx_pool(SuRenderer *r, Frame *fr) {
 }
 
 static int make_frame_sets(SuRenderer *r) {
-    VkDescriptorSetLayout l[FRAMES_IN_FLIGHT + 3u];
-    VkDescriptorSet sets[FRAMES_IN_FLIGHT + 3u];
+    VkDescriptorSetLayout l[FRAMES_IN_FLIGHT + 4u];
+    VkDescriptorSet sets[FRAMES_IN_FLIGHT + 4u];
     VkDescriptorSetAllocateInfo ai;
     uint32_t i;
     for (i = 0; i < FRAMES_IN_FLIGHT; i++) {
@@ -1936,10 +2004,11 @@ static int make_frame_sets(SuRenderer *r) {
     l[FRAMES_IN_FLIGHT] = r->tex_dsl;
     l[FRAMES_IN_FLIGHT + 1u] = r->tex_dsl;
     l[FRAMES_IN_FLIGHT + 2u] = r->depth_in_dsl;
+    l[FRAMES_IN_FLIGHT + 3u] = r->tex3_dsl;
     memset(&ai, 0, sizeof ai);
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = r->pool_frame;
-    ai.descriptorSetCount = FRAMES_IN_FLIGHT + 3u;
+    ai.descriptorSetCount = FRAMES_IN_FLIGHT + 4u;
     ai.pSetLayouts = l;
     if (r->f.vkAllocateDescriptorSets(r->dev, &ai, sets) != VK_SUCCESS) {
         return 0;
@@ -1962,6 +2031,7 @@ static int make_frame_sets(SuRenderer *r) {
     r->post_set = sets[FRAMES_IN_FLIGHT];
     r->font_set = sets[FRAMES_IN_FLIGHT + 1u];
     r->depth_in_set = sets[FRAMES_IN_FLIGHT + 2u];
+    r->distortion_resolve_set = sets[FRAMES_IN_FLIGHT + 3u];
     return 1;
 }
 
@@ -2063,6 +2133,8 @@ static void destroy_targets(SuRenderer *r) {
         r->hdr_fb = VK_NULL_HANDLE;
     }
     free_image(r, &r->hdr_img, &r->hdr_mem, &r->hdr_view);
+    free_image(r, &r->scene_img, &r->scene_mem, &r->scene_view);
+    free_image(r, &r->distortion_img, &r->distortion_mem, &r->distortion_view);
     free_image(r, &r->depth_img, &r->depth_mem, &r->depth_view);
     free_image(r, &r->color_img, &r->color_mem, &r->color_view);
     su_rvk_free_buffer(r, &r->readback);
@@ -2252,21 +2324,29 @@ fail:
 /* HDR colour, depth, the scene framebuffer, the output framebuffers; the output pass input set. */
 static int make_framebuffers(SuRenderer *r) {
     uint32_t i;
-    VkImageView att[2];
+    VkImageView att[4];
     VkFramebufferCreateInfo fi;
     if (!make_image(r, r->width, r->height, r->depth_format,
-                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                     VK_IMAGE_ASPECT_DEPTH_BIT, &r->depth_img, &r->depth_mem, &r->depth_view) ||
         !make_image(r, r->width, r->height, HDR_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                    VK_IMAGE_ASPECT_COLOR_BIT, &r->hdr_img, &r->hdr_mem, &r->hdr_view)) {
+                    VK_IMAGE_ASPECT_COLOR_BIT, &r->hdr_img, &r->hdr_mem, &r->hdr_view) ||
+        !make_image(r, r->width, r->height, HDR_FORMAT,
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+                    VK_IMAGE_ASPECT_COLOR_BIT, &r->scene_img, &r->scene_mem, &r->scene_view) ||
+        !make_image(r, r->width, r->height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+                    VK_IMAGE_ASPECT_COLOR_BIT, &r->distortion_img, &r->distortion_mem, &r->distortion_view)) {
         return 0;
     }
     att[0] = r->hdr_view;
     att[1] = r->depth_view;
+    att[2] = r->scene_view;
+    att[3] = r->distortion_view;
     memset(&fi, 0, sizeof fi);
     fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fi.renderPass = r->scene_pass;
-    fi.attachmentCount = 2;
+    fi.attachmentCount = 4;
     fi.pAttachments = att;
     fi.width = r->width;
     fi.height = r->height;
@@ -2275,6 +2355,25 @@ static int make_framebuffers(SuRenderer *r) {
         return 0;
     }
     write_image_set(r, r->post_set, r->hdr_view, r->nearest);
+    {
+        VkDescriptorImageInfo images[3];
+        VkWriteDescriptorSet writes[3];
+        uint32_t slot;
+        memset(writes, 0, sizeof writes);
+        for (slot = 0; slot < 3u; slot++) {
+            images[slot].sampler = r->nearest;
+            images[slot].imageView = slot == 0u ? r->scene_view : slot == 1u ? r->distortion_view : r->depth_view;
+            images[slot].imageLayout = slot == 2u ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
+                                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            writes[slot].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[slot].dstSet = r->distortion_resolve_set;
+            writes[slot].dstBinding = slot;
+            writes[slot].descriptorCount = 1;
+            writes[slot].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[slot].pImageInfo = &images[slot];
+        }
+        r->f.vkUpdateDescriptorSets(r->dev, 3, writes, 0, NULL);
+    }
     {
         VkDescriptorImageInfo ii;
         VkWriteDescriptorSet w;
@@ -2487,6 +2586,14 @@ void su_render_destroy(SuRenderer *r) {
         {
             VkPipeline all[12 + 2 * PIPE_PBR_COUNT];
             uint32_t k;
+            VkPipeline distortion_pipes[4] = {r->distortion_quad_pipe, r->distortion_mesh_pipe[0],
+                                              r->distortion_mesh_pipe[1], r->distortion_resolve_pipe};
+            for (k = 0; k < 4u; k++) {
+                if (distortion_pipes[k] != VK_NULL_HANDLE) r->f.vkDestroyPipeline(r->dev, distortion_pipes[k], NULL);
+            }
+            if (r->distortion_resolve_layout != VK_NULL_HANDLE) {
+                r->f.vkDestroyPipelineLayout(r->dev, r->distortion_resolve_layout, NULL);
+            }
             for (k = 0; k < 4u; k++) {
                 if (r->fxmesh_pipe[k] != VK_NULL_HANDLE) {
                     r->f.vkDestroyPipeline(r->dev, r->fxmesh_pipe[k], NULL);
@@ -3089,7 +3196,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     VkResult vr;
     VkCommandBufferBeginInfo bi;
     VkRenderPassBeginInfo rp;
-    VkClearValue clear[2];
+    VkClearValue clear[4];
     VkSubmitInfo si;
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkDeviceSize zero = 0;
@@ -3174,7 +3281,8 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
             count = n_fxt - first;
         }
         count -= count % 3u;
-        if ((bt->texture == 0u && bt->layers.textures[0] == 0u) || !su_rvk_fx_layers_valid(&bt->layers) ||
+        if ((bt->distortion.mode == SU_DISTORT_NONE && bt->texture == 0u && bt->layers.textures[0] == 0u) ||
+            !su_rvk_fx_layers_valid(&bt->layers) || !su_rvk_distortion_valid(&bt->distortion) ||
             count == 0u || first % 3u != 0u ||
             bt->blend > SU_FX_BLEND_PREMUL || n_batches >= r->max_fx_batches) {
             skipped++;
@@ -3188,9 +3296,10 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         tmpl.set = set;
         tmpl.first = first;
         tmpl.count = count;
-        tmpl.pipe = bt->blend;
+        tmpl.pipe = bt->distortion.mode != SU_DISTORT_NONE ? 2u : bt->blend;
         su_rvk_fx_push(&tmpl.push, &bt->layers, in->scene != NULL ? in->scene->time_seconds : 0.0f,
                        bt->soft_distance, in->scene != NULL ? in->scene->camera.near_z : 1.0f, bt->wrap_u, bt->wrap_v);
+        su_rvk_distortion_push(&tmpl.push, &bt->distortion);
         n_batches++;
         if ((bt->flags & SU_FX_BATCH_SORT) != 0u && count % 6u == 0u && n_quads + count / 6u <= r->max_fx_tex / 6u &&
             n_sorted < r->max_fx_batches) {
@@ -3368,6 +3477,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     /* ---- scene pass (HDR) ---- */
     memset(clear, 0, sizeof clear);
     memcpy(clear[0].color.float32, in->clear, sizeof in->clear);
+    memcpy(clear[2].color.float32, in->clear, sizeof in->clear);
     clear[1].depthStencil.depth = 0.0f; /* reversed Z: far is 0 */
     memset(&rp, 0, sizeof rp);
     rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -3375,7 +3485,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     rp.framebuffer = r->hdr_fb;
     rp.renderArea.extent.width = r->width;
     rp.renderArea.extent.height = r->height;
-    rp.clearValueCount = 2;
+    rp.clearValueCount = 4;
     rp.pClearValues = clear;
     r->f.vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
     viewport(r, cmd);
@@ -3454,6 +3564,38 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     }
     r->f.vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
     r->stats.fx_batches_skipped = 0;
+    {
+        uint32_t before = r->stats.draws;
+        if (n_items > 0u) su_rvk_scene_draw(r, fr, cmd, n_items, 3, in->scene);
+        for (i = 0; i < n_fxb; i++) {
+            VkDescriptorSet sets[3] = {fr->frame_set, r->fxb[i].set, r->depth_in_set};
+            if (r->fxb[i].pipe != 2u) continue;
+            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->distortion_quad_pipe);
+            r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->fx_tex.buf, &zero);
+            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fxtex_layout, 0, 3, sets, 0, NULL);
+            r->f.vkCmdPushConstants(cmd, r->fxtex_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                     sizeof r->fxb[i].push, &r->fxb[i].push);
+            r->f.vkCmdDraw(cmd, r->fxb[i].count, 1, r->fxb[i].first, 0);
+            r->stats.draws++;
+        }
+        r->stats.distortion_draws = r->stats.draws - before;
+    }
+    r->f.vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
+    {
+        float lod = 0.0f;
+        PostPush push = {{0}};
+        VkDescriptorSet sets[2];
+        sets[0] = r->distortion_resolve_set;
+        sets[1] = su_rvk_env_set(r, in->scene != NULL ? in->scene->distortion_cube : 0u,
+            in->scene != NULL ? in->scene->distortion_cube_intensity : 0.0f, &lod, &push.p[0]);
+        if (in->scene == NULL || in->scene->distortion_cube_intensity == 0.0f) push.p[0] = 0.0f;
+        r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->distortion_resolve_pipe);
+        r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->distortion_resolve_layout, 0, 2, sets, 0, NULL);
+        r->f.vkCmdPushConstants(cmd, r->distortion_resolve_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);
+        r->f.vkCmdDraw(cmd, 3, 1, 0, 0);
+        r->stats.draws++;
+    }
+    r->f.vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
     if (n_items > 0u) {
         su_rvk_scene_draw(r, fr, cmd, n_items, 2, in->scene);
     }
@@ -3469,6 +3611,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->fx_tex.buf, &zero);
         for (i = 0; i < n_fxb; i++) {
             VkDescriptorSet three[3];
+            if (r->fxb[i].pipe == 2u) continue;
             if (r->fxb[i].pipe != last_pipe) {
                 r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fxtex_pipe[r->fxb[i].pipe]);
                 last_pipe = r->fxb[i].pipe;
@@ -3793,6 +3936,7 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
         (f->fx == NULL && f->fx_vertex_count > 0u) || (f->hud == NULL && f->hud_vertex_count > 0u) ||
         (f->fx_tex == NULL && f->fx_tex_vertex_count > 0u) || (f->fx_batches == NULL && f->fx_batch_count > 0u) ||
         (f->haze == NULL && f->haze_count > 0u) || f->haze_count > SU_HAZE_MAX_VOLUMES ||
+        !isfinite(f->distortion_cube_intensity) || f->distortion_cube_intensity < 0.0f ||
         !isfinite(f->time_seconds) || !(f->camera.fov_y > 0.0f && f->camera.fov_y < 3.1f) || !(f->camera.near_z > 0.0f)) {
         return SU_E_INVALID_ARGUMENT;
     }

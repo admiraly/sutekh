@@ -403,6 +403,8 @@ typedef struct FxPush {
     float near_z;
     float angular;
     uint32_t layers;
+    float distortion[4];
+    float ring[4];
 } FxPush;
 
 /* A textured-effects batch prepared for drawing. */
@@ -480,6 +482,11 @@ struct SuRenderer {
     VkPipelineLayout flame_layout;
     VkPipeline fxtex_pipe[2];           /* textured effects: additive, premultiplied alpha */
     VkPipeline fxmesh_pipe[4];
+    VkPipeline distortion_quad_pipe;
+    VkPipeline distortion_mesh_pipe[2];
+    VkPipeline distortion_resolve_pipe;
+    VkPipelineLayout distortion_resolve_layout;
+    VkDescriptorSet distortion_resolve_set;
     VkDescriptorSetLayout fx_dsl;
     VkPipeline skycube_pipe;
     VkPipeline haze_pipe[2];
@@ -533,6 +540,9 @@ struct SuRenderer {
     VkDeviceMemory hdr_mem;
     VkImageView hdr_view;
     VkFramebuffer hdr_fb;
+    VkImage scene_img, distortion_img;
+    VkDeviceMemory scene_mem, distortion_mem;
+    VkImageView scene_view, distortion_view;
     /* bloom (half resolution): chain A = downsampled levels (alpha: log2 luma), chain B = upsampled levels */
     VkRenderPass bloom_pass;
     VkDescriptorSetLayout tex3_dsl;     /* three samplers: upsample and bloom output */
@@ -653,6 +663,8 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
 void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t item_count, int blend_pass,
                        const SuRenderFrameDesc *frame);
 int su_rvk_fx_layers_valid(const SuFxLayers *layers);
+int su_rvk_distortion_valid(const SuFxDistortion *distortion);
+void su_rvk_distortion_push(FxPush *push, const SuFxDistortion *distortion);
 VkDescriptorSet su_rvk_fx_set(SuRenderer *r, Frame *fr, const SuFxLayers *layers, SuRenderHandle first,
                              uint32_t wrap_u, uint32_t wrap_v);
 void su_rvk_fx_push(FxPush *push, const SuFxLayers *layers, float time, float soft, float near_z,
