@@ -43,6 +43,31 @@ uint32_t su_audio_clip_from_wav(const void *bytes, size_t len, SuAudioClip **out
 uint32_t su_audio_clip_from_ogg(const void *bytes, size_t len, SuAudioClip **out, char message[256]);
 int su_audio_ogg_available(void);
 
+/* PlayStation 4-bit ADPCM (PS-ADPCM, SPU ADPCM, VAG). 16-byte frames of 28 samples: byte 0 = (filter << 4) | shift,
+ * byte 1 = flags, then 14 bytes of signed nibbles, low nibble first. Each sample is
+ * ((nibble << 12 as int16) >> shift) + ((hist1 * c1 + hist2 * c2) >> 6) (arithmetic shifts, no rounding term),
+ * clamped to int16, with (c1, c2) = (0,0) (60,0) (115,-52) (98,-55) (122,-60); filter > 4 reads as 0 and
+ * shift > 12 as 9. History starts at 0 for each channel. Flags: bit 0 end, bit 1 repeat (inside the loop), bit 2
+ * loop start; end and repeat together mark the last frame of the loop. Floats are sample / 32768. */
+typedef struct SuAudioPsAdpcmDesc {
+    uint32_t sample_rate;          /* 1000..384000 */
+    uint32_t channels;             /* 1 or 2 */
+    uint32_t interleave;           /* bytes per channel block, a multiple of 16; 0 = contiguous (mono only). The data
+                                    * must hold whole groups of channels * interleave bytes. */
+    int stop_at_end_flag;          /* non-zero: decoding stops after the first frame (of channel 0) with flag bit 0 */
+} SuAudioPsAdpcmDesc;
+
+/* Decodes raw frames into a clip. loop_start_frame and loop_end_frame (each optional) receive the loop region in
+ * sample frames from channel 0's flags (start: the first loop-start frame; end: just past the first end+repeat
+ * frame at or after it, else the end of the clip), or 0 and 0 without a loop-start flag. SU_E_PARSE with a reason on
+ * malformed input, SU_E_INVALID_ARGUMENT for a null pointer or a bad descriptor. */
+uint32_t su_audio_clip_from_ps_adpcm(const void *bytes, size_t len, const SuAudioPsAdpcmDesc *d, SuAudioClip **out,
+                                     uint32_t *loop_start_frame, uint32_t *loop_end_frame, char message[256]);
+/* A "VAGp" file: 48-byte big-endian header (magic at 0, version at 4, data size at 0x0C, sample rate at 0x10, name at
+ * 0x20), then mono frames from 0x30 up to the data size. Decoding stops at the end flag. Loop outputs as above. */
+uint32_t su_audio_clip_from_vag(const void *bytes, size_t len, SuAudioClip **out, uint32_t *loop_start_frame,
+                                uint32_t *loop_end_frame, char message[256]);
+
 #define SU_AUDIO_WAVE_SINE 0u
 #define SU_AUDIO_WAVE_SQUARE 1u
 #define SU_AUDIO_WAVE_SAW 2u
