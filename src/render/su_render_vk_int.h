@@ -193,6 +193,7 @@ typedef struct Frame {
     Buffer draw_inst;     /* object draw instances (DrawInstance) */
     Buffer fx;
     Buffer fx_tex;        /* textured effects */
+    Buffer flames;
     Buffer shadow_inst;   /* shadow caster instances (DrawInstance) */
     VkDescriptorPool fx_pool; /* one sampler set per textured batch, reset every frame */
     Buffer hud;
@@ -244,7 +245,7 @@ typedef struct TexRes {
     VkImageView view;
     VkFormat vkfmt;
     uint32_t format;          /* SU_TEX_* */
-    uint32_t width, height, mips;
+    uint32_t width, height, mips, depth;
     const uint8_t *src[SU_ASSET_MAX_MIPS * 6u]; /* [mip * layers + layer] */
     uint8_t *owned;
     uint32_t layers;          /* array layers: 1, or 6 for an environment cube */
@@ -454,6 +455,8 @@ struct SuRenderer {
     VkPipeline line_pipe;
     VkPipeline sky_pipe;
     VkPipeline fx_pipe;
+    VkPipeline flame_pipe;
+    VkPipelineLayout flame_layout;
     VkPipeline fxtex_pipe[2];           /* textured effects: additive, premultiplied alpha */
     VkPipeline skycube_pipe;
     VkPipelineLayout fxtex_layout;      /* frame, one sampler, scene depth (input attachment), FxPush */
@@ -587,6 +590,9 @@ struct SuRenderer {
 };
 
 /* su_render_vk.c */
+#define SU_FLAME_MAX 4096u
+int su_rvk_flames_valid(const SuRenderFrameDesc *frame);
+void su_rvk_flames(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, const SuRenderFrameDesc *frame);
 uint32_t su_rvk_fail(SuRenderer *r, uint32_t code, const char *fmt, ...);
 int su_rvk_find_memory(SuRenderer *r, uint32_t bits, VkMemoryPropertyFlags want, uint32_t *type);
 int su_rvk_make_buffer(SuRenderer *r, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, Buffer *b);
