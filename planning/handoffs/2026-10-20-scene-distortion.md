@@ -118,6 +118,12 @@ assets or external material code were used.
 
 No correctness blockers identified locally. CI on Linux GCC/lavapipe, native
 tier and the checked runtimes remains required before merge.
+The initial CI run passed GCC 16.2/lavapipe, the native tier and Windows
+checked runtime, but Ubuntu's older synchronization validator reported a
+store-after-sampled-read hazard for the snapshot and field at subpass 2's end.
+Both images now remain input attachments through subpass 3, placing their
+stores after the resolve-read dependency. This is an explicit resource-lifetime
+fix, not a validator suppression; the current local layer had not reported it.
 The full-resolution field/snapshot allocate 24 extra bytes/pixel, and the
 resolve runs even when the field is empty. Lazy targets and an off-path bypass
 are possible follow-up optimizations. Overlap intentionally uses last nonzero

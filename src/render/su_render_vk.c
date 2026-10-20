@@ -587,9 +587,9 @@ static int make_scene_pass(SuRenderer *r) {
     VkAttachmentReference dro;
     VkAttachmentReference scene_ref = {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference field_ref = {3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference inputs[3] = {{2, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                     {3, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                     {1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
+    VkAttachmentReference inputs[3] = {{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+                                     {2, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                     {3, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     uint32_t preserve = 2;
     uint32_t index;
     VkSubpassDescription sub[4];
@@ -641,6 +641,8 @@ static int make_scene_pass(SuRenderer *r) {
     sub[2].pInputAttachments = inputs;
     sub[3] = sub[1];
     sub[3].pColorAttachments = &cref;
+    sub[3].inputAttachmentCount = 3;
+    sub[3].pInputAttachments = inputs;
     sub[3].preserveAttachmentCount = 0;
     memset(dep, 0, sizeof dep);
     memset(&pi, 0, sizeof pi);
