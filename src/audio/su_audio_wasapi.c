@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "sutekh/audio.h"
+#include "su_audio_int.h"
 
 /* GUIDs written out here so no extra import library is needed. */
 static const GUID SU_CLSID_MMDeviceEnumerator = {0xBCDE0395, 0xE52F, 0x467C, {0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}};
@@ -31,6 +32,8 @@ static const PROPERTYKEY SU_PKEY_Device_FriendlyName = {{0xA45C254E, 0xDF1C, 0x4
 
 struct SuAudioDevice {
     SuAudioMixer *mixer;
+    SuAudioPullFn pull;     /* pull-mode source (integrated runtime ring) instead of the mixer */
+    void *pull_user;
     HANDLE thread;
     HANDLE ready;           /* signalled when initialisation finished (status in init_status) */
     HANDLE wake;            /* the WASAPI buffer event */
@@ -142,7 +145,11 @@ static DWORD WINAPI device_main(LPVOID arg) {
         if (FAILED(IAudioRenderClient_GetBuffer(render, frames - padding, &buf))) {
             break;
         }
-        su_audio_mixer_render(d->mixer, (float *)(void *)buf, frames - padding);
+        if (d->pull != NULL) {
+            d->pull(d->pull_user, (float *)(void *)buf, frames - padding);
+        } else {
+            su_audio_mixer_render(d->mixer, (float *)(void *)buf, frames - padding);
+        }
         (void)IAudioRenderClient_ReleaseBuffer(render, frames - padding, 0);
         atomic_fetch_add(&d->frames, frames - padding);
     }
@@ -176,20 +183,20 @@ fail:
     return 1;
 }
 
-uint32_t su_audio_device_open(SuAudioMixer *m, SuAudioDevice **out, SuAudioDeviceInfo *info, char message[256]) {
+static uint32_t device_start(SuAudioMixer *m, SuAudioPullFn pull, void *user, uint32_t rate, SuAudioDevice **out,
+                             SuAudioDeviceInfo *info, char message[256]) {
     SuAudioDevice *d;
-    if (m == NULL || out == NULL) {
-        return SU_E_INVALID_ARGUMENT;
-    }
     *out = NULL;
     d = calloc(1, sizeof *d);
     if (d == NULL) {
         return SU_E_RESOURCE_LIMIT;
     }
     d->mixer = m;
+    d->pull = pull;
+    d->pull_user = user;
     atomic_init(&d->stop, 0);
     atomic_init(&d->frames, 0u);
-    d->info.sample_rate = su_audio_mixer_rate(m);
+    d->info.sample_rate = rate;
     d->ready = CreateEventW(NULL, FALSE, FALSE, NULL);
     d->wake = CreateEventW(NULL, FALSE, FALSE, NULL);
     if (d->ready == NULL || d->wake == NULL) {
@@ -214,6 +221,21 @@ uint32_t su_audio_device_open(SuAudioMixer *m, SuAudioDevice **out, SuAudioDevic
     }
     *out = d;
     return SU_OK;
+}
+
+uint32_t su_audio_device_open(SuAudioMixer *m, SuAudioDevice **out, SuAudioDeviceInfo *info, char message[256]) {
+    if (m == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return device_start(m, NULL, NULL, su_audio_mixer_rate(m), out, info, message);
+}
+
+uint32_t su_audio_device_open_pull(uint32_t sample_rate, SuAudioPullFn pull, void *user, SuAudioDevice **out,
+                                   SuAudioDeviceInfo *info, char message[256]) {
+    if (pull == NULL || out == NULL || sample_rate < 1000u || sample_rate > 384000u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return device_start(NULL, pull, user, sample_rate, out, info, message);
 }
 
 void su_audio_device_close(SuAudioDevice *d) {

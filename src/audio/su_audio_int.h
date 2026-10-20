@@ -30,6 +30,11 @@ uint32_t su_reader_ogg(FILE *f, const uint8_t *mem, size_t len, SuReader *r, cha
 float su_wav_sample(const uint8_t *p, uint32_t format, uint32_t bits);
 
 /* Render-thread side of a stream. */
+/* Output device in pull mode: the device thread calls pull for every buffer instead of rendering a mixer. */
+typedef void (*SuAudioPullFn)(void *user, float *out, uint32_t frames);
+uint32_t su_audio_device_open_pull(uint32_t sample_rate, SuAudioPullFn pull, void *user, SuAudioDevice **out,
+                                   SuAudioDeviceInfo *info, char message[256]);
+
 int su_stream_claim(SuAudioStream *s);       /* game thread: 1 if the stream was free */
 void su_stream_release(SuAudioStream *s);
 uint64_t su_stream_frames(const SuAudioStream *s);

@@ -73,8 +73,10 @@ cursors and filter state, never pointers from native prepared views.
 
 ## Acceptance boundaries
 
-The integrated runtime that wires these components together is described in
-[EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md).
+The integrated runtime that wires these components together, and the
+`SuAudioSystem` owner object for games, are described in
+[EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md); moving a game from the
+legacy mixer is covered in [EVENT_AUDIO_MIGRATION.md](EVENT_AUDIO_MIGRATION.md).
 
 Component notes contain exact APIs and tests. Synthetic PCM is the only public
 fixture source. Offline mastering is separate from the final safety limiter.

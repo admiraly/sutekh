@@ -7,7 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sutekh/audio_inspect.h"
+#include "sutekh/audio_system.h"
+#include "ir/su_sha256.h"
 
 static unsigned checks;
 static unsigned failures;
@@ -290,7 +291,7 @@ static void event_stage(const char *dir) {
     CHECK(su_audio_wav_encode_f32(event_pcm, LENGTH, RATE, wav, sizeof wav, &written) == SU_OK);
     write_file(dir, "event_stage.wav", wav, written);
     CHECK(su_audio_acceptance_manifest_json(off, wav, written, text, sizeof text, &written) == SU_OK);
-    CHECK(clean_text(text) && strstr(text, "owner-composed") != NULL);
+    CHECK(clean_text(text) && strstr(text, "integrated:") != NULL);
     write_file(dir, "acceptance.json", text, written);
     su_audio_offline_end(off);
     su_audio_trace_end(telemetry);
@@ -503,6 +504,297 @@ static Composition compose(float *out, uint32_t block, const char *dir) {
     return result;
 }
 
+/* Stage 3: the same slice through the integrated runtime owned by one SuAudioSystem. The real-time path
+ * (per game frame: commands, render-ahead ring update, device-sized reads) and the offline path (journal
+ * replay into a fresh offline system) must produce the same PCM. */
+static float live_pcm[LENGTH * 2u];
+static float offline_pcm[LENGTH * 2u];
+static char report[1u << 18];
+
+typedef struct Integrated {
+    double min_ambience_gain_early;
+    float final_ambience_fader_db;
+    uint64_t scope_limited;
+    uint32_t cluster_outputs;
+    uint64_t cluster_joins;
+} Integrated;
+
+static Integrated integrated_stage(const char *dir) {
+    static const SuAudioBindingPoint fader_points[2] = {{0.0f, 0.0f}, {1.0f, -12.0f}};
+    SuAudioAssets *assets = NULL;
+    SuAudioGraph *graph = NULL;
+    SuAudioGraphLimits limits = {16u, 32u, 8u, 16u, 8192u};
+    SuAudioGraphDiagnostic diagnostic;
+    SuAudioAssetRef refs[3];
+    SuAudioCurvePoint points[2];
+    SuAudioCurveDesc curve;
+    SuAudioBusDesc bus_desc[4];
+    SuAudioDuckRule duck;
+    SuAudioBusTreeDesc tree_desc;
+    SuAudioParamDef param;
+    SuAudioParamBinding binding;
+    SuAudioParamsDesc params_desc;
+    SuAudioClusterDesc cluster_desc;
+    SuAudioVoicePolicyRule rules[3];
+    SuAudioSystemDesc desc;
+    SuAudioSystem *live = NULL;
+    SuAudioSystem *offline = NULL;
+    SuAudioEmitter emitters[3];
+    SuAudioInstance handles[32];
+    SuAudioTelemetryEntry entries[64];
+    Integrated result;
+    char message[256];
+    uint32_t index;
+    uint32_t posted = 0u;
+    uint32_t next_command = 0u;
+    uint64_t consumed = 0u;
+    uint32_t chunk = 441u;
+    size_t written = 0u;
+    memset(&result, 0, sizeof result);
+    result.min_ambience_gain_early = 1.0;
+    CHECK(su_audio_assets_create(4u, 1u << 20, &assets) == SU_OK);
+    for (index = 0; index < 3u; index++) {
+        CHECK(su_audio_asset_prepare(assets, index + 1u, &clips[index], &refs[index]) == SU_OK);
+    }
+    CHECK(su_audio_graph_prepare(graph_json, sizeof graph_json - 1u, assets, &limits, &graph, &diagnostic) == SU_OK);
+    memset(points, 0, sizeof points);
+    points[0].distance_m = 1.0f;
+    points[0].lowpass_hz = 20000.0f;
+    points[0].scale = 1.0f;
+    points[1].distance_m = 80.0f;
+    points[1].gain_db = -30.0f;
+    points[1].lowpass_hz = 1500.0f;
+    points[1].scale = 1.0f;
+    curve.struct_size = sizeof curve;
+    curve.points = points;
+    curve.point_count = 2u;
+    memset(bus_desc, 0, sizeof bus_desc);
+    bus_desc[0].id = 1u;
+    bus_desc[0].parent = SU_AUDIO_BUS_ROOT;
+    bus_desc[1].id = 10u;
+    bus_desc[2].id = 20u;
+    bus_desc[3].id = 30u;
+    for (index = 1u; index < 4u; index++) {
+        bus_desc[index].parent = 1u;
+    }
+    memset(&duck, 0, sizeof duck);
+    duck.source = 10u;
+    duck.target = 30u;
+    duck.threshold_db = -30.0f;
+    duck.ratio = 4.0f;
+    duck.attack_ms = 5.0f;
+    duck.hold_ms = 50.0f;
+    duck.release_ms = 200.0f;
+    duck.max_attenuation_db = 9.0f;
+    memset(&tree_desc, 0, sizeof tree_desc);
+    tree_desc.struct_size = sizeof tree_desc;
+    tree_desc.sample_rate = RATE;
+    tree_desc.max_block_frames = BLOCK;
+    tree_desc.buses = bus_desc;
+    tree_desc.bus_count = 4u;
+    tree_desc.rules = &duck;
+    tree_desc.rule_count = 1u;
+    memset(&param, 0, sizeof param);
+    param.id = 1u;
+    param.max_value = 1.0f;
+    param.smoothing_frames = 480u;
+    memset(&binding, 0, sizeof binding);
+    binding.param_id = 1u;
+    binding.control = SU_AUDIO_CONTROL_BUS_GAIN_DB;
+    binding.bus_id = 30u;
+    binding.points = fader_points;
+    binding.point_count = 2u;
+    memset(&params_desc, 0, sizeof params_desc);
+    params_desc.struct_size = sizeof params_desc;
+    params_desc.sample_rate = RATE;
+    params_desc.params = &param;
+    params_desc.param_count = 1u;
+    params_desc.bindings = &binding;
+    params_desc.binding_count = 1u;
+    params_desc.max_scoped_values = 8u;
+    memset(&cluster_desc, 0, sizeof cluster_desc);
+    cluster_desc.struct_size = sizeof cluster_desc;
+    cluster_desc.width_rad = 1.2f;
+    cluster_desc.leave_ratio = 1.25f;
+    cluster_desc.hold_frames = 1024u;
+    cluster_desc.crossfade_frames = 256u;
+    cluster_desc.output_limit = 2u;
+    cluster_desc.max_objects = 32u;
+    memset(rules, 0, sizeof rules);
+    for (index = 0; index < 3u; index++) {
+        rules[index].bus_id = index == 0u ? 10u : index == 1u ? 20u : 30u;
+        rules[index].policy.physical_limit = index == 1u ? 3u : 2u;
+        rules[index].policy.limit_scope = SU_AUDIO_LIMIT_BUS;
+        rules[index].policy.virtual_mode = SU_AUDIO_VIRTUAL_ADVANCE;
+        rules[index].policy.release_frames = 64u;
+    }
+    memset(&desc, 0, sizeof desc);
+    desc.struct_size = sizeof desc;
+    desc.output = SU_AUDIO_OUTPUT_RING;
+    desc.ring_frames = 2048u;
+    desc.assets = assets;
+    desc.graph = graph;
+    desc.events.struct_size = sizeof desc.events;
+    desc.events.sample_rate = RATE;
+    desc.events.max_instances = 12u;
+    desc.events.max_leaves_per_instance = 4u;
+    desc.events.max_logical_voices = 24u;
+    desc.events.command_capacity = 4u;
+    desc.events.project_seed = 4242u;
+    desc.events.session_generation = 1u;
+    desc.scene.struct_size = sizeof desc.scene;
+    desc.scene.max_emitters = 4u;
+    desc.scene.max_curves = 1u;
+    desc.curves = &curve;
+    desc.curve_count = 1u;
+    desc.voices.struct_size = sizeof desc.voices;
+    desc.voices.sample_rate = RATE;
+    desc.voices.max_logical = 32u;
+    desc.voices.max_physical = 7u;
+    desc.voices.transition_reserve = 6u;
+    desc.policies = rules;
+    desc.policy_count = 3u;
+    desc.default_policy.release_frames = 64u;
+    desc.buses = &tree_desc;
+    desc.params = &params_desc;
+    desc.cluster = &cluster_desc;
+    desc.cluster_inputs = SU_AUDIO_EVENTS_CLUSTER_VOICES | SU_AUDIO_EVENTS_CLUSTER_BUSES;
+    desc.journal_capacity = 256u;
+    desc.telemetry_capacity = 64u;
+    CHECK(su_audio_system_create(&desc, &live, message) == SU_OK);
+    if (live == NULL) {
+        return result;
+    }
+    {
+        SuAudioEmitterSnapshot emitter;
+        SuAudioCameraListener listener;
+        SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+        memset(&emitter, 0, sizeof emitter);
+        emitter.curve = 1u;
+        emitter.scale = 1.0f;
+        for (index = 0; index < 3u; index++) {
+            emitter.pos = meters(-20.0 + 20.0 * index, -5.0 - 10.0 * index);
+            CHECK(su_audio_system_emitter_create(live, &emitter, &emitters[index]) == SU_OK);
+        }
+        memset(&listener, 0, sizeof listener);
+        listener.rot.w = 1.0f;
+        CHECK(su_audio_system_listener_set(live, &listener) == SU_OK);
+        CHECK(su_audio_system_param_set(live, global, 1u, 1.0f, 24000u) == SU_OK);
+    }
+    /* The A10 trace of stage 1, issued by a game loop: every command is submitted once the render-ahead clock
+     * is within 2048 frames of its time. */
+    while (consumed < LENGTH) {
+        uint64_t clock = su_audio_system_clock(live);
+        float gain = 1.0f;
+        while (next_command < 18u + 2u) {
+            /* command k: 0 = ambience, 1..18 = shots/sequences, 19 = listener move at shot 9 */
+            uint64_t at = next_command == 0u ? 0u : next_command <= 18u ? 100u + (next_command - 1u) * 2500u
+                : 100u + 9u * 2500u + 20u;
+            SuAudioTrigger trigger;
+            if (at >= clock + 2048u) {
+                break;
+            }
+            if (at < clock) {
+                at = clock;
+            }
+            memset(&trigger, 0, sizeof trigger);
+            trigger.struct_size = sizeof trigger;
+            trigger.session_generation = 1u;
+            trigger.sample_time = at;
+            if (next_command == 0u) {
+                trigger.event_id = 3u;
+                trigger.scope_id = 1u;
+            } else if (next_command <= 18u) {
+                uint32_t shot_index = next_command - 1u;
+                trigger.event_id = shot_index % 4u == 3u ? 2u : 1u;
+                trigger.emitter = emitters[shot_index % 3u];
+                trigger.scope_id = 2u;
+            } else {
+                SuAudioCameraListener listener;
+                memset(&listener, 0, sizeof listener);
+                listener.pos = meters(5.0, -8.0);
+                listener.rot.w = 1.0f;
+                CHECK(su_audio_system_listener_set(live, &listener) == SU_OK);
+                next_command++;
+                continue;
+            }
+            trigger.commit_seq = posted;
+            CHECK(su_audio_system_post(live, &trigger, &handles[posted], NULL) == SU_OK);
+            posted++;
+            next_command++;
+        }
+        CHECK(su_audio_system_update(live) == SU_OK);
+        CHECK(su_audio_bus_gain_at(su_audio_system_buses(live), 30u, &gain) == SU_OK);
+        if (su_audio_system_clock(live) < 24000u && gain < result.min_ambience_gain_early) {
+            result.min_ambience_gain_early = gain;
+        }
+        {
+            SuAudioClusterStats running;
+            su_audio_cluster_stats(su_audio_system_cluster(live), &running);
+            CHECK(running.outputs <= 2u || running.infeasible != 0u);
+            if (running.outputs > result.cluster_outputs) {
+                result.cluster_outputs = running.outputs;
+            }
+        }
+        {
+            uint32_t take = (uint32_t)(LENGTH - consumed < chunk ? LENGTH - consumed : chunk);
+            CHECK(su_audio_system_ring_read(live, live_pcm + consumed * 2u, take) == take);
+            consumed += take;
+            chunk = chunk == 441u ? 480u : chunk == 480u ? 97u : 441u;
+        }
+    }
+    {
+        const SuAudioSystemCommand *journal = NULL;
+        uint32_t count = 0u;
+        SuAudioSystemStats stats;
+        SuAudioVoiceStats voice_stats;
+        SuAudioClusterStats cluster;
+        SuAudioBusMeter meter;
+        uint32_t drained = 0u;
+        su_audio_system_stats(live, &stats);
+        CHECK(stats.underrun_frames == 0u);
+        CHECK(su_audio_system_journal(live, &journal, &count) == SU_OK && count == posted + 6u);
+        desc.output = SU_AUDIO_OUTPUT_OFFLINE;
+        CHECK(su_audio_system_create(&desc, &offline, message) == SU_OK);
+        CHECK(su_audio_system_replay(offline, journal, count, LENGTH, offline_pcm) == SU_OK);
+        CHECK(memcmp(live_pcm, offline_pcm, sizeof live_pcm) == 0);
+        su_audio_voice_pool_stats(su_audio_system_voices(live), &voice_stats);
+        result.scope_limited = voice_stats.reasons[SU_AUDIO_REASON_SCOPE_LIMIT];
+        su_audio_cluster_stats(su_audio_system_cluster(live), &cluster);
+        result.cluster_joins = cluster.joins;
+        CHECK(su_audio_bus_meter_read(su_audio_system_buses(offline), 30u, &meter, 0) == SU_OK);
+        result.final_ambience_fader_db = meter.fader_db;
+        CHECK(su_audio_trace_drain(su_audio_system_telemetry(live), entries, 64u, &drained) == SU_OK);
+        CHECK(drained == posted + 2u);
+        CHECK(su_audio_trace_csv(entries, drained, text, sizeof text, &written) == SU_OK && clean_text(text));
+        write_file(dir, "integrated_trace.csv", text, written);
+    }
+    CHECK(su_audio_system_control(live, "audio.inspect", NULL, 0u, report, sizeof report, &written) == SU_OK);
+    CHECK(clean_text(report) && strstr(report, "su_audio_system_inspect_v1") != NULL);
+    write_file(dir, "integrated_inspect.json", report, written);
+    {
+        static const char params[] = "{\"frames\":48000}";
+        SuSha256 sha;
+        uint8_t digest[32];
+        char hex[65];
+        su_sha256_init(&sha);
+        su_sha256_update(&sha, live_pcm, sizeof live_pcm);
+        su_sha256_final(&sha, digest);
+        su_sha256_hex(digest, hex);
+        CHECK(su_audio_system_control(live, "audio.render.offline", params, sizeof params - 1u, report, sizeof report,
+            &written) == SU_OK);
+        CHECK(strstr(report, hex) != NULL);
+        write_file(dir, "integrated_offline.json", report, written);
+    }
+    CHECK(su_audio_wav_encode_f32(live_pcm, LENGTH, RATE, wav, sizeof wav, &written) == SU_OK);
+    write_file(dir, "integrated.wav", wav, written);
+    su_audio_system_destroy(offline);
+    su_audio_system_destroy(live);
+    su_audio_graph_release(graph);
+    CHECK(su_audio_assets_destroy(assets) == SU_OK);
+    return result;
+}
+
 int main(int argc, char **argv) {
     const char *dir = argc > 1 ? argv[1] : NULL;
     Composition a;
@@ -540,6 +832,27 @@ int main(int argc, char **argv) {
         (unsigned long long)a.stolen, a.min_ambience_gain_early, a.max_cluster_outputs);
     write_file(dir, "composed.json", text, strlen(text));
     printf("%s", text);
+    {
+        Integrated integrated = integrated_stage(dir);
+        double ilufs = 0.0;
+        double ipeak = 0.0;
+        /* The integrated runtime reproduces the composed slice's behaviour: per-bus voice limits virtualise
+         * shots, shots duck the ambience bus before the parameter moves its fader to -12 dB, and the three
+         * emitters fold into at most two cluster outputs. */
+        CHECK(integrated.scope_limited > 0u);
+        CHECK(integrated.min_ambience_gain_early < 0.95);
+        CHECK(fabs(integrated.final_ambience_fader_db + 12.0f) < 0.01);
+        CHECK(integrated.cluster_outputs >= 1u && integrated.cluster_outputs <= 2u && integrated.cluster_joins > 0u);
+        CHECK(su_audio_measure_stereo(live_pcm, LENGTH, RATE, &ilufs, &ipeak) == SU_OK);
+        CHECK(ilufs > -60.0 && ilufs < 0.0 && ipeak > 0.0 && ipeak <= 1.5);
+        (void)snprintf(text, sizeof text, "{\"schema\":\"su_audio_integrated_v1\",\"frames\":%u,"
+            "\"integrated_lufs\":%.3f,\"true_peak_dbtp\":%.3f,\"scope_limited\":%llu,\"min_ambience_gain_early\":%.4f,"
+            "\"cluster_outputs\":%u,\"realtime_equals_offline\":%s}\n", LENGTH, ilufs, 20.0 * log10(ipeak),
+            (unsigned long long)integrated.scope_limited, integrated.min_ambience_gain_early,
+            integrated.cluster_outputs, memcmp(live_pcm, offline_pcm, sizeof live_pcm) == 0 ? "true" : "false");
+        write_file(dir, "integrated.json", text, strlen(text));
+        printf("%s", text);
+    }
     printf("audio_acceptance: %u checks, %u failures\n", checks, failures);
     return failures == 0u ? 0 : 1;
 }

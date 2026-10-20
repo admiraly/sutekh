@@ -556,12 +556,13 @@ static const char *const capabilities[][2] = {
     {"event_runtime", "implemented"},
     {"offline_render", "implemented"},
     {"inspection", "implemented"},
-    {"voice_virtualisation", "implemented as a standalone pool; owner-composed, not wired into the event runtime"},
-    {"bus_tree_ducking", "implemented as a standalone bus tree; owner-composed, not wired into the event runtime"},
-    {"parameters_music", "implemented as standalone parameters/music; owner-composed, not wired into the event runtime"},
-    {"clustering", "implemented as standalone clustering; owner-composed, not wired into the event runtime"},
+    {"voice_virtualisation", "implemented; integrated: the event runtime drives the pool once a hook is attached"},
+    {"bus_tree_ducking", "implemented; integrated: voices and music render into buses, ducking detects bus signals"},
+    {"parameters_music", "implemented; integrated: expansion snapshots, voice and bus-gain bindings, music on a bus"},
+    {"clustering", "implemented; integrated: fed from voice identity and pre-master buses (object metadata)"},
+    {"direct_checkpoints", "implemented; integrated runtimes only, replay kept as the verifier"},
     {"bank_format_import", "out of scope: downstream adapter"},
-    {"control_plane_methods", "gap: audio.inspect/audio.trace/audio.render.offline are not registered"}};
+    {"control_plane_methods", "implemented as su_audio_system_control; not registered with the agent control plane"}};
 
 uint32_t su_audio_acceptance_manifest_json(const SuAudioOffline *offline, const void *wav, size_t wav_bytes,
     char *out, size_t capacity, size_t *written) {

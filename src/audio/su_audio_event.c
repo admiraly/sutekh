@@ -95,6 +95,7 @@ struct SuAudioEvents {
     uint32_t bed_count;
     EventLeaf **leaf_by_voice;
     uint32_t leaf_map_size;
+    uint32_t *due;
     float cluster_mix[SU_AUDIO_EVENT_QUANTUM * 2u];
 };
 
@@ -215,6 +216,7 @@ void su_audio_events_destroy(SuAudioEvents *events) {
     free(events->bed_ids);
     free(events->bed_mem);
     free(events->leaf_by_voice);
+    free(events->due);
     free(events->param_values);
     free(events->switch_values);
     free(events->bus_gains);
@@ -654,23 +656,31 @@ static uint32_t leaf_controls(SuAudioEvents *events, const EventInstance *instan
 }
 
 static void pooled_start(SuAudioEvents *events, uint64_t now, uint64_t end) {
-    uint64_t previous = 0u;
+    uint32_t due = 0u;
+    uint32_t slot;
     uint32_t visited;
-    for (visited = 0; visited < events->desc.max_instances; visited++) {
-        EventInstance *instance = NULL;
-        uint32_t slot;
+    /* instances with a leaf starting in this quantum, in admission order */
+    for (slot = 0; slot < events->desc.max_instances; slot++) {
+        const EventInstance *candidate = &events->instances[slot];
         uint32_t index;
-        for (slot = 0; slot < events->desc.max_instances; slot++) {
-            EventInstance *candidate = &events->instances[slot];
-            if (candidate->state == 1u && candidate->order > previous
-                && (instance == NULL || candidate->order < instance->order)) {
-                instance = candidate;
+        if (candidate->state != 1u) {
+            continue;
+        }
+        for (index = 0; index < candidate->count; index++) {
+            if (candidate->leaves[index].state == 0u && candidate->leaves[index].at < end) {
+                uint32_t at = due++;
+                while (at > 0u && events->instances[events->due[at - 1u]].order > candidate->order) {
+                    events->due[at] = events->due[at - 1u];
+                    at--;
+                }
+                events->due[at] = slot;
+                break;
             }
         }
-        if (instance == NULL) {
-            break;
-        }
-        previous = instance->order;
+    }
+    for (visited = 0; visited < due; visited++) {
+        EventInstance *instance = &events->instances[events->due[visited]];
+        uint32_t index;
         for (index = 0; index < instance->count; index++) {
             EventLeaf *leaf = &instance->leaves[index];
             SuAudioLogicalDesc desc;
@@ -1129,11 +1139,13 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     param_values = calloc(param_count + 1u, sizeof *param_values);
     switch_values = calloc(switch_count + 1u, sizeof *switch_values);
     bus_gains = calloc(bus_bindings + 1u, sizeof *bus_gains);
+    events->due = calloc(events->desc.max_instances, sizeof *events->due);
     if (hook->policy_count != 0u) {
         policies = calloc(hook->policy_count, sizeof *policies);
     }
     status = route_mem == NULL || routes == NULL || route_ids == NULL || param_values == NULL
-        || switch_values == NULL || bus_gains == NULL || (hook->policy_count != 0u && policies == NULL)
+        || switch_values == NULL || bus_gains == NULL || events->due == NULL
+        || (hook->policy_count != 0u && policies == NULL)
         ? SU_E_RESOURCE_LIMIT : SU_OK;
     for (index = 0; status == SU_OK && buses != NULL && index < route_count; index++) {
         status = su_audio_bus_order(buses, index, &route_ids[index]);
@@ -1165,6 +1177,8 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
         free(switch_values);
         free(bus_gains);
         free(policies);
+        free(events->due);
+        events->due = NULL;
         return status;
     }
     if (policies != NULL) {
@@ -1196,7 +1210,8 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     events->stats.runtime_bytes += (uint64_t)route_count * (SU_AUDIO_EVENT_QUANTUM * 2u * sizeof *route_mem
         + sizeof *routes + sizeof *route_ids) + (uint64_t)(param_count + 1u) * sizeof *param_values
         + (uint64_t)(switch_count + 1u) * sizeof *switch_values + (uint64_t)(bus_bindings + 1u) * sizeof *bus_gains
-        + (uint64_t)hook->policy_count * sizeof *policies;
+        + (uint64_t)hook->policy_count * sizeof *policies
+        + (uint64_t)events->desc.max_instances * sizeof *events->due;
     return SU_OK;
 }
 
