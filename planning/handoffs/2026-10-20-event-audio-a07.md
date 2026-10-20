@@ -5,8 +5,8 @@ shared header, schema or event runtime source. Changed paths:
 `include/sutekh/audio_parameter.h`, `src/audio/su_audio_parameter.c`,
 `src/audio/su_audio_music.c`, `tests/audio/test_audio_parameter.c`,
 `docs/EVENT_AUDIO_PARAMETERS.md`, an additive `su_audio_parameter` library and
-`audio_parameter` test registration in `cmake/SutekhPresentation.cmake`, this
-handoff and the generated pack report.
+`audio_parameter` test registration in `cmake/SutekhPresentation.cmake` and this
+handoff. `tools/validate_pack.py --write-report` left the pack report unchanged.
 
 Delivered: typed global/emitter/instance parameters with clamp/reject policies,
 linear smoothing and bounded timestamped segments; switches with first-only,
