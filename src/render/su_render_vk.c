@@ -16,6 +16,7 @@
 
 #include "ir/su_sha256.h"
 #include "render/su_render_shaders.h"
+#include "render/su_render_haze.h"
 
 /* ---------- loader ---------- */
 
@@ -1265,6 +1266,8 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         gi.layout = r->fxtex_layout;
     } else if (s->layout == 2) {
         gi.layout = r->skycube_layout;
+    } else if (s->layout == 3) {
+        gi.layout = r->haze_layout;
     }
     gi.renderPass = s->post ? r->post_pass : s->shadow ? r->shadow_pass : r->scene_pass;
     gi.subpass = (uint32_t)s->subpass;
@@ -1335,6 +1338,18 @@ static int make_pipelines(SuRenderer *r) {
     s.fs_bytes = sizeof su_shader_fx_tex_pm_frag;
     s.blend = BLEND_PREMUL;
     ok = ok && make_pipe(r, &s, &r->fxtex_pipe[1]);
+    memset(&s, 0, sizeof s);
+    s.vs = su_shader_fullscreen_vert;
+    s.vs_bytes = sizeof su_shader_fullscreen_vert;
+    s.fs = su_shader_haze_frag;
+    s.fs_bytes = sizeof su_shader_haze_frag;
+    s.vin = VIN_NONE;
+    s.layout = 3;
+    s.subpass = 1;
+    s.blend = BLEND_ADD;
+    ok = ok && make_pipe(r, &s, &r->haze_pipe[0]);
+    s.blend = BLEND_PREMUL;
+    ok = ok && make_pipe(r, &s, &r->haze_pipe[1]);
     /* the cube-map sky background */
     memset(&s, 0, sizeof s);
     s.vs = su_shader_fullscreen_vert;
@@ -1579,6 +1594,12 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
         fli.pushConstantRangeCount = 1;
         fli.pPushConstantRanges = &spc;
         if (r->f.vkCreatePipelineLayout(r->dev, &fli, NULL, &r->fxtex_layout) != VK_SUCCESS) {
+            return 0;
+        }
+        fli.setLayoutCount = 2;
+        fsets[1] = r->depth_in_dsl;
+        spc.size = sizeof(HazePush);
+        if (r->f.vkCreatePipelineLayout(r->dev, &fli, NULL, &r->haze_layout) != VK_SUCCESS) {
             return 0;
         }
         fli.setLayoutCount = 2;
@@ -2311,7 +2332,7 @@ void su_render_destroy(SuRenderer *r) {
         su_rvk_free_buffer(r, &r->mesh_vb);
         su_rvk_free_buffer(r, &r->mesh_ib);
         {
-            VkPipeline all[10 + 2 * PIPE_PBR_COUNT];
+            VkPipeline all[12 + 2 * PIPE_PBR_COUNT];
             uint32_t k;
             all[0] = r->mesh_pipe;
             all[1] = r->line_pipe;
@@ -2323,6 +2344,8 @@ void su_render_destroy(SuRenderer *r) {
             all[7] = r->fxtex_pipe[0];
             all[8] = r->fxtex_pipe[1];
             all[9] = r->skycube_pipe;
+            all[10] = r->haze_pipe[0];
+            all[11] = r->haze_pipe[1];
             if (r->bloom_up_pipe != VK_NULL_HANDLE) {
                 r->f.vkDestroyPipeline(r->dev, r->bloom_up_pipe, NULL);
             }
@@ -2351,10 +2374,10 @@ void su_render_destroy(SuRenderer *r) {
                 r->f.vkDestroySampler(r->dev, r->bloom_sampler, NULL);
             }
             for (k = 0; k < PIPE_PBR_COUNT; k++) {
-                all[10 + k] = r->pbr_pipe[k];
-                all[10 + PIPE_PBR_COUNT + k] = r->paint_pipe[k];
+                all[12 + k] = r->pbr_pipe[k];
+                all[12 + PIPE_PBR_COUNT + k] = r->paint_pipe[k];
             }
-            for (k = 0; k < 10 + 2 * PIPE_PBR_COUNT; k++) {
+            for (k = 0; k < 12 + 2 * PIPE_PBR_COUNT; k++) {
                 if (all[k] != VK_NULL_HANDLE) {
                     r->f.vkDestroyPipeline(r->dev, all[k], NULL);
                 }
@@ -2379,6 +2402,9 @@ void su_render_destroy(SuRenderer *r) {
         }
         if (r->fxtex_layout != VK_NULL_HANDLE) {
             r->f.vkDestroyPipelineLayout(r->dev, r->fxtex_layout, NULL);
+        }
+        if (r->haze_layout != VK_NULL_HANDLE) {
+            r->f.vkDestroyPipelineLayout(r->dev, r->haze_layout, NULL);
         }
         if (r->depth_in_dsl != VK_NULL_HANDLE) {
             r->f.vkDestroyDescriptorSetLayout(r->dev, r->depth_in_dsl, NULL);
@@ -2797,6 +2823,39 @@ typedef struct FrameIn {
     uint32_t shadow_size;     /* > 0: sun shadows requested at this map size */
     uint32_t shadow_layers;   /* with it: cascades (1 for the single map) */
 } FrameIn;
+
+static int haze_scissor(const SuHazeVolume *volume, const FrameIn *in, uint32_t width, uint32_t height, VkRect2D *rect) {
+    SuVec3f offset = su_wpos_delta(volume->pos, in->scene->camera.pos);
+    float low_x = INFINITY, low_y = INFINITY, high_x = -INFINITY, high_y = -INFINITY;
+    uint32_t corner;
+    rect->offset.x = rect->offset.y = 0;
+    rect->extent.width = width;
+    rect->extent.height = height;
+    for (corner = 0; corner < 8u; corner++) {
+        SuVec3f point = {(corner & 1u) != 0u ? 1.0f : -1.0f, (corner & 2u) != 0u ? 1.0f : -1.0f,
+                        (corner & 4u) != 0u ? 1.0f : -1.0f};
+        SuVec3f projected;
+        float clip_w;
+        point = su_mat4f_transform_point(volume->transform, point, NULL);
+        point.x += offset.x;
+        point.y += offset.y;
+        point.z += offset.z;
+        projected = su_mat4f_transform_point(in->scene_vp, point, &clip_w);
+        if (clip_w <= 0.0f) return 1;
+        low_x = fminf(low_x, projected.x);
+        low_y = fminf(low_y, projected.y);
+        high_x = fmaxf(high_x, projected.x);
+        high_y = fmaxf(high_y, projected.y);
+    }
+    if (high_x < -1.0f || high_y < -1.0f || low_x > 1.0f || low_y > 1.0f) return 0;
+    rect->offset.x = (int32_t)fmaxf(0.0f, floorf((low_x + 1.0f) * 0.5f * (float)width) - 1.0f);
+    rect->offset.y = (int32_t)fmaxf(0.0f, floorf((low_y + 1.0f) * 0.5f * (float)height) - 1.0f);
+    rect->extent.width = (uint32_t)fminf((float)width, ceilf((high_x + 1.0f) * 0.5f * (float)width) + 1.0f) -
+                         (uint32_t)rect->offset.x;
+    rect->extent.height = (uint32_t)fminf((float)height, ceilf((high_y + 1.0f) * 0.5f * (float)height) + 1.0f) -
+                          (uint32_t)rect->offset.y;
+    return rect->extent.width > 0u && rect->extent.height > 0u;
+}
 
 /* Farther quads first; equal distances keep submission order. */
 static int cmp_fx_quads(const void *a, const void *b) {
@@ -3258,6 +3317,25 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
             r->stats.draws++;
         }
     }
+    r->stats.haze_volumes_drawn = 0;
+    if (in->scene != NULL && in->scene->haze_count > 0u) {
+        VkDescriptorSet sets[2] = {fr->frame_set, r->depth_in_set};
+        r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->haze_layout, 0, 2, sets, 0, NULL);
+        for (i = 0; i < in->scene->haze_count; i++) {
+            HazePush push;
+            VkRect2D rect;
+            const SuHazeVolume *volume = &in->scene->haze[i];
+            if (volume->density == 0.0f || !su_haze_prepare(volume, in->scene->camera.pos, &push)) continue;
+            if (!haze_scissor(volume, in, r->width, r->height, &rect)) continue;
+            r->f.vkCmdSetScissor(cmd, 0, 1, &rect);
+            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->haze_pipe[volume->blend]);
+            r->f.vkCmdPushConstants(cmd, r->haze_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);
+            r->f.vkCmdDraw(cmd, 3, 1, 0, 0);
+            r->stats.draws++;
+            r->stats.haze_volumes_drawn++;
+        }
+        viewport(r, cmd);
+    }
     r->f.vkCmdEndRenderPass(cmd);
 
     /* ---- bloom chain (half resolution), when asked for and available ---- */
@@ -3546,10 +3624,18 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
         (f->debug_instances == NULL && f->debug_instance_count > 0u) || (f->lines == NULL && f->line_vertex_count > 0u) ||
         (f->fx == NULL && f->fx_vertex_count > 0u) || (f->hud == NULL && f->hud_vertex_count > 0u) ||
         (f->fx_tex == NULL && f->fx_tex_vertex_count > 0u) || (f->fx_batches == NULL && f->fx_batch_count > 0u) ||
+        (f->haze == NULL && f->haze_count > 0u) || f->haze_count > SU_HAZE_MAX_VOLUMES ||
         !(f->camera.fov_y > 0.0f && f->camera.fov_y < 3.1f) || !(f->camera.near_z > 0.0f)) {
         return SU_E_INVALID_ARGUMENT;
     }
     l = &f->light;
+    {
+        uint32_t index;
+        HazePush push;
+        for (index = 0; index < f->haze_count; index++) {
+            if (!su_haze_prepare(&f->haze[index], f->camera.pos, &push)) return SU_E_INVALID_ARGUMENT;
+        }
+    }
     memset(&in, 0, sizeof in);
     view = su_render_camera_view(&f->camera);
     proj = su_mat4f_perspective_rz(f->camera.fov_y, (float)r->width / (float)(r->height > 0u ? r->height : 1u),

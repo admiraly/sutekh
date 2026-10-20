@@ -30,7 +30,7 @@ SHADERS = ["mesh.vert", "mesh.frag", "line.vert", "line.frag", "pbr.vert", "pbr.
            "post.frag", "hud.vert", "hud.frag", "fx.vert", "fx.frag",
 "bloom_down.frag", "bloom_up.frag", "post_bloom.frag", "paint.frag", "fx_tex_add.frag", "fx_tex_pm.frag",
            "sky_cube.frag", "shadow.vert", "shadow.frag",
-           "env_prefilter.frag"]
+           "env_prefilter.frag", "haze.frag"]
 # Shared sources pulled in with #include (GL_GOOGLE_include_directive); their hashes are recorded too.
 INCLUDES = ["frame.glsl"]
 
