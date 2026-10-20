@@ -215,7 +215,9 @@ new records:
   order by centroid key and index; leaves of at most 4), from exact integer bounds. Sweeps visit nodes whose bounds,
   swept back by the mover's extent and padded by 1/64 m, the path enters no later than the best toi so far; each
   triangle first passes a plane test (the swept core more than r + pad from its plane on one side is skipped).
-  Distances visit nodes whose box gap is within the best distance + pad. Every skipped triangle provably cannot
+  Distances visit nodes whose box gap is within the best distance + pad (nearer child first), skip triangles whose
+  plane is farther than that from both segment ends, and are searched only below the best proximity distance found
+  so far among the mover's candidates (a strict < keeps the tie rule). Every skipped triangle provably cannot
   reach the reported minimum, so results do not depend on the traversal: tests compare culled and brute-force runs
   bit for bit.
 - *Cost.* Per mover and mesh row: two frame changes, then a BVH walk; an exact triangle test is a fixed sequence of at
