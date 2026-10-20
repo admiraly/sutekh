@@ -4,6 +4,7 @@
 #include "sutekh/audio_asset.h"
 #include "sutekh/audio_spatial.h"
 #include "sutekh/audio_graph.h"
+#include "sutekh/audio_voice_policy.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -74,6 +75,33 @@ void su_audio_events_stats(const SuAudioEvents *events, SuAudioEventStats *out);
 uint32_t su_audio_commit_cursor_snapshot(const SuAudioEvents *events, SuAudioCommitCursor *out);
 uint32_t su_audio_commit_cursor_restore(SuAudioEvents *events, const SuAudioCommitCursor *cursor);
 uint32_t su_audio_events_session(SuAudioEvents *events, uint64_t session_generation);
+
+/* ---- Integrated voice runtime (versioned hook) ----
+ * Attaching a hook replaces the private legacy mixer of an idle runtime: admitted leaves become logical voices
+ * of the A05 pool (ranking, virtualisation, stealing and release), started and stopped at their exact sample
+ * times, with pitch, camera spatialisation (attenuation, equal-power pan) and the curve low-pass applied per
+ * voice by the pool's controlled render path. Later hook versions append fields; struct_size selects them. */
+#define SU_AUDIO_EVENTS_HOOK_VERSION 1u
+
+/* First matching rule wins: node_id (0 = any) and bus_id (0 = any) of the graph leaf. */
+typedef struct SuAudioVoicePolicyRule {
+    uint32_t node_id;
+    uint32_t bus_id;
+    SuAudioVoicePolicy policy;
+} SuAudioVoicePolicyRule;
+
+typedef struct SuAudioEventsHook {
+    uint32_t struct_size;
+    uint32_t version;                      /* SU_AUDIO_EVENTS_HOOK_VERSION */
+    SuAudioVoicePool *voices;              /* required; idle, max_logical >= max_logical_voices */
+    const SuAudioVoicePolicyRule *policies; /* copied */
+    uint32_t policy_count;                 /* <= 4096 */
+    SuAudioVoicePolicy default_policy;
+} SuAudioEventsHook;
+
+/* Valid only while no instance, stop command or partially consumed quantum exists. A stop with
+ * release_frames == 0 uses the voice policy release. */
+uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *hook);
 
 #ifdef __cplusplus
 }

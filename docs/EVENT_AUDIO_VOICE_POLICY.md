@@ -58,9 +58,13 @@ its end while virtual expires (`expired_end`) and is never replayed; any voice
 virtual for `wake_deadline_frames` expires (`expired_deadline`). A one-shot
 that plays to its end finishes.
 
-Pitch, spatial filtering and bus routing are not applied here: clips play at
-1x, pan is a balance law (centre is unity on both channels) and gain is linear.
-Clip sample rate must equal the pool rate when one is given.
+Voices without controls play at 1x with a balance pan law (centre is unity on
+both channels) and linear gain. `su_audio_voice_set_controls` switches a voice
+to the integrated path (fractional cursor, per-channel gains, one-pole
+low-pass), and `su_audio_voice_add_at`/`su_audio_voice_stop_at` start and stop
+voices at exact frames inside a quantum; see
+[EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md). Clip sample rate must
+equal the pool rate when one is given.
 
 ## Tests
 

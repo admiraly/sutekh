@@ -3,8 +3,24 @@
 #include <string.h>
 
 #include "sutekh/audio_voice_policy.h"
+#include "su_audio_state.h"
+#include "su_audio_voice_int.h"
 
 #define Q SU_AUDIO_VOICE_QUANTUM
+#define NO_STOP UINT64_MAX
+
+/* Integrated playback state of a controlled voice or tail (see SuAudioVoiceControls). */
+typedef struct VoiceDsp {
+    uint32_t controlled;
+    uint32_t mono_mix;
+    uint32_t fresh;           /* next quantum starts from the target gains and pitch (no ramp) */
+    uint32_t lp_remain;
+    double pos;               /* fractional source frame */
+    float pitch, pitch_prev;
+    float gl, gr, gl_prev, gr_prev;
+    float lp_alpha, lp_target, lp_step;
+    float lp_l, lp_r;
+} VoiceDsp;
 
 typedef struct PoolVoice {
     SuAudioLogicalDesc desc;
@@ -20,6 +36,12 @@ typedef struct PoolVoice {
     uint32_t release_total;   /* owner stop release */
     uint32_t release_remain;
     uint32_t next_free;
+    uint32_t route;
+    uint32_t stop_release;
+    uint64_t start_at;        /* absolute pool frame; silent before */
+    uint64_t stop_at;         /* NO_STOP when none */
+    uint64_t tag;
+    VoiceDsp dsp;
 } PoolVoice;
 
 typedef struct PoolTail {
@@ -30,6 +52,10 @@ typedef struct PoolTail {
     uint32_t loop;
     uint32_t total;
     uint32_t remain;
+    uint32_t route;
+    uint64_t tag;
+    SuAudioLogicalVoice voice;
+    VoiceDsp dsp;
 } PoolTail;
 
 typedef struct RankKey {
@@ -53,11 +79,18 @@ struct SuAudioVoicePool {
     float cache[Q * 2u];
     uint32_t cache_pos;
     SuAudioVoiceStats stats;
+    SuAudioVoiceCapture *capture;
+    uint32_t capture_capacity;
+    uint32_t captured;
 };
 
 #define NO_FREE UINT32_MAX
 
 static int finite_f(float v) { return v == v && v - v == 0.0f; }
+
+static SuAudioLogicalVoice make_handle(const SuAudioVoicePool *pool, const PoolVoice *voice) {
+    return ((uint64_t)voice->generation << 32) | (uint64_t)((uint32_t)(voice - pool->voices) + 1u);
+}
 
 static uint32_t handle_index(const SuAudioVoicePool *pool, SuAudioLogicalVoice handle, PoolVoice **out) {
     uint32_t index;
@@ -132,7 +165,8 @@ void su_audio_voice_pool_destroy(SuAudioVoicePool *pool) {
     free(pool);
 }
 
-uint32_t su_audio_voice_add(SuAudioVoicePool *pool, const SuAudioLogicalDesc *desc, SuAudioLogicalVoice *out) {
+static uint32_t add_voice(SuAudioVoicePool *pool, const SuAudioLogicalDesc *desc, uint64_t start_frame,
+                          SuAudioLogicalVoice *out) {
     PoolVoice *voice;
     uint32_t index;
     const SuAudioVoicePolicy *policy;
@@ -145,6 +179,7 @@ uint32_t su_audio_voice_add(SuAudioVoicePool *pool, const SuAudioLogicalDesc *de
         !finite_f(policy->distance_offset) || policy->limit_scope > SU_AUDIO_LIMIT_NODE ||
         policy->virtual_mode > SU_AUDIO_VIRTUAL_DISCARD ||
         (policy->flags & ~(SU_AUDIO_VOICE_LOOP | SU_AUDIO_VOICE_HERO)) != 0u) return SU_E_INVALID_ARGUMENT;
+    if (start_frame < pool->clock) return SU_E_INVALID_ARGUMENT;
     if (pool->free_head == NO_FREE) {
         pool->stats.refused++;
         return SU_E_RESOURCE_LIMIT;
@@ -161,11 +196,22 @@ uint32_t su_audio_voice_add(SuAudioVoicePool *pool, const SuAudioLogicalDesc *de
     voice->state = SU_AUDIO_VOICE_VIRTUAL; /* ranked at the next quantum boundary */
     voice->reason = SU_AUDIO_REASON_NONE;
     voice->audibility = desc->gain / (policy->distance_offset > 1.0f ? policy->distance_offset : 1.0f);
+    voice->start_at = start_frame;
+    voice->stop_at = NO_STOP;
     pool->logical++;
     pool->stats.admitted++;
     if (pool->logical > pool->stats.logical_peak) pool->stats.logical_peak = pool->logical;
-    *out = ((uint64_t)voice->generation << 32) | (uint64_t)(index + 1u);
+    *out = make_handle(pool, voice);
     return SU_OK;
+}
+
+uint32_t su_audio_voice_add(SuAudioVoicePool *pool, const SuAudioLogicalDesc *desc, SuAudioLogicalVoice *out) {
+    return add_voice(pool, desc, pool ? pool->clock : 0u, out);
+}
+
+uint32_t su_audio_voice_add_at(SuAudioVoicePool *pool, const SuAudioLogicalDesc *desc, uint64_t start_frame,
+                               SuAudioLogicalVoice *out) {
+    return add_voice(pool, desc, start_frame, out);
 }
 
 uint32_t su_audio_voice_set_audibility(SuAudioVoicePool *pool, SuAudioLogicalVoice handle,
@@ -181,16 +227,54 @@ uint32_t su_audio_voice_set_audibility(SuAudioVoicePool *pool, SuAudioLogicalVoi
     return SU_OK;
 }
 
-uint32_t su_audio_voice_stop(SuAudioVoicePool *pool, SuAudioLogicalVoice handle, uint32_t release_frames) {
+static float lowpass_alpha(const SuAudioVoicePool *pool, float cutoff_hz) {
+    double rate = pool->desc.sample_rate ? (double)pool->desc.sample_rate : 48000.0;
+    if (cutoff_hz > 0.0f && (double)cutoff_hz < rate * 0.5) {
+        double sine = sin(3.141592653589793 * (double)cutoff_hz / rate);
+        double term = 2.0 * sine * sine;
+        return (float)(sqrt(term * term + 2.0 * term) - term);
+    }
+    return 1.0f;
+}
+
+uint32_t su_audio_voice_set_controls(SuAudioVoicePool *pool, SuAudioLogicalVoice handle,
+                                     const SuAudioVoiceControls *controls) {
     PoolVoice *voice;
+    VoiceDsp *dsp;
+    float alpha;
     uint32_t status = handle_index(pool, handle, &voice);
     if (status != SU_OK) return status;
-    if (release_frames == 0u) release_frames = voice->desc.policy.release_frames;
-    if (voice->state == SU_AUDIO_VOICE_VIRTUAL || release_frames == 0u) {
-        free_voice(pool, voice, SU_AUDIO_REASON_STOPPED);
-        return SU_OK;
+    if (!controls || controls->struct_size != sizeof *controls || !finite_f(controls->gain_left) ||
+        !finite_f(controls->gain_right) || controls->gain_left < 0.0f || controls->gain_right < 0.0f ||
+        !finite_f(controls->pitch) || !(controls->pitch > 0.0f) || controls->pitch > 64.0f ||
+        !finite_f(controls->lowpass_hz) || controls->lowpass_hz < 0.0f) return SU_E_INVALID_ARGUMENT;
+    dsp = &voice->dsp;
+    if (!dsp->controlled) {
+        dsp->controlled = 1u;
+        dsp->fresh = 1u;
+        dsp->pos = (double)voice->cursor;
+        dsp->lp_alpha = 1.0f;
+        dsp->lp_target = 1.0f;
     }
-    if (voice->state == SU_AUDIO_VOICE_STOPPING && voice->release_remain <= release_frames) return SU_OK;
+    dsp->gl = controls->gain_left;
+    dsp->gr = controls->gain_right;
+    dsp->pitch = controls->pitch;
+    dsp->mono_mix = controls->mono_mix != 0u;
+    alpha = lowpass_alpha(pool, controls->lowpass_hz);
+    if (dsp->fresh && !voice->played) {
+        dsp->lp_alpha = dsp->lp_target = alpha;
+        dsp->lp_remain = 0u;
+    } else if (alpha != dsp->lp_target) {
+        uint32_t glide = (pool->desc.sample_rate ? pool->desc.sample_rate : 48000u) / 100u;
+        dsp->lp_target = alpha;
+        dsp->lp_remain = glide ? glide : 1u;
+        dsp->lp_step = (alpha - dsp->lp_alpha) / (float)dsp->lp_remain;
+    }
+    return SU_OK;
+}
+
+static void begin_stop(SuAudioVoicePool *pool, PoolVoice *voice, uint32_t release_frames) {
+    if (voice->state == SU_AUDIO_VOICE_STOPPING && voice->release_remain <= release_frames) return;
     if (voice->state == SU_AUDIO_VOICE_STOPPING) {
         /* shorter release continues from the current envelope */
         float g = (float)voice->release_remain / (float)voice->release_total;
@@ -202,6 +286,36 @@ uint32_t su_audio_voice_stop(SuAudioVoicePool *pool, SuAudioLogicalVoice handle,
     voice->release_remain = release_frames;
     voice->state = SU_AUDIO_VOICE_STOPPING;
     set_reason(pool, voice, SU_AUDIO_REASON_STOPPED);
+}
+
+uint32_t su_audio_voice_stop(SuAudioVoicePool *pool, SuAudioLogicalVoice handle, uint32_t release_frames) {
+    PoolVoice *voice;
+    uint32_t status = handle_index(pool, handle, &voice);
+    if (status != SU_OK) return status;
+    if (release_frames == 0u) release_frames = voice->desc.policy.release_frames;
+    if (voice->state == SU_AUDIO_VOICE_VIRTUAL || release_frames == 0u) {
+        free_voice(pool, voice, SU_AUDIO_REASON_STOPPED);
+        return SU_OK;
+    }
+    begin_stop(pool, voice, release_frames);
+    return SU_OK;
+}
+
+uint32_t su_audio_voice_stop_at(SuAudioVoicePool *pool, SuAudioLogicalVoice handle, uint64_t frame,
+                                uint32_t release_frames) {
+    PoolVoice *voice;
+    uint32_t status = handle_index(pool, handle, &voice);
+    if (status != SU_OK) return status;
+    if (frame < pool->clock) return SU_E_INVALID_ARGUMENT;
+    if (frame <= voice->start_at && voice->state == SU_AUDIO_VOICE_VIRTUAL && !voice->played) {
+        free_voice(pool, voice, SU_AUDIO_REASON_STOPPED);
+        return SU_OK;
+    }
+    if (voice->stop_at == NO_STOP || frame < voice->stop_at ||
+        (frame == voice->stop_at && release_frames < voice->stop_release)) {
+        voice->stop_at = frame;
+        voice->stop_release = release_frames ? release_frames : voice->desc.policy.release_frames;
+    }
     return SU_OK;
 }
 
@@ -240,6 +354,10 @@ static uint64_t scope_key(const SuAudioLogicalDesc *desc, uint32_t scope) {
     }
 }
 
+static int pending(const SuAudioVoicePool *pool, const PoolVoice *voice) {
+    return voice->start_at >= pool->clock + Q;
+}
+
 static int start_tail(SuAudioVoicePool *pool, const PoolVoice *voice) {
     uint32_t i;
     uint32_t release = voice->desc.policy.release_frames;
@@ -256,6 +374,19 @@ static int start_tail(SuAudioVoicePool *pool, const PoolVoice *voice) {
         tail->loop = (voice->desc.policy.flags & SU_AUDIO_VOICE_LOOP) != 0u;
         tail->total = release;
         tail->remain = release;
+        tail->route = voice->route;
+        tail->tag = voice->tag;
+        tail->voice = make_handle(pool, voice);
+        tail->dsp = voice->dsp;
+        if (tail->dsp.controlled) {
+            /* the tail holds the gains it was last heard with; envelope scales them */
+            tail->dsp.gl = tail->dsp.gl_prev * env;
+            tail->dsp.gr = tail->dsp.gr_prev * env;
+            tail->dsp.gl_prev = tail->dsp.gl;
+            tail->dsp.gr_prev = tail->dsp.gr;
+            tail->dsp.pitch = tail->dsp.pitch_prev;
+            tail->dsp.fresh = 0u;
+        }
         return 1;
     }
     return 0;
@@ -267,7 +398,10 @@ static void expire_virtual(SuAudioVoicePool *pool) {
         PoolVoice *voice = &pool->voices[i];
         const SuAudioVoicePolicy *policy = &voice->desc.policy;
         if (voice->state != SU_AUDIO_VOICE_VIRTUAL) continue;
-        if (policy->wake_deadline_frames && voice->virtual_frames >= policy->wake_deadline_frames) {
+        if (voice->stop_at < pool->clock + Q && !pending(pool, voice)) {
+            /* a voice that is virtual when its stop comes due ends without sound */
+            free_voice(pool, voice, SU_AUDIO_REASON_STOPPED);
+        } else if (policy->wake_deadline_frames && voice->virtual_frames >= policy->wake_deadline_frames) {
             free_voice(pool, voice, SU_AUDIO_REASON_EXPIRED_DEADLINE);
             pool->stats.expired++;
         } else if (!(policy->flags & SU_AUDIO_VOICE_LOOP) && voice->cursor >= voice->desc.clip->frames) {
@@ -285,6 +419,7 @@ static void rank(SuAudioVoicePool *pool) {
         pool->desired[i] = 0u;
         if (voice->state == SU_AUDIO_VOICE_STOPPING) stopping++;
         if (voice->state != SU_AUDIO_VOICE_PHYSICAL && voice->state != SU_AUDIO_VOICE_VIRTUAL) continue;
+        if (pending(pool, voice)) continue;
         pool->keys[n].priority = voice->desc.policy.priority;
         pool->keys[n].audibility = voice->audibility;
         pool->keys[n].seq = voice->desc.trigger_seq;
@@ -358,8 +493,16 @@ static void rank(SuAudioVoicePool *pool) {
         voice->state = SU_AUDIO_VOICE_PHYSICAL;
         if (voice->played || voice->cursor != 0u) {
             pool->stats.woken++;
-            if (voice->desc.policy.virtual_mode == SU_AUDIO_VIRTUAL_RESTART) voice->cursor = 0u;
+            if (voice->desc.policy.virtual_mode == SU_AUDIO_VIRTUAL_RESTART) {
+                voice->cursor = 0u;
+                voice->dsp.pos = 0.0;
+            }
             voice->fade_total = voice->fade_remain = voice->desc.policy.release_frames;
+            /* the filter restarts from silence under the fade-in; gains and pitch jump to their targets */
+            voice->dsp.fresh = 1u;
+            voice->dsp.lp_l = voice->dsp.lp_r = 0.0f;
+            voice->dsp.lp_alpha = voice->dsp.lp_target;
+            voice->dsp.lp_remain = 0u;
         }
         set_reason(pool, voice, SU_AUDIO_REASON_PHYSICAL);
     }
@@ -376,64 +519,220 @@ static void mix_frame(float *out, const SuAudioClip *clip, uint64_t cursor, floa
     out[1] += clip_sample(clip, cursor, 1u) * gain * rg;
 }
 
-static void render_quantum(SuAudioVoicePool *pool) {
-    uint32_t i, f, transitions = 0u, physical = 0u, virt = 0u;
-    float *out = pool->cache;
-    memset(pool->cache, 0, sizeof pool->cache);
+/* Linearly interpolated source frame at dsp->pos; the partner of the last frame is frame 0 when looping. */
+static void dsp_sample(const SuAudioClip *clip, const VoiceDsp *dsp, int loop, float *sl, float *sr) {
+    uint64_t i0 = (uint64_t)dsp->pos;
+    double fr = dsp->pos - (double)i0;
+    float l0 = clip_sample(clip, i0, 0u), r0 = clip_sample(clip, i0, 1u);
+    if (fr != 0.0) {
+        uint64_t i1 = i0 + 1u;
+        float l1, r1;
+        if (i1 >= clip->frames) i1 = loop ? 0u : clip->frames - 1u;
+        l1 = clip_sample(clip, i1, 0u);
+        r1 = clip_sample(clip, i1, 1u);
+        l0 += (l1 - l0) * (float)fr;
+        r0 += (r1 - r0) * (float)fr;
+    }
+    if (dsp->mono_mix && clip->channels == 2u) l0 = r0 = 0.5f * (l0 + r0);
+    *sl = l0;
+    *sr = r0;
+}
+
+/* One controlled frame at quantum offset f: filters, applies env and the ramped gains, advances the cursor.
+ * Returns 0 when a one-shot ran past its end. */
+static int dsp_frame(VoiceDsp *dsp, const SuAudioClip *clip, int loop, uint32_t f, float env, float *out,
+                     float *mono) {
+    float sl, sr, t = (float)(f + 1u) / (float)Q;
+    float gl = dsp->gl_prev + (dsp->gl - dsp->gl_prev) * t;
+    float gr = dsp->gr_prev + (dsp->gr - dsp->gr_prev) * t;
+    float step = dsp->pitch_prev + (dsp->pitch - dsp->pitch_prev) * t;
+    dsp_sample(clip, dsp, loop, &sl, &sr);
+    if (dsp->lp_remain) {
+        dsp->lp_remain--;
+        dsp->lp_alpha = dsp->lp_remain ? dsp->lp_target - dsp->lp_step * (float)dsp->lp_remain : dsp->lp_target;
+    }
+    if (dsp->lp_alpha != 1.0f) {
+        sl = dsp->lp_l + dsp->lp_alpha * (sl - dsp->lp_l);
+        sr = dsp->lp_r + dsp->lp_alpha * (sr - dsp->lp_r);
+        if (fabsf(sl) < 1.0e-20f) sl = 0.0f;
+        if (fabsf(sr) < 1.0e-20f) sr = 0.0f;
+    }
+    dsp->lp_l = sl;
+    dsp->lp_r = sr;
+    out[0] += sl * gl * env;
+    out[1] += sr * gr * env;
+    if (mono) mono[f] = 0.5f * (sl + sr) * env;
+    dsp->pos += (double)step;
+    if (dsp->pos >= (double)clip->frames) {
+        if (!loop) return 0;
+        dsp->pos = fmod(dsp->pos, (double)clip->frames);
+    }
+    return 1;
+}
+
+static void dsp_end_quantum(VoiceDsp *dsp) {
+    dsp->gl_prev = dsp->gl;
+    dsp->gr_prev = dsp->gr;
+    dsp->pitch_prev = dsp->pitch;
+}
+
+static void dsp_begin_quantum(VoiceDsp *dsp) {
+    if (dsp->fresh) {
+        dsp->gl_prev = dsp->gl;
+        dsp->gr_prev = dsp->gr;
+        dsp->pitch_prev = dsp->pitch;
+        dsp->fresh = 0u;
+    }
+}
+
+static float *capture_slot(SuAudioVoicePool *pool, SuAudioLogicalVoice handle, uint32_t route, uint32_t tail,
+                           const VoiceDsp *dsp) {
+    SuAudioVoiceCapture *entry;
+    if (!pool->capture || pool->captured >= pool->capture_capacity || !dsp->controlled) return NULL;
+    entry = &pool->capture[pool->captured++];
+    entry->voice = handle;
+    entry->route = route;
+    entry->tail = tail;
+    entry->gain_left = dsp->gl;
+    entry->gain_right = dsp->gr;
+    memset(entry->mono, 0, Q * sizeof(float));
+    return entry->mono;
+}
+
+static void render_tail(SuAudioVoicePool *pool, PoolTail *tail, float *out) {
+    uint32_t f;
+    if (tail->dsp.controlled) {
+        float *mono = capture_slot(pool, tail->voice, tail->route, 1u, &tail->dsp);
+        for (f = 0u; f < Q && tail->remain; ++f) {
+            tail->remain--;
+            if (!dsp_frame(&tail->dsp, tail->clip, (int)tail->loop, f,
+                           (float)tail->remain / (float)tail->total, out + f * 2u, mono)) {
+                tail->remain = 0u;
+            }
+        }
+        tail->cursor = (uint64_t)tail->dsp.pos;
+        dsp_end_quantum(&tail->dsp);
+        return;
+    }
+    for (f = 0u; f < Q && tail->remain; ++f) {
+        if (tail->cursor >= tail->clip->frames) {
+            if (!tail->loop) { tail->remain = 0u; break; }
+            tail->cursor = 0u;
+        }
+        tail->remain--;
+        mix_frame(out + f * 2u, tail->clip, tail->cursor, tail->gain * (float)tail->remain / (float)tail->total,
+                  tail->pan);
+        tail->cursor++;
+    }
+}
+
+/* Renders a physical or stopping voice for the quantum. Returns nonzero when the voice must be freed, with the
+ * reason in *reason. */
+static int render_voice(SuAudioVoicePool *pool, PoolVoice *voice, float *out, uint32_t *reason) {
+    const SuAudioClip *clip = voice->desc.clip;
+    int loop = (voice->desc.policy.flags & SU_AUDIO_VOICE_LOOP) != 0u;
+    uint32_t f = voice->start_at > pool->clock ? (uint32_t)(voice->start_at - pool->clock) : 0u;
+    uint32_t stop = voice->stop_at < pool->clock + Q
+        ? (voice->stop_at > pool->clock ? (uint32_t)(voice->stop_at - pool->clock) : 0u) : Q;
+    VoiceDsp *dsp = &voice->dsp;
+    float *mono = NULL;
+    if (dsp->controlled) {
+        dsp_begin_quantum(dsp);
+        mono = capture_slot(pool, make_handle(pool, voice), voice->route, 0u, dsp);
+    }
+    voice->played = 1u;
+    for (; f < Q; ++f) {
+        float env = 1.0f;
+        if (f == stop && voice->stop_at != NO_STOP) {
+            voice->stop_at = NO_STOP;
+            if (voice->stop_release == 0u) {
+                *reason = SU_AUDIO_REASON_STOPPED;
+                set_reason(pool, voice, SU_AUDIO_REASON_STOPPED);
+                if (dsp->controlled) dsp_end_quantum(dsp);
+                return 1;
+            }
+            begin_stop(pool, voice, voice->stop_release);
+        }
+        if (dsp->controlled) {
+            if (dsp->pos >= (double)clip->frames) {
+                if (!loop) break;
+                dsp->pos = fmod(dsp->pos, (double)clip->frames);
+            }
+        } else if (voice->cursor >= clip->frames) {
+            if (!loop) break;
+            voice->cursor = 0u;
+        }
+        if (voice->fade_remain) {
+            env = (float)(voice->fade_total - voice->fade_remain) / (float)voice->fade_total;
+            voice->fade_remain--;
+        }
+        if (voice->state == SU_AUDIO_VOICE_STOPPING) {
+            if (!voice->release_remain) break;
+            voice->release_remain--;
+            env *= (float)voice->release_remain / (float)voice->release_total;
+        }
+        if (dsp->controlled) {
+            int more = dsp_frame(dsp, clip, loop, f, env, out + f * 2u, mono);
+            voice->cursor = (uint64_t)dsp->pos;
+            if (!more) {
+                voice->cursor = clip->frames;
+                break;
+            }
+        } else {
+            mix_frame(out + f * 2u, clip, voice->cursor, voice->desc.gain * env, voice->desc.pan);
+            voice->cursor++;
+        }
+    }
+    if (dsp->controlled) dsp_end_quantum(dsp);
+    if (voice->state == SU_AUDIO_VOICE_STOPPING && !voice->release_remain) {
+        *reason = SU_AUDIO_REASON_STOPPED;
+        return 1;
+    }
+    if (!loop && voice->cursor >= clip->frames) {
+        *reason = SU_AUDIO_REASON_FINISHED;
+        return 1;
+    }
+    return 0;
+}
+
+static void render_quantum(SuAudioVoicePool *pool, float *const *routes, uint32_t route_count) {
+    uint32_t i, transitions = 0u, physical = 0u, virt = 0u;
+    pool->captured = 0u;
     rank(pool);
     for (i = 0u; i < pool->desc.transition_reserve; ++i) {
         PoolTail *tail = &pool->tails[i];
         if (!tail->remain) continue;
         transitions++;
-        for (f = 0u; f < Q && tail->remain; ++f) {
-            if (tail->cursor >= tail->clip->frames) {
-                if (!tail->loop) { tail->remain = 0u; break; }
-                tail->cursor = 0u;
-            }
-            tail->remain--;
-            mix_frame(out + f * 2u, tail->clip, tail->cursor, tail->gain * (float)tail->remain / (float)tail->total,
-                      tail->pan);
-            tail->cursor++;
-        }
+        render_tail(pool, tail, routes[tail->route < route_count ? tail->route : 0u]);
     }
     for (i = 0u; i < pool->desc.max_logical; ++i) {
         PoolVoice *voice = &pool->voices[i];
         const SuAudioClip *clip = voice->desc.clip;
         int loop = (voice->desc.policy.flags & SU_AUDIO_VOICE_LOOP) != 0u;
+        uint32_t reason = 0u;
         if (voice->state == SU_AUDIO_VOICE_VIRTUAL) {
+            uint32_t offset;
+            if (pending(pool, voice)) continue;
+            offset = voice->start_at > pool->clock ? (uint32_t)(voice->start_at - pool->clock) : 0u;
             virt++;
-            voice->virtual_frames += Q;
+            voice->virtual_frames += Q - offset;
             if (voice->desc.policy.virtual_mode == SU_AUDIO_VIRTUAL_ADVANCE) {
-                voice->cursor += Q;
-                if (loop) voice->cursor %= clip->frames;
+                if (voice->dsp.controlled) {
+                    voice->dsp.pos += (double)(Q - offset) * (double)voice->dsp.pitch;
+                    if (loop) voice->dsp.pos = fmod(voice->dsp.pos, (double)clip->frames);
+                    voice->cursor = (uint64_t)voice->dsp.pos;
+                } else {
+                    voice->cursor += Q - offset;
+                    if (loop) voice->cursor %= clip->frames;
+                }
             }
+            if (voice->start_at > pool->clock) voice->start_at = pool->clock;
             continue;
         }
         if (voice->state != SU_AUDIO_VOICE_PHYSICAL && voice->state != SU_AUDIO_VOICE_STOPPING) continue;
         physical++;
-        voice->played = 1u;
-        for (f = 0u; f < Q; ++f) {
-            float env = 1.0f;
-            if (voice->cursor >= clip->frames) {
-                if (!loop) break;
-                voice->cursor = 0u;
-            }
-            if (voice->fade_remain) {
-                env = (float)(voice->fade_total - voice->fade_remain) / (float)voice->fade_total;
-                voice->fade_remain--;
-            }
-            if (voice->state == SU_AUDIO_VOICE_STOPPING) {
-                if (!voice->release_remain) break;
-                voice->release_remain--;
-                env *= (float)voice->release_remain / (float)voice->release_total;
-            }
-            mix_frame(out + f * 2u, clip, voice->cursor, voice->desc.gain * env, voice->desc.pan);
-            voice->cursor++;
-        }
-        if (voice->state == SU_AUDIO_VOICE_STOPPING && !voice->release_remain) {
-            free_voice(pool, voice, SU_AUDIO_REASON_STOPPED);
-        } else if (!loop && voice->cursor >= clip->frames) {
-            free_voice(pool, voice, SU_AUDIO_REASON_FINISHED);
+        if (render_voice(pool, voice, routes[voice->route < route_count ? voice->route : 0u], &reason)) {
+            free_voice(pool, voice, reason);
         }
     }
     pool->stats.physical = physical;
@@ -443,7 +742,6 @@ static void render_quantum(SuAudioVoicePool *pool) {
     if (virt > pool->stats.virtual_peak) pool->stats.virtual_peak = virt;
     if (transitions > pool->stats.transition_peak) pool->stats.transition_peak = transitions;
     pool->clock += Q;
-    pool->cache_pos = 0u;
 }
 
 uint32_t su_audio_voice_pool_render(SuAudioVoicePool *pool, float *out, uint32_t frames) {
@@ -452,8 +750,11 @@ uint32_t su_audio_voice_pool_render(SuAudioVoicePool *pool, float *out, uint32_t
     while (done < frames) {
         uint32_t take;
         if (pool->cache_pos == Q) {
+            float *route = pool->cache;
             if (pool->clock > UINT64_MAX - Q) return SU_E_RESOURCE_LIMIT;
-            render_quantum(pool);
+            memset(pool->cache, 0, sizeof pool->cache);
+            render_quantum(pool, &route, 1u);
+            pool->cache_pos = 0u;
         }
         take = Q - pool->cache_pos;
         if (take > frames - done) take = frames - done;
@@ -462,6 +763,167 @@ uint32_t su_audio_voice_pool_render(SuAudioVoicePool *pool, float *out, uint32_t
         done += take;
     }
     return SU_OK;
+}
+
+uint32_t su_audio_voice_pool_quantum(SuAudioVoicePool *pool, float *const *routes, uint32_t route_count) {
+    if (!pool || !routes || route_count == 0u || pool->cache_pos != Q) return SU_E_INVALID_ARGUMENT;
+    if (pool->clock > UINT64_MAX - Q) return SU_E_RESOURCE_LIMIT;
+    render_quantum(pool, routes, route_count);
+    return SU_OK;
+}
+
+uint32_t su_audio_voice_pool_set_clock(SuAudioVoicePool *pool, uint64_t clock) {
+    if (!pool || pool->logical != 0u || pool->cache_pos != Q) return SU_E_INVALID_ARGUMENT;
+    pool->clock = clock;
+    return SU_OK;
+}
+
+uint64_t su_audio_voice_pool_clock(const SuAudioVoicePool *pool) {
+    return pool ? pool->clock : 0u;
+}
+
+void su_audio_voice_pool_desc(const SuAudioVoicePool *pool, SuAudioVoicePoolDesc *out) {
+    if (out) {
+        if (pool) *out = pool->desc;
+        else memset(out, 0, sizeof *out);
+    }
+}
+
+uint32_t su_audio_voice_set_route(SuAudioVoicePool *pool, SuAudioLogicalVoice handle, uint32_t route) {
+    PoolVoice *voice;
+    uint32_t status = handle_index(pool, handle, &voice);
+    if (status != SU_OK) return status;
+    voice->route = route;
+    return SU_OK;
+}
+
+uint32_t su_audio_voice_set_tag(SuAudioVoicePool *pool, SuAudioLogicalVoice handle, uint64_t tag) {
+    PoolVoice *voice;
+    uint32_t status = handle_index(pool, handle, &voice);
+    if (status != SU_OK) return status;
+    voice->tag = tag;
+    return SU_OK;
+}
+
+int su_audio_voice_pool_clip_busy(const SuAudioVoicePool *pool, const SuAudioClip *clip) {
+    uint32_t i;
+    if (!pool) return 0;
+    for (i = 0u; i < pool->desc.transition_reserve; ++i) {
+        if (pool->tails[i].remain && pool->tails[i].clip == clip) return 1;
+    }
+    return 0;
+}
+
+uint32_t su_audio_voice_pool_capture(SuAudioVoicePool *pool, SuAudioVoiceCapture *entries, uint32_t capacity) {
+    uint32_t i;
+    if (!pool || (!entries && capacity)) return SU_E_INVALID_ARGUMENT;
+    for (i = 0u; i < capacity; ++i) {
+        if (!entries[i].mono) return SU_E_INVALID_ARGUMENT;
+    }
+    pool->capture = capacity ? entries : NULL;
+    pool->capture_capacity = capacity;
+    pool->captured = 0u;
+    return SU_OK;
+}
+
+uint32_t su_audio_voice_pool_captured(const SuAudioVoicePool *pool) {
+    return pool ? pool->captured : 0u;
+}
+
+static void dsp_state(SuAudioStateIo *io, VoiceDsp *dsp) {
+    SU_STATE(io, dsp->controlled);
+    SU_STATE(io, dsp->mono_mix);
+    SU_STATE(io, dsp->fresh);
+    SU_STATE(io, dsp->lp_remain);
+    SU_STATE(io, dsp->pos);
+    SU_STATE(io, dsp->pitch);
+    SU_STATE(io, dsp->pitch_prev);
+    SU_STATE(io, dsp->gl);
+    SU_STATE(io, dsp->gr);
+    SU_STATE(io, dsp->gl_prev);
+    SU_STATE(io, dsp->gr_prev);
+    SU_STATE(io, dsp->lp_alpha);
+    SU_STATE(io, dsp->lp_target);
+    SU_STATE(io, dsp->lp_step);
+    SU_STATE(io, dsp->lp_l);
+    SU_STATE(io, dsp->lp_r);
+}
+
+static void desc_state(SuAudioStateIo *io, SuAudioLogicalDesc *desc) {
+    SU_STATE(io, desc->policy.priority);
+    SU_STATE(io, desc->policy.distance_offset);
+    SU_STATE(io, desc->policy.physical_limit);
+    SU_STATE(io, desc->policy.limit_scope);
+    SU_STATE(io, desc->policy.virtual_mode);
+    SU_STATE(io, desc->policy.wake_deadline_frames);
+    SU_STATE(io, desc->policy.release_frames);
+    SU_STATE(io, desc->policy.flags);
+    SU_STATE(io, desc->gain);
+    SU_STATE(io, desc->pan);
+    SU_STATE(io, desc->event_id);
+    SU_STATE(io, desc->node_id);
+    SU_STATE(io, desc->bus_id);
+    SU_STATE(io, desc->emitter);
+    SU_STATE(io, desc->instance);
+    SU_STATE(io, desc->trigger_seq);
+}
+
+uint32_t su_audio_voice_pool_state(SuAudioVoicePool *pool, SuAudioStateIo *io, SuAudioClipResolver resolve,
+                                   void *user) {
+    uint32_t i, tails;
+    if (!pool || !io || pool->cache_pos != Q || (!io->save && io->data && !resolve)) return SU_E_INVALID_ARGUMENT;
+    tails = pool->desc.transition_reserve;
+    SU_STATE(io, pool->clock);
+    SU_STATE(io, pool->free_head);
+    SU_STATE(io, pool->logical);
+    SU_STATE(io, pool->stats);
+    for (i = 0u; i < pool->desc.max_logical; ++i) {
+        PoolVoice *voice = &pool->voices[i];
+        SU_STATE(io, voice->generation);
+        SU_STATE(io, voice->state);
+        SU_STATE(io, voice->next_free);
+        if (voice->state == SU_AUDIO_VOICE_DEAD) continue;
+        voice->desc.struct_size = sizeof voice->desc;
+        desc_state(io, &voice->desc);
+        SU_STATE(io, voice->reason);
+        SU_STATE(io, voice->played);
+        SU_STATE(io, voice->cursor);
+        SU_STATE(io, voice->virtual_frames);
+        SU_STATE(io, voice->audibility);
+        SU_STATE(io, voice->fade_total);
+        SU_STATE(io, voice->fade_remain);
+        SU_STATE(io, voice->release_total);
+        SU_STATE(io, voice->release_remain);
+        SU_STATE(io, voice->route);
+        SU_STATE(io, voice->stop_release);
+        SU_STATE(io, voice->start_at);
+        SU_STATE(io, voice->stop_at);
+        SU_STATE(io, voice->tag);
+        dsp_state(io, &voice->dsp);
+        if (!io->save && io->data && !io->failed) {
+            voice->desc.clip = resolve(user, voice->tag);
+            if (!voice->desc.clip) return SU_E_SCHEMA_MISMATCH;
+        }
+    }
+    for (i = 0u; i < tails; ++i) {
+        PoolTail *tail = &pool->tails[i];
+        SU_STATE(io, tail->remain);
+        if (!tail->remain) continue;
+        SU_STATE(io, tail->cursor);
+        SU_STATE(io, tail->gain);
+        SU_STATE(io, tail->pan);
+        SU_STATE(io, tail->loop);
+        SU_STATE(io, tail->total);
+        SU_STATE(io, tail->route);
+        SU_STATE(io, tail->tag);
+        SU_STATE(io, tail->voice);
+        dsp_state(io, &tail->dsp);
+        if (!io->save && io->data && !io->failed) {
+            tail->clip = resolve(user, tail->tag);
+            if (!tail->clip) return SU_E_SCHEMA_MISMATCH;
+        }
+    }
+    return io->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
 void su_audio_voice_pool_stats(const SuAudioVoicePool *pool, SuAudioVoiceStats *out) {
