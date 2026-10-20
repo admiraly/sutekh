@@ -1,0 +1,153 @@
+#version 450
+layout(local_size_x = 64) in;
+struct Emitter {
+    uvec4 control, emission;
+    mat4 start, end;
+    vec4 extent, velocity, random_velocity, gravity;
+    vec4 attractor_position_strength[4], attractor_radius[4], size;
+    vec4 colour[4];
+    vec4 offset, right, up, axis;
+    uvec4 atlas;
+};
+struct State { vec4 position_size, velocity_age, colour; uvec4 meta; };
+layout(std430, binding = 0) readonly buffer Params { Emitter emitters[]; };
+layout(std430, binding = 1) buffer States { State states[]; };
+layout(std430, binding = 2) writeonly buffer Vertices { float vertices[]; };
+layout(std430, binding = 3) buffer Keys { uvec2 keys[]; };
+layout(push_constant) uniform Push { uint emitter, offset, padded, count, phase, stage, stride, unused; } pc;
+shared uvec2 block_keys[64];
+
+void sort_block(uint lane, uint index, uint stage, uint stride) {
+    uint partner = lane ^ stride;
+    if (partner > lane) {
+        uvec2 left = block_keys[lane], right = block_keys[partner];
+        bool less = left.x < right.x || (left.x == right.x && left.y > right.y);
+        bool greater = left.x > right.x || (left.x == right.x && left.y < right.y);
+        if (((index & stage) == 0u && less) || ((index & stage) != 0u && greater)) {
+            block_keys[lane] = right; block_keys[partner] = left;
+        }
+    }
+}
+
+float random_float(uint seed, uint id, uint counter) {
+    uint value = seed ^ (id * 0x9e3779b9u) ^ (counter * 0x85ebca6bu);
+    value ^= value >> 16; value *= 0x7feb352du;
+    value ^= value >> 15; value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return float(value >> 8) * (1.0 / 8388608.0) - 1.0;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= pc.padded) return;
+    if (pc.phase >= 3u) {
+        uint lane = gl_LocalInvocationID.x;
+        block_keys[lane] = keys[pc.offset + index];
+        barrier();
+        if (pc.phase == 3u) {
+            for (uint stage = 2u; stage <= 64u; stage *= 2u) {
+                for (uint stride = stage / 2u; stride != 0u; stride /= 2u) {
+                    sort_block(lane, index, stage, stride);
+                    barrier();
+                }
+            }
+        } else {
+            for (uint stride = pc.stride; stride != 0u; stride /= 2u) {
+                sort_block(lane, index, pc.stage, stride);
+                barrier();
+            }
+        }
+        keys[pc.offset + index] = block_keys[lane];
+        return;
+    }
+    if (pc.phase == 1u) {
+        uint partner = index ^ pc.stride;
+        if (partner <= index) return;
+        uvec2 left = keys[pc.offset + index], right = keys[pc.offset + partner];
+        bool less = left.x < right.x || (left.x == right.x && left.y > right.y);
+        bool greater = left.x > right.x || (left.x == right.x && left.y < right.y);
+        if (((index & pc.stage) == 0u && less) || ((index & pc.stage) != 0u && greater)) {
+            keys[pc.offset + index] = right; keys[pc.offset + partner] = left;
+        }
+        return;
+    }
+    Emitter em = emitters[pc.emitter];
+    if (pc.phase == 2u) {
+        if (index >= pc.count) return;
+        State state = states[pc.offset + keys[pc.offset + index].y - em.control.y];
+        vec3 across = em.right.xyz, along = em.up.xyz;
+        if ((em.emission.w & 2u) != 0u) {
+            along = em.axis.xyz;
+            if (dot(along, along) < 1e-12) along = vec3(0, 1, 0);
+            along = normalize(along);
+            across = cross(-state.position_size.xyz, along);
+            if (dot(across, across) < 1e-12 * (dot(state.position_size.xyz, state.position_size.xyz) + 1e-20))
+                across = abs(along.y) < 0.9 ? cross(along, vec3(0,1,0)) : cross(along, vec3(1,0,0));
+            across = normalize(across);
+        }
+        float aspect = em.offset.w == 0.0 ? 1.0 : em.offset.w;
+        const vec2 corners[6] = vec2[6](vec2(-1,1), vec2(1,1), vec2(1,-1), vec2(-1,1), vec2(1,-1), vec2(-1,-1));
+        uint cols = max(em.atlas.x, 1u), rows = max(em.atlas.y, 1u);
+        uint cell = em.atlas.z != 0u ? uint(state.velocity_age.w) / em.atlas.z % (cols * rows) : 0u;
+        for (uint vertex = 0; vertex < 6u; vertex++) {
+            vec2 corner = corners[vertex];
+            float sign_y = (em.emission.w & 2u) != 0u ? -1.0 : 1.0;
+            vec3 position = state.position_size.xyz + state.position_size.w * (across * corner.x + along * corner.y * aspect * sign_y);
+            vec2 uv = (corner * vec2(0.5, -0.5) + 0.5 + vec2(cell % cols, cell / cols)) / vec2(cols, rows);
+            uint base = ((pc.offset + index) * 6u + vertex) * 9u;
+            vertices[base] = position.x; vertices[base+1u] = position.y; vertices[base+2u] = position.z;
+            vertices[base+3u] = uv.x; vertices[base+4u] = uv.y;
+            for (uint component = 0; component < 4u; component++) vertices[base+5u+component] = state.colour[component];
+        }
+        return;
+    }
+    State state;
+    state.position_size = vec4(0); state.velocity_age = vec4(0); state.colour = vec4(0);
+    state.meta = uvec4(em.control.y + index, 0, 0, 0);
+    if (index < pc.count) {
+        uint id = state.meta.x, seed = em.control.x;
+        uint birth = id < em.emission.y ? 0u : ((id - em.emission.y + 1u) * 60u + em.emission.z - 1u) / em.emission.z;
+        uint age = em.control.w - birth;
+        vec3 position = vec3(random_float(seed,id,0), random_float(seed,id,1), random_float(seed,id,2));
+        if (em.atlas.w == 0u) position = vec3(0);
+        if (em.atlas.w == 2u) {
+            float radius = pow((random_float(seed,id,3) + 1.0) * 0.5, 1.0 / 3.0);
+            float angle = position.x * 3.14159265358979323846;
+            float ring = sqrt(max(1.0 - position.z * position.z, 0.0));
+            position = vec3(cos(angle) * ring * radius, sin(angle) * ring * radius, position.z * radius);
+        }
+        if (em.atlas.w == 3u) {
+            float height = pow((position.z + 1.0) * 0.5, 1.0 / 3.0);
+            float angle = position.x * 3.14159265358979323846;
+            float radius = sqrt((position.y + 1.0) * 0.5) * height;
+            position = vec3(cos(angle) * radius, sin(angle) * radius, height);
+        }
+        position *= em.extent.xyz;
+        vec3 velocity = em.velocity.xyz + em.random_velocity.xyz * vec3(random_float(seed,id,4), random_float(seed,id,5), random_float(seed,id,6));
+        bool local = (em.emission.w & 1u) != 0u;
+        float amount = em.random_velocity.w != 0.0 ? min(float(local ? em.control.w : birth) / em.random_velocity.w, 1.0) : 0.0;
+        mat4 transform = em.start + (em.end - em.start) * amount;
+        if (!local) { position = (transform * vec4(position,1)).xyz; velocity = (transform * vec4(velocity,0)).xyz; }
+        for (uint step = 0; step < age; step++) {
+            vec3 acceleration = em.gravity.xyz;
+            for (uint attractor = 0; attractor < uint(em.gravity.w); attractor++) {
+                vec3 delta = em.attractor_position_strength[attractor].xyz - position;
+                float force = em.attractor_position_strength[attractor].w / max(length(delta), max(em.attractor_radius[attractor].x, 0.001));
+                acceleration += delta * force;
+            }
+            vec3 noise = vec3(random_float(seed,id,7u+step*3u), random_float(seed,id,8u+step*3u), random_float(seed,id,9u+step*3u));
+            velocity = (velocity + (acceleration + em.velocity.w * noise) / 60.0) * (1.0 / (1.0 + em.extent.w / 60.0));
+            position += velocity / 60.0;
+        }
+        if (local) { position = (transform * vec4(position,1)).xyz; velocity = (transform * vec4(velocity,0)).xyz; }
+        float curve = float(age) / float(em.emission.x) * 3.0;
+        uint key = min(uint(curve), 2u);
+        float fraction = curve - float(key);
+        state.position_size = vec4(position + em.offset.xyz, em.size[key] + (em.size[key+1u] - em.size[key]) * fraction);
+        state.velocity_age = vec4(velocity, float(age));
+        state.colour = em.colour[key] + (em.colour[key+1u] - em.colour[key]) * fraction;
+        state.meta.y = age; state.meta.z = 1u;
+    }
+    states[pc.offset + index] = state;
+    keys[pc.offset + index] = uvec2(index < pc.count ? floatBitsToUint(dot(state.position_size.xyz, state.position_size.xyz)) + 1u : 0u, state.meta.x);
+}

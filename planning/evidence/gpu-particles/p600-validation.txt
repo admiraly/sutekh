@@ -1,0 +1,2 @@
+device=Quadro P600 driver=2441347072 Vulkan=4211000 timestamps=1 resolution=128x128
+validation_enabled=1 errors=0 warnings=0 failures=0

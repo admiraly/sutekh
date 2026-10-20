@@ -1,0 +1,2 @@
+device=llvmpipe (LLVM 20.1.6, 256 bits) driver=1 Vulkan=4210993 timestamps=1 resolution=128x128
+validation_enabled=1 errors=0 warnings=0 failures=0
