@@ -1549,21 +1549,21 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
     }
     b[0].descriptorCount = 1;
     {
-        /* layered paint: eight samplers and the layer parameters; the environment cube */
-        VkDescriptorSetLayoutBinding pb[SU_PAINT_SLOT_COUNT + 1u];
+        /* layered paint samplers and the layer parameters; the environment cube */
+        VkDescriptorSetLayoutBinding pb[SU_RENDER_PAINT_SLOT_COUNT + 1u];
         VkDescriptorSetLayout psets[3];
         memset(pb, 0, sizeof pb);
-        for (i = 0; i < SU_PAINT_SLOT_COUNT; i++) {
-            pb[i].binding = i;
+        for (i = 0; i < SU_RENDER_PAINT_SLOT_COUNT; i++) {
+            pb[i].binding = i < SU_PAINT_SLOT_COUNT ? i : i + 1u;
             pb[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             pb[i].descriptorCount = 1;
             pb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         }
-        pb[SU_PAINT_SLOT_COUNT].binding = SU_PAINT_SLOT_COUNT;
-        pb[SU_PAINT_SLOT_COUNT].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        pb[SU_PAINT_SLOT_COUNT].descriptorCount = 1;
-        pb[SU_PAINT_SLOT_COUNT].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        li.bindingCount = SU_PAINT_SLOT_COUNT + 1u;
+        pb[SU_RENDER_PAINT_SLOT_COUNT].binding = SU_PAINT_SLOT_COUNT;
+        pb[SU_RENDER_PAINT_SLOT_COUNT].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        pb[SU_RENDER_PAINT_SLOT_COUNT].descriptorCount = 1;
+        pb[SU_RENDER_PAINT_SLOT_COUNT].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        li.bindingCount = SU_RENDER_PAINT_SLOT_COUNT + 1u;
         li.pBindings = pb;
         if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->paint_dsl) != VK_SUCCESS) {
             return 0;
@@ -1708,7 +1708,7 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
         return 0;
     }
     ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[0].descriptorCount = material_sets * SU_PAINT_SLOT_COUNT;
+    ps[0].descriptorCount = material_sets * SU_RENDER_PAINT_SLOT_COUNT;
     ps[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     ps[1].descriptorCount = material_sets;
     pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;

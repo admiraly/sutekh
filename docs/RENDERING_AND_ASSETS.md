@@ -50,6 +50,48 @@ meaning: `baseColorTexture` albedo (sRGB), `normalTexture` normal (cooked as BC5
 
 Malformed fields produce an import warning and keep the default; a material without the extension cooks exactly as
 before. The cooked layout is `SuAssetMaterial` + `SuAssetPaint` (`include/sutekh/asset.h`). Tests: `test_render_paint`.
+
+#### Runtime specular-colour and tiled detail options
+
+Zero-initialize `SuRenderPaintDesc`, then initialize `factors` and `paint` with their existing default functions.
+The extra fields are runtime-only: existing version-2 packs and the glTF extension are unchanged. Applications must
+recompile against the extended header; binary ABI compatibility with an older descriptor is not promised.
+`SU_PAINT_SLOT_COUNT` remains eight for the cooked format; the runtime `textures` array now has
+`SU_RENDER_PAINT_SLOT_COUNT` (12) entries. Zero extra fields and absent extra textures retain the old metalness path.
+
+- Bind `textures[SU_PAINT_SLOT_SPECULAR]` to an RGB F0 map (linear or sRGB). Sampling decodes sRGB before multiplying
+  by `specular_factor[3]` (linear RGB, each in 0..1; explicitly set to 1 for an unscaled map). The result is clamped
+  to 0..1. A bound map selects this workflow even when its factor is zero. F0 is independent of base colour, tint,
+  layers and dirt. Diffuse uses the fully blended albedo without a metalness multiplier. Direct diffuse is
+  `(1 - Schlick(F0, V.H)) * A / pi`; the existing GGX specular normalization is unchanged. Ambient becomes
+  `diffEnv * A * (1 - envBRDF(F0)) + specEnv * envBRDF(F0)`, multiplied by ambient intensity and AO.
+- `specular_channels` packs one byte per output RGB component: 0 uses the corresponding input component;
+  1, 2, 3, 4 select R, G, B, A; 5 supplies 1. Thus zero is identity, and `1 | (1 << 8) | (1 << 16)` replicates R.
+- Set `flags |= SU_PAINT_NORMAL_Z_ONE` for `normalize(x * scale * T + y * scale * B + N)` instead of reconstructing
+  tangent-space Z from XY. Zero retains reconstructed Z. This option applies to the base normal.
+- The extra slots use `extra_tex_info[slot - SU_PAINT_SLOT_COUNT]`, the existing `SU_ASSET_TEX_INFO` encoding
+  (UV0/UV1 and independent repeat/clamp/mirror wrap). Their zero value is UV0 and repeat. The detail slots must be linear.
+- `detail_uv_scale[2]` scales each detail slot's selected UV before `detail_rotation` (radians, counterclockwise around
+  the UV origin). A zero scale component means 1; negative scales mirror. Detail normals rotate back into base UV
+  tangent axes. These controls do not change any base texture coordinates.
+- `detail_strength` is 0..1; zero bypasses all detail reads. `detail_layer_mask` selects base mask channels with bits
+  0..3, and the unpainted remainder with bit 4. Zero selects the whole surface; selected weights sum and clamp to 1.
+  The remainder is `1 - clamp(sum(base mask RGBA), 0, 1)`, before layer opacity/order. Weight = strength times selector.
+- `flags |= SU_PAINT_DETAIL_MATERIAL` blends `textures[SU_PAINT_SLOT_DETAIL_MATERIAL]` into the base material-map
+  texel by weight times the unpainted remainder. The existing metal/specular channel selectors consume this texel;
+  subsequent paint layers retain their existing overrides. This is a tiled replacement of the base material scalar,
+  not a new material-ID palette system. A missing map is white, like the base material map.
+- `flags |= SU_PAINT_DETAIL_NORMAL_DARKEN` adds the weighted XY of `textures[SU_PAINT_SLOT_DETAIL_NORMAL]` to the
+  base tangent normal before normalization, and multiplies albedo by
+  `1 - weight * textures[SU_PAINT_SLOT_DETAIL_MASK].r`. Missing normal/mask are neutral flat/black. The mask darkens
+  diffuse only, not glow or independent F0. Both detail modes may be combined.
+
+Unknown flags, invalid channels/UV selectors/wraps, out-of-range strengths/factors, nonfinite controls, invalid
+texture handles and sRGB detail maps are rejected. Texture uploads and release use the existing deferred resource
+lifetime rules. Synthetic pixel tests cover the new workflows on hardware and CPU Vulkan devices.
+For an optional whole-frame GPU timestamp observation, run `SUTEKH_PAINT_BENCH=1 test_render_paint --no-validation`:
+1920x1080 full-screen paint, 40 warm-up frames then 300 samples per mode (legacy options disabled, F0 with fixed-Z
+normal, material detail, normal/darkening detail, F0 plus normal/darkening detail). This is not a shipping budget.
 ### 2.2 Directional sun shadows (optional)
 
 `SuRenderFrameDesc.shadow` (`SuRenderShadow`) is zero for "off": nothing extra is allocated or drawn and frames render

@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 5u
+#define SU_RENDER_API_VERSION 6u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -531,7 +531,7 @@ typedef struct SuRenderMaterialDesc {
  *   direct light: the same GGX / Smith / Schlick / Lambert terms as PBR-lite, with A, R, M, F0 above
  *   ambient = (diffuse_env(n) * A * (1 - M) + specular_env(reflect) * (F0 * ab.x + ab.y)) * light.ambient * ao
  *   glow    = glow map.rgb * T * I * object.emissive      (HDR, so bloom picks it up; AO, dirt and light do not touch it)
- * With layer_count 0 and dirt_amount 0 the result is the PBR-lite result for the same A, R, M (zero layers = base).
+ * With runtime extensions disabled, layer_count 0 and dirt_amount 0 give the PBR-lite result for the same A, R, M.
  * (ab.x, ab.y) is the split-sum environment BRDF scale and bias, Karis' analytic fit (the same as PBR-lite).
  *
  * Image-based ambient: with SuRenderFrameDesc.env set, diffuse_env is the cube's roughest mip (a GGX alpha = 1
@@ -541,11 +541,28 @@ typedef struct SuRenderMaterialDesc {
  * PBR-lite does. Both are multiplied by env_intensity (0 = 1).
  *
  * object.emissive multiplies the glow (a per-instance glow multiplier: pulse lights and engines with it); 0 = no glow. */
+#define SU_PAINT_SLOT_SPECULAR 8u
+#define SU_PAINT_SLOT_DETAIL_MATERIAL 9u
+#define SU_PAINT_SLOT_DETAIL_NORMAL 10u
+#define SU_PAINT_SLOT_DETAIL_MASK 11u
+#define SU_RENDER_PAINT_SLOT_COUNT 12u
+#define SU_PAINT_NORMAL_Z_ONE 1u
+#define SU_PAINT_DETAIL_MATERIAL 2u
+#define SU_PAINT_DETAIL_NORMAL_DARKEN 4u
+
 typedef struct SuRenderPaintDesc {
     SuAssetMaterial factors;           /* base_color, metallic, roughness, normal_scale, occlusion_strength, emissive,
                                         * emissive_strength, alpha_mode, alpha_cutoff, double_sided; texture ids unused */
     SuAssetPaint paint;                /* texture ids unused; tex_info selects UV set and wrap modes */
-    SuRenderHandle textures[SU_PAINT_SLOT_COUNT]; /* 0 = none */
+    SuRenderHandle textures[SU_RENDER_PAINT_SLOT_COUNT]; /* 0 = none */
+    uint32_t extra_tex_info[4];
+    float specular_factor[3];
+    uint32_t specular_channels;
+    uint32_t flags;
+    float detail_strength;
+    float detail_uv_scale[2];
+    float detail_rotation;
+    uint32_t detail_layer_mask;
     uint32_t overlay;
 } SuRenderPaintDesc;
 

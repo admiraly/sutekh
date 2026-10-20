@@ -826,13 +826,13 @@ static VkDescriptorSet write_material_set(SuRenderer *r, const SuRenderHandle *t
 }
 
 /* Paint slot defaults when a texture is missing or still uploading: normal flat, mask all zero, the rest white. */
-static VkDescriptorSet write_paint_set(SuRenderer *r, const SuRenderHandle *tex, const SuAssetPaint *p, const Buffer *ubo,
+static VkDescriptorSet write_paint_set(SuRenderer *r, const SuRenderHandle *tex, const uint32_t *tex_info, const Buffer *ubo,
                                        uint32_t *ready) {
     VkDescriptorSetAllocateInfo ai;
     VkDescriptorSet set = VK_NULL_HANDLE;
-    VkDescriptorImageInfo ii[SU_PAINT_SLOT_COUNT];
+    VkDescriptorImageInfo ii[SU_RENDER_PAINT_SLOT_COUNT];
     VkDescriptorBufferInfo bi;
-    VkWriteDescriptorSet w[SU_PAINT_SLOT_COUNT + 1u];
+    VkWriteDescriptorSet w[SU_RENDER_PAINT_SLOT_COUNT + 1u];
     VkImageView dflt[3];
     uint32_t i;
     SuRenderHandle dh[3];
@@ -854,15 +854,16 @@ static VkDescriptorSet write_paint_set(SuRenderer *r, const SuRenderHandle *tex,
         return VK_NULL_HANDLE;
     }
     *ready = 0;
-    for (i = 0; i < SU_PAINT_SLOT_COUNT; i++) {
+    for (i = 0; i < SU_RENDER_PAINT_SLOT_COUNT; i++) {
         VkImageView v = tex != NULL ? view_of(r, tex[i]) : VK_NULL_HANDLE;
-        uint32_t info = p != NULL ? p->tex_info[i] : 0u;
+        uint32_t info = tex_info != NULL ? tex_info[i] : 0u;
         uint32_t ws = (info >> 8) & 0xFu;
         uint32_t wt = (info >> 12) & 0xFu;
         if (v != VK_NULL_HANDLE) {
             *ready |= 1u << i;
         } else {
-            v = i == SU_PAINT_SLOT_NORMAL ? dflt[1] : i == SU_PAINT_SLOT_MASK ? dflt[2] : dflt[0];
+            v = i == SU_PAINT_SLOT_NORMAL || i == SU_PAINT_SLOT_DETAIL_NORMAL ? dflt[1] :
+                i == SU_PAINT_SLOT_MASK || i == SU_PAINT_SLOT_DETAIL_MASK ? dflt[2] : dflt[0];
         }
         ii[i].sampler = r->samplers[(ws > 2u ? 0u : ws) * 3u + (wt > 2u ? 0u : wt)];
         ii[i].imageView = v;
@@ -870,7 +871,7 @@ static VkDescriptorSet write_paint_set(SuRenderer *r, const SuRenderHandle *tex,
         memset(&w[i], 0, sizeof w[i]);
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstSet = set;
-        w[i].dstBinding = i;
+        w[i].dstBinding = i < SU_PAINT_SLOT_COUNT ? i : i + 1u;
         w[i].descriptorCount = 1;
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[i].pImageInfo = &ii[i];
@@ -878,14 +879,14 @@ static VkDescriptorSet write_paint_set(SuRenderer *r, const SuRenderHandle *tex,
     bi.buffer = ubo->buf;
     bi.offset = 0;
     bi.range = sizeof(PaintUbo);
-    memset(&w[SU_PAINT_SLOT_COUNT], 0, sizeof w[0]);
-    w[SU_PAINT_SLOT_COUNT].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w[SU_PAINT_SLOT_COUNT].dstSet = set;
-    w[SU_PAINT_SLOT_COUNT].dstBinding = SU_PAINT_SLOT_COUNT;
-    w[SU_PAINT_SLOT_COUNT].descriptorCount = 1;
-    w[SU_PAINT_SLOT_COUNT].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    w[SU_PAINT_SLOT_COUNT].pBufferInfo = &bi;
-    r->f.vkUpdateDescriptorSets(r->dev, SU_PAINT_SLOT_COUNT + 1u, w, 0, NULL);
+    memset(&w[SU_RENDER_PAINT_SLOT_COUNT], 0, sizeof w[0]);
+    w[SU_RENDER_PAINT_SLOT_COUNT].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[SU_RENDER_PAINT_SLOT_COUNT].dstSet = set;
+    w[SU_RENDER_PAINT_SLOT_COUNT].dstBinding = SU_PAINT_SLOT_COUNT;
+    w[SU_RENDER_PAINT_SLOT_COUNT].descriptorCount = 1;
+    w[SU_RENDER_PAINT_SLOT_COUNT].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w[SU_RENDER_PAINT_SLOT_COUNT].pBufferInfo = &bi;
+    r->f.vkUpdateDescriptorSets(r->dev, SU_RENDER_PAINT_SLOT_COUNT + 1u, w, 0, NULL);
     return set;
 }
 
@@ -917,6 +918,24 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
     }
     *out = 0;
     p = &d->paint;
+    if ((d->flags & ~7u) != 0u || !all_finite(d->specular_factor, 3u) ||
+        !isfinite(d->detail_strength) || d->detail_strength < 0.0f || d->detail_strength > 1.0f ||
+        !all_finite(d->detail_uv_scale, 2u) || !isfinite(d->detail_rotation) || d->detail_layer_mask > 31u ||
+        (d->specular_channels & 0xFF000000u) != 0u) {
+        return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint material: extension parameters invalid");
+    }
+    for (i = 0; i < 3u; i++) {
+        if (d->specular_factor[i] < 0.0f || d->specular_factor[i] > 1.0f ||
+            ((d->specular_channels >> (8u * i)) & 255u) > 5u) {
+            return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint material: specular factor or channel invalid");
+        }
+    }
+    for (i = 0; i < 4u; i++) {
+        uint32_t info = d->extra_tex_info[i];
+        if ((info & ~0x00003301u) != 0u || ((info >> 8) & 15u) > 2u || ((info >> 12) & 15u) > 2u) {
+            return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint material: extra texture coordinates invalid");
+        }
+    }
     if (!all_finite(d->factors.base_color, 13u) || p->layer_count > SU_PAINT_MAX_LAYERS || !all_finite(&p->specular, 4u)) {
         return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint material: layer count or factors invalid");
     }
@@ -937,7 +956,7 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
             return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint material: channel selector %u invalid", (unsigned)i);
         }
     }
-    for (i = 0; i < SU_PAINT_SLOT_COUNT; i++) {
+    for (i = 0; i < SU_RENDER_PAINT_SLOT_COUNT; i++) {
         const Res *x;
         int need_srgb = i == SU_PAINT_SLOT_ALBEDO; /* glow: either (sRGB colour map or linear mask) */
         if (d->textures[i] == 0u) {
@@ -949,7 +968,7 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
         }
         if (i == SU_PAINT_SLOT_GLOW) {
             glow_mask = !tex_srgb_format(x->u.tex.format);
-        } else if (tex_srgb_format(x->u.tex.format) != need_srgb) {
+        } else if (i != SU_PAINT_SLOT_SPECULAR && tex_srgb_format(x->u.tex.format) != need_srgb) {
             return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint slot %u needs a %s texture (got %s)", (unsigned)i,
                                need_srgb ? "sRGB" : "linear", su_asset_texture_format_name(x->u.tex.format));
         }
@@ -961,12 +980,25 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
     s->u.mat.kind = 1u;
     s->u.mat.f = d->factors;
     s->u.mat.paint = d->paint;
+    memcpy(s->u.mat.paint_tex_info, p->tex_info, sizeof p->tex_info);
+    memcpy(s->u.mat.paint_tex_info + SU_PAINT_SLOT_COUNT, d->extra_tex_info, sizeof d->extra_tex_info);
     memcpy(s->u.mat.tex, d->textures, sizeof s->u.mat.tex);
     s->u.mat.pipeline = d->overlay ? PIPE_OVERLAY + (d->factors.double_sided ? 1u : 0u) : pipe_of(&d->factors);
     if (d->overlay) {
         s->u.mat.f.alpha_mode = SU_ASSET_ALPHA_BLEND;
     }
     memset(&u, 0, sizeof u);
+    memcpy(u.specular_factor, d->specular_factor, sizeof d->specular_factor);
+    u.detail[0] = d->detail_strength;
+    u.detail[1] = d->detail_uv_scale[0] == 0.0f ? 1.0f : d->detail_uv_scale[0];
+    u.detail[2] = d->detail_uv_scale[1] == 0.0f ? 1.0f : d->detail_uv_scale[1];
+    u.rotation[0] = cosf(d->detail_rotation);
+    u.rotation[1] = sinf(d->detail_rotation);
+    u.rotation[2] = d->textures[SU_PAINT_SLOT_DETAIL_NORMAL] != 0u ? 1.0f : 0.0f;
+    u.extra[0] = d->flags;
+    u.extra[1] = d->textures[SU_PAINT_SLOT_SPECULAR] != 0u;
+    u.extra[2] = d->detail_layer_mask;
+    u.extra[3] = d->specular_channels;
     u.a[0] = p->specular;
     u.a[1] = p->dirt_amount;
     u.a[2] = p->dirt_darken;
@@ -997,7 +1029,7 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
         return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "device memory for a paint material");
     }
     memcpy(s->u.mat.ubo.map, &u, sizeof u);
-    s->u.mat.set = write_paint_set(r, s->u.mat.tex, &s->u.mat.paint, &s->u.mat.ubo, &s->u.mat.bound_ready);
+    s->u.mat.set = write_paint_set(r, s->u.mat.tex, s->u.mat.paint_tex_info, &s->u.mat.ubo, &s->u.mat.bound_ready);
     if (s->u.mat.set == VK_NULL_HANDLE) {
         Retired t;
         memset(&t, 0, sizeof t);
@@ -1063,7 +1095,7 @@ uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d,
     }
     s = &r->res[idx];
     s->u.mat.f = d->factors;
-    memcpy(s->u.mat.tex, d->textures, sizeof s->u.mat.tex);
+    memcpy(s->u.mat.tex, d->textures, sizeof d->textures);
     s->u.mat.pipeline = d->overlay ? PIPE_OVERLAY + (d->factors.double_sided ? 1u : 0u) : pipe_of(&d->factors);
     if (d->overlay) {
         s->u.mat.f.alpha_mode = SU_ASSET_ALPHA_BLEND;
@@ -1091,14 +1123,14 @@ void su_rvk_refresh_materials(SuRenderer *r) {
         if (s->type != RES_MATERIAL || s->u.mat.kind == 2u) {
             continue;
         }
-        for (k = 0; k < (s->u.mat.kind != 0u ? SU_PAINT_SLOT_COUNT : SU_ASSET_SLOT_COUNT); k++) {
+        for (k = 0; k < (s->u.mat.kind != 0u ? SU_RENDER_PAINT_SLOT_COUNT : SU_ASSET_SLOT_COUNT); k++) {
             if (view_of(r, s->u.mat.tex[k]) != VK_NULL_HANDLE) {
                 want |= 1u << k;
             }
         }
         if (want != s->u.mat.bound_ready) {
             uint32_t ready = 0;
-            VkDescriptorSet n = s->u.mat.kind != 0u ? write_paint_set(r, s->u.mat.tex, &s->u.mat.paint, &s->u.mat.ubo, &ready)
+            VkDescriptorSet n = s->u.mat.kind != 0u ? write_paint_set(r, s->u.mat.tex, s->u.mat.paint_tex_info, &s->u.mat.ubo, &ready)
                                                     : write_material_set(r, s->u.mat.tex, &s->u.mat.f, &ready);
             if (n != VK_NULL_HANDLE) {
                 Retired t;
@@ -1881,6 +1913,7 @@ uint32_t su_render_upload_pak(SuRenderer *r, const SuAssetPak *pak, uint64_t mod
                 uint32_t k;
                 memset(&d, 0, sizeof d);
                 SuRenderPaintDesc pd;
+                memset(&pd, 0, sizeof pd);
                 (void)su_asset_pak_material(pak, e.id, &d.factors);
                 if (su_asset_pak_paint(pak, e.id, &pd.paint) == SU_OK) {
                     pd.factors = d.factors;
