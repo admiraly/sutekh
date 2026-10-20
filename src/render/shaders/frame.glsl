@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 // Per-frame constants shared by the scene shaders (set 0, binding 0). Space is camera-relative: the camera sits at
 // the origin and view_proj has no translation.
+struct PointLight {
+    vec4 position_radius;
+    vec4 radiance;
+};
+
 layout(set = 0, binding = 0) uniform Frame {
     mat4 view_proj;
     mat4 inv_view_proj;
@@ -18,6 +23,7 @@ layout(set = 0, binding = 0) uniform Frame {
     vec4 shadow_bias;   // depth bias of each cascade
     vec4 shadow_noff;   // normal offset of each cascade (units)
     vec4 shadow_fwd;    // the camera's forward axis
+    PointLight point_lights[128];
 } fr;
 
 #ifdef SU_SHADOW_RECEIVER

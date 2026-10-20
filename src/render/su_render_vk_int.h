@@ -29,6 +29,7 @@
 #include <string.h>
 
 #include "sutekh/render.h"
+#include "render/su_render_lights.h"
 
 #define FRAMES_IN_FLIGHT 2u
 #define MAX_SWAP_IMAGES 8u
@@ -335,6 +336,7 @@ typedef struct DrawInstance {
     float r2[4];
     float tint[4];
     float extra[4];           /* x: emissive multiplier */
+    uint32_t light_mask[4];
 } DrawInstance;
 
 typedef struct FrameUbo {
@@ -353,6 +355,7 @@ typedef struct FrameUbo {
     float shadow_bias[4];     /* depth bias of each cascade (depth units) */
     float shadow_noff[4];     /* normal offset of each cascade (units) */
     float shadow_fwd[4];      /* the camera's forward axis */
+    SuPointLightGpu point_lights[SU_RENDER_MAX_POINT_LIGHTS];
 } FrameUbo;
 
 typedef struct MatPush {

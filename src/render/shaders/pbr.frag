@@ -15,6 +15,7 @@ layout(location = 2) in vec4 v_tangent;
 layout(location = 3) in vec4 v_uv;
 layout(location = 4) in vec4 v_tint;
 layout(location = 5) in float v_emissive;
+layout(location = 6) flat in uvec4 v_light_mask;
 
 layout(set = 1, binding = 0) uniform sampler2D t_base;
 layout(set = 1, binding = 1) uniform sampler2D t_mr;
@@ -33,6 +34,7 @@ layout(push_constant) uniform Material {
 layout(location = 0) out vec4 o_color;
 
 const float PI = 3.14159265;
+#include "point_lights.glsl"
 
 vec2 uv_of(uint slot) {
     return ((mat.uvset.x >> slot) & 1u) != 0u ? v_uv.zw : v_uv.xy;
@@ -89,6 +91,10 @@ void main() {
     vec3 direct = (diffuse + d * vis * f) * fr.sun_color.rgb * nl;
     if (nl > 0.0) {
         direct *= sun_shadow(v_pos, normalize(v_normal) * (gl_FrontFacing ? 1.0 : -1.0));
+    }
+
+    if (any(notEqual(v_light_mask, uvec4(0u)))) {
+        direct += point_lighting(v_light_mask, v_pos, n, v, base.rgb, f0, 1.0 - metallic, rough);
     }
 
     // ambient: analytic environment BRDF (Karis, mobile approximation)
