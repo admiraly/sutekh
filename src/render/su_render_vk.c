@@ -1034,6 +1034,7 @@ static VkShaderModule shader(SuRenderer *r, const uint32_t *code, size_t bytes) 
 #define VIN_FX 4
 #define VIN_FLAME 7
 #define VIN_HUD 5
+#define VIN_FXMESH 8
 #define VIN_SHADOW 6 /* asset vertex position and the instance rows only (shadow casters) */
 
 #define BLEND_NONE 0
@@ -1130,21 +1131,28 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         attr(at, &na, 1, 0, VK_FORMAT_R8G8B8A8_UNORM, 12);
         break;
     case VIN_PBR:
+    case VIN_FXMESH:
         bind[0].stride = sizeof(SuAssetVertex);
         bind[1].binding = 1;
         bind[1].stride = sizeof(DrawInstance);
         bind[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
         nb = 2;
         attr(at, &na, 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0);
-        attr(at, &na, 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12);
-        attr(at, &na, 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 24);
+        if (s->vin == VIN_PBR) {
+            attr(at, &na, 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12);
+            attr(at, &na, 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 24);
+        }
         attr(at, &na, 3, 0, VK_FORMAT_R32G32_SFLOAT, 40);
-        attr(at, &na, 4, 0, VK_FORMAT_R32G32_SFLOAT, 48);
+        if (s->vin == VIN_PBR) {
+            attr(at, &na, 4, 0, VK_FORMAT_R32G32_SFLOAT, 48);
+        }
         attr(at, &na, 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0);
         attr(at, &na, 6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16);
         attr(at, &na, 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32);
         attr(at, &na, 8, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48);
-        attr(at, &na, 9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 64);
+        if (s->vin == VIN_PBR) {
+            attr(at, &na, 9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 64);
+        }
         break;
     case VIN_SHADOW:
         bind[0].stride = sizeof(SuAssetVertex);
@@ -1306,7 +1314,7 @@ static int make_pipelines(SuRenderer *r) {
     s.fs = su_shader_mesh_frag;
     s.fs_bytes = sizeof su_shader_mesh_frag;
     s.vin = VIN_LEGACY_MESH;
-    s.cull = 1;
+    s.cull = 0;
     s.depth_test = s.depth_write = 1;
     ok = ok && make_pipe(r, &s, &r->mesh_pipe);
     memset(&s, 0, sizeof s);
@@ -1335,8 +1343,11 @@ static int make_pipelines(SuRenderer *r) {
     s.vin = VIN_FX;
     s.depth_test = 1;
     s.blend = BLEND_ADD;
+    s.subpass = 1;
     ok = ok && make_pipe(r, &s, &r->fx_pipe);
     /* textured effects: additive and premultiplied alpha, in the effects subpass */
+    s.vs = su_shader_fx_layer_vert;
+    s.vs_bytes = sizeof su_shader_fx_layer_vert;
     s.layout = 1;
     s.subpass = 1;
     s.fs = su_shader_fx_tex_add_frag;
@@ -1346,12 +1357,23 @@ static int make_pipelines(SuRenderer *r) {
     s.fs_bytes = sizeof su_shader_fx_tex_pm_frag;
     s.blend = BLEND_PREMUL;
     ok = ok && make_pipe(r, &s, &r->fxtex_pipe[1]);
+    s.vs = su_shader_fx_mesh_vert;
+    s.vs_bytes = sizeof su_shader_fx_mesh_vert;
+    s.vin = VIN_FXMESH;
+    for (i = 0; i < 4u; i++) {
+        s.cull = (i & 1u) == 0u;
+        s.blend = i < 2u ? BLEND_ADD : BLEND_PREMUL;
+        s.fs = i < 2u ? su_shader_fx_tex_add_frag : su_shader_fx_tex_pm_frag;
+        s.fs_bytes = i < 2u ? sizeof su_shader_fx_tex_add_frag : sizeof su_shader_fx_tex_pm_frag;
+        ok = ok && make_pipe(r, &s, &r->fxmesh_pipe[i]);
+    }
     s.vs = su_shader_flame_vert;
     s.vs_bytes = sizeof su_shader_flame_vert;
     s.fs = su_shader_flame_frag;
     s.fs_bytes = sizeof su_shader_flame_frag;
     s.vin = VIN_FLAME;
     s.layout = 3;
+    s.cull = 0;
     s.blend = BLEND_ADD;
     ok = ok && make_pipe(r, &s, &r->flame_pipe);
     /* the cube-map sky background */
@@ -1376,6 +1398,7 @@ static int make_pipelines(SuRenderer *r) {
         s.depth_write = i < PIPE_OVERLAY;
         s.blend = i >= PIPE_OVERLAY ? BLEND_ALPHA : BLEND_NONE;
         s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
+        s.subpass = i >= PIPE_BLEND ? 1 : 0;
         ok = make_pipe(r, &s, &r->pbr_pipe[i]);
     }
     /* sun shadow casters: depth only */
@@ -1404,6 +1427,7 @@ static int make_pipelines(SuRenderer *r) {
         s.depth_write = i < PIPE_OVERLAY;
         s.blend = i >= PIPE_OVERLAY ? BLEND_ALPHA : BLEND_NONE;
         s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
+        s.subpass = i >= PIPE_BLEND ? 1 : 0;
         ok = make_pipe(r, &s, &r->paint_pipe[i]);
     }
     /* output pass */
@@ -1519,6 +1543,11 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
         return 0;
     }
     b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[0].descriptorCount = 3;
+    if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->fx_dsl) != VK_SUCCESS) {
+        return 0;
+    }
+    b[0].descriptorCount = 1;
     {
         /* layered paint: eight samplers and the layer parameters; the environment cube */
         VkDescriptorSetLayoutBinding pb[SU_PAINT_SLOT_COUNT + 1u];
@@ -1581,12 +1610,12 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
         return 0;
     }
     {
-        /* textured effects (frame + one sampler + scene depth, FxPush) and the cube sky (frame + cube + SkyPush) */
+        /* textured effects (frame + three samplers + scene depth, FxPush) and the cube sky (frame + cube + SkyPush) */
         VkDescriptorSetLayout fsets[3];
         VkPushConstantRange spc;
         VkPipelineLayoutCreateInfo fli;
         fsets[0] = r->frame_dsl;
-        fsets[1] = r->tex_dsl;
+        fsets[1] = r->fx_dsl;
         fsets[2] = r->depth_in_dsl;
         memset(&spc, 0, sizeof spc);
         spc.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -1775,14 +1804,99 @@ static void write_image_set(SuRenderer *r, VkDescriptorSet set, VkImageView view
 }
 
 /* The per-frame pool of sampler sets for textured effect batches (reset at the start of each frame). */
+int su_rvk_fx_layers_valid(const SuFxLayers *layers) {
+    uint32_t layer;
+    uint32_t axis;
+    if (!isfinite(layers->angular_fade) || layers->angular_fade < 0.0f || layers->angular_fade > 1.0f) {
+        return 0;
+    }
+    for (layer = 0; layer < 3u; layer++) {
+        for (axis = 0; axis < 2u; axis++) {
+            if (!isfinite(layers->uv[layer].scale[axis]) || !isfinite(layers->uv[layer].offset[axis]) ||
+                !isfinite(layers->uv[layer].speed[axis])) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+void su_rvk_fx_push(FxPush *push, const SuFxLayers *layers, float time, float soft, float near_z,
+                    uint32_t wrap_u, uint32_t wrap_v) {
+    float rect[4];
+    uint32_t layer;
+    uint32_t axis;
+    memset(push, 0, sizeof *push);
+    for (layer = 0; layer < 3u; layer++) {
+        for (axis = 0; axis < 2u; axis++) {
+            double offset = (double)layers->uv[layer].offset[axis] + (double)layers->uv[layer].speed[axis] * time;
+            push->uv[layer][axis] = layers->uv[layer].scale[axis] != 0.0f ? layers->uv[layer].scale[axis] : 1.0f;
+            push->uv[layer][axis + 2u] = (float)fmax(-1e30, fmin(1e30, offset));
+        }
+    }
+    su_fx_atlas_rect(layers->atlas_cols, layers->atlas_rows, layers->atlas_frame, rect);
+    push->atlas[0] = rect[2] - rect[0];
+    push->atlas[1] = rect[3] - rect[1];
+    push->atlas[2] = rect[0];
+    push->atlas[3] = rect[1];
+    push->soft = soft > 0.0f && soft < 1e30f ? 1.0f / soft : 0.0f;
+    push->near_z = near_z;
+    push->angular = layers->angular_fade;
+    push->layers = (layers->textures[1] != 0u ? 1u : 0u) | (layers->textures[2] != 0u ? 2u : 0u);
+    if (layers->atlas_cols > 1u || layers->atlas_rows > 1u) {
+        push->layers |= 4u | ((wrap_u > 2u ? 0u : wrap_u) << 3u) | ((wrap_v > 2u ? 0u : wrap_v) << 5u);
+    }
+}
+
+VkDescriptorSet su_rvk_fx_set(SuRenderer *renderer, Frame *fr, const SuFxLayers *layers, SuRenderHandle first,
+                             uint32_t wrap_u, uint32_t wrap_v) {
+    static const uint32_t wrap_index[3] = {1u, 0u, 2u};
+    VkDescriptorImageInfo images[3];
+    VkDescriptorSetAllocateInfo alloc;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkWriteDescriptorSet write;
+    uint32_t layer;
+    for (layer = 0; layer < 3u; layer++) {
+        SuRenderHandle handle = layers->textures[layer];
+        Res *texture;
+        if (handle == 0u) {
+            handle = layer == 0u && first != 0u ? first : renderer->white_tex;
+        }
+        texture = su_rvk_get(renderer, handle, RES_TEXTURE, NULL);
+        if (texture == NULL || texture->state != SU_RENDER_STATE_READY || texture->u.tex.layers != 1u ||
+            texture->u.tex.depth > 1u) {
+            return VK_NULL_HANDLE;
+        }
+        images[layer].sampler = renderer->samplers[wrap_index[wrap_u > 2u ? 0u : wrap_u] * 3u + wrap_index[wrap_v > 2u ? 0u : wrap_v]];
+        images[layer].imageView = texture->u.tex.view;
+        images[layer].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    memset(&alloc, 0, sizeof alloc);
+    alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc.descriptorPool = fr->fx_pool;
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts = &renderer->fx_dsl;
+    if (renderer->f.vkAllocateDescriptorSets(renderer->dev, &alloc, &set) != VK_SUCCESS) {
+        return VK_NULL_HANDLE;
+    }
+    memset(&write, 0, sizeof write);
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = set;
+    write.descriptorCount = 3;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = images;
+    renderer->f.vkUpdateDescriptorSets(renderer->dev, 1, &write, 0, NULL);
+    return set;
+}
+
 static int make_fx_pool(SuRenderer *r, Frame *fr) {
     VkDescriptorPoolSize ps;
     VkDescriptorPoolCreateInfo pi;
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = r->max_fx_batches + SU_FLAME_MAX * 3u;
+    ps.descriptorCount = (r->max_fx_batches + r->max_draw) * 3u + SU_FLAME_MAX * 3u;
     memset(&pi, 0, sizeof pi);
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = r->max_fx_batches + SU_FLAME_MAX;
+    pi.maxSets = r->max_fx_batches + r->max_draw + SU_FLAME_MAX;
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &ps;
     return r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &fr->fx_pool) == VK_SUCCESS;
@@ -2344,6 +2458,14 @@ void su_render_destroy(SuRenderer *r) {
         {
             VkPipeline all[10 + 2 * PIPE_PBR_COUNT];
             uint32_t k;
+            for (k = 0; k < 4u; k++) {
+                if (r->fxmesh_pipe[k] != VK_NULL_HANDLE) {
+                    r->f.vkDestroyPipeline(r->dev, r->fxmesh_pipe[k], NULL);
+                }
+            }
+            if (r->fx_dsl != VK_NULL_HANDLE) {
+                r->f.vkDestroyDescriptorSetLayout(r->dev, r->fx_dsl, NULL);
+            }
             all[0] = r->mesh_pipe;
             all[1] = r->line_pipe;
             all[2] = r->sky_pipe;
@@ -2889,7 +3011,6 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     uint32_t n_quads = 0;
     uint32_t n_sort_draws = 0;
     uint32_t sort_at = UINT32_MAX;
-    FxPush fxp;
     uint32_t skipped = 0;
     VkDescriptorSet sky_set = VK_NULL_HANDLE;
     uint32_t n_items = 0;
@@ -2968,13 +3089,10 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     }
     for (i = 0; i < in->batch_count; i++) {
         const SuFxBatch *bt = &in->batches[i];
-        Res *tr = su_rvk_get(r, bt->texture, RES_TEXTURE, NULL);
         FxBatchDraw tmpl;
         uint32_t first = bt->first_vertex;
         uint32_t count = bt->vertex_count;
-        VkDescriptorSetAllocateInfo dai;
         VkDescriptorSet set = VK_NULL_HANDLE;
-        static const uint32_t wrap_index[3] = {1u, 0u, 2u}; /* SU_FX_WRAP_* to the sampler table (repeat, clamp, mirror) */
         if (count == 0u) {
             continue;
         }
@@ -2984,29 +3102,23 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
             count = n_fxt - first;
         }
         count -= count % 3u;
-        if (tr == NULL || tr->state != SU_RENDER_STATE_READY || tr->u.tex.layers != 1u || tr->u.tex.depth > 1u ||
+        if ((bt->texture == 0u && bt->layers.textures[0] == 0u) || !su_rvk_fx_layers_valid(&bt->layers) ||
             count == 0u || first % 3u != 0u ||
             bt->blend > SU_FX_BLEND_PREMUL || n_batches >= r->max_fx_batches) {
             skipped++;
             continue;
         }
-        memset(&dai, 0, sizeof dai);
-        dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dai.descriptorPool = fr->fx_pool;
-        dai.descriptorSetCount = 1;
-        dai.pSetLayouts = &r->tex_dsl;
-        if (r->f.vkAllocateDescriptorSets(r->dev, &dai, &set) != VK_SUCCESS) {
+        set = su_rvk_fx_set(r, fr, &bt->layers, bt->texture, bt->wrap_u, bt->wrap_v);
+        if (set == VK_NULL_HANDLE) {
             skipped++;
             continue;
         }
-        write_image_set(r, set, tr->u.tex.view,
-                        r->samplers[wrap_index[bt->wrap_u > 2u ? 0u : bt->wrap_u] * 3u +
-                                    wrap_index[bt->wrap_v > 2u ? 0u : bt->wrap_v]]);
         tmpl.set = set;
         tmpl.first = first;
         tmpl.count = count;
         tmpl.pipe = bt->blend;
-        tmpl.soft = bt->soft_distance > 0.0f && bt->soft_distance < 1e30f ? 1.0f / bt->soft_distance : 0.0f;
+        su_rvk_fx_push(&tmpl.push, &bt->layers, in->scene != NULL ? in->scene->time_seconds : 0.0f,
+                       bt->soft_distance, in->scene != NULL ? in->scene->camera.near_z : 1.0f, bt->wrap_u, bt->wrap_v);
         n_batches++;
         if ((bt->flags & SU_FX_BATCH_SORT) != 0u && count % 6u == 0u && n_quads + count / 6u <= r->max_fx_tex / 6u &&
             n_sorted < r->max_fx_batches) {
@@ -3239,7 +3351,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         r->stats.draws++;
     }
     if (n_items > 0u) {
-        su_rvk_scene_draw(r, fr, cmd, n_items, 0);
+        su_rvk_scene_draw(r, fr, cmd, n_items, 0, in->scene);
     }
     if (n_inst > 0u) {
         VkBuffer vbs[2];
@@ -3266,21 +3378,22 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         r->stats.draws++;
     }
     if (n_items > 0u) {
-        su_rvk_scene_draw(r, fr, cmd, n_items, 1);
-        su_rvk_scene_draw(r, fr, cmd, n_items, 2);
+        su_rvk_scene_draw(r, fr, cmd, n_items, 1, in->scene);
+    }
+    r->f.vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
+    r->stats.fx_batches_skipped = 0;
+    if (n_items > 0u) {
+        su_rvk_scene_draw(r, fr, cmd, n_items, 2, in->scene);
     }
     if (n_fx > 0u) {
+        r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->scene_layout, 0, 1, &fr->frame_set, 0, NULL);
         r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fx_pipe);
         r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->fx.buf, &zero);
         r->f.vkCmdDraw(cmd, n_fx, 1, 0, 0);
         r->stats.draws++;
     }
-    /* subpass 1: textured effects, with the scene depth readable for soft particles */
-    r->f.vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
     if (n_fxb > 0u) {
         uint32_t last_pipe = UINT32_MAX;
-        memset(&fxp, 0, sizeof fxp);
-        fxp.near_z = in->scene != NULL && in->scene->camera.near_z > 0.0f ? in->scene->camera.near_z : 1.0f;
         r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->fx_tex.buf, &zero);
         for (i = 0; i < n_fxb; i++) {
             VkDescriptorSet three[3];
@@ -3292,8 +3405,8 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
             three[1] = r->fxb[i].set;
             three[2] = r->depth_in_set;
             r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fxtex_layout, 0, 3, three, 0, NULL);
-            fxp.soft = r->fxb[i].soft;
-            r->f.vkCmdPushConstants(cmd, r->fxtex_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof fxp, &fxp);
+            r->f.vkCmdPushConstants(cmd, r->fxtex_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                     sizeof r->fxb[i].push, &r->fxb[i].push);
             r->f.vkCmdDraw(cmd, r->fxb[i].count, 1, r->fxb[i].first, 0);
             r->stats.draws++;
         }
@@ -3496,7 +3609,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     r->stats.fx_batches_drawn = n_batches;
     r->stats.fx_quads_sorted = n_quads;
     r->stats.fx_sort_draws = n_sort_draws;
-    r->stats.fx_batches_skipped = skipped;
+    r->stats.fx_batches_skipped += skipped;
     r->stats.hud_vertices = n_hud;
     r->stats.width = r->width;
     r->stats.height = r->height;
@@ -3587,7 +3700,7 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
         (f->debug_instances == NULL && f->debug_instance_count > 0u) || (f->lines == NULL && f->line_vertex_count > 0u) ||
         (f->fx == NULL && f->fx_vertex_count > 0u) || (f->hud == NULL && f->hud_vertex_count > 0u) ||
         (f->fx_tex == NULL && f->fx_tex_vertex_count > 0u) || (f->fx_batches == NULL && f->fx_batch_count > 0u) ||
-        !(f->camera.fov_y > 0.0f && f->camera.fov_y < 3.1f) || !(f->camera.near_z > 0.0f)) {
+        !isfinite(f->time_seconds) || !(f->camera.fov_y > 0.0f && f->camera.fov_y < 3.1f) || !(f->camera.near_z > 0.0f)) {
         return SU_E_INVALID_ARGUMENT;
     }
     l = &f->light;

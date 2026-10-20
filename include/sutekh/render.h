@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 4u
+#define SU_RENDER_API_VERSION 5u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -266,6 +266,19 @@ typedef uint64_t SuRenderHandle;   /* a renderer resource (see "GPU resources" b
 #define SU_FX_WRAP_MIRROR 2u
 #define SU_FX_BATCH_SORT 0x1u              /* sort this batch's quads back to front with the other sorted batches */
 
+typedef struct SuFxUvTransform {
+    float scale[2];
+    float offset[2];
+    float speed[2];
+} SuFxUvTransform;
+
+typedef struct SuFxLayers {
+    SuRenderHandle textures[3];
+    SuFxUvTransform uv[3];
+    uint32_t atlas_cols, atlas_rows, atlas_frame;
+    float angular_fade;
+} SuFxLayers;
+
 typedef struct SuFxBatch {
     SuRenderHandle texture;            /* a READY 2D texture */
     uint32_t blend;                    /* SU_FX_BLEND_* */
@@ -274,7 +287,16 @@ typedef struct SuFxBatch {
     uint32_t vertex_count;             /* a multiple of 3 */
     float soft_distance;               /* world units; > 0: soft particles (see above); 0 = hard, as before */
     uint32_t flags;                    /* SU_FX_BATCH_*; 0 = drawn in batch order, as before */
+    SuFxLayers layers;
 } SuFxBatch;
+
+typedef struct SuRenderFxMaterialDesc {
+    SuFxLayers layers;
+    uint32_t blend;
+    uint32_t two_sided;
+    uint32_t wrap_u, wrap_v;
+    float soft_distance;
+} SuRenderFxMaterialDesc;
 
 /* A batch covering the vertices written to buffer since first_vertex (take first_vertex = buffer->count before
  * adding the sprites of one texture). soft_distance and flags are 0; set them on the result. */
@@ -555,6 +577,7 @@ typedef struct SuRenderModelNode {
 SU_RENDER_API uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_texture_create(SuRenderer *r, const SuRenderTextureDesc *d, SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d, SuRenderHandle *out);
+SU_RENDER_API uint32_t su_render_fx_material_create(SuRenderer *r, const SuRenderFxMaterialDesc *d, SuRenderHandle *out);
 /* A layered paint material (see above). SU_E_INVALID_ARGUMENT for an unknown texture handle, a texture of the wrong
  * colour space for its slot, or invalid paint parameters (layer count, order, channels, non-finite values). */
 SU_RENDER_API uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc *d, SuRenderHandle *out);
@@ -769,6 +792,7 @@ typedef struct SuRenderFrameDesc {
                                         * light.up with su_quatf_axis_angle */
     float sky_lod;                     /* mip level sampled (0 = sharpest); a prefiltered env cube gets blurrier with it */
     SuRenderShadow shadow;             /* all zero: no sun shadows (see SuRenderShadow) */
+    float time_seconds;
     const SuRenderFlame *flames;
     uint32_t flame_count;
 } SuRenderFrameDesc;

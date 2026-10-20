@@ -44,6 +44,7 @@ static long g_fail = 0;
 #define NEAR_Z 0.05f
 
 static SuRenderer *g_r;
+static int g_benchmark;
 static uint8_t g_img[W * H * 4];
 static uint8_t g_ref[W * H * 4];
 
@@ -102,6 +103,9 @@ typedef struct Scene {
     int sky;
     const SuRenderInstance *inst;      /* debug instances (opaque geometry for the depth buffer) */
     uint32_t inst_count;
+    const SuRenderObject *objects;
+    uint32_t object_count;
+    float time_seconds;
 } Scene;
 
 static void scene_init(Scene *s) {
@@ -141,6 +145,9 @@ static int render(const Scene *s, uint8_t *out) {
     f.post = s->post;
     f.debug_instances = s->inst;
     f.debug_instance_count = s->inst_count;
+    f.objects = s->objects;
+    f.object_count = s->object_count;
+    f.time_seconds = s->time_seconds;
     for (k = 0; k < 3; k++) {
         uint32_t st = su_render_frame_ex(g_r, &f);
         CHECK(st == SU_OK);
@@ -149,7 +156,9 @@ static int render(const Scene *s, uint8_t *out) {
             return 0;
         }
     }
-    CHECK(su_render_readback(g_r, out, (size_t)W * H * 4u) == SU_OK);
+    if (!g_benchmark) {
+        CHECK(su_render_readback(g_r, out, (size_t)W * H * 4u) == SU_OK);
+    }
     return 1;
 }
 
@@ -1758,6 +1767,575 @@ static void test_skips_and_unchanged(void) {
     CHECK(su_render_texture_create(g_r, &d, &h) == SU_E_INVALID_ARGUMENT);
 }
 
+typedef struct FxModel {
+    SuRenderHandle model;
+    SuRenderHandle mesh;
+} FxModel;
+
+static FxModel make_fx_model(SuRenderHandle material, const SuFxVertex *quad) {
+    SuAssetVertex vertices[6];
+    uint32_t indices[6] = {0, 2, 1, 3, 5, 4};
+    SuAssetSubmesh sub;
+    SuRenderMeshDesc mesh;
+    SuRenderModelNode node;
+    FxModel result;
+    uint32_t vertex;
+    memset(&result, 0, sizeof result);
+    memset(vertices, 0, sizeof vertices);
+    for (vertex = 0; vertex < 6u; vertex++) {
+        memcpy(vertices[vertex].pos, quad[vertex].pos, sizeof vertices[vertex].pos);
+        vertices[vertex].pos[2] += 4.0f;
+        vertices[vertex].normal[2] = 1.0f;
+        vertices[vertex].tangent[0] = vertices[vertex].tangent[3] = 1.0f;
+        memcpy(vertices[vertex].uv0, quad[vertex].uv, sizeof vertices[vertex].uv0);
+    }
+    memset(&sub, 0, sizeof sub);
+    sub.index_count = 6;
+    sub.radius = 3.0f;
+    memset(&mesh, 0, sizeof mesh);
+    mesh.vertices = vertices;
+    mesh.vertex_count = 6;
+    mesh.indices = indices;
+    mesh.index_count = 6;
+    mesh.submeshes = &sub;
+    mesh.submesh_count = 1;
+    mesh.materials = &material;
+    mesh.radius = 3.0f;
+    mesh.flags = SU_RENDER_UPLOAD_COPY;
+    CHECK(su_render_mesh_create(g_r, &mesh, &result.mesh) == SU_OK);
+    {
+        static uint8_t upload_image[W * H * 4];
+        Scene upload_scene;
+        uint32_t attempt;
+        scene_init(&upload_scene);
+        for (attempt = 0; attempt < 40u && su_render_resource_state(g_r, result.mesh) == SU_RENDER_STATE_PENDING; attempt++) {
+            CHECK(render(&upload_scene, upload_image));
+        }
+        CHECK(su_render_resource_state(g_r, result.mesh) == SU_RENDER_STATE_READY);
+    }
+    memset(&node, 0, sizeof node);
+    node.transform[0] = node.transform[5] = node.transform[10] = node.transform[15] = 1.0f;
+    node.lod_count = 1;
+    node.lod_mesh[0] = result.mesh;
+    node.lod_screen[0] = 1.0f;
+    CHECK(su_render_model_create(g_r, &node, 1, &result.model) == SU_OK);
+    return result;
+}
+
+static SuRenderObject fx_object(SuRenderHandle model, float z, const float color[4]) {
+    SuRenderObject object;
+    memset(&object, 0, sizeof object);
+    object.model = model;
+    object.pos = su_wpos(0, 0, z);
+    object.rot.w = 1.0f;
+    memcpy(object.tint, color, sizeof object.tint);
+    return object;
+}
+
+static void release_fx_model(FxModel model) {
+    CHECK(su_render_release(g_r, model.model) == SU_OK);
+    CHECK(su_render_release(g_r, model.mesh) == SU_OK);
+}
+
+static void test_layered_fx(void) {
+    static const uint8_t colors[3][4] = {{128, 192, 255, 128}, {128, 255, 64, 128}, {255, 128, 128, 128}};
+    float tint[4] = {2.0f, 1.0f, 0.5f, 0.8f};
+    SuFxVertex vertices[6];
+    SuFxBuffer buffer = fxbuf(vertices, 6);
+    SuFxBatch batch;
+    SuRenderFxMaterialDesc desc;
+    SuRenderHandle material = 0;
+    SuRenderHandle textures[3];
+    SuRenderObject object;
+    FxModel model;
+    Scene scene;
+    uint32_t blend;
+    uint32_t layer;
+    uint32_t channel;
+    uint32_t pixel_x;
+    uint32_t pixel_y;
+    double product[4] = {1, 1, 1, 1};
+    scene_init(&scene);
+    for (layer = 0; layer < 3u; layer++) {
+        textures[layer] = make_tex(SU_TEX_RGBA8_UNORM, 1, 1, colors[layer]);
+        for (channel = 0; channel < 4u; channel++) {
+            product[channel] *= colors[layer][channel] / 255.0;
+        }
+    }
+    su_fx_sprite(&buffer, v3(0, 0, -4), 1.5f, 1.5f, 0, tint, NULL, camera_view(&scene));
+    batch = su_fx_batch(textures[0], SU_FX_BLEND_ADD, SU_FX_WRAP_REPEAT, SU_FX_WRAP_REPEAT, 0, &buffer);
+    batch.layers.textures[1] = textures[1];
+    batch.layers.textures[2] = textures[2];
+    batch.flags = SU_FX_BATCH_SORT;
+    scene.clear[2] = 0.1f;
+    for (blend = 0; blend <= SU_FX_BLEND_PREMUL; blend++) {
+        batch.blend = blend;
+        scene.fx_tex = vertices;
+        scene.fx_tex_count = 6;
+        scene.batches = &batch;
+        scene.batch_count = 1;
+        scene.objects = NULL;
+        scene.object_count = 0;
+        CHECK(render(&scene, g_ref));
+        for (channel = 0; channel < 3u; channel++) {
+            double alpha = product[3] * tint[3];
+            double source = product[channel] * tint[channel] * (blend == SU_FX_BLEND_ADD ? alpha : tint[3]);
+            double background = scene.clear[channel] * (blend == SU_FX_BLEND_ADD ? 1.0 : 1.0 - alpha);
+            CHECK(near_i(px(g_ref, 128, 128)[channel], srgb8(source + background), 2));
+        }
+        memset(&desc, 0, sizeof desc);
+        desc.layers = batch.layers;
+        desc.layers.textures[0] = textures[0];
+        desc.blend = blend;
+        desc.two_sided = 1;
+        CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_OK);
+        model = make_fx_model(material, vertices);
+        object = fx_object(model.model, -4, tint);
+        scene.fx_tex_count = scene.batch_count = 0;
+        scene.objects = &object;
+        scene.object_count = 1;
+        CHECK(render(&scene, g_img));
+        for (pixel_y = 64; pixel_y < 192u; pixel_y++) {
+            for (pixel_x = 64; pixel_x < 192u; pixel_x++) {
+                for (channel = 0; channel < 3u; channel++) {
+                    CHECK(near_i(px(g_img, pixel_x, pixel_y)[channel], px(g_ref, pixel_x, pixel_y)[channel], 1));
+                }
+            }
+        }
+        release_fx_model(model);
+        CHECK(su_render_release(g_r, material) == SU_OK);
+    }
+    for (layer = 0; layer < 3u; layer++) {
+        CHECK(su_render_release(g_r, textures[layer]) == SU_OK);
+    }
+}
+
+static void test_layer_scroll_atlas(void) {
+    uint8_t pixels[8 * 8 * 4];
+    const float tint[4] = {1, 1, 1, 1};
+    SuFxVertex vertices[6];
+    SuFxBuffer buffer = fxbuf(vertices, 6);
+    SuFxBatch batch;
+    SuRenderHandle texture;
+    Scene scene;
+    uint32_t layer;
+    uint32_t mode;
+    uint32_t pixel;
+    for (pixel = 0; pixel < 64u; pixel++) {
+        uint8_t value = (uint8_t)((pixel % 8u >= 4u ? 128u : 64u) + (pixel / 8u >= 4u ? 64u : 0u));
+        pixels[pixel * 4u] = pixels[pixel * 4u + 1u] = pixels[pixel * 4u + 2u] = value;
+        pixels[pixel * 4u + 3u] = 255;
+    }
+    texture = make_tex(SU_TEX_RGBA8_UNORM, 8, 8, pixels);
+    scene_init(&scene);
+    su_fx_sprite(&buffer, v3(0, 0, -4), 1.5f, 1.5f, 0, tint, NULL, camera_view(&scene));
+    for (pixel = 0; pixel < 6u; pixel++) {
+        vertices[pixel].uv[0] = vertices[pixel].uv[1] = 0.125f;
+    }
+    for (layer = 0; layer < 3u; layer++) {
+        for (mode = 0; mode < 5u; mode++) {
+            SuRenderFxMaterialDesc desc;
+            SuRenderHandle material = 0;
+            FxModel model;
+            SuRenderObject object;
+            int expected = mode == 0u || mode == 4u ? 64 : 192;
+            batch = su_fx_batch(texture, SU_FX_BLEND_ADD, SU_FX_WRAP_REPEAT, SU_FX_WRAP_REPEAT, 0, &buffer);
+            batch.layers.textures[0] = 0;
+            if (layer != 0u) {
+                static const uint8_t white[4] = {255, 255, 255, 255};
+                batch.texture = make_tex(SU_TEX_RGBA8_UNORM, 1, 1, white);
+            }
+            batch.layers.textures[layer] = texture;
+            scene.time_seconds = 2.0f;
+            if (mode == 1u) {
+                batch.layers.uv[layer].scale[0] = batch.layers.uv[layer].scale[1] = 5.0f;
+            } else if (mode == 2u) {
+                batch.layers.uv[layer].offset[0] = batch.layers.uv[layer].offset[1] = 0.5f;
+            } else if (mode == 3u) {
+                batch.layers.uv[layer].speed[0] = batch.layers.uv[layer].speed[1] = 0.25f;
+            } else if (mode == 4u) {
+                batch.layers.uv[layer].speed[0] = batch.layers.uv[layer].speed[1] = -0.5f;
+            }
+            scene.fx_tex = vertices;
+            scene.fx_tex_count = 6;
+            scene.batches = &batch;
+            scene.batch_count = 1;
+            scene.object_count = 0;
+            CHECK(render(&scene, g_ref));
+            if (!near_i(px(g_ref, 128, 128)[0], srgb8(expected / 255.0), 2)) {
+                printf("scroll layer=%u mode=%u got=%u expected=%d\n", layer, mode, px(g_ref, 128, 128)[0], srgb8(expected / 255.0));
+            }
+            CHECK(rgb_near(px(g_ref, 128, 128), srgb8(expected / 255.0), srgb8(expected / 255.0), srgb8(expected / 255.0), 2));
+            memset(&desc, 0, sizeof desc);
+            desc.layers = batch.layers;
+            if (desc.layers.textures[0] == 0u) {
+                desc.layers.textures[0] = batch.texture;
+            }
+            desc.wrap_u = desc.wrap_v = SU_FX_WRAP_REPEAT;
+            desc.two_sided = 1;
+            CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_OK);
+            model = make_fx_model(material, vertices);
+            object = fx_object(model.model, -4, tint);
+            scene.fx_tex_count = scene.batch_count = 0;
+            scene.objects = &object;
+            scene.object_count = 1;
+            CHECK(render(&scene, g_img));
+            CHECK(memcmp(px(g_img, 128, 128), px(g_ref, 128, 128), 3) == 0);
+            release_fx_model(model);
+            CHECK(su_render_release(g_r, material) == SU_OK);
+            if (layer != 0u) {
+                CHECK(su_render_release(g_r, batch.texture) == SU_OK);
+            }
+        }
+    }
+    scene.object_count = 0;
+    batch = su_fx_batch(texture, SU_FX_BLEND_ADD, 0, 0, 0, &buffer);
+    batch.layers.textures[0] = batch.layers.textures[2] = texture;
+    batch.layers.atlas_cols = batch.layers.atlas_rows = 2;
+    scene.fx_tex_count = 6;
+    scene.batch_count = 1;
+    for (pixel = 0; pixel < 8u; pixel++) {
+        int value = 64 + ((pixel % 2u) != 0u ? 64 : 0) + ((pixel % 4u) >= 2u ? 64 : 0);
+        int expected = srgb8((64.0 / 255.0) * (value / 255.0));
+        batch.layers.atlas_frame = pixel;
+        CHECK(render(&scene, g_img));
+        CHECK(rgb_near(px(g_img, 128, 128), expected, expected, expected, 2));
+    }
+    for (mode = 0; mode < 3u; mode++) {
+        SuRenderFxMaterialDesc desc;
+        SuRenderHandle material = 0;
+        FxModel model;
+        SuRenderObject object;
+        batch.wrap_u = batch.wrap_v = mode;
+        batch.layers.atlas_frame = 0;
+        batch.layers.uv[2].speed[0] = 0.5f;
+        batch.layers.uv[2].speed[1] = -0.5f;
+        CHECK(render(&scene, g_ref));
+        CHECK(near_i(px(g_ref, 128, 128)[0], srgb8((64.0 / 255.0) * (64.0 / 255.0)), 2));
+        memset(&desc, 0, sizeof desc);
+        desc.layers = batch.layers;
+        desc.wrap_u = desc.wrap_v = mode;
+        desc.two_sided = 1;
+        CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_OK);
+        model = make_fx_model(material, vertices);
+        object = fx_object(model.model, -4, tint);
+        scene.objects = &object;
+        scene.object_count = 1;
+        scene.fx_tex_count = scene.batch_count = 0;
+        CHECK(render(&scene, g_img));
+        CHECK(memcmp(px(g_ref, 128, 128), px(g_img, 128, 128), 3) == 0);
+        release_fx_model(model);
+        CHECK(su_render_release(g_r, material) == SU_OK);
+        scene.object_count = 0;
+        scene.fx_tex_count = 6;
+        scene.batch_count = 1;
+    }
+    batch.layers.uv[1].speed[0] = NAN;
+    CHECK(render(&scene, g_img));
+    {
+        SuRenderStats stats;
+        CHECK(su_render_stats(g_r, &stats) == SU_OK && stats.fx_batches_skipped == 1u);
+    }
+    CHECK(su_render_release(g_r, texture) == SU_OK);
+}
+
+static void test_fx_mesh_options(void) {
+    const float gray[4] = {0.5f, 0.5f, 0.5f, 1};
+    const float red[4] = {0.5f, 0, 0, 0.5f};
+    const float blue[4] = {0, 0, 0.5f, 0.5f};
+    SuFxVertex vertices[6];
+    SuFxBuffer buffer = fxbuf(vertices, 6);
+    SuRenderFxMaterialDesc desc;
+    SuRenderHandle material = 0;
+    SuRenderHandle white = make_tex(SU_TEX_RGBA8_UNORM, 2, 2, white4);
+    SuRenderObject objects[2];
+    SuRenderInstance wall;
+    FxModel model;
+    Scene scene;
+    uint32_t mode;
+    uint32_t vertex;
+    scene_init(&scene);
+    su_fx_sprite(&buffer, v3(0, 0, -4), 1.5f, 1.5f, 0, gray, NULL, camera_view(&scene));
+    memset(&wall, 0, sizeof wall);
+    wall.pos[2] = -16;
+    wall.scale = 20;
+    wall.rot[3] = wall.color[3] = 1;
+    for (mode = 0; mode < 4u; mode++) {
+        memset(&desc, 0, sizeof desc);
+        desc.layers.textures[0] = white;
+        desc.two_sided = mode & 1u;
+        desc.blend = mode / 2u;
+        desc.soft_distance = 2;
+        CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_OK);
+        model = make_fx_model(material, vertices);
+        objects[0] = fx_object(model.model, -5.5f, gray);
+        scene.objects = objects;
+        scene.object_count = 1;
+        scene.inst = &wall;
+        scene.inst_count = 1;
+        CHECK(render(&scene, g_img));
+        CHECK(near_i(px(g_img, 128, 128)[0], srgb8(0.125), 2));
+        objects[0].pos = su_wpos(0, 0, -6.5);
+        CHECK(render(&scene, g_img));
+        CHECK(rgb_near(px(g_img, 128, 128), 0, 0, 0, 0));
+        scene.inst_count = 0;
+        CHECK(render(&scene, g_img));
+        CHECK(near_i(px(g_img, 128, 128)[0], srgb8(0.5), 2));
+        objects[0].tint[0] = 4;
+        scene.exposure = 0.125f;
+        CHECK(render(&scene, g_img));
+        CHECK(near_i(px(g_img, 128, 128)[0], srgb8(0.5), 2));
+        objects[0].tint[0] = 0.5f;
+        scene.exposure = 1;
+        objects[0].rot = su_quatf_axis_angle(v3(0, 1, 0), 3.14159265f);
+        CHECK(render(&scene, g_img));
+        CHECK(near_i(px(g_img, 128, 128)[0], (mode & 1u) != 0u ? srgb8(0.5) : 0, 2));
+        objects[0] = fx_object(model.model, -3, red);
+        objects[1] = fx_object(model.model, -5, blue);
+        scene.object_count = 2;
+        CHECK(render(&scene, g_ref));
+        CHECK(rgb_near(px(g_ref, 128, 128), srgb8(0.25), 0,
+                       srgb8(mode < 2u ? 0.25 : 0.125), 2));
+        {
+            SuRenderObject swap = objects[0];
+            objects[0] = objects[1];
+            objects[1] = swap;
+        }
+        CHECK(render(&scene, g_img));
+        CHECK(memcmp(g_img, g_ref, sizeof g_img) == 0);
+        objects[0] = fx_object(model.model, -4, gray);
+        scene.object_count = 1;
+        {
+            SuFxVertex behind[6];
+            SuFxBuffer behind_buffer = fxbuf(behind, 6);
+            SuFxBatch batch;
+            su_fx_sprite(&behind_buffer, v3(0, 0, -5), 1.5f, 1.5f, 0, blue, NULL, camera_view(&scene));
+            batch = su_fx_batch(white, SU_FX_BLEND_ADD, 0, 0, 0, &behind_buffer);
+            batch.flags = SU_FX_BATCH_SORT;
+            scene.fx_tex = behind;
+            scene.fx_tex_count = 6;
+            scene.batches = &batch;
+            scene.batch_count = 1;
+            CHECK(render(&scene, g_img));
+            CHECK(near_i(px(g_img, 128, 128)[2], srgb8(0.75), 2));
+            scene.fx_tex_count = scene.batch_count = 0;
+        }
+        release_fx_model(model);
+        CHECK(su_render_release(g_r, material) == SU_OK);
+    }
+    scene.object_count = 0;
+    for (vertex = 0; vertex < 6u; vertex++) {
+        float horizontal = vertices[vertex].pos[0];
+        vertices[vertex].pos[0] *= 0.5f;
+        vertices[vertex].pos[2] -= horizontal * 0.8660254f;
+    }
+    for (mode = 0; mode < 3u; mode++) {
+        SuFxBatch batch = su_fx_batch(white, SU_FX_BLEND_ADD, 0, 0, 0, &buffer);
+        batch.layers.angular_fade = (float)mode * 0.5f;
+        batch.flags = SU_FX_BATCH_SORT;
+        scene.fx_tex = vertices;
+        scene.fx_tex_count = 6;
+        scene.batches = &batch;
+        scene.batch_count = 1;
+        scene.object_count = 0;
+        CHECK(render(&scene, g_ref));
+        CHECK(near_i(px(g_ref, 128, 128)[0], srgb8(0.5 * (1.0 - mode * 0.25)), 2));
+        memset(&desc, 0, sizeof desc);
+        desc.layers = batch.layers;
+        desc.two_sided = 1;
+        CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_OK);
+        model = make_fx_model(material, vertices);
+        objects[0] = fx_object(model.model, -4, gray);
+        scene.objects = objects;
+        scene.object_count = 1;
+        scene.fx_tex_count = scene.batch_count = 0;
+        CHECK(render(&scene, g_img));
+        CHECK(memcmp(px(g_ref, 128, 128), px(g_img, 128, 128), 3) == 0);
+        release_fx_model(model);
+        CHECK(su_render_release(g_r, material) == SU_OK);
+    }
+    memset(&desc, 0, sizeof desc);
+    desc.blend = 2;
+    CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_E_INVALID_ARGUMENT && material == 0u);
+    desc.blend = 0;
+    desc.layers.angular_fade = 2;
+    CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_E_INVALID_ARGUMENT);
+    desc.layers.angular_fade = 0;
+    desc.soft_distance = NAN;
+    CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_E_INVALID_ARGUMENT);
+    desc.soft_distance = 0;
+    desc.wrap_u = 3;
+    CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_E_INVALID_ARGUMENT);
+    desc.wrap_u = 0;
+    desc.layers.textures[1] = UINT64_MAX;
+    CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_E_INVALID_ARGUMENT);
+    desc.layers.textures[1] = white;
+    CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_OK);
+    model = make_fx_model(material, vertices);
+    objects[0] = fx_object(model.model, -4, gray);
+    scene.objects = objects;
+    scene.object_count = 1;
+    CHECK(su_render_release(g_r, white) == SU_OK);
+    CHECK(render(&scene, g_img));
+    {
+        SuRenderStats stats;
+        float rect[4];
+        CHECK(su_render_stats(g_r, &stats) == SU_OK && stats.fx_batches_skipped == 1u);
+        CHECK(rgb_near(px(g_img, 128, 128), 0, 0, 0, 0));
+        su_fx_atlas_rect(65536, 65536, UINT32_MAX, rect);
+        CHECK(rect[0] > 0.99f && rect[1] > 0.99f && rect[2] == 1.0f && rect[3] == 1.0f);
+    }
+    release_fx_model(model);
+    CHECK(su_render_release(g_r, material) == SU_OK);
+}
+
+static void test_mixed_fx_sort(void) {
+    const float gray[4] = {1, 1, 1, 1};
+    const float red[4] = {0.5f, 0, 0, 0.5f};
+    const float blue[4] = {0, 0, 0.5f, 0.5f};
+    SuFxVertex vertices[6];
+    SuFxBuffer buffer = fxbuf(vertices, 6);
+    SuRenderFxMaterialDesc desc;
+    SuRenderMaterialDesc pbr;
+    SuRenderHandle material = 0;
+    SuRenderHandle pbr_material = 0;
+    FxModel models[2];
+    SuRenderObject objects[2];
+    Scene scene;
+    uint32_t mode;
+    scene_init(&scene);
+    su_fx_sprite(&buffer, v3(0, 0, -4), 1.5f, 1.5f, 0, gray, NULL, camera_view(&scene));
+    memset(&desc, 0, sizeof desc);
+    desc.blend = SU_FX_BLEND_PREMUL;
+    desc.two_sided = 1;
+    CHECK(su_render_fx_material_create(g_r, &desc, &material) == SU_OK);
+    memset(&pbr, 0, sizeof pbr);
+    su_asset_material_default(&pbr.factors);
+    pbr.factors.unlit = 1;
+    pbr.factors.alpha_mode = SU_ASSET_ALPHA_BLEND;
+    pbr.factors.double_sided = 1;
+    CHECK(su_render_material_create(g_r, &pbr, &pbr_material) == SU_OK);
+    models[0] = make_fx_model(material, vertices);
+    models[1] = make_fx_model(pbr_material, vertices);
+    scene.objects = objects;
+    scene.object_count = 2;
+    for (mode = 0; mode < 2u; mode++) {
+        objects[0] = fx_object(models[mode].model, -3, red);
+        objects[1] = fx_object(models[1u - mode].model, -5, blue);
+        CHECK(render(&scene, g_ref));
+        CHECK(rgb_near(px(g_ref, 128, 128), srgb8(0.25), 0, srgb8(0.125), 2));
+        {
+            SuRenderObject swap = objects[0];
+            objects[0] = objects[1];
+            objects[1] = swap;
+        }
+        CHECK(render(&scene, g_img));
+        CHECK(memcmp(g_img, g_ref, sizeof g_img) == 0);
+    }
+    release_fx_model(models[0]);
+    release_fx_model(models[1]);
+    CHECK(su_render_release(g_r, material) == SU_OK);
+    CHECK(su_render_release(g_r, pbr_material) == SU_OK);
+}
+
+static int compare_times(const void *left, const void *right) {
+    double first = *(const double *)left;
+    double second = *(const double *)right;
+    return first < second ? -1 : first > second;
+}
+
+static void bench_layered_fx(void) {
+    static const char *names[5] = {"empty", "quad_1_layer", "quad_3_layers", "mesh_1_layer", "mesh_3_layers"};
+    static uint8_t pixels[128 * 128 * 4];
+    SuRenderHandle textures[3];
+    SuRenderHandle materials[2];
+    FxModel models[2];
+    SuRenderObject objects[16];
+    SuFxVertex vertices[16 * 6];
+    SuFxBuffer buffer = fxbuf(vertices, 16 * 6);
+    SuFxBatch batches[2];
+    SuRenderFrameDesc frame;
+    Scene scene;
+    float tint[4] = {0.01f, 0.01f, 0.01f, 1};
+    uint32_t layer;
+    uint32_t mode;
+    uint32_t sample;
+    uint32_t pixel;
+    scene_init(&scene);
+    for (layer = 0; layer < 3u; layer++) {
+        for (pixel = 0; pixel < 128u * 128u; pixel++) {
+            pixels[pixel * 4u] = (uint8_t)((pixel * 13u + layer * 23u) % 256u);
+            pixels[pixel * 4u + 1u] = (uint8_t)((pixel / 128u * 7u + layer * 29u) % 256u);
+            pixels[pixel * 4u + 2u] = 128;
+            pixels[pixel * 4u + 3u] = 255;
+        }
+        textures[layer] = make_tex(SU_TEX_RGBA8_UNORM, 128, 128, pixels);
+    }
+    for (sample = 0; sample < 16u; sample++) {
+        su_fx_sprite(&buffer, v3(0, 0, -4), 2.4f, 2.4f, 0, tint, NULL, camera_view(&scene));
+    }
+    for (mode = 0; mode < 2u; mode++) {
+        SuRenderFxMaterialDesc desc;
+        batches[mode] = su_fx_batch(textures[0], SU_FX_BLEND_ADD, SU_FX_WRAP_REPEAT, SU_FX_WRAP_REPEAT, 0, &buffer);
+        for (layer = 0; layer < 3u; layer++) {
+            batches[mode].layers.textures[layer] = layer == 0u || mode == 1u ? textures[layer] : 0;
+            batches[mode].layers.uv[layer].speed[0] = 0.1f * (float)(layer + 1u);
+            batches[mode].layers.uv[layer].scale[0] = 1.0f + (float)layer;
+        }
+        memset(&desc, 0, sizeof desc);
+        desc.layers = batches[mode].layers;
+        desc.wrap_u = desc.wrap_v = SU_FX_WRAP_REPEAT;
+        desc.two_sided = 1;
+        CHECK(su_render_fx_material_create(g_r, &desc, &materials[mode]) == SU_OK);
+        models[mode] = make_fx_model(materials[mode], vertices);
+    }
+    memset(&frame, 0, sizeof frame);
+    frame.struct_size = sizeof frame;
+    frame.camera.rot.w = 1;
+    frame.camera.fov_y = FOV;
+    frame.camera.near_z = NEAR_Z;
+    frame.light.no_sky = 1;
+    frame.light.tonemap = SU_TONEMAP_CLAMP;
+    printf("layered_fx_bench: 1024x1024, 16 full-screen overlapping quads/instances, 128x128 RGBA8 textures, "
+           "20 warmup + 120 samples per mode, GPU timestamps, no readback\n");
+    for (mode = 0; mode < 5u; mode++) {
+        double gpu[120];
+        double cpu[120];
+        frame.fx_tex = vertices;
+        frame.fx_tex_vertex_count = mode == 1u || mode == 2u ? buffer.count : 0;
+        frame.fx_batches = &batches[mode == 2u ? 1 : 0];
+        frame.fx_batch_count = mode == 1u || mode == 2u ? 1u : 0u;
+        for (sample = 0; sample < 16u; sample++) {
+            objects[sample] = fx_object(models[mode == 4u ? 1 : 0].model, -4, tint);
+        }
+        frame.objects = objects;
+        frame.object_count = mode >= 3u ? 16u : 0;
+        for (sample = 0; sample < 140u; sample++) {
+            SuRenderStats stats;
+            frame.time_seconds = (float)sample / 60.0f;
+            CHECK(su_render_frame_ex(g_r, &frame) == SU_OK);
+            CHECK(su_render_stats(g_r, &stats) == SU_OK);
+            CHECK(stats.width == 1024u && stats.height == 1024u);
+            if (sample >= 20u) {
+                CHECK(stats.gpu_ms >= 0);
+                gpu[sample - 20u] = stats.gpu_ms;
+                cpu[sample - 20u] = stats.cpu_ms;
+            }
+        }
+        qsort(gpu, 120, sizeof gpu[0], compare_times);
+        qsort(cpu, 120, sizeof cpu[0], compare_times);
+        printf("%s gpu_ms min=%.6f median=%.6f p95=%.6f cpu_ms median=%.6f p95=%.6f\n",
+               names[mode], gpu[0], (gpu[59] + gpu[60]) * 0.5, gpu[113], (cpu[59] + cpu[60]) * 0.5, cpu[113]);
+    }
+    for (mode = 0; mode < 2u; mode++) {
+        release_fx_model(models[mode]);
+        CHECK(su_render_release(g_r, materials[mode]) == SU_OK);
+    }
+    for (layer = 0; layer < 3u; layer++) {
+        CHECK(su_render_release(g_r, textures[layer]) == SU_OK);
+    }
+}
+
 static const char *type_name(uint32_t t) {
     return t == SU_RENDER_DEVICE_DISCRETE ? "discrete" : t == SU_RENDER_DEVICE_INTEGRATED ? "integrated"
                                                        : t == SU_RENDER_DEVICE_CPU        ? "cpu"
@@ -1779,6 +2357,9 @@ int main(int argc, char **argv) {
         if (strcmp(argv[i], "--no-validation") == 0) {
             validation = 0;
         }
+        if (strcmp(argv[i], "--bench-layered") == 0) {
+            g_benchmark = 1;
+        }
     }
     msg[0] = '\0';
     if (su_render_enumerate(devs, 8, &ndev, msg) != SU_OK) {
@@ -1795,8 +2376,8 @@ int main(int argc, char **argv) {
     memset(&d, 0, sizeof d);
     d.struct_size = sizeof d;
     d.flags = validation ? SU_RENDER_FLAG_VALIDATION : 0u;
-    d.width = W;
-    d.height = H;
+    d.width = g_benchmark ? 1024u : W;
+    d.height = g_benchmark ? 1024u : H;
     d.device_index = -1;
     code = su_render_create(&d, &g_r, msg);
     CHECK(code == SU_OK);
@@ -1806,21 +2387,29 @@ int main(int argc, char **argv) {
     }
     CHECK(su_render_device(g_r, &used) == SU_OK);
     printf("rendering on: %s (%s)\n", used.name, type_name(used.type));
-    test_quadrants_and_colour();
-    test_atlas();
-    test_colour_space_and_blend();
-    test_hdr_texture_bloom();
-    test_axis_billboards();
-    test_ribbon();
-    test_dds_2d();
-    test_cube_sky();
-    test_bc6h_gpu();
-    test_soft_particles();
-    test_fx_sort();
-    test_bc_ldr_gpu();
-    test_env_ldr_and_downsample();
-    test_env_gpu();
-    test_skips_and_unchanged();
+    if (g_benchmark) {
+        bench_layered_fx();
+    } else {
+        test_quadrants_and_colour();
+        test_atlas();
+        test_colour_space_and_blend();
+        test_hdr_texture_bloom();
+        test_axis_billboards();
+        test_ribbon();
+        test_dds_2d();
+        test_cube_sky();
+        test_bc6h_gpu();
+        test_soft_particles();
+        test_fx_sort();
+        test_bc_ldr_gpu();
+        test_env_ldr_and_downsample();
+        test_env_gpu();
+        test_skips_and_unchanged();
+        test_layered_fx();
+        test_layer_scroll_atlas();
+        test_fx_mesh_options();
+        test_mixed_fx_sort();
+    }
     CHECK(su_render_stats(g_r, &st) == SU_OK);
     if (validation) {
         CHECK(getenv("SUTEKH_REQUIRE_VALIDATION") == NULL || st.validation_enabled != 0u); /* CI: the layer must be on */
