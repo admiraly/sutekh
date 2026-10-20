@@ -1,0 +1,50 @@
+{
+  "task": "issue-72",
+  "date": "2026-10-20",
+  "state": "submitted",
+  "owner": "voice-lowpass implementation worker",
+  "base": "478c7366c2cab7c85b8b1983a4b501d53af2aec9",
+  "scope": [
+    "include/sutekh/audio.h",
+    "src/audio/su_audio_mix.c",
+    "cmake/SutekhPresentation.cmake",
+    "tests/audio/test_audio_lowpass.c",
+    "docs/AUDIO_LOWPASS.md",
+    "planning/handoffs/2026-10-20-voice-lowpass.json"
+  ],
+  "coordination": "Issue comment declares mixer/voice-only scope; decoder work in issue 71 is untouched.",
+  "implemented": "Additive live cutoff API; independent channel histories; exact bypass by default; sample-counted 10 ms smoothing; reset on voice reuse; no render allocation.",
+  "source_sha256": {
+    "include/sutekh/audio.h": "bdec48045d4c2cef5f88bf3012d647b39c2cfd678de316c9bc848e494a3d8e95",
+    "src/audio/su_audio_mix.c": "8efa43b3767e6eb30de70868f24602912deb9eb668984e638b76c9043427269c",
+    "tests/audio/test_audio_lowpass.c": "f97f8f9e7eb63950c014d68c424ff1a6e93e8a4a622dcf2320c0d2b0205d301e",
+    "cmake/SutekhPresentation.cmake": "2b7aeaa627d039d776d33b9c33d22b8b934cce7cdebbda449be96b2cdabdb8ee"
+  },
+  "checks": [
+    {"command": "cmake --build build-win -j 2 && ctest --test-dir build-win --output-on-failure -j 2 -E '^audio_device$'", "status": "passed", "tests": 104, "skipped": ["path_fifo", "containment"], "configuration": "Release, native OFF, render OFF, asset import AUTO, pinned Ogg decoder enabled", "ctest_seconds": 62.27},
+    {"command": "cmake --build build-win --target test_audio_lowpass test_audio test_audio_stream -j 2", "toolchain": "Clang 23.1.3 Release, -Wall -Wextra -pedantic -Werror", "status": "passed"},
+    {"command": "ctest --test-dir build-win -R 'audio_(mixer|stream|lowpass)$' --output-on-failure", "status": "passed", "tests": 3},
+    {"command": "cmake --build build-msvc --target test_audio_lowpass test_audio test_audio_stream -j 2", "toolchain": "MSVC 19.44.35229 Release, /W4 /WX", "status": "passed"},
+    {"command": "ctest --test-dir build-msvc -R 'audio_(mixer|stream|lowpass)$' --output-on-failure", "status": "passed", "tests": 3},
+    {"command": "python tools/validate_pack.py --check-report", "status": "passed"},
+    {"command": "python tools/check_repository_license.py", "status": "passed"},
+    {"command": "git diff --check", "status": "passed"}
+  ],
+  "coverage": ["8/48/96 kHz response against analytic reference", "-3.01 dB cutoff tolerance 0.15 dB", "mono and independent stereo", "exact default/Nyquist bypass and re-disable", "10 ms ramp independent of block partition", "identical-target commands do not restart smoothing", "retarget during ramp", "deterministic live pitch/cutoff changes", "both-channel sample-step bound", "spatial voices at distance", "master limiter", "reuse/steal/stop history reset", "invalid input, stale handle and queue overflow"],
+  "benchmark": {
+    "command": "build-win/test_audio_lowpass.exe --bench",
+    "cpu": "Intel Core i5-12400F",
+    "os": "Windows 11",
+    "toolchain": "Clang 23.1.3 Release",
+    "workload": "64 mono noise voices, stereo output, 48 kHz, 256 frames, 100 warm-up and 2000 measured blocks per trial",
+    "units": "ns/voice/output-frame",
+    "bypass": [6.348, 5.920, 6.012, 6.653, 6.195, 6.012, 5.310],
+    "filtered": [10.559, 10.559, 11.230, 10.620, 10.284, 10.498, 10.376],
+    "paired_delta": [4.211, 4.639, 5.219, 3.967, 4.089, 4.486, 5.066],
+    "median_delta": 4.486,
+    "caveat": "Observational clock() timing on a shared workstation, not an isolated performance guarantee. Coefficient setup is outside the measured render loop."
+  },
+  "unrun": ["Linux and GCC 16.2 pending CI", "physical output device (offline path used)"],
+  "left_open": ["Automatic distance mapping and high-pass intentionally out of scope", "PR-specific CLA acceptance/authority record required by CONTRIBUTING.md before merge"],
+  "next": "Rebase on current origin/main, submit PR, resolve CI and record acceptance before merge."
+}

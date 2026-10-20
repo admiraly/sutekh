@@ -149,6 +149,7 @@ uint32_t su_audio_voice_update(SuAudioMixer *m, SuAudioVoice v, SuWorldPos pos, 
 uint32_t su_audio_voice_set_pitch(SuAudioMixer *m, SuAudioVoice v, float pitch);
 /* Sets a voice's linear gain alone (applied at the next render, ramped across the block). Stale: SU_E_STALE_HANDLE. */
 uint32_t su_audio_voice_set_gain(SuAudioMixer *m, SuAudioVoice v, float gain);
+uint32_t su_audio_voice_set_lowpass(SuAudioMixer *m, SuAudioVoice v, float cutoff_hz);
 /* Stops a voice with a linear fade of fade_s seconds (0: at the next render, still click-free over one block). */
 uint32_t su_audio_stop(SuAudioMixer *m, SuAudioVoice v, float fade_s);
 /* Jumps a voice to an exact source frame (applied at the next render; the next output sample is that frame, no

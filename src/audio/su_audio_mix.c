@@ -253,6 +253,7 @@ float su_audio_doppler(SuVec3f lp, SuVec3f lv, SuVec3f sp, SuVec3f sv, float c, 
 #define CMD_PITCH 7u
 #define CMD_GAIN 8u
 #define CMD_LIMIT 9u
+#define CMD_LOWPASS 10u
 
 typedef struct Cmd {
     uint32_t type;
@@ -280,6 +281,11 @@ typedef struct Voice {
     float fade;           /* 1 = full */
     float fade_step;      /* per frame; < 0 while stopping */
     float pitch_from;     /* > 0 for the block after a pitch change: the rate ramps from this pitch to d.pitch */
+    float lowpass_alpha;
+    float lowpass_target;
+    float lowpass_step;
+    float lowpass_l, lowpass_r;
+    uint32_t lowpass_remaining;
 } Voice;
 
 typedef struct GtSlot {
@@ -595,6 +601,28 @@ uint32_t su_audio_voice_set_gain(SuAudioMixer *m, SuAudioVoice v, float gain) {
     return push_cmd(m, &c) ? SU_OK : SU_E_RESOURCE_LIMIT;
 }
 
+uint32_t su_audio_voice_set_lowpass(SuAudioMixer *m, SuAudioVoice v, float cutoff_hz) {
+    uint32_t slot;
+    Cmd c;
+    if (!voice_slot(m, v, &slot)) {
+        return SU_E_STALE_HANDLE;
+    }
+    if (!isfinite(cutoff_hz) || cutoff_hz < 0.0f) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memset(&c, 0, sizeof c);
+    c.type = CMD_LOWPASS;
+    c.slot = slot;
+    c.gen = m->gt[slot].gen;
+    c.a = 1.0f;
+    if (cutoff_hz > 0.0f && cutoff_hz < (float)m->rate * 0.5f) {
+        double sine = sin(3.141592653589793 * (double)cutoff_hz / (double)m->rate);
+        double term = 2.0 * sine * sine;
+        c.a = (float)(sqrt(term * term + 2.0 * term) - term);
+    }
+    return push_cmd(m, &c) ? SU_OK : SU_E_RESOURCE_LIMIT;
+}
+
 uint32_t su_audio_voice_update(SuAudioMixer *m, SuAudioVoice v, SuWorldPos pos, SuVec3f vel, float gain) {
     uint32_t slot;
     Cmd c;
@@ -717,6 +745,8 @@ static void apply_commands(SuAudioMixer *m) {
             v->d = c->d;
             v->fade = 1.0f;
             v->fresh = 1;
+            v->lowpass_alpha = 1.0f;
+            v->lowpass_target = 1.0f;
             v->pos = (double)c->frame;
             v->ls = c->ls;
             v->le = c->le;
@@ -742,6 +772,16 @@ static void apply_commands(SuAudioMixer *m) {
         case CMD_GAIN:
             if (v->active && v->gen == c->gen) {
                 v->d.gain = c->a; /* the per-block gain ramp makes this click-free */
+            }
+            break;
+        case CMD_LOWPASS:
+            if (v->active && v->gen == c->gen && v->lowpass_target != c->a) {
+                v->lowpass_target = c->a;
+                v->lowpass_remaining = m->rate / 100u;
+                if (v->lowpass_remaining == 0u) {
+                    v->lowpass_remaining = 1u;
+                }
+                v->lowpass_step = (c->a - v->lowpass_alpha) / (float)v->lowpass_remaining;
             }
             break;
         case CMD_PITCH:
@@ -896,6 +936,25 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
                 f = 1.0f - (float)(i + 1u) / (float)frames; /* immediate stop: one-block ramp */
             }
             voice_sample(v, v->pos, loop, mono_mix, &sl, &sr);
+            if (v->lowpass_remaining > 0u) {
+                v->lowpass_remaining--;
+                v->lowpass_alpha = v->lowpass_target - v->lowpass_step * (float)v->lowpass_remaining;
+                if (v->lowpass_remaining == 0u) {
+                    v->lowpass_alpha = v->lowpass_target;
+                }
+            }
+            if (v->lowpass_alpha != 1.0f) {
+                sl = v->lowpass_l + v->lowpass_alpha * (sl - v->lowpass_l);
+                sr = v->lowpass_r + v->lowpass_alpha * (sr - v->lowpass_r);
+                if (fabsf(sl) < 1.0e-20f) {
+                    sl = 0.0f;
+                }
+                if (fabsf(sr) < 1.0e-20f) {
+                    sr = 0.0f;
+                }
+            }
+            v->lowpass_l = sl;
+            v->lowpass_r = sr;
             out[i * 2u] += sl * l * f;
             out[i * 2u + 1u] += sr * r * f;
             if (v->fade_step < 0.0f && v->fade_step != -1.0f) {
