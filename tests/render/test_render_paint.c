@@ -1780,14 +1780,14 @@ static void test_paint_detail(void) {
     CHECK(shoot(&scene, &paint, g_img));
     CHECK(same_px(px(g_ref, qx(0.125f), 128), px(g_img, qx(0.125f), 128)));
     CHECK(px(g_img, qx(0.375f), 128)[0] < px(g_img, qx(0.125f), 128)[0] - 50);
-    CHECK(same_px(px(g_img, qx(0.125f), 128), px(g_img, qx(0.625f), 128)));
+    CHECK(same_px(px(g_ref, qx(0.625f), 128), px(g_img, qx(0.625f), 128)));
     paint.d.detail_rotation = 1.5707963268f;
     CHECK(shoot(&scene, &paint, g_img));
     CHECK(px(g_img, 128, qx(0.125f))[0] < px(g_img, 128, qx(0.375f))[0] - 50);
     paint.d.detail_rotation = 0;
-    paint.d.extra_tex_info[3] = SU_ASSET_TEX_INFO(1, 0, 0);
+    paint.d.extra_tex_info[3] = SU_ASSET_TEX_INFO(1, SU_ASSET_WRAP_CLAMP, SU_ASSET_WRAP_CLAMP);
     CHECK(shoot(&scene, &paint, g_img));
-    CHECK(same_px(px(g_img, qx(0.125f), 128), px(g_img, qx(0.375f), 128)));
+    CHECK(memcmp(g_ref, g_img, sizeof g_img) == 0);
     paint.d.extra_tex_info[3] = 0;
     paint.d.detail_strength = 0.5f;
     CHECK(shoot(&scene, &paint, g_img));

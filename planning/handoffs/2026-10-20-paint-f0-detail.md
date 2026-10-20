@@ -90,5 +90,11 @@ host and tails; these observations are not a performance guarantee.
 
 ## Next
 
+CI follow-up: the first Linux checked run exposed an invalid fixture assumption: two non-symmetric screen positions
+with constant detail UV1 still have different view-dependent specular lighting. The UV1 check now clamps the known
+black edge texel and compares the whole image byte-for-byte to the same-pixel no-detail reference. The repeat check
+likewise compares each repeated sample to its corresponding reference pixel, not a different view angle. No pixel
+tolerance or CPU-device skip was added; implementation and measured shader hashes are unchanged.
+
 Rebase on latest upstream, regenerate shaders if needed, push the PR, repair CI findings, merge only when all required
 checks are green, and remove the isolated worktree after unlinking its toolchain/dependency junctions.
