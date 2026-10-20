@@ -59,7 +59,12 @@ switches use the instance start).
 (up to 16 strictly increasing points) to `GAIN_DB` (added), `PITCH` (ratio,
 multiplied, output in (0, 64]), `LOWPASS_HZ` (minimum wins, default Nyquist) or
 `BUS_GAIN_DB` (first bound bus ID, gains on that bus added).
-`su_audio_param_controls` evaluates them for a target at a sample time.
+`su_audio_param_controls` evaluates them for a target at a sample time. In
+the integrated runtime a voice-control binding with a nonzero `bus_id`
+applies only to voices on that bus (see
+[EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md));
+`su_audio_param_controls` and `SuAudioParamVoice` have no voice bus and apply
+every binding.
 
 `SuAudioParamVoice` is the reference consumer: it renders one resident clip
 through the controls with per-frame evaluation, a double-precision fractional

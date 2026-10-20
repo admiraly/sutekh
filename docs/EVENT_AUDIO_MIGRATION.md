@@ -18,7 +18,9 @@ The two can coexist in one process; they share nothing but the clip format.
 | `su_audio_voice_update(pos, vel, gain)` per voice | `su_audio_system_emitter_update(emitter, pos, vel)` once per emitter; every voice on it follows |
 | `su_audio_listener(pos, rot, vel)` | `su_audio_system_listener_set(&camera_listener)` |
 | `su_audio_master_limiter(knee)` | `desc.limiter_knee` (same law) at the end of the bus chain |
-| `su_audio_voice_set_pitch/gain` driven by game state | Parameters (`desc.params`) with `PITCH`/`GAIN_DB` bindings, set with `su_audio_system_param_set` (scoped global, per emitter or per instance, smoothed) |
+| `su_audio_voice_set_pitch/gain` driven by game state | Parameters (`desc.params`) with `PITCH`/`GAIN_DB` bindings, set with `su_audio_system_param_set` (scoped global, per emitter or per instance, smoothed); a binding's `bus_id` limits it to one bus's voices |
+| `SuAudioVoiceDesc.doppler` | `desc.doppler` for every spatial voice |
+| Streams (`SuAudioVoiceDesc.stream`) | Stay legacy; mix them in through a host bus input (`desc.inputs`) |
 
 ## Replacing a game-side voice budget
 
@@ -57,6 +59,20 @@ distance) and give emitters that curve. The runtime evaluates it per voice per
 128-frame quantum and glides the filter coefficient, so there is no zipper
 noise. Occlusion-style extra filtering maps to a `LOWPASS_HZ` parameter binding
 (the lower cut-off wins).
+
+## Long streamed tracks, Doppler and layered engines
+
+- The music player plays prepared resident segments only. Long tracks can stay
+  on the legacy `SuAudioStream` path: render them with a device-less legacy
+  mixer from a host bus input (`desc.inputs`, `SuAudioBusInput`) into a music
+  bus, so they still get bus faders (crossfades between playlists), duck rules
+  and the master limiter. Host input is not journaled.
+- Legacy per-voice `doppler` becomes `desc.doppler` (one amount for every
+  spatial voice; the listener velocity comes from `listener_set`).
+- Engine sounds layered from several loops, each answering the same game
+  inputs differently, get one bus per layer and voice bindings filtered by
+  `bus_id`, so a single "throttle" parameter can open one layer's filter and
+  raise another's gain.
 
 ## Things to keep in mind
 

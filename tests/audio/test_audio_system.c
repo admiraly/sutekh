@@ -483,6 +483,152 @@ static void test_device_output(void) {
     setup_free(&s);
 }
 
+typedef struct HostInput {
+    uint32_t calls;
+    uint64_t next_time;
+    uint32_t out_of_order;
+} HostInput;
+
+static void host_input_render(void *user, float *stereo, uint32_t frames, uint64_t sample_time) {
+    HostInput *input = (HostInput *)user;
+    uint32_t index;
+    input->out_of_order += sample_time != input->next_time || stereo[0] != 0.0f;
+    input->next_time = sample_time + frames;
+    input->calls++;
+    for (index = 0; index < frames * 2u; index++) {
+        stereo[index] = 0.25f;
+    }
+}
+
+/* Positive-going zero crossings of the left channel: the played frequency of a looping tone. */
+static uint32_t crossings(const float *pcm, uint32_t frames) {
+    uint32_t index;
+    uint32_t count = 0u;
+    for (index = 1u; index < frames; index++) {
+        count += pcm[(index - 1u) * 2u] < 0.0f && pcm[index * 2u] >= 0.0f;
+    }
+    return count;
+}
+
+/* Renders the looping 200 Hz tone (event 2, bus 30) for one second, optionally on an emitter approaching the
+ * listener at 34.3 m/s; returns the left-channel RMS and the zero-crossing count. */
+static void render_loop(Setup *s, int spatial, double *rms, uint32_t *count) {
+    SuAudioSystem *system = NULL;
+    SuAudioTrigger trigger;
+    SuAudioInstance instance;
+    uint64_t position;
+    double sum = 0.0;
+    uint32_t index;
+    CHECK(su_audio_system_create(&s->desc, &system, NULL) == SU_OK);
+    memset(&trigger, 0, sizeof trigger);
+    trigger.struct_size = sizeof trigger;
+    trigger.event_id = 2u;
+    trigger.commit_seq = 1u;
+    trigger.session_generation = 1u;
+    if (spatial) {
+        SuAudioEmitterSnapshot emitter;
+        memset(&emitter, 0, sizeof emitter);
+        emitter.pos = meters(0.0, -10.0);
+        emitter.vel.z = 34.3f; /* toward the listener at the origin */
+        emitter.scale = 1.0f;
+        CHECK(su_audio_system_emitter_create(system, &emitter, &trigger.emitter) == SU_OK);
+    }
+    CHECK(su_audio_system_post(system, &trigger, &instance, NULL) == SU_OK);
+    for (position = 0u; position < 48000u; position += 4800u) {
+        CHECK(su_audio_system_render(system, offline_pcm + position * 2u, 4800u) == SU_OK);
+    }
+    for (index = 4800u; index < 48000u; index++) {
+        sum += (double)offline_pcm[index * 2u] * offline_pcm[index * 2u];
+    }
+    *rms = sqrt(sum / 43200.0);
+    *count = crossings(offline_pcm + 4800u * 2u, 43200u);
+    su_audio_system_destroy(system);
+}
+
+/* Host bus inputs, Doppler on spatial voices and bus-filtered voice bindings. */
+static void test_host_extensions(void) {
+    Setup s;
+    SuAudioSystem *system = NULL;
+    SuAudioBusInput input;
+    HostInput host;
+    SuAudioParamBinding bindings[2];
+    SuAudioBindingPoint quiet[2];
+    SuAudioParamDef params[2];
+    double plain_rms = 0.0;
+    double rms = 0.0;
+    uint32_t plain_count = 0u;
+    uint32_t count = 0u;
+    uint32_t index;
+    size_t written = 0u;
+    char message[256];
+
+    /* bus input: constant 0.25 into bus 20; called once per quantum in order, mixed through the tree */
+    setup_init(&s, SU_AUDIO_OUTPUT_OFFLINE);
+    memset(&host, 0, sizeof host);
+    input.bus_id = 20u;
+    input.render = host_input_render;
+    input.user = &host;
+    s.desc.inputs = &input;
+    s.desc.input_count = 1u;
+    CHECK(su_audio_system_create(&s.desc, &system, message) == SU_OK);
+    CHECK(su_audio_system_render(system, offline_pcm, 1000u) == SU_OK);
+    CHECK(host.calls == 8u && host.out_of_order == 0u);
+    for (index = 0; index < 2000u; index++) {
+        CHECK(fabsf(offline_pcm[index] - 0.25f) < 1e-6f);
+    }
+    CHECK(su_audio_system_control(system, "audio.render.offline", "{\"frames\":1000}", 15u, text, sizeof text,
+        &written) == SU_OK);
+    CHECK(host.calls == 8u); /* the replay ran without the host input */
+    su_audio_system_destroy(system);
+    input.bus_id = 99u;
+    CHECK(su_audio_system_create(&s.desc, &system, message) != SU_OK && system == NULL);
+    input.bus_id = 0u;
+    input.render = NULL;
+    CHECK(su_audio_system_create(&s.desc, &system, message) != SU_OK && system == NULL);
+    s.desc.input_count = 0u;
+    s.desc.doppler = 1.5f;
+    CHECK(su_audio_system_create(&s.desc, &system, message) != SU_OK && system == NULL);
+    s.desc.doppler = 0.0f;
+
+    /* Doppler: 200 Hz approaching at a tenth of the speed of sound plays at 343 / (343 - 34.3) = 1.111x */
+    render_loop(&s, 1, &plain_rms, &plain_count);
+    s.desc.doppler = 1.0f;
+    render_loop(&s, 1, &rms, &count);
+    CHECK(plain_count >= 179u && plain_count <= 181u);
+    CHECK(count >= 198u && count <= 202u);
+    CHECK(fabs(rms - plain_rms) < 0.05 * plain_rms);
+    s.desc.doppler = 0.0f;
+
+    /* bus filter: a -20 dB binding on bus 30 lowers the bus-30 voice; the same binding on bus 20 does not */
+    memset(params, 0, sizeof params);
+    params[0] = s.param;
+    params[1].id = 2u;
+    params[1].max_value = 1.0f;
+    quiet[0].value = 0.0f;
+    quiet[0].output = -20.0f;
+    quiet[1].value = 1.0f;
+    quiet[1].output = -20.0f;
+    bindings[0] = s.binding;
+    memset(&bindings[1], 0, sizeof bindings[1]);
+    bindings[1].param_id = 2u;
+    bindings[1].control = SU_AUDIO_CONTROL_GAIN_DB;
+    bindings[1].bus_id = 20u;
+    bindings[1].points = quiet;
+    bindings[1].point_count = 2u;
+    s.params.params = params;
+    s.params.param_count = 2u;
+    s.params.bindings = bindings;
+    s.params.binding_count = 2u;
+    render_loop(&s, 0, &plain_rms, &plain_count);
+    bindings[1].bus_id = 30u;
+    render_loop(&s, 0, &rms, &count);
+    CHECK(plain_rms > 0.05 && fabs(rms / plain_rms - 0.1) < 0.005);
+    bindings[1].bus_id = 0u; /* every voice */
+    render_loop(&s, 0, &rms, &count);
+    CHECK(fabs(rms / plain_rms - 0.1) < 0.005);
+    setup_free(&s);
+}
+
 #endif
 
 #ifdef SU_AUDIO_SYSTEM_ALLOC_TEST
@@ -531,6 +677,7 @@ int main(void) {
     test_checkpoint_verify();
     test_control_methods();
     test_device_output();
+    test_host_extensions();
 #endif
     printf("audio_system: %u checks, %u failures\n", checks, failures);
     return failures == 0u ? 0 : 1;

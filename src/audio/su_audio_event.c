@@ -83,6 +83,11 @@ struct SuAudioEvents {
     uint32_t music_bus_id;
     float limiter_knee;
     float music_buffer[SU_AUDIO_EVENT_QUANTUM * 2u];
+    float doppler;
+    float speed_of_sound;
+    SuAudioBusInput inputs[SU_AUDIO_EVENTS_MAX_INPUTS];
+    uint32_t input_count;
+    float input_buffer[SU_AUDIO_EVENT_QUANTUM * 2u];
     SuAudioCluster *cluster;
     uint32_t cluster_inputs;
     SuAudioVoiceCapture *captures;
@@ -611,6 +616,10 @@ static uint32_t leaf_controls(SuAudioEvents *events, const EventInstance *instan
         distance = sqrtf(rel.x * rel.x + rel.y * rel.y + rel.z * rel.z);
         attenuation = su_audio_attenuation(distance, desc.min_distance, desc.max_distance, desc.rolloff);
         su_audio_pan(local, &left, &right);
+        if (events->doppler > 0.0f) {
+            SuVec3f origin = {0.0f, 0.0f, 0.0f};
+            pitch *= su_audio_doppler(origin, listener->vel, rel, desc.vel, events->speed_of_sound, events->doppler);
+        }
         gain = desc.gain * attenuation;
         out->gain_left = left * gain;
         out->gain_right = right * gain;
@@ -630,7 +639,7 @@ static uint32_t leaf_controls(SuAudioEvents *events, const EventInstance *instan
         float cutoff = 0.0f;
         target.emitter = instance->emitter;
         target.instance = instance_handle((uint32_t)(instance - events->instances), instance->generation);
-        (void)su_audio_param_voice_controls(events->params, target,
+        (void)su_audio_param_voice_controls(events->params, target, leaf->data.bus_id,
             events->stats.render_clock + SU_AUDIO_EVENT_QUANTUM, &gain_db, &ratio, &cutoff);
         if (gain_db != 0.0f) {
             float scale = powf(10.0f, gain_db / 20.0f);
@@ -915,6 +924,14 @@ static uint32_t render_quantum_pooled(SuAudioEvents *events) {
             status = su_audio_bus_mix(events->buses, events->music_bus_id, events->music_buffer,
                 SU_AUDIO_EVENT_QUANTUM);
         }
+        for (index = 0; index < events->input_count && status == SU_OK; index++) {
+            const SuAudioBusInput *input = &events->inputs[index];
+            memset(events->input_buffer, 0, sizeof events->input_buffer);
+            input->render(input->user, events->input_buffer, SU_AUDIO_EVENT_QUANTUM, now);
+            status = su_audio_bus_mix(events->buses,
+                input->bus_id != 0u ? input->bus_id : events->route_ids[events->root_route], events->input_buffer,
+                SU_AUDIO_EVENT_QUANTUM);
+        }
         if (events->params != NULL && events->bus_gain_capacity != 0u && status == SU_OK) {
             uint32_t count = 0u;
             status = su_audio_param_bus_gains(events->params, end, events->bus_gains, events->bus_gain_capacity,
@@ -932,10 +949,19 @@ static uint32_t render_quantum_pooled(SuAudioEvents *events) {
             return status;
         }
     } else {
+        uint32_t input;
         memcpy(events->quantum, events->routes[0], sizeof events->quantum);
         if (events->music != NULL) {
             for (index = 0; index < SU_AUDIO_EVENT_QUANTUM * 2u; index++) {
                 events->quantum[index] += events->music_buffer[index];
+            }
+        }
+        for (input = 0; input < events->input_count; input++) {
+            memset(events->input_buffer, 0, sizeof events->input_buffer);
+            events->inputs[input].render(events->inputs[input].user, events->input_buffer, SU_AUDIO_EVENT_QUANTUM,
+                now);
+            for (index = 0; index < SU_AUDIO_EVENT_QUANTUM * 2u; index++) {
+                events->quantum[index] += events->input_buffer[index];
             }
         }
     }
@@ -1073,6 +1099,10 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     uint32_t index;
     uint32_t status;
     float knee = 0.0f;
+    float doppler = 0.0f;
+    float speed_of_sound = 0.0f;
+    const SuAudioBusInput *inputs = NULL;
+    uint32_t input_count = 0u;
     float *route_mem;
     float **routes;
     if (events == NULL || hook == NULL || hook->struct_size < offsetof(SuAudioEventsHook, params)
@@ -1116,6 +1146,27 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     }
     if (!(knee == 0.0f || (knee >= 0.1f && knee < 1.0f))) {
         return SU_E_INVALID_ARGUMENT;
+    }
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, doppler)) {
+        doppler = hook->doppler;
+    }
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, speed_of_sound)) {
+        speed_of_sound = hook->speed_of_sound;
+    }
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, input_count)) {
+        input_count = hook->input_count;
+        inputs = hook->inputs;
+    }
+    if (!(doppler >= 0.0f && doppler <= 1.0f) || !(speed_of_sound >= 0.0f && speed_of_sound <= 1e6f)
+        || input_count > SU_AUDIO_EVENTS_MAX_INPUTS || (input_count != 0u && inputs == NULL)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (index = 0; index < input_count; index++) {
+        float probe;
+        if (inputs[index].render == NULL || (inputs[index].bus_id != 0u
+            && (buses == NULL || su_audio_bus_gain_at(buses, inputs[index].bus_id, &probe) != SU_OK))) {
+            return SU_E_INVALID_ARGUMENT;
+        }
     }
     if (buses != NULL) {
         route_count = su_audio_bus_count(buses);
@@ -1200,6 +1251,12 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     events->music = music;
     events->music_bus_id = music_bus_id;
     events->limiter_knee = knee;
+    events->doppler = doppler;
+    events->speed_of_sound = speed_of_sound > 0.0f ? speed_of_sound : 343.0f;
+    if (input_count != 0u) {
+        memcpy(events->inputs, inputs, (size_t)input_count * sizeof *inputs);
+    }
+    events->input_count = input_count;
     events->policies = policies;
     events->policy_count = hook->policy_count;
     events->default_policy = hook->default_policy;
@@ -1438,6 +1495,10 @@ static uint64_t layout_fingerprint(const SuAudioEvents *events) {
     hash = fnv_u64(hash, ((uint64_t)emitters << 32) | curves);
     hash = fnv_u64(hash, curve_count);
     memcpy(&knee_bits, &events->limiter_knee, sizeof knee_bits);
+    hash = fnv_u64(hash, knee_bits);
+    memcpy(&knee_bits, &events->doppler, sizeof knee_bits);
+    hash = fnv_u64(hash, knee_bits);
+    memcpy(&knee_bits, &events->speed_of_sound, sizeof knee_bits);
     hash = fnv_u64(hash, knee_bits);
     return hash;
 }

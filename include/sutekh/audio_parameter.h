@@ -80,7 +80,9 @@ typedef struct SuAudioBindingPoint {
 typedef struct SuAudioParamBinding {
     SuAudioParamId param_id;
     uint32_t control;
-    uint32_t bus_id;
+    uint32_t bus_id;  /* BUS_GAIN_DB: the fader's bus. GAIN_DB/PITCH/LOWPASS_HZ in the integrated runtime: 0 = every
+                       * voice, else only voices whose graph leaf bus_id equals it (su_audio_param_controls and
+                       * SuAudioParamVoice have no voice bus and apply every binding) */
     const SuAudioBindingPoint *points;
     uint32_t point_count;
 } SuAudioParamBinding;

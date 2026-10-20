@@ -48,6 +48,11 @@ typedef struct SuAudioSystemDesc {
     float limiter_knee;                    /* 0 = hard clamp, else [0.1, 1) */
     uint32_t journal_capacity;             /* commands kept for replay (render.offline, verification); 0 = none */
     uint32_t telemetry_capacity;           /* A10 trace ring; 0 = none */
+    float doppler;                         /* spatial voices: Doppler amount in [0, 1]; 0 = none */
+    float speed_of_sound;                  /* metres/second for Doppler; 0 = 343 */
+    const SuAudioBusInput *inputs;         /* host bus inputs (SuAudioBusInput); not journaled: replays, render.offline
+                                            * and checkpoint verification run without them (silence) */
+    uint32_t input_count;
 } SuAudioSystemDesc;
 
 enum {

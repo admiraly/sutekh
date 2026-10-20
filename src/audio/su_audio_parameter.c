@@ -524,8 +524,8 @@ void su_audio_params_counts(const SuAudioParams *params, uint32_t *param_count, 
     *bus_binding_count = buses;
 }
 
-uint32_t su_audio_param_voice_controls(const SuAudioParams *params, SuAudioParamTarget target, uint64_t sample_time,
-                                       float *gain_db, float *pitch, float *lowpass_hz) {
+uint32_t su_audio_param_voice_controls(const SuAudioParams *params, SuAudioParamTarget target, uint32_t bus_id,
+                                       uint64_t sample_time, float *gain_db, float *pitch, float *lowpass_hz) {
     uint32_t i;
     *gain_db = 0.0f;
     *pitch = 1.0f;
@@ -533,7 +533,8 @@ uint32_t su_audio_param_voice_controls(const SuAudioParams *params, SuAudioParam
     for (i = 0u; i < params->desc.binding_count; i++) {
         const ParamBinding *binding = &params->bindings[i];
         float mapped;
-        if (binding->desc.control == SU_AUDIO_CONTROL_BUS_GAIN_DB) {
+        if (binding->desc.control == SU_AUDIO_CONTROL_BUS_GAIN_DB
+            || (binding->desc.bus_id != 0u && binding->desc.bus_id != bus_id)) {
             continue;
         }
         mapped = binding_eval(binding, param_value(params, target, binding->def_index, sample_time));
