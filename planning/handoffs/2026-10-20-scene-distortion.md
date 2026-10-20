@@ -10,7 +10,7 @@ bloom/tonemapping. Zero-initialized descriptors preserve ordinary FX.
 The public issue description was rewritten using generic rendering terms.
 
 The work started from `origin/main` at `7e3c6eb` in an isolated worktree.
-Rendering API generation 9 enlarges the batch, FX material, frame and stats
+Rendering API generation 10 enlarges the batch, FX material, frame and stats
 structures; native consumers must recompile. No simulation state changes.
 
 Modified paths:
@@ -60,24 +60,29 @@ pipelines, quad/mesh parity, cubes/intensity/stale/wrong-kind handles, sorted
 batches, overlap ordering, invalid fields and skipped draws.
 
 `SUTEKH_REQUIRE_VALIDATION=1 ctest --test-dir build-distortion --output-on-failure -j 2`:
-After merging main: 118 passed, 2 platform skips (`path_fifo`, `containment`),
-zero failures, 62.32 s. MSVC's integrated render/point-light subset passed
-7/7 in 10.72 s, again with required synchronization validation and no messages.
+After merging main including GPU particles: 120 passed, 2 platform skips
+(`path_fifo`, `containment`), zero failures, 64.90 s. MSVC's integrated
+render/point-light/particle subset passed 9/9, again with required
+synchronization validation and no messages.
 All render tests passed with zero validation errors/warnings.
-`python tools/compile_shaders.py --check`: 30 shader sources and 2 includes
-fresh (3 shared includes after integration). `git diff --check`: passed. Merging fetched `origin/main` before the
+`python tools/compile_shaders.py --check`: 31 shader sources and 3 includes
+fresh after integration. `git diff --check`: passed. Merging fetched `origin/main` before the
 initial API version check reported already up to date. During CI, point lights
 merged into main (`9971957`), advancing the render API to 8. That main revision
 was merged (not rebased); the frame fields from both features are retained,
 instance stride/vertex inputs were checked, and distortion advances the
-integrated API once to generation 9. The shader header was regenerated from
+integrated API once to generation 9. GPU particles subsequently merged into
+main (`29894fa`), advancing its API to 9. This main revision was also merged;
+particle frame/stats fields and the compute shader are retained, particle
+draws remain in the ordinary transparency subpass, and distortion's final
+API generation is 10, one above current main. The shader header was regenerated from
 the merged sources rather than resolving generated words by hand.
 
 Source SHA-256:
 
 - `distortion.frag`: `5506f932f3d35b59d933cc319123ccc012b8838b4ddddd513ef887d0c59ea21f`
 - `distortion_resolve.frag`: `c60de59174e9121ee471516760827f4fe331c778b6109e474d278cfbee4809d9`
-- generated shader header: `7224fa741efb3a554dc90f27b1f5a4c7ef06034a9f85f9924d7ed20b9586fa45`
+- generated shader header: `cf3bc1ed049c412370bbedccaf8cf29cb375521f698e724f2e41a0a354102a94`
 
 ## Measurement protocol
 
@@ -100,22 +105,22 @@ Final repeat, GPU/CPU milliseconds:
 
 | Resolution | Effects | GPU p50 | GPU p95 | CPU p50 | CPU p95 |
 |---|---:|---:|---:|---:|---:|
-| 1280x720 | 0 | 1.679488 | 26.394048 | 0.046400 | 0.097600 |
-| 1280x720 | 1 | 2.272032 | 26.990400 | 0.062000 | 0.120300 |
-| 1280x720 | 32 | 7.295232 | 33.611264 | 0.104300 | 0.171200 |
-| 1920x1080 | 0 | 3.261376 | 28.734720 | 0.085000 | 0.180700 |
-| 1920x1080 | 1 | 4.850464 | 30.272160 | 0.109600 | 0.232300 |
-| 1920x1080 | 32 | 15.345280 | 42.784064 | 0.131500 | 0.263400 |
+| 1280x720 | 0 | 1.693184 | 26.438592 | 0.067700 | 0.127600 |
+| 1280x720 | 1 | 2.276608 | 27.195840 | 0.082800 | 0.142800 |
+| 1280x720 | 32 | 7.455392 | 33.161728 | 0.157900 | 0.201000 |
+| 1920x1080 | 0 | 3.287200 | 28.634368 | 0.095500 | 0.153700 |
+| 1920x1080 | 1 | 4.743840 | 30.894144 | 0.118600 | 0.188600 |
+| 1920x1080 | 32 | 15.137312 | 41.948320 | 0.163300 | 0.277500 |
 
-Median differences from off: +0.592544 / +5.615744 ms at 720p (1/32 effects),
-+1.589088 / +12.083904 ms at 1080p. These are differences of whole-frame
+Median differences from off: +0.583424 / +5.762208 ms at 720p (1/32 effects),
++1.456640 / +11.850112 ms at 1080p. These are differences of whole-frame
 medians, not directly measured per-pass costs. Both benchmark invocations
 reported zero failures and validation disabled as requested.
-The immediately preceding repeat was 1.693/2.316/7.318 ms at 720p and
+A prior repeat was 1.693/2.316/7.318 ms at 720p and
 3.392/4.839/15.220 ms at 1080p, supporting the median trend but not the tails.
 
 Measured release executable SHA-256:
-`86403c8081a4f777622246f672f65f609e38b8af9b5f24c62a73ab3d7a4ea980`.
+`5f313c5c19af3273f7e23c915a3f316e7ff19fee14cd1b16c392ce0194251e8c`.
 It was built from this patch with Clang 23.1.3 in release mode; sources are
 identified by the committed patch and shader hashes above. No downloaded
 assets or external material code were used.
@@ -130,6 +135,8 @@ store-after-sampled-read hazard for the snapshot and field at subpass 2's end.
 Both images now remain input attachments through subpass 3, placing their
 stores after the resolve-read dependency. This is an explicit resource-lifetime
 fix, not a validator suppression; the current local layer had not reported it.
+The next checked Linux run (39463091219) passed in 8m49s, confirming zero
+messages with that older validator before the final GPU-particle integration.
 The full-resolution field/snapshot allocate 24 extra bytes/pixel, and the
 resolve runs even when the field is empty. Lazy targets and an off-path bypass
 are possible follow-up optimizations. Overlap intentionally uses last nonzero

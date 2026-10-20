@@ -37,6 +37,9 @@ direction in a procedural annulus. Animate `ring_radius` to expand it and
 strength or opacity to fade it. This works on the same sprite/mesh primitive;
 no tessellation or uploaded ring texture is needed.
 
+Submit distortion quads through `frame.fx_batches`. GPU-emitter material
+routing remains the separate ordinary additive/premultiplied path.
+
 Optional extra cube: `frame.distortion_cube = cube;` and
 `frame.distortion_cube_intensity = 0.2f;` add a cube sample only at displaced
 pixels. The direction is the normalized view-aligned `(offset_x,offset_y,16)`;

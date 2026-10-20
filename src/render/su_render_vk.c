@@ -363,9 +363,9 @@ static int describe(VkFns *f, VkPhysicalDevice pd, VkSurfaceKHR surface, SuRende
         nq = 32u;
     }
     f->vkGetPhysicalDeviceQueueFamilyProperties(pd, &nq, qf);
-    for (i = 0; i < nq && family < 0; i++) {
+    for (i = 0; i < nq; i++) {
         VkBool32 present = VK_TRUE;
-        if ((qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
+        if ((qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0u) {
             continue;
         }
         if (surface != VK_NULL_HANDLE &&
@@ -373,9 +373,10 @@ static int describe(VkFns *f, VkPhysicalDevice pd, VkSurfaceKHR surface, SuRende
              f->vkGetPhysicalDeviceSurfaceSupportKHR(pd, i, surface, &present) != VK_SUCCESS)) {
             present = VK_FALSE;
         }
-        if (present) {
+        if (present && (family < 0 || (info->gpu_particles == 0u && (qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0u))) {
             family = (int)i;
             info->timestamps = qf[i].timestampValidBits > 0u && p.limits.timestampPeriod > 0.0f;
+            info->gpu_particles = (qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0u;
         }
     }
     f->vkGetPhysicalDeviceFormatProperties(pd, VK_FORMAT_R8G8B8A8_SRGB, &fp);
@@ -1983,10 +1984,10 @@ static int make_fx_pool(SuRenderer *r, Frame *fr) {
     VkDescriptorPoolSize ps;
     VkDescriptorPoolCreateInfo pi;
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = (r->max_fx_batches + r->max_draw) * 3u + SU_FLAME_MAX * 3u;
+    ps.descriptorCount = (r->max_fx_batches + r->max_draw + SU_PARTICLE_EMITTER_MAX) * 3u + SU_FLAME_MAX * 3u;
     memset(&pi, 0, sizeof pi);
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = r->max_fx_batches + r->max_draw + SU_FLAME_MAX;
+    pi.maxSets = r->max_fx_batches + r->max_draw + SU_FLAME_MAX + SU_PARTICLE_EMITTER_MAX;
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &ps;
     return r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &fr->fx_pool) == VK_SUCCESS;
@@ -2557,6 +2558,12 @@ void su_render_destroy(SuRenderer *r) {
             su_rvk_free_buffer(r, &fr->fx);
             su_rvk_free_buffer(r, &fr->fx_tex);
             su_rvk_free_buffer(r, &fr->flames);
+            su_rvk_free_buffer(r, &fr->particle_params);
+            su_rvk_free_buffer(r, &fr->particle_states);
+            su_rvk_free_buffer(r, &fr->particle_vertices);
+            su_rvk_free_buffer(r, &fr->particle_keys);
+            su_rvk_free_buffer(r, &fr->particle_readback);
+            if (fr->particle_pool != VK_NULL_HANDLE) r->f.vkDestroyDescriptorPool(r->dev, fr->particle_pool, NULL);
             su_rvk_free_buffer(r, &fr->shadow_inst);
             if (fr->fx_pool != VK_NULL_HANDLE) {
                 r->f.vkDestroyDescriptorPool(r->dev, fr->fx_pool, NULL);
@@ -2613,6 +2620,9 @@ void su_render_destroy(SuRenderer *r) {
             if (r->flame_pipe != VK_NULL_HANDLE) {
                 r->f.vkDestroyPipeline(r->dev, r->flame_pipe, NULL);
             }
+            if (r->particle_pipe != VK_NULL_HANDLE) r->f.vkDestroyPipeline(r->dev, r->particle_pipe, NULL);
+            if (r->particle_layout != VK_NULL_HANDLE) r->f.vkDestroyPipelineLayout(r->dev, r->particle_layout, NULL);
+            if (r->particle_dsl != VK_NULL_HANDLE) r->f.vkDestroyDescriptorSetLayout(r->dev, r->particle_dsl, NULL);
             if (r->flame_layout != VK_NULL_HANDLE) {
                 r->f.vkDestroyPipelineLayout(r->dev, r->flame_layout, NULL);
             }
@@ -2991,7 +3001,7 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
     }
     if (r->shadow_format == VK_FORMAT_UNDEFINED || !make_layouts(r, max_res + 64u) || !make_samplers(r) ||
         !make_shadow_sampler(r) || !make_scene_pass(r) || !make_shadow_pass(r) || !make_post_pass(r) ||
-        !make_bloom_pass(r) || !make_pipelines(r) || !make_frame_sets(r) || !make_shadow_map(r, 1u, 1u)) {
+        !make_bloom_pass(r) || !make_pipelines(r) || !su_rvk_particles_init(r) || !make_frame_sets(r) || !make_shadow_map(r, 1u, 1u)) {
         return create_fail(r, SU_E_UNSUPPORTED_METHOD, message, "render passes, layouts or pipelines could not be created");
     }
     if (!make_meshes(r)) {
@@ -3220,6 +3230,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         r->completed = fr->serial;
     }
     collect_gpu_time(r, fr);
+    if (!su_rvk_particles_prepare(r, fr, in->scene)) return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "particle buffers");
     if (!r->offscreen) {
         vr = r->f.vkAcquireNextImageKHR(r->dev, r->swapchain, UINT64_MAX, fr->acquired, VK_NULL_HANDLE, &image);
         if (vr == VK_ERROR_OUT_OF_DATE_KHR) {
@@ -3249,6 +3260,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     }
     su_rvk_record_uploads(r, fr, cmd);
     su_rvk_refresh_materials(r);
+    su_rvk_particles_compute(r, fr, cmd, in->scene);
     n_fxt = in->fx_tex_count < r->max_fx_tex ? in->fx_tex_count : r->max_fx_tex;
     n_fxt -= n_fxt % 3u;
     if (n_fxt > 0u) {
@@ -3614,6 +3626,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
             r->stats.draws++;
         }
     }
+    su_rvk_particles_draw(r, fr, cmd, in->scene);
     r->stats.haze_volumes_drawn = 0;
     if (in->scene != NULL && in->scene->haze_count > 0u) {
         VkDescriptorSet sets[2] = {fr->frame_set, r->depth_in_set};
@@ -3935,6 +3948,9 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
             if (!su_haze_prepare(&f->haze[index], f->camera.pos, &push)) return SU_E_INVALID_ARGUMENT;
         }
     }
+    if (!su_rvk_particles_valid(f)) return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "invalid particle emitters or capacity");
+    if (f->particle_emitter_count != 0u && !r->info.gpu_particles)
+        return su_rvk_fail(r, SU_E_UNSUPPORTED_METHOD, "GPU particles require a graphics/compute queue");
     if (!su_rvk_flames_valid(f)) {
         return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "invalid flame volume instances");
     }
