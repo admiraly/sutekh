@@ -263,7 +263,7 @@ end-of-tick orientation is not a bound for a turning craft. A fourth operator, r
   the world identity as before (`su_host_set_operator_data`), so replays only load with the same shapes.
 - *Shape.* A mover whose `compound` lane names a compound of its instance's set is the union of the sub-shapes,
   each rotated by the mover's `rot` lanes (end of tick) about its reference point; its `radius`, `z0` and `z1`
-  lanes are not used for collision (a game may keep a sphere or capsule there for its own logic). Any other
+  lanes are not used for contacts: they are its proximity envelope (below). Any other
   mover (`compound` 0xFFFFFFFF, an unknown index, or no set: the `sutekh serve` worker) is the sphere or capsule
   mover of `space3d.query_shape`.
 - *Turning.* When a mover's `rot0` lanes are nonzero, s = sin(a / 2) is taken for the angle a of the shortest
@@ -283,13 +283,17 @@ end-of-tick orientation is not a bound for a turning craft. A fourth operator, r
   pieces; equal toi keeps the lower mover piece, then the lower other piece. `c*_sub` name them. Contacts per
   mover and their (toi, slot) order are unchanged: a row still contributes at most one contact.
 - *Broadphase and proximity.* A compound or padded mover's bounds are the union of every piece's end spheres at
-  `prev` and at `pos` with the padded radii (plus the margin and slack as before). `prox_dist` is the smallest over
-  the pieces (and the other mover's pieces) of core distance minus the unpadded radii; a mesh is searched within
-  min(margin, best so far) plus the piece radius. Gate crossings stay on the reference point's segment.
+  `prev` and at `pos` with the padded radii and of its `radius`/`z0`/`z1` shape at both positions (plus the margin
+  and slack as before). Proximity measures every mover by its `radius`/`z0`/`z1` sphere or capsule, unpadded, exactly
+  as `space3d.query_shape` does (since 2026-10-20 evening; the first version took the minimum over the sub-shapes):
+  a game keeps an enveloping sphere or capsule there. An exact distance search per sub-shape costs about n times the
+  single search against meshes (measured in a downstream pack race: proximity per sub-shape raised the 99th
+  percentile step from about 2 ms to 4 ms), while a proximity margin is coarse by nature. Gate crossings stay on the
+  reference point's segment.
 - *Compatibility.* A mover with `compound` 0xFFFFFFFF and `rot0` all zero takes exactly the `space3d.query_shape`
   code (its lanes equal that operator's bit for bit, and `c*_sub` are 0xFFFFFFFF); worlds using the other three
   operators are untouched (their records, constants hashes and digests are unchanged). Constants hash
-  `36ada49c...` (SHA-256 of `space3d_compound_constants_text()`).
+  `ced24aed...` (SHA-256 of `space3d_compound_constants_text()`).
 - *Cost.* Per mover and candidate: n pieces against a static row (n mesh walks for a mesh, each limited by the best
   toi so far), n x m piece pairs against another mover (at most 64 rounded-parallelogram sweeps), one quaternion
   product and a square root for the turn per mover row.

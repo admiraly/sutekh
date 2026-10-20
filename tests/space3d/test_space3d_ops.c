@@ -1570,7 +1570,7 @@ static void test_compound(void) {
     }
     /* Known 4: turning. Compound 0's sphere piece (reach 8, r 2) moves +x by 20 towards a sphere r 1 at (20, 0, 8):
      * no turn: centre distance 3 at x = 17, toi 0.85. With rot0 = 0.1 rad about y before rot = identity, the piece
-     * is padded by 2 * 8 * sin(0.05) = 0.79967 m: toi (17 - 0.79967) / 20. Proximity is unpadded (margin 50 at the
+     * is padded by 2 * 8 * sin(0.05) = 0.79967 m: toi (17 - 0.79967) / 20. (Proximity: known 5.) (margin 50 at the
      * end, x = 20: 3 - 3 = 0 -> clamped 0). */
     scene_init(&s, 2);
     cmp_mover(0, V(0, 0, 0), V(Q(20), 0, 0), QID, 0);
@@ -1587,6 +1587,20 @@ static void test_compound(void) {
     su_world_destroy(w);
     su_world_destroy(w2);
     w = w2 = NULL;
+    /* Known 5: proximity measures the radius/z0/z1 envelope, not the compound: the T (compound 0) at rest at the
+     * origin with radius lane 12 and a sphere r 1 at (40, 0, 0): 40 - 12 - 1 = 27 (the capsule piece alone: 29). */
+    scene_init(&s, 2);
+    cmp_mover(0, V(0, 0, 0), V(0, 0, 0), QID, 0);
+    setq(SPACE3D_F_RADIUS, 0, Q(12));
+    setq(SPACE3D_F_PROX_MARGIN, 0, Q(50));
+    sphere(1, V(Q(40), 0, 0), ONE);
+    CHECK(run_scene(&s, &w) == SU_OK);
+    if (w != NULL) {
+        CHECK(rd32(w, SPACE3D_F_PROX_SLOT, 0) == 1u && near64(rdq(w, SPACE3D_F_PROX_DIST, 0), Q(27), 4));
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 0u);
+        su_world_destroy(w);
+        w = NULL;
+    }
 
     /* Compound none, rot0 zero: every query_shape lane equals space3d.query_shape bit for bit (random scenes with
      * capsule movers and meshes); c*_sub are NONE. A one-capsule compound (1) equals the capsule mover z -4..4 r 1

@@ -12,7 +12,7 @@
   "host": {
     "operator": "space3d_ops_v1",
     "operator_version": 1,
-    "constants_hash": "36ada49c9de5af5780e4b1dae888c45a14cd58262597809966843a6fe3dd3e24",
+    "constants_hash": "ced24aed85b307ad6c32486e7cc9facd92522d8c885616868f3213f98bf1e8b6",
     "fields": [
       {
         "id": 1,
