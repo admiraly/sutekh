@@ -163,6 +163,11 @@ int su_audio_voice_active(const SuAudioMixer *m, SuAudioVoice v);
 /* Listener (the camera): position, orientation (+x right, +y up, looking down -z), velocity. */
 uint32_t su_audio_listener(SuAudioMixer *m, SuWorldPos pos, SuQuatf rot, SuVec3f vel);
 uint32_t su_audio_master_gain(SuAudioMixer *m, float gain);
+/* Soft limiter on the final mix (applied at the next render). knee in [0.1, 1): samples up to knee pass unchanged, larger
+ * ones bend smoothly towards 1 (never beyond it) (knee + (1 - knee) tanh((|x| - knee) / (1 - knee))), so the output does not hard-clamp. 0 (the
+ * default) turns it off: the plain clamp. SuAudioStats.peak is still the level before the limiter and .clipped counts the
+ * samples that would have clamped. Stateless, so renders stay deterministic. */
+uint32_t su_audio_master_limiter(SuAudioMixer *m, float knee);
 /* Game thread, once per frame: collects voices that finished so their slots can be reused. */
 void su_audio_update(SuAudioMixer *m);
 
@@ -176,8 +181,8 @@ typedef struct SuAudioStats {
     uint32_t plays_refused;
     uint32_t commands_dropped;     /* queue full */
     uint64_t frames_rendered;
-    float peak;                    /* largest absolute output sample of the last render, before the clamp */
-    uint32_t clipped;              /* samples clamped to [-1, 1] in the last render */
+    float peak;                    /* largest absolute output sample of the last render, before the clamp / limiter */
+    uint32_t clipped;              /* samples clamped to [-1, 1] in the last render (with the limiter: samples that would have been) */
 } SuAudioStats;
 void su_audio_mixer_stats(const SuAudioMixer *m, SuAudioStats *out);
 

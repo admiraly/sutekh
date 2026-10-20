@@ -366,6 +366,34 @@ static void test_lifetimes(void) {
         }
         CHECK(mx == 1.0f);
     }
+    /* the soft limiter: below the knee untouched, above it bent, never beyond 1; off again restores the clamp */
+    CHECK(su_audio_master_limiter(m, 1.0f) == SU_E_INVALID_ARGUMENT && su_audio_master_limiter(m, 0.05f) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_audio_master_limiter(m, 0.8f) == SU_OK);
+    render(m, 4800);
+    su_audio_mixer_stats(m, &st);
+    CHECK(st.peak > 11.0f && st.clipped > 0u);
+    {
+        float mx = 0.0f;
+        uint32_t q;
+        for (q = 0; q < 9600u; q++) {
+            mx = fabsf(g_buf[q]) > mx ? fabsf(g_buf[q]) : mx;
+        }
+        CHECK(mx > 0.99f && mx <= 1.0f);
+    }
+    su_audio_mixer_destroy(m);
+    m = mixer(4, 16);
+    d = voice(loop, 0.5f, SU_AUDIO_LOOP);
+    CHECK(su_audio_play(m, &d, &v[0]) == SU_OK);
+    CHECK(su_audio_master_limiter(m, 0.8f) == SU_OK);
+    render(m, 4800);
+    {
+        float mx = 0.0f;
+        uint32_t q;
+        for (q = 0; q < 9600u; q++) {
+            mx = fabsf(g_buf[q]) > mx ? fabsf(g_buf[q]) : mx;
+        }
+        CHECK(mx > 0.49f && mx < 0.51f); /* a level under the knee is not touched */
+    }
     su_audio_mixer_destroy(m);
     su_audio_clip_free(beep);
     su_audio_clip_free(loop);
