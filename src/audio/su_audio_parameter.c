@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "sutekh/audio_parameter.h"
+#include "su_audio_parameter_int.h"
+#include "su_audio_state.h"
 
 /* One timeline segment. Parameters ramp linearly from `from` at `start` to
  * `to` at `end`; switches step to `value` at `start`. */
@@ -501,6 +503,99 @@ static float binding_eval(const ParamBinding *binding, float value) {
         }
     }
     return p[n - 1u].output;
+}
+
+void su_audio_params_counts(const SuAudioParams *params, uint32_t *param_count, uint32_t *switch_count,
+                            uint32_t *bus_binding_count) {
+    uint32_t i;
+    uint32_t buses = 0u;
+    if (params == NULL) {
+        *param_count = *switch_count = *bus_binding_count = 0u;
+        return;
+    }
+    for (i = 0u; i < params->desc.binding_count; i++) {
+        buses += params->bindings[i].desc.control == SU_AUDIO_CONTROL_BUS_GAIN_DB;
+    }
+    *param_count = params->desc.param_count;
+    *switch_count = params->desc.switch_count;
+    *bus_binding_count = buses;
+}
+
+uint32_t su_audio_param_voice_controls(const SuAudioParams *params, SuAudioParamTarget target, uint64_t sample_time,
+                                       float *gain_db, float *pitch, float *lowpass_hz) {
+    uint32_t i;
+    *gain_db = 0.0f;
+    *pitch = 1.0f;
+    *lowpass_hz = (float)params->desc.sample_rate * 0.5f;
+    for (i = 0u; i < params->desc.binding_count; i++) {
+        const ParamBinding *binding = &params->bindings[i];
+        float mapped;
+        if (binding->desc.control == SU_AUDIO_CONTROL_BUS_GAIN_DB) {
+            continue;
+        }
+        mapped = binding_eval(binding, param_value(params, target, binding->def_index, sample_time));
+        if (binding->desc.control == SU_AUDIO_CONTROL_GAIN_DB) {
+            *gain_db += mapped;
+        } else if (binding->desc.control == SU_AUDIO_CONTROL_PITCH) {
+            *pitch *= mapped;
+        } else if (mapped < *lowpass_hz) {
+            *lowpass_hz = mapped;
+        }
+    }
+    if (*pitch > 64.0f) {
+        *pitch = 64.0f;
+    }
+    return SU_OK;
+}
+
+uint32_t su_audio_param_bus_gains(const SuAudioParams *params, uint64_t sample_time, SuAudioBusGain *out,
+                                  uint32_t capacity, uint32_t *count) {
+    SuAudioParamTarget global = {0u, 0u};
+    uint32_t i;
+    uint32_t n = 0u;
+    for (i = 0u; i < params->desc.binding_count; i++) {
+        const ParamBinding *binding = &params->bindings[i];
+        float mapped;
+        uint32_t k;
+        if (binding->desc.control != SU_AUDIO_CONTROL_BUS_GAIN_DB) {
+            continue;
+        }
+        mapped = binding_eval(binding, param_value(params, global, binding->def_index, sample_time));
+        for (k = 0u; k < n && out[k].bus_id != binding->desc.bus_id; k++) {
+        }
+        if (k == n) {
+            if (n == capacity) {
+                return SU_E_RESOURCE_LIMIT;
+            }
+            out[n].bus_id = binding->desc.bus_id;
+            out[n].gain_db = 0.0f;
+            n++;
+        }
+        out[k].gain_db += mapped;
+    }
+    *count = n;
+    return SU_OK;
+}
+
+uint32_t su_audio_params_state(SuAudioParams *params, SuAudioStateIo *io) {
+    uint32_t i;
+    uint32_t globals;
+    if (params == NULL || io == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    globals = params->desc.param_count + params->desc.switch_count;
+    SU_STATE(io, params->clock);
+    SU_STATE(io, params->stats);
+    for (i = 0u; i < globals; i++) {
+        SU_STATE(io, params->global[i]);
+    }
+    for (i = 0u; i < params->desc.max_scoped_values; i++) {
+        SU_STATE(io, params->scoped[i].used);
+        if (params->scoped[i].used) {
+            SU_STATE(io, params->scoped[i]);
+        }
+    }
+    return io->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }
 
 uint32_t su_audio_param_controls(const SuAudioParams *params, SuAudioParamTarget target,

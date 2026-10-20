@@ -5,6 +5,7 @@
 #include "sutekh/audio_spatial.h"
 #include "sutekh/audio_graph.h"
 #include "sutekh/audio_voice_policy.h"
+#include "sutekh/audio_bus.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -97,10 +98,27 @@ typedef struct SuAudioEventsHook {
     const SuAudioVoicePolicyRule *policies; /* copied */
     uint32_t policy_count;                 /* <= 4096 */
     SuAudioVoicePolicy default_policy;
+    /* Appended fields; read only when struct_size covers them (SU_AUDIO_EVENTS_HOOK_HAS). */
+    struct SuAudioParams *params;          /* optional: expansion snapshots, voice and bus-gain controls */
+    SuAudioBusTree *buses;                 /* optional: voices mix into their leaf bus_id (unknown/0: root) */
+    struct SuAudioMusic *music;            /* optional: rendered into music_bus_id (0: root) each quantum */
+    uint32_t music_bus_id;
+    float limiter_knee;                    /* master soft limiter knee in [0.1, 1); 0 = hard clamp */
 } SuAudioEventsHook;
 
+#define SU_AUDIO_EVENTS_HOOK_HAS(hook, field) \
+    ((hook)->struct_size >= offsetof(SuAudioEventsHook, field) + sizeof((hook)->field))
+
 /* Valid only while no instance, stop command or partially consumed quantum exists. A stop with
- * release_frames == 0 uses the voice policy release. */
+ * release_frames == 0 uses the voice policy release.
+ *
+ * Optional components: with params, su_audio_event_post expands through su_audio_param_expand_state for the
+ * (emitter, new instance) target at the trigger time (switch and blend nodes), and every voice applies its
+ * GAIN_DB/PITCH/LOWPASS_HZ bindings at the end of each quantum; BUS_GAIN_DB bindings drive their bus faders
+ * (owned by the bindings). The params clock advances with the runtime, and retired instances' scoped values
+ * are cleared. With buses, every voice renders into its bus, sidechain ducking detects the real bus signals and
+ * the tree output feeds the master limiter. Music must share the runtime clock and sample rate. All referenced
+ * objects must outlive the runtime and are then driven only by it (their own render calls must not be used). */
 uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *hook);
 
 #ifdef __cplusplus

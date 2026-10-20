@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "sutekh/audio_bus.h"
+#include "su_audio_bus_int.h"
+#include "su_audio_state.h"
 
 #define NONE UINT32_MAX
 
@@ -26,6 +28,7 @@ typedef struct Bus {
     uint64_t frames;
     uint32_t target_first, target_count; /* rules attenuating this bus (CSR into rule_index) */
     uint32_t source_first, source_count; /* rules detecting on this bus */
+    float *capture;                      /* integrated runtime: copy of the processed output */
 } Bus;
 
 typedef struct Rule {
@@ -446,6 +449,7 @@ uint32_t su_audio_bus_process(SuAudioBusTree *tree, float *out, uint32_t frames)
                 else rule->det[f] = level;
             }
         }
+        if (bus->capture) memcpy(bus->capture, buf, (size_t)frames * 2u * sizeof(float));
         if (bus->parent == NONE) {
             memcpy(out, buf, (size_t)frames * 2u * sizeof(float));
         } else {
@@ -493,4 +497,53 @@ uint32_t su_audio_bus_meter_read(SuAudioBusTree *tree, SuAudioBusId id, SuAudioB
 
 uint64_t su_audio_bus_tree_bytes(const SuAudioBusTree *tree) {
     return tree ? tree->bytes : 0u;
+}
+
+uint32_t su_audio_bus_count(const SuAudioBusTree *tree) {
+    return tree ? tree->desc.bus_count : 0u;
+}
+
+uint32_t su_audio_bus_max_block(const SuAudioBusTree *tree) {
+    return tree ? tree->desc.max_block_frames : 0u;
+}
+
+uint32_t su_audio_bus_capture(SuAudioBusTree *tree, SuAudioBusId id, float *dst) {
+    uint32_t b;
+    if (!tree) return SU_E_INVALID_ARGUMENT;
+    b = find(tree, id);
+    if (b == NONE) return SU_E_INVALID_ARGUMENT;
+    tree->buses[b].capture = dst;
+    return SU_OK;
+}
+
+/* Checkpoint state between blocks: faders and ramps, window, meters, duck envelopes and delayed sidechains. */
+uint32_t su_audio_bus_tree_state(SuAudioBusTree *tree, SuAudioStateIo *io) {
+    uint32_t i;
+    if (!tree || !io || tree->pending_frames) return SU_E_INVALID_ARGUMENT;
+    SU_STATE(io, tree->ring_pos);
+    SU_STATE(io, tree->hdr_top);
+    for (i = 0u; i < tree->desc.bus_count; ++i) {
+        Bus *bus = &tree->buses[i];
+        SU_STATE(io, bus->fader);
+        SU_STATE(io, bus->fader_target);
+        SU_STATE(io, bus->fader_step);
+        SU_STATE(io, bus->ramp_remain);
+        SU_STATE(io, bus->hdr_gain);
+        SU_STATE(io, bus->hdr_db);
+        SU_STATE(io, bus->loudness);
+        SU_STATE(io, bus->last_gain);
+        SU_STATE(io, bus->last_duck);
+        SU_STATE(io, bus->peak);
+        SU_STATE(io, bus->sumsq);
+        SU_STATE(io, bus->true_peak);
+        SU_STATE(io, bus->hist);
+        SU_STATE(io, bus->frames);
+    }
+    for (i = 0u; i < tree->desc.rule_count; ++i) {
+        Rule *rule = &tree->rules[i];
+        SU_STATE(io, rule->hold);
+        SU_STATE(io, rule->env);
+        if (rule->ring) su_audio_state_io(io, rule->ring, (size_t)tree->desc.max_block_frames * sizeof(float));
+    }
+    return io->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
 }

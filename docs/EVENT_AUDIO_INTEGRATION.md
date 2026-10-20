@@ -45,6 +45,37 @@ For unpitched, pitched, looping, delayed and statically spatialised voices
 without a curve low-pass the integrated output is bit-identical to the legacy
 path (`test_legacy_equivalence`).
 
+## Parameters, buses, music and the master limiter
+
+The hook's appended fields (read only when `struct_size` covers them,
+`SU_AUDIO_EVENTS_HOOK_HAS`) attach optional components; all must outlive the
+runtime and are then driven only by it:
+
+- `params`: `su_audio_event_post` builds `su_audio_param_expand_state` for the
+  `(emitter, new instance)` target at the trigger time and expands through
+  `su_audio_graph_expand_ex`, so switch and blend nodes follow scoped values
+  (`FIRST_ONLY` latches at the trigger time). Every quantum the runtime
+  advances the parameter clock to the quantum start and evaluates `GAIN_DB`
+  (added to the voice gain), `PITCH` (multiplies the pitch) and `LOWPASS_HZ`
+  (the lower of curve and binding cut-off) for each voice's
+  `(emitter, instance)` target at the quantum end; the gains then ramp across
+  the quantum. `BUS_GAIN_DB` bindings, evaluated globally at the quantum end,
+  drive their bus faders with a one-quantum ramp; those faders belong to the
+  bindings. A retired instance's scoped values are cleared. Graph snapshots may
+  now hold up to 4096 parameters and switches regardless of graph size.
+- `buses`: routes are the tree's buses in execution order; each voice mixes
+  into its leaf `bus_id`, unknown or zero IDs into the root. The runtime mixes
+  every route, sets the bound faders and processes the tree once per quantum,
+  so sidechain ducking detects the real post-fader bus signals. The tree's
+  `max_block_frames` must be at least 128. The authored-loudness window has no
+  automatic input yet (`su_audio_bus_set_loudness` is per block).
+- `music` / `music_bus_id`: a music player on the runtime clock renders one
+  quantum per quantum into its bus (0: the root; without buses it is added to
+  the voices).
+- `limiter_knee`: the master output passes the legacy soft limiter
+  (`knee + (1 - knee) tanh((|x| - knee) / (1 - knee))`, never beyond full
+  scale) when the knee is in [0.1, 1); 0 keeps the hard clamp.
+
 ## Tests
 
 `ctest -R '^audio_runtime$'` (`tests/audio/test_audio_runtime.c`, synthetic
@@ -52,4 +83,8 @@ PCM only): hook validation; legacy equivalence under 37- versus 1000-frame
 chunking; exact pitch-0.5 interpolation; curve low-pass on a far voice; a
 one-physical-voice steal and resume with the largest sample step bounded by
 the tone slope plus one envelope increment; exact stop timing, stop-before-start
-cancellation and instance retirement.
+cancellation and instance retirement. Parameter cases: switch selection before
+and after a timed change, exact blend weights, `GAIN_DB` and `PITCH` bindings
+on every voice, sidechain ducking of an ambience bus by shots on another bus,
+a `BUS_GAIN_DB` binding reaching -12 dB on its fader, music metered on its own
+bus, and the soft limiter bending an 18 dB overdrive to at most full scale.
