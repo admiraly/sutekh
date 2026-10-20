@@ -144,12 +144,15 @@ extern const SuHostOpDesc g_space3d_query_shape_desc;
 /* space3d.query_compound: every lane and result of space3d.query_shape, plus
  *   - compound movers: a mover whose `compound` lane names a compound of the instance's set (space3d_mesh.h,
  *     S3MESH02) is the union of up to 8 capsules/spheres fixed in its local frame (rotated by its rot lanes); its
- *     radius, z0 and z1 lanes are not used for collision. Contacts against it (or by it) are the earliest over its
+ *     radius, z0 and z1 lanes are not used for contacts (proximity measures that shape: the envelope). Contacts against it (or by it) are the earliest over its
  *     sub-shapes, ties to the lower sub-shape index, and c*_sub report which sub-shapes touched;
  *   - turning: when a mover's rot0 lanes (start-of-tick orientation) are nonzero, every core point at distance d
  *     from the reference point is padded by 2 d sin(a / 2) (rounded up), a the angle between rot0 and rot, so the
  *     translation-only sweep at the end orientation contains the shape at every intermediate orientation of the
  *     shortest rotation from rot0 to rot (a conservative bound; proximity is measured without the pad).
+ *   - proximity: every mover is measured by its radius/z0/z1 shape exactly as in space3d.query_shape (a game keeps
+ *     an enveloping sphere or capsule there), never by its compound (an exact search per sub-shape costs about n
+ *     times as much); compound movers' bounds include that shape.
  * A mover with compound = 0xFFFFFFFF (or an unknown index, or no set) and rot0 all zero is the mover of
  * space3d.query_shape bit for bit. docs/SPACE3D.md "Compound movers". */
 extern const SuHostOpDesc g_space3d_query_compound_desc;

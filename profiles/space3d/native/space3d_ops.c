@@ -139,8 +139,8 @@ const SuHostOpDesc g_space3d_query_compound_desc = {
     "space3d.query_compound",
     SPACE3D_SCHEMA_ID,
     SPACE3D_OPS_VERSION,
-    {0x36, 0xad, 0xa4, 0x9c, 0x9d, 0xe5, 0xaf, 0x57, 0x80, 0xe4, 0xb1, 0xda, 0xe8, 0x88, 0xc4, 0x5a,
-     0x14, 0xcd, 0x58, 0x26, 0x25, 0x97, 0x80, 0x99, 0x66, 0x84, 0x3a, 0x6f, 0xe3, 0xdd, 0x3e, 0x24},
+    {0xce, 0xd2, 0x4a, 0xed, 0x85, 0xb3, 0x07, 0xad, 0x6c, 0x32, 0x48, 0x6e, 0x7c, 0xc9, 0xfa, 0xcd,
+     0x92, 0x52, 0x2d, 0x8c, 0x88, 0x56, 0x16, 0x86, 0x8f, 0x32, 0x13, 0xf9, 0x8b, 0xf1, 0xe8, 0xb6},
     (uint32_t)S3_NFIELDS_COMPOUND,
     k_fields,
     query_run_compound,
@@ -203,7 +203,8 @@ const char *space3d_compound_constants_text(void) {
            "turn=rot0_lanes_start_orientation,all_zero_off\n"
            "turn_pad=2_reach_sin_half_angle,sin_plus_2^-20,mul_plus_1_raw,sweep_and_bounds_only\n"
            "compound_bounds=union_subshape_end_spheres_at_prev_and_pos\n"
-           "compound_prox=min_over_subshapes,unpadded\n"
+           "compound_prox=radius_z0_z1_shape_as_query_shape,compound_not_used\n"
+           "compound_bounds_prox=plus_radius_z0_z1_shape_at_prev_and_pos\n"
            "compound_off=compound_none_and_rot0_zero,query_shape_bit_exact\n"
            "gate=reference_point_segment\n"
            "none=4294967295\n";
@@ -680,49 +681,6 @@ static int64_t prox_distance(const Cols *c, uint32_t m, uint32_t o, int64_t marg
     return d < 0 ? 0 : d;
 }
 
-/* Proximity with pieces (query_compound, mover m or a mover o special): the smallest over the pieces of
- * (core distance minus the unpadded radii), clamped at 0. A mesh is searched within min(margin, best so far) plus
- * the piece radius, as prox_distance does. */
-static int64_t prox_geo(const Cols *c, uint32_t m, const Geo *gm, uint32_t o, const Geo *go, int64_t margin) {
-    SuV3 p = rd3(c, F_POSX, m);
-    int64_t best = INT64_MAX;
-    uint32_t ko = c->kind[o], i, j;
-    for (i = 0; i < gm->n; i++) {
-        const Piece *pc = &gm->p[i];
-        int64_t d;
-        if (ko == SPACE3D_KIND_MESH) {
-            int64_t lim = best < margin ? best : margin;
-            d = su_q32_subf(s3mesh_dist(c->meshes, c->gate_index[o], rd3(c, F_POSX, o), rdrot(c, o), p, pc->e0, pc->e1,
-                                        su_q32_addf(lim, pc->r0), c->mst),
-                            pc->r0);
-        } else if (ko == SPACE3D_KIND_BOX) {
-            d = su_q32_subf(s3_dist_seg_obb(p, pc->e0, pc->e1, rd3(c, F_POSX, o), rdrot(c, o), rd3(c, F_HALFX, o)),
-                            pc->r0);
-        } else if (ko == SPACE3D_KIND_MOVER) {
-            SuV3 po = rd3(c, F_POSX, o);
-            d = INT64_MAX;
-            for (j = 0; j < go->n; j++) {
-                const Piece *q = &go->p[j];
-                int64_t dj = su_q32_subf(su_q32_subf(s3_dist_seg_seg(p, pc->e0, pc->e1, su_v3_addf(po, q->e0),
-                                                                     su_v3_addf(po, q->e1)),
-                                                     q->r0),
-                                         pc->r0);
-                d = dj < d ? dj : d;
-            }
-        } else {
-            SuV3 a, b;
-            if (ko == SPACE3D_KIND_CAPSULE) {
-                capsule_ends(c, o, &a, &b);
-            } else {
-                a = b = rd3(c, F_POSX, o);
-            }
-            d = su_q32_subf(su_q32_subf(s3_dist_seg_seg(p, pc->e0, pc->e1, a, b), rdq(c, F_RADIUS, o)), pc->r0);
-        }
-        best = d < best ? d : best;
-    }
-    return best < 0 ? 0 : best;
-}
-
 static void row_bounds(Space3dScratch *s, const Cols *c, uint32_t r, uint32_t kind) {
     SuV3 lo, hi, lo2, hi2;
     int64_t rad = rdq(c, F_RADIUS, r);
@@ -746,6 +704,22 @@ static void row_bounds(Space3dScratch *s, const Cols *c, uint32_t r, uint32_t ki
             s3_bounds_sphere(su_v3_addf(p1, pc->e0), pc->r, &lo2, &hi2);
             bounds_union(&lo, &hi, lo2, hi2);
             s3_bounds_sphere(su_v3_addf(p1, pc->e1), pc->r, &lo2, &hi2);
+            bounds_union(&lo, &hi, lo2, hi2);
+        }
+        /* and the radius/z0/z1 shape at both positions: proximity measures it (the envelope may be larger) */
+        if (mover_seg(c, r, &e0, &e1)) {
+            s3_bounds_sphere(su_v3_addf(p0, e0), rad, &lo2, &hi2);
+            bounds_union(&lo, &hi, lo2, hi2);
+            s3_bounds_sphere(su_v3_addf(p0, e1), rad, &lo2, &hi2);
+            bounds_union(&lo, &hi, lo2, hi2);
+            s3_bounds_sphere(su_v3_addf(p1, e0), rad, &lo2, &hi2);
+            bounds_union(&lo, &hi, lo2, hi2);
+            s3_bounds_sphere(su_v3_addf(p1, e1), rad, &lo2, &hi2);
+            bounds_union(&lo, &hi, lo2, hi2);
+        } else {
+            s3_bounds_sphere(p0, rad, &lo2, &hi2);
+            bounds_union(&lo, &hi, lo2, hi2);
+            s3_bounds_sphere(p1, rad, &lo2, &hi2);
             bounds_union(&lo, &hi, lo2, hi2);
         }
     } else if (kind == SPACE3D_KIND_MOVER && mover_seg(c, r, &e0, &e1)) {
@@ -1244,16 +1218,9 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
                     if (o == r) {
                         continue;
                     }
-                    /* a mesh need only be searched below the best distance so far (strict < keeps ties) */
-                    go.special = 0;
-                    if (compound && c.kind[o] == SPACE3D_KIND_MOVER) {
-                        geo_of(&c, o, &go);
-                    }
-                    if (gm.special || go.special) {
-                        d = prox_geo(&c, r, &gm, o, &go, pslot == S3_NONE || pdist > mg ? mg : pdist);
-                    } else {
-                        d = prox_distance(&c, r, o, pslot == S3_NONE || pdist > mg ? mg : pdist);
-                    }
+                    /* a mesh need only be searched below the best distance so far (strict < keeps ties); compound
+                     * movers too are measured by their radius/z0/z1 shape (query_compound: the proximity envelope) */
+                    d = prox_distance(&c, r, o, pslot == S3_NONE || pdist > mg ? mg : pdist);
                     if (d <= mg && (pslot == S3_NONE || d < pdist)) {
                         pslot = o;
                         pdist = d;
