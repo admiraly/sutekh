@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "su_audio_int.h"
+#include "su_audio_event_int.h"
 
 #define PI_F 3.14159265358979f
 
@@ -286,6 +287,9 @@ typedef struct Voice {
     float lowpass_step;
     float lowpass_l, lowpass_r;
     uint32_t lowpass_remaining;
+    uint32_t event_release_remaining;
+    uint32_t event_release_total;
+    float event_release_from;
 } Voice;
 
 typedef struct GtSlot {
@@ -832,6 +836,55 @@ static SuVec3f rotate_inv(SuQuatf q, SuVec3f v) {
     return su_quatf_rotate(c, v);
 }
 
+uint32_t su_audio_event_voice_release(SuAudioMixer *mixer, SuAudioVoice voice, uint32_t frames) {
+    uint32_t slot;
+    Voice *playing;
+    apply_commands(mixer);
+    if (!voice_slot(mixer, voice, &slot)) {
+        return SU_E_STALE_HANDLE;
+    }
+    playing = &mixer->v[slot];
+    if (!playing->active || playing->gen != (uint32_t)(voice >> 32)) {
+        return SU_E_STALE_HANDLE;
+    }
+    if (frames == 0u) {
+        playing->active = 0;
+        su_stream_release(playing->stream);
+        playing->stream = NULL;
+        report_end(mixer, slot, playing->gen);
+        return SU_OK;
+    }
+    playing->event_release_from = playing->event_release_total != 0u
+        ? playing->event_release_from * (float)playing->event_release_remaining / (float)playing->event_release_total
+        : playing->fade;
+    playing->event_release_remaining = frames;
+    playing->event_release_total = frames;
+    playing->fade_step = 0.0f;
+    return SU_OK;
+}
+
+uint32_t su_audio_event_voice_spatial(SuAudioMixer *mixer, SuAudioVoice voice, const SuAudioVoiceDesc *desc) {
+    uint32_t slot;
+    Voice *playing;
+    apply_commands(mixer);
+    if (!voice_slot(mixer, voice, &slot)) {
+        return SU_E_STALE_HANDLE;
+    }
+    playing = &mixer->v[slot];
+    if (!playing->active || playing->gen != (uint32_t)(voice >> 32)) {
+        return SU_E_STALE_HANDLE;
+    }
+    playing->d.pos = desc->pos;
+    playing->d.vel = desc->vel;
+    playing->d.gain = desc->gain;
+    playing->d.min_distance = desc->min_distance;
+    playing->d.max_distance = desc->max_distance;
+    playing->d.rolloff = desc->rolloff;
+    playing->d.doppler = desc->doppler;
+    playing->d.flags = desc->flags;
+    return SU_OK;
+}
+
 static void src_frame(const Voice *v, uint64_t i, float *l, float *r) {
     if (v->stream != NULL) {
         su_stream_frame(v->stream, i, l, r);
@@ -939,6 +992,9 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
             float sl;
             float sr;
             float f = v->fade;
+            if (v->event_release_total != 0u) {
+                f = v->event_release_from * (float)v->event_release_remaining / (float)v->event_release_total;
+            }
             if (v->fade_step == -1.0f) {
                 f = 1.0f - (float)(i + 1u) / (float)frames; /* immediate stop: one-block ramp */
             }
@@ -964,6 +1020,10 @@ void su_audio_mixer_render(SuAudioMixer *m, float *out, uint32_t frames) {
             v->lowpass_r = sr;
             out[i * 2u] += sl * l * f;
             out[i * 2u + 1u] += sr * r * f;
+            if (v->event_release_total != 0u && --v->event_release_remaining == 0u) {
+                ended = 1;
+                break;
+            }
             if (v->fade_step < 0.0f && v->fade_step != -1.0f) {
                 v->fade += v->fade_step;
                 if (v->fade <= 0.0f) {
