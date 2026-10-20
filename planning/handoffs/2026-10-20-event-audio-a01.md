@@ -71,3 +71,19 @@ owner-device async profiling. No latency distribution is claimed. Next ready
 step is the additive spatial component A02, then bounded graph A03 and event
 runtime A04. Later components do not edit the shared header set without the
 integrator's coordination.
+
+## Review repair and main integration
+
+An independent review reproduced primary-frame starvation at interpolation
+window boundaries. The first guarded source fetch now latches primary demand
+through both interpolation reads; neither adjacent nor loop-head partners can
+overwrite it. The regression failed 25 checks before repair. Final direct
+strict Clang evidence: 33153 checks without Ogg, 77286 with Ogg, and 77297
+instrumented checks across five runs, all zero failures. Instrumentation still
+records zero callback side effects. Updated source/artifact hashes are in the
+asset note; the earlier table above identifies the original staged checkpoint.
+
+Main advanced to `9971957` during CI. Both validate jobs correctly rejected the
+stale pack report on the combined tree. Main was merged normally, without a
+rebase or force-push, and the report regenerated from the exact A01 snapshot.
+Incoming render files are upstream integration, not audio-authored changes.
