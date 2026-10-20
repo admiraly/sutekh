@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 5u
+#define SU_RENDER_API_VERSION 6u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
