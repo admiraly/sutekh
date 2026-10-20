@@ -1,0 +1,24 @@
+{
+  "format": "0.1",
+  "task_ids": ["issue-67"],
+  "owner": "decal-overlay-implementation",
+  "authorization": "Issue #67 implementation request, 2026-10-20",
+  "state": "implemented",
+  "base_revision": "d5b98fe",
+  "worktree": "engines/sutekh-worktrees/decals",
+  "heartbeat": "2026-10-20",
+  "write_scope": [
+    "include/sutekh/render.h",
+    "src/render/su_render_res.c",
+    "src/render/su_render_scene.c",
+    "src/render/su_render_vk.c",
+    "src/render/su_render_vk_int.h",
+    "tests/render/test_render_paint.c",
+    "docs/RENDERING_AND_ASSETS.md",
+    "planning/leases/issue-67-overlay.json",
+    "planning/handoffs/2026-10-20-overlay-material.md"
+  ],
+  "tested": ["Clang full Release build and 112-test suite", "MSVC /W4 /WX renderer build and pixel tests", "P600 and lavapipe pixel tests, synchronization validation: 2776 checks, zero failures, zero validation messages", "P600 0/1/64 overlay timing observations", "Shader recompilation freshness", "Pack validation"],
+  "integration": "PR #77 tracks cross-platform CI, merge and worktree cleanup",
+  "pending": ["PR #77 integration gates"]
+}

@@ -315,9 +315,11 @@ typedef struct Retired {
 #define PIPE_OPAQUE_2S 1u
 #define PIPE_MASK 2u
 #define PIPE_MASK_2S 3u
-#define PIPE_BLEND 4u
-#define PIPE_BLEND_2S 5u
-#define PIPE_PBR_COUNT 6u
+#define PIPE_OVERLAY 4u
+#define PIPE_OVERLAY_2S 5u
+#define PIPE_BLEND 6u
+#define PIPE_BLEND_2S 7u
+#define PIPE_PBR_COUNT 8u
 
 typedef struct DrawInstance {
     float r0[4];

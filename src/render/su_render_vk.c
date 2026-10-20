@@ -1057,6 +1057,7 @@ typedef struct PipeSpec {
     int layout;        /* 1: the textured-effects layout (frame, one sampler), 2: the cube sky layout */
     int subpass;       /* scene pass subpass: 0, or 1 for the textured effects */
     int shadow;        /* the shadow pass: depth only, standard depth (less or equal), slope bias */
+    int overlay;
 } PipeSpec;
 
 static void attr(VkVertexInputAttributeDescription *a, uint32_t *n, uint32_t loc, uint32_t binding, VkFormat fmt,
@@ -1206,6 +1207,11 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         rs.depthBiasConstantFactor = 1.0f;
         rs.depthBiasSlopeFactor = 1.5f;
     }
+    if (s->overlay) {
+        rs.depthBiasEnable = VK_TRUE;
+        rs.depthBiasConstantFactor = 1.0f;
+        rs.depthBiasSlopeFactor = 1.0f;
+    }
     memset(&cba, 0, sizeof cba);
     cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
                          VK_COLOR_COMPONENT_A_BIT;
@@ -1348,8 +1354,9 @@ static int make_pipelines(SuRenderer *r) {
         s.vin = VIN_PBR;
         s.cull = (i & 1u) == 0u;
         s.depth_test = 1;
-        s.depth_write = i < PIPE_BLEND;
-        s.blend = i >= PIPE_BLEND ? BLEND_ALPHA : BLEND_NONE;
+        s.depth_write = i < PIPE_OVERLAY;
+        s.blend = i >= PIPE_OVERLAY ? BLEND_ALPHA : BLEND_NONE;
+        s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
         ok = make_pipe(r, &s, &r->pbr_pipe[i]);
     }
     /* sun shadow casters: depth only */
@@ -1375,8 +1382,9 @@ static int make_pipelines(SuRenderer *r) {
         s.paint = 1;
         s.cull = (i & 1u) == 0u;
         s.depth_test = 1;
-        s.depth_write = i < PIPE_BLEND;
-        s.blend = i >= PIPE_BLEND ? BLEND_ALPHA : BLEND_NONE;
+        s.depth_write = i < PIPE_OVERLAY;
+        s.blend = i >= PIPE_OVERLAY ? BLEND_ALPHA : BLEND_NONE;
+        s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
         ok = make_pipe(r, &s, &r->paint_pipe[i]);
     }
     /* output pass */
@@ -3204,6 +3212,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     }
     if (n_items > 0u) {
         su_rvk_scene_draw(r, fr, cmd, n_items, 1);
+        su_rvk_scene_draw(r, fr, cmd, n_items, 2);
     }
     if (n_fx > 0u) {
         r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fx_pipe);

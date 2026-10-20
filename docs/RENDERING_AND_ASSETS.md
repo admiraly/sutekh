@@ -90,6 +90,33 @@ Audio consumes committed effect events. Use an established device/mixing backend
 
 Speculative candidates do not play real sounds. Development effect IDs and commit indices prevent duplicate externally visible effects after controlled recovery where supported.
 
+## Depth-biased mesh overlays
+
+Set `SuRenderMaterialDesc.overlay = 1` or `SuRenderPaintDesc.overlay = 1` before
+creating a material for coplanar decal geometry. Zero preserves the existing
+material behavior. Both paths use their normal lit fragment shader and texture
+slots, including texture alpha and per-object tint alpha. Overlay mode overrides
+the material alpha mode with straight-alpha blending (it does not alpha-test).
+
+Overlays render after opaque and masked geometry, including diagnostic meshes,
+and before ordinary transparent geometry. They use reversed-Z greater-or-equal
+depth testing, positive constant and slope-scaled raster depth bias (both factors
+1), and no depth writes. They receive the normal material lighting and shadows
+but never cast shadows. Single- and double-sided variants retain material culling.
+Overlays are sorted back-to-front within their phase and batch like other meshes.
+
+Use the base surface's vertex positions with a dedicated decal index buffer and
+material; no CPU vertex displacement or special shader is needed. This is a mesh
+overlay, not a screen-space projected decal. Bias is intentionally small and fixed;
+geometry meaningfully behind another surface remains occluded. Avoid intersecting
+transparent surfaces and ambiguous same-depth overlapping decals: this is the
+existing sorted-alpha renderer, not order-independent transparency.
+
+No glTF extension or cooked asset format changes are introduced: import continues
+to preserve its existing material semantics. Applications select overlay materials
+through the renderer API when constructing their mesh materials. Issue #67 does
+not request an import mapping.
+
 ## 7. Release player
 
 The shipped player/server excludes agent RPC, source watchers, untrusted compilation, test imports, and development secrets. It loads a pinned semantic/content manifest and validated platform artifacts. JIT may be disabled where unnecessary or disallowed. Offline native optimization and shader preparation are packaging operations, not normal gameplay edit operations.

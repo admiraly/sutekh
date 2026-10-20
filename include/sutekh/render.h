@@ -469,6 +469,7 @@ typedef struct SuRenderTextureDesc {
 typedef struct SuRenderMaterialDesc {
     SuAssetMaterial factors;           /* its texture ids are ignored; tex_info selects UV set and wrap modes */
     SuRenderHandle textures[SU_ASSET_SLOT_COUNT]; /* 0 = none */
+    uint32_t overlay;
 } SuRenderMaterialDesc;
 
 /* ---- layered paint material ----
@@ -522,6 +523,7 @@ typedef struct SuRenderPaintDesc {
                                         * emissive_strength, alpha_mode, alpha_cutoff, double_sided; texture ids unused */
     SuAssetPaint paint;                /* texture ids unused; tex_info selects UV set and wrap modes */
     SuRenderHandle textures[SU_PAINT_SLOT_COUNT]; /* 0 = none */
+    uint32_t overlay;
 } SuRenderPaintDesc;
 
 /* ---- image-based lighting: a cubemap with prefiltered specular mips ----
