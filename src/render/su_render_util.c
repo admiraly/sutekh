@@ -690,13 +690,13 @@ static void uv_default(const float *in, float out[4]) {
 }
 
 void su_fx_atlas_rect(uint32_t cols, uint32_t rows, uint32_t frame, float rect[4]) {
-    uint32_t n;
+    uint64_t n;
     uint32_t cx;
     uint32_t cy;
     cols = cols != 0u ? cols : 1u;
     rows = rows != 0u ? rows : 1u;
-    n = cols * rows;
-    frame %= n;
+    n = (uint64_t)cols * rows;
+    frame = (uint32_t)((uint64_t)frame % n);
     cx = frame % cols;
     cy = frame / cols;
     rect[0] = (float)cx / (float)cols;

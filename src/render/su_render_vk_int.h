@@ -274,8 +274,9 @@ typedef struct PaintUbo {
 
 typedef struct MatRes {
     SuAssetMaterial f;
-    uint32_t kind;            /* 0: PBR-lite, 1: layered paint */
+    uint32_t kind;            /* 0: PBR-lite, 1: layered paint, 2: unlit FX */
     SuAssetPaint paint;       /* kind 1 */
+    SuRenderFxMaterialDesc fx;
     Buffer ubo;               /* kind 1: PaintUbo, host visible, written once */
     SuRenderHandle tex[SU_RENDER_PAINT_SLOT_COUNT];
     uint32_t paint_tex_info[SU_RENDER_PAINT_SLOT_COUNT];
@@ -385,12 +386,21 @@ typedef struct BloomPush {
 
 #define BLOOM_MAX_LEVELS 12u
 
+typedef struct FxPush {
+    float uv[3][4];
+    float atlas[4];
+    float soft;
+    float near_z;
+    float angular;
+    uint32_t layers;
+} FxPush;
+
 /* A textured-effects batch prepared for drawing. */
 typedef struct FxBatchDraw {
     VkDescriptorSet set;
     uint32_t first, count;
     uint32_t pipe;            /* index into fxtex_pipe */
-    float soft;               /* 1 / soft distance, 0 = hard */
+    FxPush push;
 } FxBatchDraw;
 
 /* A quad of a sorted textured-effects batch. */
@@ -400,13 +410,6 @@ typedef struct FxQuad {
     uint32_t first;           /* first vertex in SuRenderFrameDesc.fx_tex */
     uint32_t seq;             /* submission order, for stable ties */
 } FxQuad;
-
-/* Push constants of the textured-effects fragment shaders. */
-typedef struct FxPush {
-    float soft;               /* 1 / soft distance, 0 = hard */
-    float near_z;             /* reversed-Z near plane: view depth = near_z / depth */
-    float pad[2];
-} FxPush;
 
 /* One caster of the shadow pass: an instance of a submesh. */
 typedef struct ShadowItem {
@@ -423,7 +426,7 @@ typedef struct DrawItem {
     uint32_t sub;
     uint32_t mat;             /* resource index, or UINT32_MAX for the default material */
     uint32_t pipe;
-    uint32_t kind;            /* 0: PBR-lite, 1: layered paint (its own pipelines and layout) */
+    uint32_t kind;            /* 0: PBR-lite, 1: layered paint, 2: unlit FX */
     float dist2;              /* blend sorting */
     uint32_t forced;          /* 1: opaque or masked material drawn in the blend pass because the instance tint is translucent */
     DrawInstance inst;
@@ -463,8 +466,10 @@ struct SuRenderer {
     VkPipeline flame_pipe;
     VkPipelineLayout flame_layout;
     VkPipeline fxtex_pipe[2];           /* textured effects: additive, premultiplied alpha */
+    VkPipeline fxmesh_pipe[4];
+    VkDescriptorSetLayout fx_dsl;
     VkPipeline skycube_pipe;
-    VkPipelineLayout fxtex_layout;      /* frame, one sampler, scene depth (input attachment), FxPush */
+    VkPipelineLayout fxtex_layout;      /* frame, three samplers, scene depth (input attachment), FxPush */
     VkDescriptorSetLayout depth_in_dsl; /* the scene depth as an input attachment (textured effects subpass) */
     VkDescriptorSet depth_in_set;
     VkPipelineLayout skycube_layout;    /* frame, one cube sampler, SkyPush */
@@ -625,7 +630,13 @@ uint32_t su_rvk_internal_textures(SuRenderer *r);
  * 1 blend) into cmd inside the scene pass. */
 void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, const SuMat4f *view_proj, float proj_y,
                         uint32_t *item_count);
-void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t item_count, int blend_pass);
+void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t item_count, int blend_pass,
+                       const SuRenderFrameDesc *frame);
+int su_rvk_fx_layers_valid(const SuFxLayers *layers);
+VkDescriptorSet su_rvk_fx_set(SuRenderer *r, Frame *fr, const SuFxLayers *layers, SuRenderHandle first,
+                             uint32_t wrap_u, uint32_t wrap_v);
+void su_rvk_fx_push(FxPush *push, const SuFxLayers *layers, float time, float soft, float near_z,
+                    uint32_t wrap_u, uint32_t wrap_v);
 /* Fits the sun's shadow map to the frame (see SuRenderShadow), writes the shadow matrix and parameters into ubo and the
  * caster instances into fr->shadow_inst; returns the number of caster instances (0: no shadow this frame, the
  * parameters say so). cam_world: the camera position in world units (for texel snapping). */
