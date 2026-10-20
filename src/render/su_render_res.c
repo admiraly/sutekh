@@ -402,11 +402,11 @@ static int make_texture_image_usage(SuRenderer *r, TexRes *t, VkImageUsageFlags 
     uint32_t type = 0;
     memset(&ii, 0, sizeof ii);
     ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    ii.imageType = VK_IMAGE_TYPE_2D;
+    ii.imageType = t->depth > 1u ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
     ii.format = t->vkfmt;
     ii.extent.width = t->width;
     ii.extent.height = t->height;
-    ii.extent.depth = 1;
+    ii.extent.depth = t->depth > 1u ? t->depth : 1u;
     ii.mipLevels = t->mips;
     ii.arrayLayers = t->layers;
     ii.flags = t->layers == 6u ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0u;
@@ -432,7 +432,8 @@ static int make_texture_image_usage(SuRenderer *r, TexRes *t, VkImageUsageFlags 
     memset(&vi, 0, sizeof vi);
     vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     vi.image = t->img;
-    vi.viewType = t->layers == 6u ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
+    vi.viewType = t->depth > 1u ? VK_IMAGE_VIEW_TYPE_3D :
+                  t->layers == 6u ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
     vi.format = t->vkfmt;
     vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     vi.subresourceRange.levelCount = t->mips;
@@ -485,6 +486,11 @@ static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int 
         return SU_E_INVALID_ARGUMENT;
     }
     layers = d->layers > 1u ? d->layers : 1u;
+    if (d->depth > 1u && (d->width > 256u || d->height > 256u || d->depth > 256u ||
+                        layers != 1u || d->mip_count != 1u ||
+                        d->format != SU_TEX_RGBA8_UNORM)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
     big = d->width > d->height ? d->width : d->height;
     while ((big >>= 1) != 0u) {
         maxm++;
@@ -510,6 +516,7 @@ static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int 
     t->vkfmt = vk_format(d->format);
     t->width = d->width;
     t->height = d->height;
+    t->depth = d->depth > 1u ? d->depth : 1u;
     t->mips = d->mip_count;
     r->f.vkGetPhysicalDeviceFormatProperties(r->pd, t->vkfmt, &fp);
     if ((is_bc(d->format) && !r->bc) || (fp.optimalTilingFeatures & need) != need) {
@@ -526,7 +533,7 @@ static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int 
         uint64_t total = 0;
         uint8_t *p;
         for (i = 0; i < d->mip_count; i++) {
-            total += layers * su_asset_texture_level_size(d->format, d->width >> i ? d->width >> i : 1u,
+            total += t->depth * layers * su_asset_texture_level_size(d->format, d->width >> i ? d->width >> i : 1u,
                                                             d->height >> i ? d->height >> i : 1u);
         }
         t->owned = malloc((size_t)total);
@@ -536,7 +543,7 @@ static uint32_t texture_create(SuRenderer *r, const SuRenderTextureDesc *d, int 
         }
         p = t->owned;
         for (i = 0; i < d->mip_count; i++) {
-            uint64_t n = su_asset_texture_level_size(d->format, d->width >> i ? d->width >> i : 1u,
+            uint64_t n = t->depth * su_asset_texture_level_size(d->format, d->width >> i ? d->width >> i : 1u,
                                                      d->height >> i ? d->height >> i : 1u);
             for (l = 0; l < layers; l++) {
                 memcpy(p, d->mip_data[i * layers + l], (size_t)n);
@@ -663,15 +670,18 @@ static int upload_texture(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, TexRes 
         if (n == 0u) {
             return 0;
         }
-        memcpy((uint8_t *)fr->staging.map + at, t->src[t->mip * t->layers + t->layer] + (uint64_t)t->row * row_bytes,
+        memcpy((uint8_t *)fr->staging.map + at,
+               t->src[t->mip * t->layers + (t->depth > 1u ? 0u : t->layer)] +
+                   (uint64_t)t->row * row_bytes + (t->depth > 1u ? t->layer * lvl_bytes : 0u),
                (size_t)(n * row_bytes));
         memset(&c, 0, sizeof c);
         c.bufferOffset = at;
         c.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         c.imageSubresource.mipLevel = t->mip;
-        c.imageSubresource.baseArrayLayer = t->layer;
+        c.imageSubresource.baseArrayLayer = t->depth > 1u ? 0u : t->layer;
         c.imageSubresource.layerCount = 1;
         c.imageOffset.y = (int32_t)(t->row * block);
+        c.imageOffset.z = t->depth > 1u ? (int32_t)t->layer : 0;
         c.imageExtent.width = w;
         c.imageExtent.height = (t->row + n) * block < h ? n * block : h - t->row * block;
         c.imageExtent.depth = 1;
@@ -680,7 +690,7 @@ static int upload_texture(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, TexRes 
         t->row += n;
         if (t->row == rows) {
             t->row = 0;
-            if (++t->layer == t->layers) {
+            if (++t->layer == (t->depth > 1u ? t->depth : t->layers)) {
                 t->layer = 0;
                 t->mip++;
             }
@@ -762,7 +772,7 @@ static uint32_t pipe_of(const SuAssetMaterial *m) {
 
 static VkImageView view_of(SuRenderer *r, SuRenderHandle h) {
     Res *s = su_rvk_get(r, h, RES_TEXTURE, NULL);
-    return s != NULL && s->state == SU_RENDER_STATE_READY ? s->u.tex.view : VK_NULL_HANDLE;
+    return s != NULL && s->state == SU_RENDER_STATE_READY && s->u.tex.depth <= 1u ? s->u.tex.view : VK_NULL_HANDLE;
 }
 
 /* Allocates and writes a material set; slots without a ready texture get the defaults. Returns the ready mask. */
@@ -953,7 +963,7 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
             continue;
         }
         x = su_rvk_get(r, d->textures[i], RES_TEXTURE, NULL);
-        if (x == NULL || x->u.tex.layers != 1u) {
+        if (x == NULL || x->u.tex.layers != 1u || x->u.tex.depth > 1u) {
             return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "paint slot %u: unknown texture handle", (unsigned)i);
         }
         if (i == SU_PAINT_SLOT_GLOW) {
@@ -973,7 +983,10 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
     memcpy(s->u.mat.paint_tex_info, p->tex_info, sizeof p->tex_info);
     memcpy(s->u.mat.paint_tex_info + SU_PAINT_SLOT_COUNT, d->extra_tex_info, sizeof d->extra_tex_info);
     memcpy(s->u.mat.tex, d->textures, sizeof s->u.mat.tex);
-    s->u.mat.pipeline = pipe_of(&d->factors);
+    s->u.mat.pipeline = d->overlay ? PIPE_OVERLAY + (d->factors.double_sided ? 1u : 0u) : pipe_of(&d->factors);
+    if (d->overlay) {
+        s->u.mat.f.alpha_mode = SU_ASSET_ALPHA_BLEND;
+    }
     memset(&u, 0, sizeof u);
     memcpy(u.specular_factor, d->specular_factor, sizeof d->specular_factor);
     u.detail[0] = d->detail_strength;
@@ -1050,7 +1063,10 @@ uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d,
     s = &r->res[idx];
     s->u.mat.f = d->factors;
     memcpy(s->u.mat.tex, d->textures, sizeof d->textures);
-    s->u.mat.pipeline = pipe_of(&d->factors);
+    s->u.mat.pipeline = d->overlay ? PIPE_OVERLAY + (d->factors.double_sided ? 1u : 0u) : pipe_of(&d->factors);
+    if (d->overlay) {
+        s->u.mat.f.alpha_mode = SU_ASSET_ALPHA_BLEND;
+    }
     s->u.mat.set = write_material_set(r, s->u.mat.tex, &s->u.mat.f, &s->u.mat.bound_ready);
     if (s->u.mat.set == VK_NULL_HANDLE) {
         free_slot(r, idx);

@@ -1958,6 +1958,169 @@ static void bench_paint(void) {
     g_r = saved;
 }
 
+static SuRenderHandle overlay_model(uint32_t paint, uint32_t overlay, uint32_t sided, uint32_t alpha_mode,
+                                    float red, float green, float blue, SuRenderHandle texture) {
+    SuRenderMaterialDesc md;
+    SuRenderPaintDesc pd;
+    SuRenderHandle mat = 0;
+    memset(&md, 0, sizeof md);
+    su_asset_material_default(&md.factors);
+    md.factors.base_color[0] = red;
+    md.factors.base_color[1] = green;
+    md.factors.base_color[2] = blue;
+    md.factors.metallic = 0.0f;
+    md.factors.roughness = 1.0f;
+    md.factors.double_sided = sided;
+    md.factors.alpha_mode = alpha_mode;
+    md.overlay = overlay;
+    if (paint) {
+        memset(&pd, 0, sizeof pd);
+        pd.factors = md.factors;
+        su_asset_paint_default(&pd.paint);
+        pd.overlay = overlay;
+        pd.textures[SU_PAINT_SLOT_ALBEDO] = texture;
+        CHECK(su_render_paint_material_create(g_r, &pd, &mat) == SU_OK);
+    } else {
+        md.textures[SU_ASSET_SLOT_BASE_COLOR] = texture;
+        CHECK(su_render_material_create(g_r, &md, &mat) == SU_OK);
+    }
+    return quad_model(mat);
+}
+
+static void test_overlay(void) {
+    static uint8_t base[W * H * 4], decal[W * H * 4], glass[W * H * 4];
+    static uint8_t combined[W * H * 4], swapped[W * H * 4];
+    const uint8_t texel[4] = {255, 255, 255, 128};
+    SuRenderHandle texture = mk_tex(SU_TEX_RGBA8_SRGB, 1, 1, texel);
+    SuRenderObject objects[3], temp;
+    SuRenderHandle base_model, decal_model, glass_model;
+    SuRenderStats stats;
+    Scene scene;
+    uint32_t kind, sided, mode, tilt, channel, sample;
+    scene_init(&scene);
+    scene.sun_intensity = 1.0f;
+    scene.ambient = 0.3f;
+    scene.sky[0] = scene.sky[1] = scene.sky[2] = 0.3f;
+    memset(objects, 0, sizeof objects);
+    for (sample = 0; sample < 3u; sample++) {
+        objects[sample].pos = su_wpos(0.0, 0.0, -3.0);
+        objects[sample].rot.w = 1.0f;
+        objects[sample].scale = 1.0f;
+        objects[sample].tint[0] = objects[sample].tint[1] = objects[sample].tint[2] = objects[sample].tint[3] = 1.0f;
+        objects[sample].emissive = 1.0f;
+    }
+    base_model = overlay_model(0, 0, 0, SU_ASSET_ALPHA_OPAQUE, 0.2f, 0.3f, 0.4f, 0);
+    glass_model = overlay_model(0, 0, 0, SU_ASSET_ALPHA_BLEND, 0.1f, 0.2f, 0.7f, 0);
+    g_obj = objects;
+    for (kind = 0; kind < 2u; kind++) {
+        for (sided = 0; sided < 2u; sided++) {
+            SuRenderHandle reference = overlay_model(kind, 0, sided, SU_ASSET_ALPHA_OPAQUE, 0.7f, 0.1f, 0.2f, 0);
+            for (mode = 0; mode <= SU_ASSET_ALPHA_BLEND; mode++) {
+                decal_model = overlay_model(kind, 1, sided, mode, 0.7f, 0.1f, 0.2f, texture);
+                for (tilt = 0; tilt < 2u; tilt++) {
+                    for (sample = 0; sample < 3u; sample++) {
+                        objects[sample].rot.y = tilt ? sinf(0.55f) : 0.0f;
+                        objects[sample].rot.w = tilt ? cosf(0.55f) : 1.0f;
+                        objects[sample].pos = su_wpos(0.0, 0.0, -3.0);
+                        objects[sample].tint[3] = 1.0f;
+                    }
+                    g_obj_count = 1;
+                    objects[0].model = base_model;
+                    CHECK(render(&scene, 0, base));
+                    objects[0].model = reference;
+                    CHECK(render(&scene, 0, decal));
+                    objects[0].model = glass_model;
+                    CHECK(render(&scene, 0, glass));
+                    objects[0].model = decal_model;
+                    objects[1].model = base_model;
+                    g_obj_count = 2;
+                    CHECK(render(&scene, 0, combined));
+                    for (sample = 0; sample < 5u; sample++) {
+                        int pixel_x = 112 + (int)sample * 8;
+                        for (channel = 0; channel < 3u; channel++) {
+                            double alpha = 128.0 / 255.0;
+                            double expected = lin(px(decal, pixel_x, 128)[channel]) * alpha +
+                                              lin(px(base, pixel_x, 128)[channel]) * (1.0 - alpha);
+                            CHECK(fabs(lin(px(combined, pixel_x, 128)[channel]) - expected) < 0.012);
+                        }
+                    }
+                    temp = objects[0];
+                    objects[0] = objects[1];
+                    objects[1] = temp;
+                    CHECK(render(&scene, 0, swapped));
+                    CHECK(memcmp(combined, swapped, sizeof combined) == 0);
+                    objects[1].pos = su_wpos(0.0, 0.0, -3.0000003);
+                    CHECK(render(&scene, 0, swapped));
+                    for (channel = 0; channel < 3u; channel++) {
+                        CHECK(abs((int)px(combined, 128, 128)[channel] - (int)px(swapped, 128, 128)[channel]) <= 1);
+                    }
+                    objects[1].pos = objects[0].pos;
+                    objects[1].tint[3] = 0.5f;
+                    CHECK(render(&scene, 0, swapped));
+                    for (channel = 0; channel < 3u; channel++) {
+                        double alpha = 64.0 / 255.0;
+                        double expected = lin(px(decal, 128, 128)[channel]) * alpha +
+                                          lin(px(base, 128, 128)[channel]) * (1.0 - alpha);
+                        CHECK(fabs(lin(px(swapped, 128, 128)[channel]) - expected) < 0.012);
+                    }
+                    objects[1].tint[3] = 1.0f;
+                    objects[2].model = glass_model;
+                    objects[2].tint[3] = 0.5f;
+                    g_obj_count = 3;
+                    CHECK(render(&scene, 0, swapped));
+                    for (channel = 0; channel < 3u; channel++) {
+                        double expected = 0.5 * (lin(px(glass, 128, 128)[channel]) + lin(px(combined, 128, 128)[channel]));
+                        CHECK(fabs(lin(px(swapped, 128, 128)[channel]) - expected) < 0.012);
+                    }
+                    g_obj_count = 2;
+                    objects[1].pos = su_wpos(0.0, 0.0, -3.2);
+                    CHECK(render(&scene, 0, swapped));
+                    CHECK(memcmp(base, swapped, sizeof base) == 0);
+                    objects[1].pos = objects[0].pos;
+                    scene.shadow.flags = SU_SHADOW_ON;
+                    scene.shadow.size = 256;
+                    CHECK(render(&scene, 0, swapped));
+                    CHECK(su_render_stats(g_r, &stats) == SU_OK && stats.shadow_casters == 1u);
+                    memset(&scene.shadow, 0, sizeof scene.shadow);
+                }
+            }
+        }
+    }
+    if (getenv("SUTEKH_OVERLAY_BENCH") != NULL) {
+        SuRenderObject batches[65];
+        batches[0] = objects[0];
+        batches[0].rot.y = 0.0f;
+        batches[0].rot.w = 1.0f;
+        g_obj = batches;
+        for (mode = 0; mode < 3u; mode++) {
+            double cpu = 0.0, gpu = 0.0;
+            uint32_t count = mode == 2u ? 64u : mode;
+            g_obj_count = count + 1u;
+            for (sample = 1; sample <= count; sample++) {
+                batches[sample] = batches[0];
+                batches[sample].model = objects[1].model;
+                if (mode == 2u) {
+                    batches[sample].scale = 0.125f;
+                    batches[sample].pos = su_wpos(-0.875 + (double)((sample - 1u) % 8u) * 0.25,
+                                                 -0.875 + (double)((sample - 1u) / 8u) * 0.25, -3.0);
+                }
+            }
+            for (sample = 0; sample < 40u; sample++) {
+                CHECK(render(&scene, 0, combined));
+                CHECK(su_render_stats(g_r, &stats) == SU_OK);
+                if (sample >= 10u) {
+                    cpu += stats.cpu_ms;
+                    gpu += stats.gpu_ms;
+                }
+            }
+            printf("overlay bench: %ux%u, %u overlay, 30 samples after warmup: CPU %.6f ms, GPU %.6f ms, %u draws\n",
+                   W, H, count, cpu / 30.0, gpu / 30.0, stats.draws);
+        }
+    }
+    g_obj = NULL;
+    g_obj_count = 1;
+}
+
 int main(int argc, char **argv) {
     int validation = 1;
     SuRenderDeviceInfo devs[8];
@@ -2007,6 +2170,7 @@ int main(int argc, char **argv) {
         return g_fail ? 1 : 0;
     }
     test_mask_channels();
+    test_overlay();
     test_blend_order();
     test_zero_layers();
     test_glow();

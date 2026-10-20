@@ -104,6 +104,28 @@ depth-only pass over the casters and nine shadow taps per lit pixel. `cascades` 
 4.73 ms; one 2048 map +0.66 ms; 2 cascades of 2048 +1.25 ms; 4 of 2048 +2.64 ms; 4 of 1024 +1.49 ms
 (`SUTEKH_SHADOW_BENCH=1 test_render_paint`). Tests: `test_render_paint` (`test_shadows`, `test_shadow_cascades`).
 
+### Vulkan sampler portability
+
+Mesa 25.0.7 lavapipe returns NaNs when an anisotropic sampler reads a texture with constant UVs (zero implicit
+derivatives). This includes the renderer's white 1x1 fallback, so even an untextured, unlit opaque material can
+render black; it is not an alpha-blending or lighting failure. The same draw works with nonconstant UVs, without
+anisotropy, and on the tested hardware driver. Synchronization validation reports no warnings or errors.
+
+The backend disables anisotropy only for `VK_DRIVER_ID_MESA_LLVMPIPE` with version 25.0.7 parsed from
+`VkPhysicalDeviceDriverProperties.driverInfo`. Its legacy `driverVersion` is 1, not the Mesa version. Linear
+minification/magnification, trilinear mip filtering and wrap modes are unchanged. Other drivers and Mesa versions
+retain anisotropy; do not widen the workaround without a failing reproduction. An upstream Mesa report with the
+reduced case would be appropriate; a newer-driver result has not been established here.
+
+`ctest --test-dir build -R '^render_(ghost|sampler)$' --output-on-failure` covers the original translucent boxes and
+a reduced case, also available as `test_render_ghost WORKDIR --sampler-repro`: one unlit opaque triangle, no pack,
+no lighting, no shadows, no sky or bloom, then the same triangle at half alpha. It checks constant, varying and
+one-axis UVs against both the white 1x1 fallback and a white 2x2 texture. Select lavapipe with `VK_DRIVER_FILES`
+(or `VK_ICD_FILENAMES`) pointing to its ICD manifest; `SUTEKH_REQUIRE_VALIDATION=1` requires the validation layer.
+To reproduce the driver defect rather than the workaround, temporarily remove `!broken_anisotropy(r)` from the
+sampler's anisotropy condition and rebuild. Only constant-UV cases fail on the affected driver; the same binary
+passes on the tested hardware. Diagnostic bisect and validation evidence: `planning/handoffs/2026-10-20-lavapipe-ghost.md`.
+
 ## 3. Shader/pipeline edits
 
 Shader source is an asset with explicit include dependencies and compiler/target/resource-layout fingerprints. Compile only affected variants using an established compiler adapter. Prepare driver pipelines away from the render-critical path. Keep the last compatible pipeline active until the new one is ready; use a documented fallback when an interface change makes that impossible.
@@ -131,6 +153,33 @@ Preserve semantic separation between visual upgrades and original gameplay. Chan
 Audio consumes committed effect events. Use an established device/mixing backend initially; do not rewrite codecs in assembly. Real-time audio callbacks cannot block on the agent control plane, memory allocation, asset import, or GPU work. Asset updates and voice lifetime changes are prepared outside the audio callback.
 
 Speculative candidates do not play real sounds. Development effect IDs and commit indices prevent duplicate externally visible effects after controlled recovery where supported.
+
+## Depth-biased mesh overlays
+
+Set `SuRenderMaterialDesc.overlay = 1` or `SuRenderPaintDesc.overlay = 1` before
+creating a material for coplanar decal geometry. Zero preserves the existing
+material behavior. Both paths use their normal lit fragment shader and texture
+slots, including texture alpha and per-object tint alpha. Overlay mode overrides
+the material alpha mode with straight-alpha blending (it does not alpha-test).
+
+Overlays render after opaque and masked geometry, including diagnostic meshes,
+and before ordinary transparent geometry. They use reversed-Z greater-or-equal
+depth testing, positive constant and slope-scaled raster depth bias (both factors
+1), and no depth writes. They receive the normal material lighting and shadows
+but never cast shadows. Single- and double-sided variants retain material culling.
+Overlays are sorted back-to-front within their phase and batch like other meshes.
+
+Use the base surface's vertex positions with a dedicated decal index buffer and
+material; no CPU vertex displacement or special shader is needed. This is a mesh
+overlay, not a screen-space projected decal. Bias is intentionally small and fixed;
+geometry meaningfully behind another surface remains occluded. Avoid intersecting
+transparent surfaces and ambiguous same-depth overlapping decals: this is the
+existing sorted-alpha renderer, not order-independent transparency.
+
+No glTF extension or cooked asset format changes are introduced: import continues
+to preserve its existing material semantics. Applications select overlay materials
+through the renderer API when constructing their mesh materials. Issue #67 does
+not request an import mapping.
 
 ## 7. Release player
 

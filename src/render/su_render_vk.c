@@ -1032,6 +1032,7 @@ static VkShaderModule shader(SuRenderer *r, const uint32_t *code, size_t bytes) 
 #define VIN_NONE 2
 #define VIN_PBR 3
 #define VIN_FX 4
+#define VIN_FLAME 7
 #define VIN_HUD 5
 #define VIN_SHADOW 6 /* asset vertex position and the instance rows only (shadow casters) */
 
@@ -1057,6 +1058,7 @@ typedef struct PipeSpec {
     int layout;        /* 1: the textured-effects layout (frame, one sampler), 2: the cube sky layout */
     int subpass;       /* scene pass subpass: 0, or 1 for the textured effects */
     int shadow;        /* the shadow pass: depth only, standard depth (less or equal), slope bias */
+    int overlay;
 } PipeSpec;
 
 static void attr(VkVertexInputAttributeDescription *a, uint32_t *n, uint32_t loc, uint32_t binding, VkFormat fmt,
@@ -1162,6 +1164,14 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         attr(at, &na, 1, 0, VK_FORMAT_R32G32_SFLOAT, 12);
         attr(at, &na, 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 20);
         break;
+    case VIN_FLAME:
+        bind[0].stride = sizeof(SuRenderFlame);
+        bind[0].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+        nb = 1;
+        for (uint32_t location = 0; location < 9u; location++) {
+            attr(at, &na, location, 0, VK_FORMAT_R32G32B32A32_SFLOAT, location * 16u);
+        }
+        break;
     case VIN_HUD:
         bind[0].stride = sizeof(SuHudVertex);
         nb = 1;
@@ -1205,6 +1215,11 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         rs.depthBiasEnable = VK_TRUE;
         rs.depthBiasConstantFactor = 1.0f;
         rs.depthBiasSlopeFactor = 1.5f;
+    }
+    if (s->overlay) {
+        rs.depthBiasEnable = VK_TRUE;
+        rs.depthBiasConstantFactor = 1.0f;
+        rs.depthBiasSlopeFactor = 1.0f;
     }
     memset(&cba, 0, sizeof cba);
     cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
@@ -1259,6 +1274,8 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         gi.layout = r->fxtex_layout;
     } else if (s->layout == 2) {
         gi.layout = r->skycube_layout;
+    } else if (s->layout == 3) {
+        gi.layout = r->flame_layout;
     }
     gi.renderPass = s->post ? r->post_pass : s->shadow ? r->shadow_pass : r->scene_pass;
     gi.subpass = (uint32_t)s->subpass;
@@ -1329,6 +1346,14 @@ static int make_pipelines(SuRenderer *r) {
     s.fs_bytes = sizeof su_shader_fx_tex_pm_frag;
     s.blend = BLEND_PREMUL;
     ok = ok && make_pipe(r, &s, &r->fxtex_pipe[1]);
+    s.vs = su_shader_flame_vert;
+    s.vs_bytes = sizeof su_shader_flame_vert;
+    s.fs = su_shader_flame_frag;
+    s.fs_bytes = sizeof su_shader_flame_frag;
+    s.vin = VIN_FLAME;
+    s.layout = 3;
+    s.blend = BLEND_ADD;
+    ok = ok && make_pipe(r, &s, &r->flame_pipe);
     /* the cube-map sky background */
     memset(&s, 0, sizeof s);
     s.vs = su_shader_fullscreen_vert;
@@ -1348,8 +1373,9 @@ static int make_pipelines(SuRenderer *r) {
         s.vin = VIN_PBR;
         s.cull = (i & 1u) == 0u;
         s.depth_test = 1;
-        s.depth_write = i < PIPE_BLEND;
-        s.blend = i >= PIPE_BLEND ? BLEND_ALPHA : BLEND_NONE;
+        s.depth_write = i < PIPE_OVERLAY;
+        s.blend = i >= PIPE_OVERLAY ? BLEND_ALPHA : BLEND_NONE;
+        s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
         ok = make_pipe(r, &s, &r->pbr_pipe[i]);
     }
     /* sun shadow casters: depth only */
@@ -1375,8 +1401,9 @@ static int make_pipelines(SuRenderer *r) {
         s.paint = 1;
         s.cull = (i & 1u) == 0u;
         s.depth_test = 1;
-        s.depth_write = i < PIPE_BLEND;
-        s.blend = i >= PIPE_BLEND ? BLEND_ALPHA : BLEND_NONE;
+        s.depth_write = i < PIPE_OVERLAY;
+        s.blend = i >= PIPE_OVERLAY ? BLEND_ALPHA : BLEND_NONE;
+        s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
         ok = make_pipe(r, &s, &r->paint_pipe[i]);
     }
     /* output pass */
@@ -1603,6 +1630,17 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
         if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->tex3_dsl) != VK_SUCCESS) {
             return 0;
         }
+        {
+            VkDescriptorSetLayout flame_sets[3] = {r->frame_dsl, r->tex3_dsl, r->depth_in_dsl};
+            VkPipelineLayoutCreateInfo flame_info;
+            memset(&flame_info, 0, sizeof flame_info);
+            flame_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            flame_info.setLayoutCount = 3;
+            flame_info.pSetLayouts = flame_sets;
+            if (r->f.vkCreatePipelineLayout(r->dev, &flame_info, NULL, &r->flame_layout) != VK_SUCCESS) {
+                return 0;
+            }
+        }
         li.bindingCount = 1;
         li.pBindings = b;
         pcr.size = sizeof(BloomPush);
@@ -1668,6 +1706,21 @@ static int make_shadow_sampler(SuRenderer *r) {
     return r->f.vkCreateSampler(r->dev, &si, NULL, &r->shadow_sampler) == VK_SUCCESS;
 }
 
+static int broken_anisotropy(SuRenderer *r) {
+    VkPhysicalDeviceDriverProperties driver = {0};
+    VkPhysicalDeviceProperties2 props = {0};
+    unsigned major = 0;
+    unsigned minor = 0;
+    unsigned patch = 0;
+    driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    props.pNext = &driver;
+    r->f.vkGetPhysicalDeviceProperties2(r->pd, &props);
+    return driver.driverID == VK_DRIVER_ID_MESA_LLVMPIPE &&
+           sscanf(driver.driverInfo, "Mesa %u.%u.%u", &major, &minor, &patch) == 3 &&
+           major == 25u && minor == 0u && patch == 7u;
+}
+
 static int make_samplers(SuRenderer *r) {
     static const VkSamplerAddressMode modes[3] = {VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
                                                   VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT};
@@ -1679,7 +1732,7 @@ static int make_samplers(SuRenderer *r) {
     si.minFilter = VK_FILTER_LINEAR;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     si.maxLod = VK_LOD_CLAMP_NONE;
-    if (r->anisotropy) {
+    if (r->anisotropy && !broken_anisotropy(r)) {
         si.anisotropyEnable = VK_TRUE;
         si.maxAnisotropy = r->props.limits.maxSamplerAnisotropy < 8.0f ? r->props.limits.maxSamplerAnisotropy : 8.0f;
     }
@@ -1726,10 +1779,10 @@ static int make_fx_pool(SuRenderer *r, Frame *fr) {
     VkDescriptorPoolSize ps;
     VkDescriptorPoolCreateInfo pi;
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = r->max_fx_batches;
+    ps.descriptorCount = r->max_fx_batches + SU_FLAME_MAX * 3u;
     memset(&pi, 0, sizeof pi);
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = r->max_fx_batches;
+    pi.maxSets = r->max_fx_batches + SU_FLAME_MAX;
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &ps;
     return r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &fr->fx_pool) == VK_SUCCESS;
@@ -2268,6 +2321,7 @@ void su_render_destroy(SuRenderer *r) {
             su_rvk_free_buffer(r, &fr->draw_inst);
             su_rvk_free_buffer(r, &fr->fx);
             su_rvk_free_buffer(r, &fr->fx_tex);
+            su_rvk_free_buffer(r, &fr->flames);
             su_rvk_free_buffer(r, &fr->shadow_inst);
             if (fr->fx_pool != VK_NULL_HANDLE) {
                 r->f.vkDestroyDescriptorPool(r->dev, fr->fx_pool, NULL);
@@ -2302,6 +2356,12 @@ void su_render_destroy(SuRenderer *r) {
             all[9] = r->skycube_pipe;
             if (r->bloom_up_pipe != VK_NULL_HANDLE) {
                 r->f.vkDestroyPipeline(r->dev, r->bloom_up_pipe, NULL);
+            }
+            if (r->flame_pipe != VK_NULL_HANDLE) {
+                r->f.vkDestroyPipeline(r->dev, r->flame_pipe, NULL);
+            }
+            if (r->flame_layout != VK_NULL_HANDLE) {
+                r->f.vkDestroyPipelineLayout(r->dev, r->flame_layout, NULL);
             }
             if (r->env_pf_pipe != VK_NULL_HANDLE) {
                 r->f.vkDestroyPipeline(r->dev, r->env_pf_pipe, NULL);
@@ -2638,6 +2698,8 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
             !su_rvk_make_buffer(r, (VkDeviceSize)r->max_fx_tex * 2u * sizeof(SuFxVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                 host, &fr->fx_tex) ||
             !make_fx_pool(r, fr) ||
+            !su_rvk_make_buffer(r, SU_FLAME_MAX * sizeof(SuRenderFlame), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                host, &fr->flames) ||
             !su_rvk_make_buffer(r, (VkDeviceSize)r->max_hud * sizeof(SuHudVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                 host, &fr->hud) ||
             !su_rvk_make_buffer(r, sizeof(FrameUbo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, host, &fr->ubo) ||
@@ -2922,7 +2984,8 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
             count = n_fxt - first;
         }
         count -= count % 3u;
-        if (tr == NULL || tr->state != SU_RENDER_STATE_READY || tr->u.tex.layers != 1u || count == 0u || first % 3u != 0u ||
+        if (tr == NULL || tr->state != SU_RENDER_STATE_READY || tr->u.tex.layers != 1u || tr->u.tex.depth > 1u ||
+            count == 0u || first % 3u != 0u ||
             bt->blend > SU_FX_BLEND_PREMUL || n_batches >= r->max_fx_batches) {
             skipped++;
             continue;
@@ -3204,6 +3267,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     }
     if (n_items > 0u) {
         su_rvk_scene_draw(r, fr, cmd, n_items, 1);
+        su_rvk_scene_draw(r, fr, cmd, n_items, 2);
     }
     if (n_fx > 0u) {
         r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->fx_pipe);
@@ -3234,6 +3298,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
             r->stats.draws++;
         }
     }
+    su_rvk_flames(r, fr, cmd, in->scene);
     r->f.vkCmdEndRenderPass(cmd);
 
     /* ---- bloom chain (half resolution), when asked for and available ---- */
@@ -3526,6 +3591,9 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
         return SU_E_INVALID_ARGUMENT;
     }
     l = &f->light;
+    if (!su_rvk_flames_valid(f)) {
+        return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "invalid flame volume instances");
+    }
     memset(&in, 0, sizeof in);
     view = su_render_camera_view(&f->camera);
     proj = su_mat4f_perspective_rz(f->camera.fov_y, (float)r->width / (float)(r->height > 0u ? r->height : 1u),

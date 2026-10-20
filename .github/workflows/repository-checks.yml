@@ -75,8 +75,7 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=ON -DSUTEKH_ASSET_IMPORT=ON
           # -k 0: report every file that fails, not just the first
           cmake --build build -j 2 -- -k 0
-          # render_ghost: blank frames on this image's lavapipe (Mesa 25.0.7), whatever the compiler (issue #61)
-          ctest --test-dir build --output-on-failure -j 2 -E '^render_ghost$'
+          ctest --test-dir build --output-on-failure -j 2
 
   runtime:
     name: Linux checked runtime

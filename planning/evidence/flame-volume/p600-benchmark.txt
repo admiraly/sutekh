@@ -1,0 +1,11 @@
+device=Quadro P600 driver=2441347072 Vulkan=4211000 timestamps=1 resolution=1280x720 validation_requested=0
+benchmark instances=0 steps=2 gpu_median_ms=0.827936 gpu_p95_ms=2.861024 cpu_median_ms=0.029100 cpu_p95_ms=0.124200
+benchmark instances=32 steps=2 gpu_median_ms=0.956000 gpu_p95_ms=3.332160 cpu_median_ms=0.045400 cpu_p95_ms=0.108700
+benchmark instances=128 steps=2 gpu_median_ms=1.050688 gpu_p95_ms=3.246976 cpu_median_ms=0.046100 cpu_p95_ms=0.100400
+benchmark instances=0 steps=6 gpu_median_ms=0.827168 gpu_p95_ms=2.365472 cpu_median_ms=0.043700 cpu_p95_ms=0.129200
+benchmark instances=32 steps=6 gpu_median_ms=0.994208 gpu_p95_ms=2.983264 cpu_median_ms=0.042500 cpu_p95_ms=0.110900
+benchmark instances=128 steps=6 gpu_median_ms=1.190080 gpu_p95_ms=3.132608 cpu_median_ms=0.054500 cpu_p95_ms=0.110200
+benchmark instances=0 steps=12 gpu_median_ms=0.826944 gpu_p95_ms=2.280896 cpu_median_ms=0.043800 cpu_p95_ms=0.122800
+benchmark instances=32 steps=12 gpu_median_ms=1.050496 gpu_p95_ms=3.057504 cpu_median_ms=0.066900 cpu_p95_ms=0.135200
+benchmark instances=128 steps=12 gpu_median_ms=1.389440 gpu_p95_ms=14.474752 cpu_median_ms=0.055800 cpu_p95_ms=0.118900
+validation_enabled=0 errors=0 warnings=0 failures=0

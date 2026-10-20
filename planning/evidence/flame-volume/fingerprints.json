@@ -1,0 +1,72 @@
+{
+  "task": "issue-65-flame-volume",
+  "date": "2026-10-20",
+  "state": "verified_local_remote_ci_pending",
+  "source_commit": "e3ad686ca56e017fd0d56e36a9b13294d8b89df8",
+  "base_commit": "d5b98fed9085345d569dcb473578e90f36307585",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "toolchain": {
+    "c": "Clang 23.1.3 and MSVC 19.44.35229",
+    "shader": "glslang 16.6.0",
+    "language": "C17"
+  },
+  "sources_sha256": {
+    "cmake/SutekhPresentation.cmake": "9cc7b411ac254c85d06b6f4e72b87b5dbeec0a6c0fcbcb6c3e8fcc1df5944408",
+    "docs/FLAME_VOLUME.md": "782e36c8dc30c387375c11f5eda67bbe307dab3080ac2b24d3f790948efe693f",
+    "include/sutekh/render.h": "29c71db627980922e1abfe98c9f862fa90a774e21f22a3aa174ad6c239464ee4",
+    "src/render/shaders/flame.frag": "b1d085952fe5998516f8229bb83fcd9b7960b6231370a7fad9ca2f9e86de9b28",
+    "src/render/shaders/flame.vert": "549d9f154714d150e0c18117703a2d819f1a928472be836436a0bf61520f12d2",
+    "src/render/su_render_flame.c": "5f70745a120a502f6a0ea4588d17f6ebcf066f1e80ee072128e78aae9379e26d",
+    "src/render/su_render_res.c": "81fd38bfb2155d5df595e48a604e3e0465ff3bdeb482c854ac0c4e81527fb98f",
+    "src/render/su_render_shaders.h": "6ae7e61ba262179145859e914443746632d17529f4a057bf3927c512e4ee1a0a",
+    "src/render/su_render_vk.c": "0277440102b636b37b3fa70f996d0e80282cdf9029a79d0f8cfdfb62013101f8",
+    "src/render/su_render_vk_int.h": "ea1d428d03718938dbb7830f7870093135fe64331c104c04f036c1fe416ea10b",
+    "tests/render/test_render_flame.c": "3c8155e81ac502172e9166fc6bc16f87908cfdd5b91dee78e6a0626728f26570",
+    "tools/compile_shaders.py": "4c5f730fe049cfc6c7835f3df5fec17ee9308cda7ed5ce3b4e8112af55fbad51"
+  },
+  "artifacts_sha256": {
+    "build-flame/test_render_flame.exe": "71207e858b8bc702c230e4f0776ac4736c8fa574e959ae17167553645c08ac16",
+    "build-flame-msvc/test_render_flame.exe": "1d08a1e95df303b1b02ed2be58766aa596cfb19ea44a7197fcfeaf43080ae315"
+  },
+  "tests": {
+    "default_ctest": {
+      "total": 113,
+      "failed": 0,
+      "skipped": [
+        "path_fifo",
+        "containment"
+      ]
+    },
+    "flame_p600": {
+      "failed": 0,
+      "validation_errors": 0,
+      "validation_warnings": 0
+    },
+    "flame_lavapipe_25_0_7": {
+      "failed": 0,
+      "validation_errors": 0,
+      "validation_warnings": 0
+    },
+    "flame_msvc_p600": {
+      "failed": 0,
+      "validation_errors": 0,
+      "validation_warnings": 0
+    }
+  },
+  "benchmark": {
+    "raw": "p600-benchmark.txt",
+    "samples_per_case": 120,
+    "warmup_frames": 20,
+    "timer": "whole-frame GPU timestamp queries",
+    "readback": false,
+    "validation": false,
+    "width": 1280,
+    "height": 720,
+    "gpu": "Quadro P600",
+    "driver_raw": 2441347072,
+    "api_raw": 4211000,
+    "pmu_counters": null,
+    "pmu_reason": "not collected",
+    "qualification": false
+  }
+}

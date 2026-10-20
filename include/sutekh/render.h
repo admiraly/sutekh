@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 3u
+#define SU_RENDER_API_VERSION 4u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -464,11 +464,13 @@ typedef struct SuRenderTextureDesc {
     uint32_t flags;                    /* SU_RENDER_UPLOAD_COPY */
     uint32_t layers;                   /* 0 or 1: a 2D texture; 6: a cube map (width == height; faces +X -X +Y -Y +Z -Z),
                                         * sampled through a cube view; the full mip chain is uploaded as given */
+    uint32_t depth;
 } SuRenderTextureDesc;
 
 typedef struct SuRenderMaterialDesc {
     SuAssetMaterial factors;           /* its texture ids are ignored; tex_info selects UV set and wrap modes */
     SuRenderHandle textures[SU_ASSET_SLOT_COUNT]; /* 0 = none */
+    uint32_t overlay;
 } SuRenderMaterialDesc;
 
 /* ---- layered paint material ----
@@ -530,7 +532,7 @@ typedef struct SuRenderPaintDesc {
     SuAssetMaterial factors;           /* base_color, metallic, roughness, normal_scale, occlusion_strength, emissive,
                                         * emissive_strength, alpha_mode, alpha_cutoff, double_sided; texture ids unused */
     SuAssetPaint paint;                /* texture ids unused; tex_info selects UV set and wrap modes */
-    SuRenderHandle textures[SU_RENDER_PAINT_SLOT_COUNT];
+    SuRenderHandle textures[SU_RENDER_PAINT_SLOT_COUNT]; /* 0 = none */
     uint32_t extra_tex_info[4];
     float specular_factor[3];
     uint32_t specular_channels;
@@ -539,6 +541,7 @@ typedef struct SuRenderPaintDesc {
     float detail_uv_scale[2];
     float detail_rotation;
     uint32_t detail_layer_mask;
+    uint32_t overlay;
 } SuRenderPaintDesc;
 
 /* ---- image-based lighting: a cubemap with prefiltered specular mips ----
@@ -740,6 +743,16 @@ typedef struct SuRenderPost {
     float exposure_max;                /* 0 = 32 */
 } SuRenderPost;
 
+typedef struct SuRenderFlame {
+    SuMat4f transform;
+    float colour[4];
+    float frequency, amplitude_start, amplitude_end, phase;
+    float gain, warp, scale, soft_distance;
+    float atlas_rows, atlas_index, steps, time;
+    float noise_velocity[3], reserved;
+    SuRenderHandle shape_atlas, gradient, noise_volume;
+} SuRenderFlame;
+
 typedef struct SuRenderFrameDesc {
     uint32_t struct_size;            /* sizeof(SuRenderFrameDesc) */
     SuRenderCamera camera;
@@ -773,6 +786,8 @@ typedef struct SuRenderFrameDesc {
                                         * light.up with su_quatf_axis_angle */
     float sky_lod;                     /* mip level sampled (0 = sharpest); a prefiltered env cube gets blurrier with it */
     SuRenderShadow shadow;             /* all zero: no sun shadows (see SuRenderShadow) */
+    const SuRenderFlame *flames;
+    uint32_t flame_count;
 } SuRenderFrameDesc;
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object
@@ -840,6 +855,7 @@ typedef struct SuRenderStats {
     /* ---- sun shadow cascades ---- */
     uint32_t shadow_cascades;      /* cascades of the last frame (1 for the single map, 0 when off) */
     float shadow_cascade_texel[4]; /* world units per texel of each cascade */
+    uint32_t flames_drawn, flames_skipped, flame_draws;
 } SuRenderStats;
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given

@@ -14,8 +14,8 @@ static const DrawItem *g_sort_items; /* qsort context (one renderer per thread) 
 static int cmp_items(const void *a, const void *b) {
     const DrawItem *x = &g_sort_items[*(const uint32_t *)a];
     const DrawItem *y = &g_sort_items[*(const uint32_t *)b];
-    int xb = x->pipe >= PIPE_BLEND;
-    int yb = y->pipe >= PIPE_BLEND;
+    int xb = x->pipe >= PIPE_BLEND ? 2 : x->pipe >= PIPE_OVERLAY ? 1 : 0;
+    int yb = y->pipe >= PIPE_BLEND ? 2 : y->pipe >= PIPE_OVERLAY ? 1 : 0;
     if (xb != yb) {
         return xb - yb;
     }
@@ -163,7 +163,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
                 it->pipe = mat != NULL ? mat->u.mat.pipeline : PIPE_OPAQUE;
                 it->kind = mat != NULL ? mat->u.mat.kind : 0u;
                 it->forced = 0;
-                if (obj->tint[3] < 1.0f && it->pipe < PIPE_BLEND) {
+                if (obj->tint[3] < 1.0f && it->pipe < PIPE_OVERLAY) {
                     /* translucent instance of an opaque or masked material: the blend pass, same face culling */
                     it->pipe = (it->pipe & 1u) != 0u ? PIPE_BLEND_2S : PIPE_BLEND;
                     it->forced = 1;
@@ -264,7 +264,8 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
         const DrawItem *it = &r->items[r->order[i]];
         uint32_t run = 1;
         const SubGpu *sub;
-        if ((it->pipe >= PIPE_BLEND) != (blend_pass != 0)) {
+        int pass = it->pipe >= PIPE_BLEND ? 2 : it->pipe >= PIPE_OVERLAY ? 1 : 0;
+        if (pass != blend_pass) {
             i++;
             continue;
         }
