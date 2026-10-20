@@ -7,6 +7,7 @@
 
 #include "sutekh/audio_offline.h"
 #include "sutekh/audio_bus.h"
+#include "sutekh/audio_cluster.h"
 #include "sutekh/audio_parameter.h"
 #include "sutekh/audio_voice_policy.h"
 
@@ -156,6 +157,7 @@ uint32_t su_audio_trace_csv(const SuAudioTelemetryEntry *entries, uint32_t count
 uint32_t su_audio_inspect_bus_json(SuAudioBusTree *tree, int reset, char *out, size_t capacity, size_t *written);
 uint32_t su_audio_inspect_voice_pool_json(const SuAudioVoicePool *pool, char *out, size_t capacity,
     size_t *written);
+uint32_t su_audio_inspect_cluster_json(const SuAudioCluster *cluster, char *out, size_t capacity, size_t *written);
 uint32_t su_audio_inspect_params_json(const SuAudioParams *params, char *out, size_t capacity, size_t *written);
 
 /* Source/artifact manifest for an offline export. Verifies that the WAV payload

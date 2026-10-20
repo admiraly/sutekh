@@ -51,6 +51,18 @@ typedef struct Voice {
     float distance;
 } Voice;
 
+#define BLOCKS (LENGTH / BLOCK)
+#define MAX_EMITTERS 4u
+
+typedef struct EmitterFrame {
+    uint64_t handle[MAX_EMITTERS];
+    SuVec3f direction[MAX_EMITTERS];
+    float distance[MAX_EMITTERS];
+    uint32_t count;
+} EmitterFrame;
+
+static EmitterFrame emitter_frames[BLOCKS];
+static const float silence[BLOCK];
 static Voice voices[MAX_VOICES];
 static uint32_t voice_count;
 static float event_pcm[LENGTH * 2u];
@@ -225,6 +237,17 @@ static void event_stage(const char *dir) {
         CHECK(su_audio_offline_render(off, event_pcm + (size_t)done * 2u, BLOCK) == SU_OK);
         CHECK(su_audio_inspect(su_audio_offline_events(off), su_audio_offline_scene(off), assets, &snap) == SU_OK);
         CHECK(snap.truncated == 0u);
+        {
+            EmitterFrame *frame = &emitter_frames[done / BLOCK];
+            uint32_t e;
+            frame->count = 0u;
+            for (e = 0; e < snap.emitter_count && e < MAX_EMITTERS; e++) {
+                frame->handle[frame->count] = live_emitters[e].handle;
+                frame->direction[frame->count] = live_emitters[e].direction_listener;
+                frame->distance[frame->count] = (float)live_emitters[e].distance_m;
+                frame->count++;
+            }
+        }
         for (v = 0; v < snap.voice_count; v++) {
             uint32_t known;
             uint32_t i;
@@ -280,6 +303,8 @@ typedef struct Composition {
     float final_ambience_fader_db;
     uint64_t stolen;
     uint32_t virtual_peak;
+    uint32_t max_cluster_outputs;
+    uint64_t cluster_joins;
 } Composition;
 
 /* Stage 2: voice pools per bus, a parameter on the ambience fader, and a
@@ -300,6 +325,7 @@ static Composition compose(float *out, uint32_t block, const char *dir) {
     SuAudioParamBinding binding;
     SuAudioParamScope global_scope = {SU_AUDIO_SCOPE_GLOBAL, 0u};
     SuAudioParamTarget target = {0u, 0u};
+    SuAudioCluster *cluster = NULL;
     Composition result;
     float scratch[BLOCK * 2u];
     uint32_t index;
@@ -367,7 +393,19 @@ static Composition compose(float *out, uint32_t block, const char *dir) {
     params_desc.max_scoped_values = 8u;
     CHECK(su_audio_params_create(&params_desc, &params) == SU_OK);
     CHECK(su_audio_param_set_at(params, global_scope, 1u, 1.0f, 24000u) == SU_OK);
-    if (tree == NULL || params == NULL || pools[0] == NULL || pools[1] == NULL || pools[2] == NULL) {
+    {
+        SuAudioClusterDesc cluster_desc;
+        memset(&cluster_desc, 0, sizeof cluster_desc);
+        cluster_desc.struct_size = sizeof cluster_desc;
+        cluster_desc.width_rad = 1.2f;
+        cluster_desc.leave_ratio = 1.25f;
+        cluster_desc.hold_frames = 1024u;
+        cluster_desc.crossfade_frames = 256u;
+        cluster_desc.output_limit = 2u;
+        cluster_desc.max_objects = MAX_EMITTERS;
+        CHECK(su_audio_cluster_create(&cluster_desc, &cluster) == SU_OK);
+    }
+    if (tree == NULL || params == NULL || cluster == NULL || pools[0] == NULL || pools[1] == NULL || pools[2] == NULL) {
         return result;
     }
     for (done = 0u; done < LENGTH; done += BLOCK) {
@@ -390,6 +428,30 @@ static Composition compose(float *out, uint32_t block, const char *dir) {
             desc.trigger_seq = next_voice;
             CHECK(su_audio_voice_add(pools[pool], &desc, &handle) == SU_OK);
             CHECK(su_audio_voice_set_audibility(pools[pool], handle, 1.0f, v->distance) == SU_OK);
+        }
+        {
+            /* Emitters of the live instances are clustered for spatial output metadata. */
+            const EmitterFrame *frame = &emitter_frames[done / BLOCK];
+            SuAudioClusterObject objects[MAX_EMITTERS];
+            SuAudioClusterStats cluster_stats;
+            uint32_t e;
+            memset(objects, 0, sizeof objects);
+            for (e = 0; e < frame->count; e++) {
+                objects[e].id = frame->handle[e];
+                objects[e].direction = frame->direction[e];
+                objects[e].distance_m = frame->distance[e];
+                objects[e].rms = 0.1f;
+                objects[e].channels = 1u;
+                objects[e].pcm = silence;
+            }
+            CHECK(su_audio_cluster_update(cluster, objects, frame->count) == SU_OK);
+            CHECK(su_audio_cluster_render(cluster, objects, frame->count, BLOCK, scratch) == SU_OK);
+            su_audio_cluster_stats(cluster, &cluster_stats);
+            CHECK(cluster_stats.outputs <= 2u || cluster_stats.infeasible != 0u);
+            if (cluster_stats.outputs > result.max_cluster_outputs) {
+                result.max_cluster_outputs = cluster_stats.outputs;
+            }
+            result.cluster_joins = cluster_stats.joins;
         }
         CHECK(su_audio_param_controls(params, target, done, &controls) == SU_OK);
         if (controls.bus_id == 30u) {
@@ -426,9 +488,13 @@ static Composition compose(float *out, uint32_t block, const char *dir) {
     CHECK(su_audio_inspect_voice_pool_json(pools[0], text, sizeof text, &written) == SU_OK && clean_text(text));
     CHECK(strstr(text, "\"physical\":") != NULL);
     write_file(dir, "voice_pool_shots.json", text, written);
+    CHECK(su_audio_inspect_cluster_json(cluster, text, sizeof text, &written) == SU_OK && clean_text(text));
+    CHECK(strstr(text, "\"schema\":\"su_audio_cluster_v1\"") != NULL);
+    write_file(dir, "clusters.json", text, written);
     CHECK(su_audio_inspect_params_json(params, text, sizeof text, &written) == SU_OK && clean_text(text));
     CHECK(strstr(text, "\"sets\":1") != NULL);
     write_file(dir, "params.json", text, written);
+    su_audio_cluster_destroy(cluster);
     su_audio_params_destroy(params);
     for (index = 0; index < 3u; index++) {
         su_audio_voice_pool_destroy(pools[index]);
@@ -452,6 +518,9 @@ int main(int argc, char **argv) {
     b = compose(mix_b, 37u, NULL);
     CHECK(memcmp(mix_a, mix_b, sizeof mix_a) == 0);
     CHECK(a.stolen == b.stolen && a.virtual_peak == b.virtual_peak);
+    CHECK(a.max_cluster_outputs == b.max_cluster_outputs && a.cluster_joins == b.cluster_joins);
+    /* Three emitters are folded into at most two cluster outputs. */
+    CHECK(a.max_cluster_outputs >= 1u && a.max_cluster_outputs <= 2u && a.cluster_joins > 0u);
     /* Shots exceed two physical voices, so virtualisation is exercised. */
     CHECK(a.virtual_peak > 0u);
     /* Shots duck the ambience bus before the parameter moves its fader. */
@@ -467,8 +536,8 @@ int main(int argc, char **argv) {
     write_file(dir, "composed.wav", wav, written);
     (void)snprintf(text, sizeof text, "{\"schema\":\"su_audio_composed_v1\",\"frames\":%u,\"integrated_lufs\":%.3f,"
         "\"true_peak_dbtp\":%.3f,\"voices\":%u,\"shot_virtual_peak\":%u,\"shot_stolen\":%llu,"
-        "\"min_ambience_gain_early\":%.4f}\n", LENGTH, lufs, 20.0 * log10(peak), voice_count, a.virtual_peak,
-        (unsigned long long)a.stolen, a.min_ambience_gain_early);
+        "\"min_ambience_gain_early\":%.4f,\"max_cluster_outputs\":%u}\n", LENGTH, lufs, 20.0 * log10(peak), voice_count, a.virtual_peak,
+        (unsigned long long)a.stolen, a.min_ambience_gain_early, a.max_cluster_outputs);
     write_file(dir, "composed.json", text, strlen(text));
     printf("%s", text);
     printf("audio_acceptance: %u checks, %u failures\n", checks, failures);

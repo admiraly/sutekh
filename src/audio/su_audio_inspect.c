@@ -492,6 +492,42 @@ uint32_t su_audio_inspect_voice_pool_json(const SuAudioVoicePool *pool, char *ou
     return finish(&w, written);
 }
 
+uint32_t su_audio_inspect_cluster_json(const SuAudioCluster *cluster, char *out, size_t capacity, size_t *written) {
+    Writer w = {out, capacity, 0u, 0};
+    SuAudioClusterStats stats;
+    SuAudioClusterOutput outputs[64];
+    uint32_t count = 0u;
+    uint32_t index;
+    if (written != NULL) {
+        *written = 0u;
+    }
+    uint32_t status;
+    if (cluster == NULL || written == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    status = su_audio_cluster_outputs(cluster, outputs, 64u, &count);
+    if (status != SU_OK && status != SU_E_RESOURCE_LIMIT) {
+        return status;
+    }
+    su_audio_cluster_stats(cluster, &stats);
+    emit(&w, "{\"schema\":\"su_audio_cluster_v1\",\"clock\":%llu,\"objects\":%u,\"beds\":%u,\"clusters\":%u,"
+        "\"draining\":%u,\"dedicated\":%u,\"outputs\":%u,\"infeasible\":%u,\"fading\":%u,\"created\":%llu,"
+        "\"joins\":%llu,\"moves\":%llu,\"merges\":%llu,\"runtime_bytes\":%llu,\"output_list\":[",
+        (unsigned long long)stats.clock, stats.objects, stats.beds, stats.clusters, stats.draining, stats.dedicated,
+        stats.outputs, stats.infeasible, stats.fading, (unsigned long long)stats.created,
+        (unsigned long long)stats.joins, (unsigned long long)stats.moves, (unsigned long long)stats.merges,
+        (unsigned long long)stats.runtime_bytes);
+    for (index = 0; index < count && index < 64u; index++) {
+        const SuAudioClusterOutput *o = &outputs[index];
+        emit(&w, "%s{\"output_id\":%u,\"kind\":%u,\"members\":%u,\"draining\":%u,\"object_id\":%llu,"
+            "\"direction\":[%.6g,%.6g,%.6g],\"rms_weight\":%.6g}", index ? "," : "", o->output_id, o->kind,
+            o->members, o->draining, (unsigned long long)o->object_id, finite_or_zero(o->direction.x),
+            finite_or_zero(o->direction.y), finite_or_zero(o->direction.z), finite_or_zero(o->rms_weight));
+    }
+    emit(&w, "%s]}", count > 64u ? ",{\"truncated\":true}" : "");
+    return finish(&w, written);
+}
+
 uint32_t su_audio_inspect_params_json(const SuAudioParams *params, char *out, size_t capacity, size_t *written) {
     Writer w = {out, capacity, 0u, 0};
     SuAudioParamStats stats;
@@ -523,7 +559,7 @@ static const char *const capabilities[][2] = {
     {"voice_virtualisation", "implemented as a standalone pool; owner-composed, not wired into the event runtime"},
     {"bus_tree_ducking", "implemented as a standalone bus tree; owner-composed, not wired into the event runtime"},
     {"parameters_music", "implemented as standalone parameters/music; owner-composed, not wired into the event runtime"},
-    {"clustering", "gap: not merged in this build"},
+    {"clustering", "implemented as standalone clustering; owner-composed, not wired into the event runtime"},
     {"bank_format_import", "out of scope: downstream adapter"},
     {"control_plane_methods", "gap: audio.inspect/audio.trace/audio.render.offline are not registered"}};
 
