@@ -19,6 +19,15 @@ enum {
     SU_AUDIO_OUTPUT_DEVICE = 2u   /* as RING, read by the output device thread */
 };
 
+/* Who renders the ring (RING/DEVICE output). OWNER: su_audio_system_update on the owner's thread renders ahead (a
+ * stalled owner starves the device). PULL: the reader (the device thread, or su_audio_system_ring_read) renders the
+ * quanta it needs itself, under the system lock, so rendering never waits for the owner's frame and the latency is
+ * one device period; the owner then brackets its calls with su_audio_system_lock/unlock (update is a no-op). */
+enum {
+    SU_AUDIO_RENDER_OWNER = 0u,
+    SU_AUDIO_RENDER_PULL = 1u
+};
+
 typedef struct SuAudioSystem SuAudioSystem;
 
 /* Configuration. Every pointer (assets, graph and the descriptor tables) is borrowed and must outlive the
@@ -53,6 +62,7 @@ typedef struct SuAudioSystemDesc {
     const SuAudioBusInput *inputs;         /* host bus inputs (SuAudioBusInput); not journaled: replays, render.offline
                                             * and checkpoint verification run without them (silence) */
     uint32_t input_count;
+    uint32_t render;                       /* SU_AUDIO_RENDER_* (RING/DEVICE output; ignored offline) */
 } SuAudioSystemDesc;
 
 enum {
@@ -137,12 +147,20 @@ uint32_t su_audio_system_music_transition(SuAudioSystem *system, const SuMusicTr
                                           uint64_t sample_time, uint64_t *boundary);
 uint32_t su_audio_system_bus_gain(SuAudioSystem *system, SuAudioBusId bus, float gain_db, uint32_t ramp_frames);
 
+/* PULL render mode: the owner holds the lock around any batch of calls on the system or its components (posts,
+ * parameters, emitters, queries) so they never interleave with a render on the reader's thread. Host bus inputs run
+ * on the reader's thread under the lock. Never hold the lock across su_audio_system_destroy. No-ops in OWNER mode. */
+void su_audio_system_lock(SuAudioSystem *system);
+void su_audio_system_unlock(SuAudioSystem *system);
+
 /* OFFLINE: renders interleaved stereo frames (any chunking gives the same stream). */
 uint32_t su_audio_system_render(SuAudioSystem *system, float *out, uint32_t frames);
-/* RING/DEVICE: renders whole quanta until the ring is full; call once per game frame. Never blocks. */
+/* RING/DEVICE, OWNER render: renders whole quanta until the ring is full; call once per game frame. Never blocks.
+ * PULL render: returns SU_OK without rendering. */
 uint32_t su_audio_system_update(SuAudioSystem *system);
 /* RING: reads up to frames from the ring (what the device thread does); missing audio is delivered as silence
- * and counted in underrun_frames. Returns the number of frames that came from the ring. */
+ * and counted in underrun_frames. PULL render: renders the missing quanta first (taking the system lock), so frames
+ * up to the ring capacity minus one quantum are always delivered. Returns the number of frames from the ring. */
 uint32_t su_audio_system_ring_read(SuAudioSystem *system, float *out, uint32_t frames);
 
 /* Applies journal commands at their positions while rendering until the event runtime has produced `frames`

@@ -133,7 +133,8 @@ uint32_t su_audio_params_create(const SuAudioParamsDesc *desc, SuAudioParams **o
         const SuAudioParamBinding *in = &desc->bindings[i];
         ParamBinding *binding = &params->bindings[i];
         if (!find_param(params, in->param_id, &binding->def_index) || in->control > SU_AUDIO_CONTROL_BUS_GAIN_DB
-            || in->points == NULL || in->point_count == 0u || in->point_count > SU_AUDIO_PARAM_MAX_BINDING_POINTS) {
+            || in->points == NULL || in->point_count == 0u || in->point_count > SU_AUDIO_PARAM_MAX_BINDING_POINTS
+            || (in->sum_group != 0u && in->control == SU_AUDIO_CONTROL_BUS_GAIN_DB)) {
             su_audio_params_destroy(params);
             return SU_E_INVALID_ARGUMENT;
         }
@@ -141,8 +142,9 @@ uint32_t su_audio_params_create(const SuAudioParamsDesc *desc, SuAudioParams **o
             float output = in->points[j].output;
             if (!isfinite(in->points[j].value) || !isfinite(output)
                 || (j > 0u && !(in->points[j].value > in->points[j - 1u].value))
-                || ((in->control == SU_AUDIO_CONTROL_PITCH) && !(output > 0.0f && output <= 64.0f))
-                || ((in->control == SU_AUDIO_CONTROL_LOWPASS_HZ) && !(output > 0.0f))) {
+                || (in->sum_group != 0u && !(output >= 0.0f))
+                || (in->sum_group == 0u && (in->control == SU_AUDIO_CONTROL_PITCH) && !(output > 0.0f && output <= 64.0f))
+                || (in->sum_group == 0u && (in->control == SU_AUDIO_CONTROL_LOWPASS_HZ) && !(output > 0.0f))) {
                 su_audio_params_destroy(params);
                 return SU_E_INVALID_ARGUMENT;
             }
@@ -152,6 +154,28 @@ uint32_t su_audio_params_create(const SuAudioParamsDesc *desc, SuAudioParams **o
         binding->desc.points = NULL;
     }
     params->desc.bindings = NULL;
+    {
+        uint32_t groups[SU_AUDIO_PARAM_SUM_GROUPS][2];
+        uint32_t count = 0u;
+        for (i = 0u; i < desc->binding_count; i++) {
+            const SuAudioParamBinding *in = &desc->bindings[i];
+            uint32_t k;
+            if (in->sum_group == 0u) {
+                continue;
+            }
+            for (k = 0u; k < count && !(groups[k][0] == in->sum_group && groups[k][1] == in->control); k++) {
+            }
+            if (k == count) {
+                if (count == SU_AUDIO_PARAM_SUM_GROUPS) {
+                    su_audio_params_destroy(params);
+                    return SU_E_INVALID_ARGUMENT;
+                }
+                groups[count][0] = in->sum_group;
+                groups[count][1] = in->control;
+                count++;
+            }
+        }
+    }
     for (i = 0u; i < desc->param_count; i++) {
         ParamSlot *slot = &params->global[i];
         slot->used = 1u;
@@ -524,6 +548,45 @@ void su_audio_params_counts(const SuAudioParams *params, uint32_t *param_count, 
     *bus_binding_count = buses;
 }
 
+typedef struct SumAcc {
+    uint32_t group;
+    uint32_t control;
+    float sum;
+} SumAcc;
+
+static void sum_add(SumAcc *acc, uint32_t *count, uint32_t group, uint32_t control, float value) {
+    uint32_t k;
+    for (k = 0u; k < *count && !(acc[k].group == group && acc[k].control == control); k++) {
+    }
+    if (k == *count) {
+        if (k == SU_AUDIO_PARAM_SUM_GROUPS) {
+            return; /* rejected at creation */
+        }
+        acc[k].group = group;
+        acc[k].control = control;
+        acc[k].sum = 0.0f;
+        (*count)++;
+    }
+    acc[k].sum += value;
+}
+
+/* Applies the group sums like single bindings. */
+static void sum_apply(const SumAcc *acc, uint32_t count, float *gain_db, float *pitch, float *lowpass_hz) {
+    uint32_t k;
+    for (k = 0u; k < count; k++) {
+        float v = acc[k].sum;
+        if (acc[k].control == SU_AUDIO_CONTROL_GAIN_DB) {
+            *gain_db += 20.0f * log10f(v > 1e-6f ? v : 1e-6f);
+        } else if (acc[k].control == SU_AUDIO_CONTROL_PITCH) {
+            if (v > 0.0f) {
+                *pitch *= v;
+            }
+        } else if (v > 0.0f && v < *lowpass_hz) {
+            *lowpass_hz = v;
+        }
+    }
+}
+
 /* A voice's own scoped slots (its instance and emitter), gathered in one pass over the scoped pool so each binding
  * then resolves among a few entries instead of scanning the pool again (same instance -> emitter -> global order). */
 #define VOICE_SCOPED_MAX 64u
@@ -554,6 +617,8 @@ static float voice_value(const SuAudioParams *params, const ParamSlot *const *mi
 uint32_t su_audio_param_voice_controls(const SuAudioParams *params, SuAudioParamTarget target, uint32_t bus_id,
                                        uint64_t sample_time, float *gain_db, float *pitch, float *lowpass_hz) {
     const ParamSlot *mine[VOICE_SCOPED_MAX];
+    SumAcc sums[SU_AUDIO_PARAM_SUM_GROUPS];
+    uint32_t nsum = 0u;
     uint32_t count = 0u;
     int gathered = 1;
     uint32_t i;
@@ -585,6 +650,10 @@ uint32_t su_audio_param_voice_controls(const SuAudioParams *params, SuAudioParam
         mapped = binding_eval(binding, gathered
             ? voice_value(params, mine, count, target, binding->def_index, sample_time)
             : param_value(params, target, binding->def_index, sample_time));
+        if (binding->desc.sum_group != 0u) {
+            sum_add(sums, &nsum, binding->desc.sum_group, binding->desc.control, mapped);
+            continue;
+        }
         if (binding->desc.control == SU_AUDIO_CONTROL_GAIN_DB) {
             *gain_db += mapped;
         } else if (binding->desc.control == SU_AUDIO_CONTROL_PITCH) {
@@ -593,6 +662,7 @@ uint32_t su_audio_param_voice_controls(const SuAudioParams *params, SuAudioParam
             *lowpass_hz = mapped;
         }
     }
+    sum_apply(sums, nsum, gain_db, pitch, lowpass_hz);
     if (*pitch > 64.0f) {
         *pitch = 64.0f;
     }
@@ -652,6 +722,8 @@ uint32_t su_audio_params_state(SuAudioParams *params, SuAudioStateIo *io) {
 uint32_t su_audio_param_controls(const SuAudioParams *params, SuAudioParamTarget target,
                                  uint64_t sample_time, SuAudioParamControls *out) {
     uint32_t i;
+    SumAcc sums[SU_AUDIO_PARAM_SUM_GROUPS];
+    uint32_t nsum = 0u;
     int bus_set = 0;
     if (out == NULL) {
         return SU_E_INVALID_ARGUMENT;
@@ -666,6 +738,10 @@ uint32_t su_audio_param_controls(const SuAudioParams *params, SuAudioParamTarget
         const ParamBinding *binding = &params->bindings[i];
         float value = param_value(params, target, binding->def_index, sample_time);
         float mapped = binding_eval(binding, value);
+        if (binding->desc.sum_group != 0u) {
+            sum_add(sums, &nsum, binding->desc.sum_group, binding->desc.control, mapped);
+            continue;
+        }
         switch (binding->desc.control) {
         case SU_AUDIO_CONTROL_GAIN_DB:
             out->gain_db += mapped;
@@ -689,6 +765,7 @@ uint32_t su_audio_param_controls(const SuAudioParams *params, SuAudioParamTarget
             break;
         }
     }
+    sum_apply(sums, nsum, &out->gain_db, &out->pitch, &out->lowpass_hz);
     if (out->pitch > 64.0f) {
         out->pitch = 64.0f;
     }

@@ -74,6 +74,14 @@ noise. Occlusion-style extra filtering maps to a `LOWPASS_HZ` parameter binding
   `bus_id`, so a single "throttle" parameter can open one layer's filter and
   raise another's gain.
 
+## Rendering off the game frame
+
+The legacy device thread mixed on its own, so a game hitch never gapped the
+output. To get the same with the system, use `desc.render =
+SU_AUDIO_RENDER_PULL`: the device thread renders under the system lock, and the
+game takes `su_audio_system_lock` around its per-frame command batch. Additive
+legacy formulas (gain = a + b x + c y) map onto binding sum groups.
+
 ## Things to keep in mind
 
 - Leave `desc.voices.sample_rate` at 0 when clips have other rates than the
