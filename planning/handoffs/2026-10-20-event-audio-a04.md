@@ -34,3 +34,10 @@ the full Clang suite plus affected MSVC tests. Cross-platform PR CI is required
 before merge. Full DSP checkpoints, virtual voices, live event parameter
 snapshots, bus processing, directional clustering and inspection remain for
 A05-A10. Watermark restore is intentionally not a PCM/filter checkpoint.
+
+Final local merged-tree evidence at main `29894fa`: full Clang Debug suite,
+112 passed plus two explicit POSIX skips, zero failures (75.22 seconds).
+Clang ASan spatial/graph/event targets: three passed, zero failures.
+Commands and exact source/artifact hashes are in the runtime component note.
+PRs: A01 #101, A02 #103, A03 #104, A04 #105; all are linked to this work thread.
+CI and ordered merges remain external gates at this checkpoint.

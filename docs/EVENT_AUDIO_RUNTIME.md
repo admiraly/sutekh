@@ -153,6 +153,20 @@ Local source SHA-256 values for this A04 checkpoint:
 `build-event-cl/test_audio_event.exe` SHA-256:
 `7C7229739C6E9B714F029AEEEDD6E0FFE8DC8901116559EE119F71B62621BD95`.
 Source/artifact hashes identify these local observations, not reproducible-build
-guarantees. ASan coverage is presently the graph component; full event-runtime
-sanitizer, concurrent adapter stress and long-duration device profiling remain
-unrun. Cross-platform repository CI is a required merge gate.
+guarantees. After normal integration of main `29894fa`, the full strict Clang
+Debug suite passed 112 tests with the same two POSIX skips and zero failures
+(114 total, 75.22 seconds). Clang AddressSanitizer additionally passed spatial,
+graph and event CTests, zero failures, using:
+
+```powershell
+cmake -S . -B build-event-asan -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=OFF -DSUTEKH_ASSET_IMPORT=OFF '-DCMAKE_C_FLAGS=-fsanitize=address'
+cmake --build build-event-asan --target test_audio_event test_audio_graph test_audio_spatial -j 4
+ctest --test-dir build-event-asan -R '^audio_(event|graph|spatial)$' --output-on-failure
+```
+
+The toolchain's `lib/clang/23/lib/windows` directory was added to PATH for its
+ASan runtime DLL. `build-event-asan/test_audio_event.exe` SHA-256:
+`0EED3DFCA7D1D770CE08B4B3608F0F7651CFA7482DC0A686EC77C5DA6AEB4372`.
+This is address-safety test coverage, not exhaustive leak or race detection.
+Concurrent adapter stress and long-duration device profiling remain unrun.
+Cross-platform repository CI is a required merge gate.
