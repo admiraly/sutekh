@@ -11,7 +11,7 @@
     "A01": "local_validated_pending_ci",
     "A02": "local_validated_pending_ci",
     "A03": "local_validated_pending_ci",
-    "A04": "implementation"
+    "A04": "local_validated_pending_ci"
   },
   "write_scope": [
     "include/sutekh/audio_asset.h",
@@ -36,5 +36,5 @@
     "integrator": "event runtime, shared design, build registration and integration evidence"
   },
   "excluded": ["src/render/", "main-checkout-builds", "external-content"],
-  "pending": ["native component tests", "full affected suite", "ordered PR CI and merge"]
+  "pending": ["ordered PR CI and merge", "final integration handoff"]
 }
