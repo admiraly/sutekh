@@ -264,6 +264,10 @@ typedef struct PaintUbo {
         float mop[4];         /* metallic, opacity, flags, glow strength */
         float glow[4];
     } layer[4];
+    float specular_factor[4];
+    float detail[4];
+    float rotation[4];
+    uint32_t extra[4];
 } PaintUbo;
 
 typedef struct MatRes {
@@ -271,7 +275,8 @@ typedef struct MatRes {
     uint32_t kind;            /* 0: PBR-lite, 1: layered paint */
     SuAssetPaint paint;       /* kind 1 */
     Buffer ubo;               /* kind 1: PaintUbo, host visible, written once */
-    SuRenderHandle tex[SU_PAINT_SLOT_COUNT];
+    SuRenderHandle tex[SU_RENDER_PAINT_SLOT_COUNT];
+    uint32_t paint_tex_info[SU_RENDER_PAINT_SLOT_COUNT];
     VkDescriptorSet set;
     uint32_t bound_ready;     /* slots whose real texture is in the current set */
     uint32_t pipeline;        /* PIPE_* of its draws */
@@ -459,7 +464,7 @@ struct SuRenderer {
     VkPipelineLayout skycube_layout;    /* frame, one cube sampler, SkyPush */
     VkPipeline pbr_pipe[PIPE_PBR_COUNT];
     VkPipeline paint_pipe[PIPE_PBR_COUNT];
-    VkDescriptorSetLayout paint_dsl;    /* eight samplers and the PaintUbo */
+    VkDescriptorSetLayout paint_dsl;    /* paint samplers and the PaintUbo */
     VkDescriptorSetLayout env_dsl;      /* one cube sampler */
     VkPipelineLayout paint_layout;      /* frame, paint material, environment */
     VkDescriptorSet frame_env_set;      /* the environment bound for this frame (built-in black cube when none) */

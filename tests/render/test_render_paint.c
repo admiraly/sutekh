@@ -1657,6 +1657,303 @@ static void test_pack(void) {
     }
 }
 
+static void test_specular_color(void) {
+    Pm paint;
+    Scene scene;
+    uint8_t texel[4] = {64, 128, 192, 255};
+    uint8_t black[4] = {0, 0, 0, 255};
+    uint8_t normal[4] = {204, 128, 255, 255};
+    uint8_t spatial[16 * 16 * 4];
+    float faces[6 * 8 * 8 * 4];
+    double measured[3];
+    uint32_t channel;
+    uint32_t srgb;
+    scene_init(&scene);
+    for (srgb = 0; srgb < 2; srgb++) {
+        pm_init(&paint, 0.3f);
+        paint.d.textures[SU_PAINT_SLOT_SPECULAR] = mk_tex(srgb ? SU_TEX_RGBA8_SRGB : SU_TEX_RGBA8_UNORM, 1, 1, texel);
+        for (channel = 0; channel < 3; channel++) paint.d.specular_factor[channel] = 0.5f;
+        CHECK(shoot(&scene, &paint, g_ref));
+        lin_px(g_ref, 0.5f, 0.5f, measured);
+        for (channel = 0; channel < 3; channel++) {
+            double f0 = (srgb ? lin(texel[channel]) : texel[channel] / 255.0) * 0.5;
+            double expected = 3.0 * ((1.0 - f0) * 0.3 + f0 * 0.25) / 3.14159265;
+            CHECK(fabs(measured[channel] - expected) < 0.009);
+        }
+        paint.d.factors.metallic = 1;
+        CHECK(shoot(&scene, &paint, g_img));
+        CHECK(memcmp(g_ref, g_img, sizeof g_img) == 0);
+        scene.sun_intensity = 0;
+        scene.ambient = 1;
+        scene.sky[0] = scene.sky[1] = scene.sky[2] = 0.5f;
+        CHECK(shoot(&scene, &paint, g_img));
+        lin_px(g_img, 0.5f, 0.5f, measured);
+        for (channel = 0; channel < 3; channel++) {
+            double f0 = (srgb ? lin(texel[channel]) : texel[channel] / 255.0) * 0.5;
+            double a004 = fmin(0.0, exp2(-9.28)) - 0.0275 + 0.0425;
+            double brdf = f0 * (-1.04 * a004 - 0.572 + 1.04) + 1.04 * a004 + 0.022 - 0.04;
+            double expected = 0.5 * (0.3 * (1.0 - brdf) + brdf);
+            CHECK(fabs(measured[channel] - expected) < 0.009);
+        }
+        scene_init(&scene);
+    }
+    for (channel = 0; channel < 6 * 8 * 8 * 4; channel++) faces[channel] = 0.5f;
+    scene.sun_intensity = 0;
+    scene.ambient = 1;
+    CHECK(su_render_env_create(g_r, 8, faces, &scene.env) == SU_OK);
+    CHECK(shoot(&scene, &paint, g_img));
+    lin_px(g_img, 0.5f, 0.5f, measured);
+    for (channel = 0; channel < 3; channel++) {
+        double f0 = lin(texel[channel]) * 0.5;
+        double brdf = f0 * 0.4524 - 0.0024;
+        CHECK(fabs(measured[channel] - 0.5 * (0.3 * (1.0 - brdf) + brdf)) < 0.009);
+    }
+    scene_init(&scene);
+    paint.d.specular_channels = 3u | (2u << 8) | (1u << 16);
+    CHECK(shoot(&scene, &paint, g_img));
+    lin_px(g_img, 0.5f, 0.5f, measured);
+    CHECK(measured[0] < measured[2]);
+    paint.d.specular_channels = 0;
+    paint.d.textures[SU_PAINT_SLOT_SPECULAR] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, texel);
+    paint.d.specular_factor[0] = paint.d.specular_factor[1] = paint.d.specular_factor[2] = 1;
+    paint.d.specular_channels = 4u | (5u << 8) | (4u << 16);
+    CHECK(shoot(&scene, &paint, g_img));
+    lin_px(g_img, 0.5f, 0.5f, measured);
+    for (channel = 0; channel < 3; channel++) CHECK(fabs(measured[channel] - 0.75 / 3.14159265) < 0.009);
+    paint.d.specular_channels = 0;
+    paint.d.textures[SU_PAINT_SLOT_SPECULAR] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, black);
+    paint.d.textures[SU_PAINT_SLOT_NORMAL] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, normal);
+    CHECK(shoot(&scene, &paint, g_ref));
+    paint.d.flags = SU_PAINT_NORMAL_Z_ONE;
+    CHECK(shoot(&scene, &paint, g_img));
+    {
+        double nx = 204.0 / 255.0 * 2.0 - 1.0;
+        double ny = 128.0 / 255.0 * 2.0 - 1.0;
+        double reconstructed = sqrt(1.0 - nx * nx - ny * ny);
+        double z_one = 1.0 / sqrt(1.0 + nx * nx + ny * ny);
+        CHECK(fabs(lin(px(g_ref, 128, 128)[0]) - 0.9 * reconstructed / 3.14159265) < 0.009);
+        CHECK(fabs(lin(px(g_img, 128, 128)[0]) - 0.9 * z_one / 3.14159265) < 0.009);
+        CHECK(px(g_img, 128, 128)[0] > px(g_ref, 128, 128)[0]);
+    }
+    for (channel = 0; channel < 16 * 16; channel++) {
+        memset(spatial + channel * 4, channel % 16 < 8 ? 64 : 192, 4);
+    }
+    pm_init(&paint, 0);
+    paint.d.specular_factor[0] = paint.d.specular_factor[1] = paint.d.specular_factor[2] = 1;
+    paint.d.textures[SU_PAINT_SLOT_SPECULAR] = mk_tex(SU_TEX_RGBA8_UNORM, 16, 16, spatial);
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(fabs(lin(px(g_img, qx(0.25f), 128)[0]) - 0.75 * 64.0 / 255.0 / 3.14159265) < 0.009);
+    CHECK(fabs(lin(px(g_img, qx(0.75f), 128)[0]) - 0.75 * 192.0 / 255.0 / 3.14159265) < 0.009);
+    paint.d.extra_tex_info[0] = SU_ASSET_TEX_INFO(1, 0, 0);
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(abs((int)px(g_img, qx(0.25f), 128)[0] - (int)px(g_img, qx(0.75f), 128)[0]) < 3);
+    printf("specular: linear/sRGB F0, factor, swizzle, independent diffuse, direct/ambient and normal conventions\n");
+}
+
+static void test_paint_detail(void) {
+    Pm paint;
+    Scene scene;
+    uint8_t stripes[16 * 16 * 4];
+    uint8_t mask[16 * 16 * 4];
+    uint8_t white[4] = {255, 255, 255, 255};
+    uint8_t black[4] = {0, 0, 0, 255};
+    uint8_t tilted[4] = {204, 128, 255, 255};
+    uint32_t row;
+    uint32_t col;
+    for (row = 0; row < 16; row++) {
+        for (col = 0; col < 16; col++) {
+            size_t offset = ((size_t)row * 16 + col) * 4;
+            memset(stripes + offset, col < 8 ? 0 : 255, 4);
+            memset(mask + offset, 0, 4);
+            mask[offset + (col < 8 ? 0 : 1)] = 255;
+        }
+    }
+    scene_init(&scene);
+    pm_init(&paint, 0.4f);
+    CHECK(shoot(&scene, &paint, g_ref));
+    paint.d.flags = SU_PAINT_DETAIL_NORMAL_DARKEN;
+    paint.d.textures[SU_PAINT_SLOT_DETAIL_MASK] = mk_tex(SU_TEX_RGBA8_UNORM, 16, 16, stripes);
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(memcmp(g_ref, g_img, sizeof g_img) == 0);
+    paint.d.detail_strength = 1;
+    paint.d.detail_uv_scale[0] = paint.d.detail_uv_scale[1] = 2;
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(same_px(px(g_ref, qx(0.125f), 128), px(g_img, qx(0.125f), 128)));
+    CHECK(px(g_img, qx(0.375f), 128)[0] < px(g_img, qx(0.125f), 128)[0] - 50);
+    CHECK(same_px(px(g_img, qx(0.125f), 128), px(g_img, qx(0.625f), 128)));
+    paint.d.detail_rotation = 1.5707963268f;
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(px(g_img, 128, qx(0.125f))[0] < px(g_img, 128, qx(0.375f))[0] - 50);
+    paint.d.detail_rotation = 0;
+    paint.d.extra_tex_info[3] = SU_ASSET_TEX_INFO(1, 0, 0);
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(same_px(px(g_img, qx(0.125f), 128), px(g_img, qx(0.375f), 128)));
+    paint.d.extra_tex_info[3] = 0;
+    paint.d.detail_strength = 0.5f;
+    CHECK(shoot(&scene, &paint, g_img));
+    {
+        double f0 = 0.04;
+        double expected = 3.0 * ((1 - f0) * 0.4 * 0.5 + f0 * 0.25) / 3.14159265;
+        CHECK(fabs(lin(px(g_img, qx(0.375f), 128)[0]) - expected) < 0.012);
+    }
+    paint.d.detail_strength = 1;
+    paint.d.textures[SU_PAINT_SLOT_DETAIL_MASK] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, white);
+    paint.d.textures[SU_PAINT_SLOT_MASK] = mk_tex(SU_TEX_RGBA8_UNORM, 16, 16, mask);
+    paint.d.detail_layer_mask = 2;
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(same_px(px(g_ref, qx(0.25f), 128), px(g_img, qx(0.25f), 128)));
+    CHECK(px(g_img, qx(0.75f), 128)[0] < px(g_img, qx(0.25f), 128)[0] - 50);
+    paint.d.detail_layer_mask = 16;
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(memcmp(g_ref, g_img, sizeof g_img) == 0);
+    pm_init(&paint, 0.3f);
+    paint.d.textures[SU_PAINT_SLOT_SPECULAR] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, black);
+    paint.d.specular_factor[0] = paint.d.specular_factor[1] = paint.d.specular_factor[2] = 1;
+    paint.d.flags = SU_PAINT_DETAIL_NORMAL_DARKEN;
+    paint.d.detail_strength = 1;
+    paint.d.textures[SU_PAINT_SLOT_DETAIL_NORMAL] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, tilted);
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(fabs(lin(px(g_img, 128, 128)[0]) - 0.9 / sqrt(1.36) / 3.14159265) < 0.009);
+    paint.d.detail_rotation = 1.5707963268f;
+    scene.sun_dir[1] = 1;
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(fabs(lin(px(g_img, 128, 128)[0]) - 0.9 * 1.6 / sqrt(2.72) / 3.14159265) < 0.009);
+    scene_init(&scene);
+    pm_init(&paint, 0.3f);
+    paint.d.flags = SU_PAINT_DETAIL_MATERIAL;
+    paint.d.detail_strength = 1;
+    paint.d.factors.metallic = 1;
+    paint.d.textures[SU_PAINT_SLOT_MATERIAL] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, black);
+    paint.d.textures[SU_PAINT_SLOT_DETAIL_MATERIAL] = mk_tex(SU_TEX_RGBA8_UNORM, 16, 16, stripes);
+    CHECK(shoot(&scene, &paint, g_img));
+    CHECK(px(g_img, qx(0.25f), 128)[0] > px(g_img, qx(0.75f), 128)[0] + 40);
+    paint.d.textures[SU_PAINT_SLOT_MASK] = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, white);
+    CHECK(shoot(&scene, &paint, g_ref));
+    CHECK(abs((int)px(g_ref, qx(0.25f), 128)[0] - (int)px(g_ref, qx(0.75f), 128)[0]) < 3);
+    printf("detail: zero strength, tiling, rotation, UV1, mask/strength, layer selectors, material and normal modes\n");
+}
+
+static void test_paint_extension_validation(void) {
+    Pm paint;
+    SuRenderHandle result = 0;
+    uint32_t index;
+    uint8_t texel[4] = {128, 128, 128, 255};
+    for (index = 0; index < 12; index++) {
+        pm_init(&paint, 0.3f);
+        switch (index) {
+        case 0: paint.d.flags = 8; break;
+        case 1: paint.d.specular_factor[0] = NAN; break;
+        case 2: paint.d.specular_factor[1] = -1; break;
+        case 3: paint.d.specular_factor[2] = 2; break;
+        case 4: paint.d.specular_channels = 6; break;
+        case 5: paint.d.specular_channels = 1u << 24; break;
+        case 6: paint.d.detail_strength = 2; break;
+        case 7: paint.d.detail_uv_scale[0] = INFINITY; break;
+        case 8: paint.d.detail_rotation = NAN; break;
+        case 9: paint.d.detail_layer_mask = 32; break;
+        case 10: paint.d.extra_tex_info[0] = 2; break;
+        default: paint.d.extra_tex_info[1] = 3u << 8; break;
+        }
+        CHECK(su_render_paint_material_create(g_r, &paint.d, &result) == SU_E_INVALID_ARGUMENT);
+    }
+    for (index = SU_PAINT_SLOT_DETAIL_MATERIAL; index < SU_RENDER_PAINT_SLOT_COUNT; index++) {
+        pm_init(&paint, 0.3f);
+        paint.d.textures[index] = mk_tex(SU_TEX_RGBA8_SRGB, 1, 1, texel);
+        CHECK(su_render_paint_material_create(g_r, &paint.d, &result) == SU_E_INVALID_ARGUMENT);
+    }
+}
+
+static int timing_cmp(const void *left, const void *right) {
+    double left_time = *(const double *)left;
+    double right_time = *(const double *)right;
+    return (left_time > right_time) - (left_time < right_time);
+}
+
+static void bench_paint(void) {
+    SuRenderer *saved = g_r;
+    SuRenderDesc desc;
+    SuRenderFrameDesc frame;
+    SuRenderObject object;
+    SuRenderDeviceInfo device;
+    char msg[256];
+    uint32_t mode;
+    uint32_t modes = 1;
+    memset(&desc, 0, sizeof desc);
+    desc.struct_size = sizeof desc;
+    desc.width = 1920;
+    desc.height = 1080;
+    desc.device_index = -1;
+    CHECK(su_render_create(&desc, &g_r, msg) == SU_OK);
+    CHECK(su_render_device(g_r, &device) == SU_OK);
+    printf("paint benchmark device: %s; 1920x1080 fullscreen quad, validation off\n", device.name);
+    memset(&frame, 0, sizeof frame);
+    frame.struct_size = sizeof frame;
+    frame.camera.rot.w = 1.0f;
+    frame.camera.fov_y = FOV;
+    frame.camera.near_z = 0.05f;
+    frame.light.sun_dir = v3(0.3f, -0.4f, -1.0f);
+    frame.light.sun_color = v3(1, 1, 1);
+    frame.light.sun_intensity = 3.0f;
+    frame.light.ambient = 0.2f;
+    frame.light.sky_zenith = frame.light.sky_horizon = frame.light.sky_nadir = v3(0.3f, 0.4f, 0.5f);
+    frame.light.no_sky = 1;
+    frame.light.exposure = 1;
+    memset(&object, 0, sizeof object);
+    object.pos = su_wpos(0, 0, -3);
+    object.rot.w = 1;
+    object.scale = 4;
+    object.tint[0] = object.tint[1] = object.tint[2] = object.tint[3] = 1;
+    frame.objects = &object;
+    frame.object_count = 1;
+#ifdef SU_PAINT_NORMAL_Z_ONE
+    modes = 5;
+#endif
+    for (mode = 0; mode < modes; mode++) {
+        Pm paint;
+        SuRenderHandle material = 0;
+        SuRenderStats stats;
+        double times[300];
+        uint32_t count = 0;
+        uint32_t sample;
+        uint8_t texel[4] = {128, 160, 192, 255};
+        SuRenderHandle texture = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, texel);
+        pm_init(&paint, 0.4f);
+        paint.d.textures[SU_PAINT_SLOT_NORMAL] = texture;
+#ifdef SU_PAINT_NORMAL_Z_ONE
+        if (mode == 1 || mode == 4) {
+            paint.d.textures[SU_PAINT_SLOT_SPECULAR] = texture;
+            paint.d.specular_factor[0] = paint.d.specular_factor[1] = paint.d.specular_factor[2] = 0.3f;
+            paint.d.flags = SU_PAINT_NORMAL_Z_ONE;
+        }
+        if (mode >= 2) {
+            paint.d.detail_strength = 0.5f;
+            paint.d.detail_uv_scale[0] = paint.d.detail_uv_scale[1] = 26;
+            paint.d.flags |= mode == 2 ? SU_PAINT_DETAIL_MATERIAL : SU_PAINT_DETAIL_NORMAL_DARKEN;
+            paint.d.textures[SU_PAINT_SLOT_DETAIL_MATERIAL] = texture;
+            paint.d.textures[SU_PAINT_SLOT_DETAIL_NORMAL] = texture;
+            paint.d.textures[SU_PAINT_SLOT_DETAIL_MASK] = texture;
+        }
+#endif
+        CHECK(su_render_paint_material_create(g_r, &paint.d, &material) == SU_OK);
+        object.model = quad_model(material);
+        for (sample = 0; sample < 340; sample++) {
+            CHECK(su_render_frame_ex(g_r, &frame) == SU_OK);
+            CHECK(su_render_stats(g_r, &stats) == SU_OK);
+            if (sample >= 40 && stats.gpu_ms >= 0) {
+                times[count++] = stats.gpu_ms;
+            }
+        }
+        qsort(times, count, sizeof times[0], timing_cmp);
+        CHECK(count == 300);
+        if (count != 0) {
+            printf("paint bench mode %u: n=%u median=%.6f p95=%.6f min=%.6f max=%.6f ms\n",
+                   mode, count, times[count / 2], times[(count * 95u) / 100u], times[0], times[count - 1]);
+        }
+    }
+    su_render_destroy(g_r);
+    g_r = saved;
+}
+
 int main(int argc, char **argv) {
     int validation = 1;
     SuRenderDeviceInfo devs[8];
@@ -1700,6 +1997,11 @@ int main(int argc, char **argv) {
     }
     CHECK(su_render_device(g_r, &used) == SU_OK);
     printf("rendering on: %s (%s)\n", used.name, type_name(used.type));
+    if (getenv("SUTEKH_PAINT_BENCH") != NULL) {
+        bench_paint();
+        su_render_destroy(g_r);
+        return g_fail ? 1 : 0;
+    }
     test_mask_channels();
     test_blend_order();
     test_zero_layers();
@@ -1713,6 +2015,9 @@ int main(int argc, char **argv) {
     test_environment();
     test_color_spaces();
     test_pack();
+    test_specular_color();
+    test_paint_detail();
+    test_paint_extension_validation();
     CHECK(su_render_stats(g_r, &st) == SU_OK);
     if (validation) {
         CHECK(getenv("SUTEKH_REQUIRE_VALIDATION") == NULL || st.validation_enabled != 0u); /* CI: the layer must be on */

@@ -210,8 +210,8 @@ static void paint_push(SuRenderer *r, uint32_t mat_index, uint32_t forced, MatPu
     p->misc[1] = forced != 0u ? 2.0f : (float)m->f.alpha_mode;
     p->misc[2] = m->f.emissive_strength;
     p->misc[3] = (m->bound_ready & (1u << SU_PAINT_SLOT_NORMAL)) != 0u ? 1.0f : 0.0f;
-    for (k = 0; k < SU_PAINT_SLOT_COUNT; k++) {
-        if ((m->paint.tex_info[k] & 0xFFu) == 1u) {
+    for (k = 0; k < SU_RENDER_PAINT_SLOT_COUNT; k++) {
+        if ((m->paint_tex_info[k] & 0xFFu) == 1u) {
             p->uvset[0] |= 1u << k;
         }
     }
