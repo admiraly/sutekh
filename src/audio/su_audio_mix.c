@@ -853,6 +853,9 @@ static void voice_sample(const Voice *v, double pos, int loop, int mix, float *s
     float r0;
     float l1 = 0.0f;
     float r1 = 0.0f;
+    if (v->stream != NULL) {
+        su_stream_sample_begin(v->stream);
+    }
     src_frame(v, i0, &l0, &r0);
     if (fr != 0.0) {
         uint64_t i1 = i0 + 1u;
@@ -860,6 +863,10 @@ static void voice_sample(const Voice *v, double pos, int loop, int mix, float *s
             i1 = loop ? v->ls : v->frames - 1u;
         }
         src_frame(v, i1, &l1, &r1);
+    }
+    if (v->stream != NULL && su_stream_sample_missed(v->stream)) {
+        *sl = *sr = 0.0f;
+        return;
     }
     if (mix) {
         float a = v->channels == 1u ? l0 : 0.5f * (l0 + r0);

@@ -39,5 +39,7 @@ uint32_t su_stream_rate(const SuAudioStream *s);
 void su_stream_prepare_loop(SuAudioStream *s, uint64_t loop_start);
 /* Frame idx (l = r for mono). Frames at or past the end read as silence. */
 void su_stream_frame(SuAudioStream *s, uint64_t idx, float *l, float *r);
+int su_stream_sample_missed(SuAudioStream *s);
+void su_stream_sample_begin(SuAudioStream *s);
 
 #endif

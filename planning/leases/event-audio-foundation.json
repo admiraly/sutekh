@@ -1,0 +1,40 @@
+{
+  "format": "0.1",
+  "task_ids": ["issue-87", "issue-88", "issue-89", "issue-90", "issue-97"],
+  "owner": "event-audio-integrator",
+  "authorization": "Owner requested ordered implementation and integration, 2026-10-20",
+  "state": "implementation",
+  "base_revision": "7e3c6ebda67f236fc1ccfee22d5e0b048b190ba6",
+  "worktree": "event-audio",
+  "heartbeat": "2026-10-20",
+  "steps": {
+    "A01": "local_validated_pending_ci",
+    "A02": "implementation",
+    "A03": "implementation",
+    "A04": "implementation"
+  },
+  "write_scope": [
+    "include/sutekh/audio_asset.h",
+    "include/sutekh/audio_stream_async.h",
+    "include/sutekh/audio_spatial.h",
+    "include/sutekh/audio_graph.h",
+    "include/sutekh/audio_event.h",
+    "src/audio/",
+    "tests/audio/",
+    "cmake/SutekhPresentation.cmake",
+    "schemas/audio_events.schema.json",
+    "docs/EVENT_AUDIO*.md",
+    "planning/leases/event-audio-foundation.json",
+    "planning/handoffs/2026-10-20-event-audio*.md",
+    "planning/evidence/event-audio/",
+    "PACK_VALIDATION.json"
+  ],
+  "subscopes": {
+    "A01": "assets and stream internals, component test/doc/header",
+    "A02": "spatial scene, component test/doc/header",
+    "A03": "graph compiler/schema, component test/doc/header",
+    "integrator": "event runtime, shared design, build registration and integration evidence"
+  },
+  "excluded": ["src/render/", "main-checkout-builds", "external-content"],
+  "pending": ["native component tests", "full affected suite", "ordered PR CI and merge"]
+}
