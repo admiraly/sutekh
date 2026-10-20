@@ -1,0 +1,16 @@
+{
+  "issue": 86,
+  "branch": "feat/point-lights",
+  "base_revision": "7e3c6ebda67f236fc1ccfee22d5e0b048b190ba6",
+  "state": "locally_verified",
+  "scope": ["render API", "point-light preparation and culling", "PBR-lite and paint shaders", "synthetic regression tests", "benchmark and documentation"],
+  "local_build": "passed_clang_and_msvc",
+  "local_tests": "passed",
+  "hardware_and_lavapipe_pixels": "passed",
+  "validation_errors": 0,
+  "validation_warnings": 0,
+  "ci": "pending",
+  "integration": "pending",
+  "blockers": [],
+  "next": "Run CI, update from main if needed, merge green PR, unlink junctions and remove worktree."
+}
