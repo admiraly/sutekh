@@ -1,12 +1,12 @@
 {
   "scope": "specification_pack_and_python_example_model_only",
   "status": "passed",
-  "strict_json_files_checked": 431,
+  "strict_json_files_checked": 433,
   "task_dag_nodes_checked": 38,
   "positive_fixture_checks": 10,
   "negative_ir_checks": 7,
   "additional_opcode_known_answer_checks": 4,
-  "internal_markdown_links_checked": 93,
+  "internal_markdown_links_checked": 94,
   "json_schema": {
     "status": "passed",
     "schemas_checked": 6,

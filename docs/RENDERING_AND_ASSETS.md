@@ -1,5 +1,7 @@
 # Rendering, assets, and the shipping player
 
+Deterministic compute emitters and their CPU reference: [GPU particles](GPU_PARTICLES.md).
+
 Layered unlit quad and resident mesh effects are implemented in
 [Layered FX](LAYERED_FX.md), including API defaults, sorting and validation.
 **Later-stage contracts. Do not implement these before the headless gates.**
