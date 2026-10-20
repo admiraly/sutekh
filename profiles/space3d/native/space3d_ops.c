@@ -939,7 +939,8 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
                     if (o == r) {
                         continue;
                     }
-                    d = prox_distance(&c, r, o, mg);
+                    /* a mesh need only be searched below the best distance so far (strict < keeps ties) */
+                    d = prox_distance(&c, r, o, pslot == S3_NONE || pdist > mg ? mg : pdist);
                     if (d <= mg && (pslot == S3_NONE || d < pdist)) {
                         pslot = o;
                         pdist = d;

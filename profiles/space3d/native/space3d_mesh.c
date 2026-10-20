@@ -845,11 +845,22 @@ static void geom_dist(const S3MeshSet *s, const S3Geom *g, SuV3 p, SuV3 e0, SuV3
         if (nd->count > 0u) {
             uint32_t k;
             for (k = nd->first; k < nd->first + nd->count; k++) {
+                const S3Tri *t = &g->tri[k];
                 int64_t d;
+                if (!s->brute && !(t->n.x == 0 && t->n.y == 0 && t->n.z == 0)) {
+                    /* Plane lower bound: both segment ends on one side of the triangle's plane. */
+                    int64_t h0 = su_v3_dotf(su_v3_subf(a, t->a), t->n), h1 = su_v3_dotf(su_v3_subf(b, t->a), t->n);
+                    if ((h0 > 0 && h1 > 0) || (h0 < 0 && h1 < 0)) {
+                        int64_t lb = h0 > 0 ? (h0 < h1 ? h0 : h1) : su_q32_neg(h0 > h1 ? h0 : h1);
+                        if (lb > su_q32_addf(*mn < prune ? *mn : prune, pad)) {
+                            continue;
+                        }
+                    }
+                }
                 if (st != NULL) {
                     st->tri_tests++;
                 }
-                d = s3_dist_seg_tri(p, e0, e1, &g->tri[k]);
+                d = s3_dist_seg_tri(p, e0, e1, t);
                 if (d < *mn) {
                     *mn = d;
                 }
@@ -857,8 +868,16 @@ static void geom_dist(const S3MeshSet *s, const S3Geom *g, SuV3 p, SuV3 e0, SuV3
             continue;
         }
         if (sp + 2u <= STACK_MAX) {
-            stack[sp++] = nd->first;
-            stack[sp++] = ni + 1u;
+            /* Nearer child last (visited first), so the minimum shrinks early; the result does not depend on it. */
+            uint32_t l = ni + 1u, r = nd->first;
+            if (!s->brute && box_gap(slo, shi, g->node[l].lo, g->node[l].hi) >
+                                 box_gap(slo, shi, g->node[r].lo, g->node[r].hi)) {
+                stack[sp++] = l;
+                stack[sp++] = r;
+            } else {
+                stack[sp++] = r;
+                stack[sp++] = l;
+            }
         }
     }
 }
