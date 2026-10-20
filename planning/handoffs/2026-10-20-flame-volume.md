@@ -44,7 +44,9 @@ Commands after `. .\tools\env-windows.ps1`:
 - `cmake --build build-flame-msvc --target test_render_flame -j 4` and its test:
   passed `/W4 /WX`; P600, 0 failures, validation enabled, 0 errors/warnings.
 - `python tools/compile_shaders.py --check`: 25 sources and 1 include current.
-- `python tools/validate_pack.py --check-report`: passed; no pack files changed.
+- `python tools/validate_pack.py --check-report`: passed locally before staging
+  the evidence JSON. CI caught its newly tracked file count (427 -> 428);
+  regenerated `PACK_VALIDATION.json` using `--write-report`, then rechecked.
 - `python tools/check_repository_license.py`: passed (not a legal/CLA review).
 - `git diff --check`: passed.
 
