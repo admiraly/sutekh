@@ -22,6 +22,57 @@ The scene (sky, opaque, masked and blended meshes, debug items, additive effects
 
 `SuRenderFrameDesc.post` (`SuRenderPost`) is zero for "off", so frames that do not set it render exactly as before. With `SU_POST_BLOOM`: a half-resolution mip chain, 13-tap downsample (Jimenez 2014) whose first level applies the threshold with a soft knee and Karis weights, tent upsample with a `radius` scale, added to the scene before exposure. Threshold is scene-linear (before exposure). The chain is energy preserving per level and divided by the level count at the output, so `bloom_intensity` 1 adds back about the energy that passed the threshold; intensity 0 gives byte-identical output to no bloom. Emissive meshes (material `emissive` x `emissive_strength` x per-object `emissive`), additive billboards and ribbon trails all write values above 1 and bleed through it. `SU_POST_AUTO_EXPOSURE` sets exposure from the log-average luminance of the frame (read from the same chain, no readback), `key / average`, clamped to `[exposure_min, exposure_max]`, times `light.exposure`; it keeps no state between frames, so it is deterministic but not temporally smoothed. `su_fx_glare` is an optional CPU helper that adds a core, halo and two streaks for very bright points. None of this reads or writes simulation state. Cost and test evidence: `planning/handoffs/2026-10-18-hdr-bloom.md`.
 
+### Dynamic point lights
+
+Render API version 8 adds `SuRenderPointLight` and the appended
+`SuRenderFrameDesc.point_lights` / `point_light_count` fields. Recompile native consumers after upgrading.
+Populate a caller-owned array for each `su_render_frame_ex` call; the renderer copies it during the call,
+so it need not survive submission. No handles, resource creation, persistent allocations or light shadows
+are involved. Zero count accepts a null pointer and preserves the previous image byte for byte.
+
+Each light has a Q32.32 world `pos`, linear RGB `color`, nonnegative `intensity`, and positive finite
+`radius` in world units. RGB and intensity must be finite and nonnegative, including their product.
+An invalid entry, null pointer with nonzero count, or count exceeding `SU_RENDER_MAX_POINT_LIGHTS` (128)
+rejects the frame with `SU_E_INVALID_ARGUMENT`; nothing is silently truncated. Zero intensity disables a light.
+
+At distance `d < radius`, attenuation is `(1 - (d / radius)^4)^2 / max(d*d, 1)`;
+it is zero at and beyond the radius. The squared window has zero slope at its outer edge, and the
+one-unit inverse-square soft core bounds near-field energy. At the exact light position the contribution
+is zero because the incoming direction is undefined. Intensity is the radiant-strength multiplier,
+not the brightness at the edge of the sphere. Choose radius independently to bound influence.
+
+PBR-lite and paint use the same GGX distribution, correlated Smith visibility, Schlick Fresnel and
+Lambert diffuse as their sun term, including paint layers, normal/detail maps and RGB specular-colour F0.
+Point light is added after sun shadowing and before ambient/emission; AO affects ambient only.
+Unlit materials, debug primitives, volumes, sky and additive effects do not receive it.
+Opaque, masked, blended and overlay mesh materials share this lighting path.
+
+Positions are made camera-relative with integer subtraction before conversion to float. CPU sphere
+intersection builds a conservative 128-bit mask per visible model node (including its scale and transforms),
+shared by its submeshes. The fragment shader iterates only set bits and skips out-of-radius/back-facing
+fragments. This keeps the existing instanced batching and descriptor bindings: the frame UBO grows by
+4096 bytes and each internal draw instance by 16 bytes. Worst case remains linear in overlapping lights;
+this is a bounded forward path, not a clustered renderer.
+
+```c
+SuRenderPointLight flash = {0};
+flash.pos = su_wpos(10.0, 2.0, -20.0);
+flash.color[0] = 1.0f;
+flash.color[1] = 0.3f;
+flash.color[2] = 0.1f;
+flash.intensity = 20.0f;
+flash.radius = 15.0f;
+frame.point_lights = &flash;
+frame.point_light_count = 1;
+su_render_frame_ex(renderer, &frame);
+```
+
+Run `test_point_lights` for portable validation/culling checks and `test_render_paint` for synthetic pixel
+regressions on hardware or lavapipe. Set `SUTEKH_POINT_LIGHT_BENCH=1` when running `test_render_paint`
+for the 1280x720 full-screen PBR-lite/paint benchmark: 0/8/32/128 coincident overlapping lights and
+the same counts wholly culled, 40 warm-up frames and 100 GPU timestamp/CPU submission samples per case.
+It reports median and p95 in milliseconds with validation disabled for the measured renderer.
+
 ### 2.2 Layered paint material and image-based ambient
 
 An optional second material model (`SuRenderPaintDesc`, or a material entry of `type_version` 2 in a pack). The

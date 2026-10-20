@@ -33,7 +33,7 @@ SHADERS = ["mesh.vert", "mesh.frag", "line.vert", "line.frag", "pbr.vert", "pbr.
            "env_prefilter.frag", "fx_layer.vert", "fx_mesh.vert", "haze.frag",
            "flame.vert", "flame.frag", "distortion.frag", "distortion_resolve.frag"]
 # Shared sources pulled in with #include (GL_GOOGLE_include_directive); their hashes are recorded too.
-INCLUDES = ["frame.glsl", "fx_layers.glsl"]
+INCLUDES = ["frame.glsl", "fx_layers.glsl", "point_lights.glsl"]
 
 
 def symbol(name):

@@ -1161,6 +1161,7 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         attr(at, &na, 8, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48);
         if (s->vin == VIN_PBR) {
             attr(at, &na, 9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 64);
+            attr(at, &na, 10, 1, VK_FORMAT_R32G32B32A32_UINT, (uint32_t)offsetof(DrawInstance, light_mask));
         }
         break;
     case VIN_SHADOW:
@@ -3939,6 +3940,9 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
     }
     memset(&in, 0, sizeof in);
     view = su_render_camera_view(&f->camera);
+    if (!su_point_lights_prepare(f->point_lights, f->point_light_count, f->camera.pos, in.ubo.point_lights)) {
+        return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "invalid point light list");
+    }
     proj = su_mat4f_perspective_rz(f->camera.fov_y, (float)r->width / (float)(r->height > 0u ? r->height : 1u),
                                    f->camera.near_z);
     in.scene_vp = su_mat4f_mul(proj, view);

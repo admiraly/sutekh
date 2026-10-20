@@ -102,6 +102,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
             Res *mesh = NULL;
             float m[12]; /* rows of the camera-relative affine transform */
             uint32_t sub;
+            uint32_t light_mask[4];
             int a;
             int b;
             for (k = 0; k < 3; k++) {
@@ -144,6 +145,8 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
             }
             r->stats.nodes_drawn++;
             r->stats.lod_nodes[pick]++;
+            su_point_lights_mask(((const FrameUbo *)fr->ubo.map)->point_lights, f->point_light_count, ncw, nr,
+                                 light_mask);
             /* M = [sR | rel] * node transform */
             for (a = 0; a < 3; a++) {
                 for (b = 0; b < 3; b++) {
@@ -183,6 +186,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
                 memcpy(it->inst.tint, obj->tint, sizeof it->inst.tint);
                 it->inst.extra[0] = obj->emissive;
                 it->inst.extra[1] = it->inst.extra[2] = it->inst.extra[3] = 0.0f;
+                memcpy(it->inst.light_mask, light_mask, sizeof light_mask);
                 r->order[n] = n;
                 n++;
             }

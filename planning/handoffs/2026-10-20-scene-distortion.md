@@ -10,7 +10,7 @@ bloom/tonemapping. Zero-initialized descriptors preserve ordinary FX.
 The public issue description was rewritten using generic rendering terms.
 
 The work started from `origin/main` at `7e3c6eb` in an isolated worktree.
-Rendering API generation 8 enlarges the batch, FX material, frame and stats
+Rendering API generation 9 enlarges the batch, FX material, frame and stats
 structures; native consumers must recompile. No simulation state changes.
 
 Modified paths:
@@ -60,18 +60,24 @@ pipelines, quad/mesh parity, cubes/intensity/stale/wrong-kind handles, sorted
 batches, overlap ordering, invalid fields and skipped draws.
 
 `SUTEKH_REQUIRE_VALIDATION=1 ctest --test-dir build-distortion --output-on-failure -j 2`:
-117 passed, 2 platform skips (`path_fifo`, `containment`), zero failures, 62.03 s.
+After merging main: 118 passed, 2 platform skips (`path_fifo`, `containment`),
+zero failures, 62.32 s. MSVC's integrated render/point-light subset passed
+7/7 in 10.72 s, again with required synchronization validation and no messages.
 All render tests passed with zero validation errors/warnings.
 `python tools/compile_shaders.py --check`: 30 shader sources and 2 includes
-fresh. `git diff --check`: passed. Merging fetched `origin/main` before the
-final API version check reported already up to date; generation 8 is one bump
-over generation 7 on that base.
+fresh (3 shared includes after integration). `git diff --check`: passed. Merging fetched `origin/main` before the
+initial API version check reported already up to date. During CI, point lights
+merged into main (`9971957`), advancing the render API to 8. That main revision
+was merged (not rebased); the frame fields from both features are retained,
+instance stride/vertex inputs were checked, and distortion advances the
+integrated API once to generation 9. The shader header was regenerated from
+the merged sources rather than resolving generated words by hand.
 
 Source SHA-256:
 
 - `distortion.frag`: `5506f932f3d35b59d933cc319123ccc012b8838b4ddddd513ef887d0c59ea21f`
 - `distortion_resolve.frag`: `c60de59174e9121ee471516760827f4fe331c778b6109e474d278cfbee4809d9`
-- generated shader header: `d1afac9cb4ba1e9656eed1459113fb877c2bc3fd75c47866524c28cf6bad31a7`
+- generated shader header: `7224fa741efb3a554dc90f27b1f5a4c7ef06034a9f85f9924d7ed20b9586fa45`
 
 ## Measurement protocol
 
@@ -94,22 +100,22 @@ Final repeat, GPU/CPU milliseconds:
 
 | Resolution | Effects | GPU p50 | GPU p95 | CPU p50 | CPU p95 |
 |---|---:|---:|---:|---:|---:|
-| 1280x720 | 0 | 1.680128 | 14.417984 | 0.047200 | 0.100100 |
-| 1280x720 | 1 | 2.250144 | 26.838528 | 0.074900 | 0.129800 |
-| 1280x720 | 32 | 7.304704 | 33.675200 | 0.104700 | 0.183700 |
-| 1920x1080 | 0 | 3.363648 | 29.112000 | 0.074000 | 0.118000 |
-| 1920x1080 | 1 | 4.773920 | 30.367776 | 0.082600 | 0.151500 |
-| 1920x1080 | 32 | 15.071104 | 41.823296 | 0.128500 | 0.213300 |
+| 1280x720 | 0 | 1.679488 | 26.394048 | 0.046400 | 0.097600 |
+| 1280x720 | 1 | 2.272032 | 26.990400 | 0.062000 | 0.120300 |
+| 1280x720 | 32 | 7.295232 | 33.611264 | 0.104300 | 0.171200 |
+| 1920x1080 | 0 | 3.261376 | 28.734720 | 0.085000 | 0.180700 |
+| 1920x1080 | 1 | 4.850464 | 30.272160 | 0.109600 | 0.232300 |
+| 1920x1080 | 32 | 15.345280 | 42.784064 | 0.131500 | 0.263400 |
 
-Median differences from off: +0.570016 / +5.624576 ms at 720p (1/32 effects),
-+1.410272 / +11.707456 ms at 1080p. These are differences of whole-frame
+Median differences from off: +0.592544 / +5.615744 ms at 720p (1/32 effects),
++1.589088 / +12.083904 ms at 1080p. These are differences of whole-frame
 medians, not directly measured per-pass costs. Both benchmark invocations
 reported zero failures and validation disabled as requested.
 The immediately preceding repeat was 1.693/2.316/7.318 ms at 720p and
 3.392/4.839/15.220 ms at 1080p, supporting the median trend but not the tails.
 
 Measured release executable SHA-256:
-`11e2584f70012462cb583b83b6f29315603b16aa80fd3be9c41daf4463567561`.
+`86403c8081a4f777622246f672f65f609e38b8af9b5f24c62a73ab3d7a4ea980`.
 It was built from this patch with Clang 23.1.3 in release mode; sources are
 identified by the committed patch and shader hashes above. No downloaded
 assets or external material code were used.
