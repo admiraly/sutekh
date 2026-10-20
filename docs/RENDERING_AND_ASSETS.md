@@ -129,6 +129,14 @@ To reproduce the driver defect rather than the workaround, temporarily remove `!
 sampler's anisotropy condition and rebuild. Only constant-UV cases fail on the affected driver; the same binary
 passes on the tested hardware. Diagnostic bisect and validation evidence: `planning/handoffs/2026-10-20-lavapipe-ghost.md`.
 
+### 2.3 Analytic haze
+
+`SuRenderFrameDesc.haze` submits depth-clipped ellipsoid and box media with exact
+polynomial density integration, additive or extinction-over composition, and
+optional sun/shadow lighting. No volumes means no change to existing frames.
+See [Analytic haze volumes](ANALYTIC_HAZE.md) for parameters, ordering, precision,
+reference integration and the repeatable offscreen benchmark.
+
 ## 3. Shader/pipeline edits
 
 Shader source is an asset with explicit include dependencies and compiler/target/resource-layout fingerprints. Compile only affected variants using an established compiler adapter. Prepare driver pipelines away from the render-critical path. Keep the last compatible pipeline active until the new one is ready; use a documented fallback when an interface change makes that impossible.

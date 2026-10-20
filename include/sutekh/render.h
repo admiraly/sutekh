@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 6u
+#define SU_RENDER_API_VERSION 7u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -766,6 +766,34 @@ typedef struct SuRenderPost {
     float exposure_max;                /* 0 = 32 */
 } SuRenderPost;
 
+#define SU_HAZE_ELLIPSOID 0u
+#define SU_HAZE_BOX 1u
+#define SU_HAZE_ADDITIVE 0u
+#define SU_HAZE_OVER 1u
+#define SU_HAZE_SHADOW 1u
+#define SU_HAZE_SCATTER 0u
+#define SU_HAZE_CHORD 1u
+#define SU_HAZE_MAX_VOLUMES 1024u
+
+typedef struct SuHazeVolume {
+    SuWorldPos pos;
+    SuMat4f transform;
+    float color[3];
+    float density;
+    float falloff;
+    float sun;
+    uint32_t shape;
+    uint32_t blend;
+    uint32_t flags;
+    uint32_t response;
+    float chord_power;
+    float source_brightness;
+    float source_size;
+} SuHazeVolume;
+
+SU_RENDER_API float su_haze_optical_depth(const SuHazeVolume *volume, SuWorldPos eye, SuVec3f direction,
+                                         float max_distance);
+
 typedef struct SuRenderFlame {
     SuMat4f transform;
     float colour[4];
@@ -810,6 +838,8 @@ typedef struct SuRenderFrameDesc {
     float sky_lod;                     /* mip level sampled (0 = sharpest); a prefiltered env cube gets blurrier with it */
     SuRenderShadow shadow;             /* all zero: no sun shadows (see SuRenderShadow) */
     float time_seconds;
+    const SuHazeVolume *haze;
+    uint32_t haze_count;
     const SuRenderFlame *flames;
     uint32_t flame_count;
 } SuRenderFrameDesc;
@@ -879,6 +909,7 @@ typedef struct SuRenderStats {
     /* ---- sun shadow cascades ---- */
     uint32_t shadow_cascades;      /* cascades of the last frame (1 for the single map, 0 when off) */
     float shadow_cascade_texel[4]; /* world units per texel of each cascade */
+    uint32_t haze_volumes_drawn;
     uint32_t flames_drawn, flames_skipped, flame_draws;
 } SuRenderStats;
 

@@ -684,6 +684,32 @@ uint32_t su_rvk_shadow_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *
         }
         far_t = dot3(cc, fwd) + rad > far_t ? dot3(cc, fwd) + rad : far_t;
     }
+    for (o = 0; o < f->haze_count; o++) {
+        const SuHazeVolume *volume = &f->haze[o];
+        SuVec3f offset;
+        uint32_t corner;
+        if (volume->density <= 0.0f || (volume->flags & SU_HAZE_SHADOW) == 0u) continue;
+        offset = su_wpos_delta(volume->pos, f->camera.pos);
+        for (corner = 0; corner < 8u; corner++) {
+            SuVec3f point = {(corner & 1u) != 0u ? 1.0f : -1.0f, (corner & 2u) != 0u ? 1.0f : -1.0f,
+                            (corner & 4u) != 0u ? 1.0f : -1.0f};
+            float position[3];
+            float projected[3];
+            int axis;
+            point = su_mat4f_transform_point(volume->transform, point, NULL);
+            position[0] = point.x + offset.x;
+            position[1] = point.y + offset.y;
+            position[2] = point.z + offset.z;
+            projected[0] = dot3(position, lx);
+            projected[1] = dot3(position, ly);
+            projected[2] = dot3(position, lz);
+            for (axis = 0; axis < 3; axis++) {
+                b[2 * axis] = fminf(b[2 * axis], projected[axis]);
+                b[2 * axis + 1] = fmaxf(b[2 * axis + 1], projected[axis]);
+            }
+            far_t = fmaxf(far_t, dot3(position, fwd));
+        }
+    }
     if (b[0] > b[1]) {
         return 0; /* nothing visible receives a shadow */
     }

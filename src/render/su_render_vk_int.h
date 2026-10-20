@@ -469,6 +469,8 @@ struct SuRenderer {
     VkPipeline fxmesh_pipe[4];
     VkDescriptorSetLayout fx_dsl;
     VkPipeline skycube_pipe;
+    VkPipeline haze_pipe[2];
+    VkPipelineLayout haze_layout;
     VkPipelineLayout fxtex_layout;      /* frame, three samplers, scene depth (input attachment), FxPush */
     VkDescriptorSetLayout depth_in_dsl; /* the scene depth as an input attachment (textured effects subpass) */
     VkDescriptorSet depth_in_set;
