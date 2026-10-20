@@ -132,5 +132,8 @@ add_test(NAME space3d_mesh COMMAND test_space3d_mesh)
 # The operator on a real world, its declaration and host record (host_decl.c compiled in: no control plane).
 add_executable(test_space3d_ops tests/space3d/test_space3d_ops.c src/runtime/rts/host_decl.c)
 target_link_libraries(test_space3d_ops PRIVATE su_space3d su_ents)
+if(UNIX)
+    target_link_libraries(test_space3d_ops PRIVATE m) # the double-precision oracle of the compound-mover checks
+endif()
 sutekh_apply_warnings(test_space3d_ops)
 add_test(NAME space3d_ops COMMAND test_space3d_ops WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

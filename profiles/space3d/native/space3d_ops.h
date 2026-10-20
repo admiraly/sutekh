@@ -84,6 +84,15 @@
 /* space3d.query_shape (2026-10-18): the proximity lanes plus the capsule-mover shape. */
 #define SPACE3D_F_Z0 72u /* q32 read: mover core segment start on local +z (z0 = z1 = 0: sphere) */
 #define SPACE3D_F_Z1 74u /* q32 read: mover core segment end on local +z */
+/* space3d.query_compound (2026-10-20): the query_shape lanes plus compound movers and turning during the tick. */
+#define SPACE3D_F_COMPOUND 76u /* u32 read: mover's compound index in the instance's set (0xFFFFFFFF: none) */
+#define SPACE3D_F_C0_SUB 77u   /* u32 write: contact 0 sub-shapes (low 16: the mover's, high 16: the other mover's) */
+#define SPACE3D_F_C1_SUB 78u   /* u32 write: contact 1 sub-shapes */
+#define SPACE3D_F_ROT0_W 80u   /* q32 read: mover orientation at the start of the tick (all four zero: not given) */
+#define SPACE3D_F_ROT0_X 82u
+#define SPACE3D_F_ROT0_Y 84u
+#define SPACE3D_F_ROT0_Z 86u
+#define SPACE3D_SUB_NONE 0xFFFFu /* sub-shape half of c*_sub when that side is not a compound mover */
 
 /* Instrumentation (tests): counters of the last run. */
 typedef struct Space3dStats {
@@ -132,6 +141,18 @@ extern const SuHostOpDesc g_space3d_query_prox_desc;
  * is the sphere of space3d.query_prox bit for bit. Gate crossings stay on the reference point's segment.
  * docs/SPACE3D.md section 3. */
 extern const SuHostOpDesc g_space3d_query_shape_desc;
+/* space3d.query_compound: every lane and result of space3d.query_shape, plus
+ *   - compound movers: a mover whose `compound` lane names a compound of the instance's set (space3d_mesh.h,
+ *     S3MESH02) is the union of up to 8 capsules/spheres fixed in its local frame (rotated by its rot lanes); its
+ *     radius, z0 and z1 lanes are not used for collision. Contacts against it (or by it) are the earliest over its
+ *     sub-shapes, ties to the lower sub-shape index, and c*_sub report which sub-shapes touched;
+ *   - turning: when a mover's rot0 lanes (start-of-tick orientation) are nonzero, every core point at distance d
+ *     from the reference point is padded by 2 d sin(a / 2) (rounded up), a the angle between rot0 and rot, so the
+ *     translation-only sweep at the end orientation contains the shape at every intermediate orientation of the
+ *     shortest rotation from rot0 to rot (a conservative bound; proximity is measured without the pad).
+ * A mover with compound = 0xFFFFFFFF (or an unknown index, or no set) and rot0 all zero is the mover of
+ * space3d.query_shape bit for bit. docs/SPACE3D.md "Compound movers". */
+extern const SuHostOpDesc g_space3d_query_compound_desc;
 /* The descriptor's static context (process-wide scratch for SPACE3D_MAX_ROWS rows; one world per worker
  * process, not reentrant). */
 Space3dCtx *space3d_query_ctx(void);
@@ -154,5 +175,6 @@ uint32_t space3d_query_instance_set_meshes(Space3dCtx *ctx, struct S3MeshSet *se
 const char *space3d_constants_text(void);
 const char *space3d_prox_constants_text(void);
 const char *space3d_shape_constants_text(void);
+const char *space3d_compound_constants_text(void);
 
 #endif

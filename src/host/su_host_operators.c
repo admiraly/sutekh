@@ -46,6 +46,8 @@ static const HostOperator k_operators[] = {
      space3d_data_release},
     {&g_space3d_query_shape_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
      space3d_data_release},
+    {&g_space3d_query_compound_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
+     space3d_data_release},
 };
 
 #define HOST_OPERATOR_COUNT (sizeof k_operators / sizeof k_operators[0])

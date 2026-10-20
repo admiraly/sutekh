@@ -321,7 +321,8 @@ SU_HOST_API uint32_t su_host_operator_count(void);
 SU_HOST_API uint32_t su_host_operator_info(uint32_t index, const char **system_id, const char **operator_name);
 /* Operator data (additive, API version 1; 2026-10-20): immutable bytes an operator reads at run time, for example
  * the static mesh set of the space3d operators (docs/SPACE3D.md, "Static meshes"; blob format in
- * profiles/space3d/native/space3d_mesh.h). Every host entry named system_id (NULL: every host entry whose operator
+ * profiles/space3d/native/space3d_mesh.h), with the compound shapes of space3d.query_compound (S3MESH02,
+ * "Compound movers"). Every host entry named system_id (NULL: every host entry whose operator
  * takes data; they must be of one family) parses the bytes (one parse, shared) and keeps them for the world's
  * life. Only before the world's first su_host_step, once per entry; the caller may free data on return. The data
  * is not world state (not in snapshots or digests) but it is part of the world identity: the identity becomes

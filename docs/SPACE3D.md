@@ -16,7 +16,7 @@ A world that uses the operator has schema ID `space3d` and reserves these field 
 
 | ID | Field | Type | Operator access | Meaning |
 |---|---|---|---|---|
-| 1 | `kind` | u32 | read | 0 none, 1 mover (swept sphere; a capsule under `space3d.query_shape`), 2 sphere, 3 oriented box, 4 capsule, 5 rectangular gate, 6 disc gate, 7 elliptical gate, 8 static mesh (see "Static meshes") |
+| 1 | `kind` | u32 | read | 0 none, 1 mover (swept sphere; a capsule under `space3d.query_shape`; a compound under `space3d.query_compound`), 2 sphere, 3 oriented box, 4 capsule, 5 rectangular gate, 6 disc gate, 7 elliptical gate, 8 static mesh (see "Static meshes") |
 | 2 | `next_gate` | u32 | read | mover: `gate_index` of the gate it must cross next |
 | 3 | `gate_index` | u32 | read | gate: its index in the course; static mesh (kind 8): its mesh index in the operator's mesh set |
 | 10, 12, 14 | `pos_x/y/z` | q32 | read | position at the end of the tick (movers), centre (others) |
@@ -243,6 +243,76 @@ broadphase equals brute force in the 18 untruncated scenes and a repeat is bit-i
 twice refused; a snapshot of a world without data does not load into one with it; the racer microcosm with its 48
 obstacles as triangle boxes collides only with the set, rolls back bit-identically, and its replay re-simulates in a
 world given the same data and is refused by one without).
+
+**Compound movers: `space3d.query_compound` (2026-10-20).** One capsule fits a winged or tall craft poorly (a measured
+wide hull as one capsule: radius 89.9 m, so contacts fire up to 81 m from the visible hull), and a capsule held at the
+end-of-tick orientation is not a bound for a turning craft. A fourth operator, record
+`profiles/space3d/space3d_query_compound.capsule.json`, has every lane and result of `space3d.query_shape` plus:
+
+| ID | Field | Type | Access | Meaning |
+|---|---|---|---|---|
+| 76 | `compound` | u32 | read | mover: index of its compound shape in the instance's set (0xFFFFFFFF: none) |
+| 77 | `c0_sub` | u32 | write | contact 0: low 16 bits the mover's sub-shape, high 16 bits the other mover's sub-shape (0xFFFF for a side that is not a compound mover); 0xFFFFFFFF when there is no contact |
+| 78 | `c1_sub` | u32 | write | contact 1, as `c0_sub` |
+| 80..86 | `rot0_w/x/y/z` | q32 | read | mover: its orientation at the start of the tick; all four zero: not given |
+
+- *Data.* Compound shapes are operator data, in the same set as the static meshes: blob format `S3MESH02`
+  (`space3d_mesh.h`) is `S3MESH01` with two more header counts and two more tables, sub-shapes (`a`, `b`, `radius`
+  in the mover's local frame; `a = b` is a sphere) and compounds (a range of 1 to 8 sub-shapes). Limits: 65,536
+  compounds, 2^20 sub-shapes, coordinates and radii within 4,096 m. A set may hold compounds only. The data enters
+  the world identity as before (`su_host_set_operator_data`), so replays only load with the same shapes.
+- *Shape.* A mover whose `compound` lane names a compound of its instance's set is the union of the sub-shapes,
+  each rotated by the mover's `rot` lanes (end of tick) about its reference point; its `radius`, `z0` and `z1`
+  lanes are not used for collision (a game may keep a sphere or capsule there for its own logic). Any other
+  mover (`compound` 0xFFFFFFFF, an unknown index, or no set: the `sutekh serve` worker) is the sphere or capsule
+  mover of `space3d.query_shape`.
+- *Turning.* When a mover's `rot0` lanes are nonzero, s = sin(a / 2) is taken for the angle a of the shortest
+  rotation from `rot0` to `rot` (|vector part| / |quaternion| of conj(rot0) * rot, plus 2^-20 for rounding), and
+  every sub-shape (or the capsule mover's segment) is swept with its radius padded by `2 reach s` plus one raw
+  unit, `reach` an upper bound of its core's distance from the reference point (max(|a|, |b|), rounded up at load;
+  max(|z0|, |z1|) for a capsule mover). A core point at distance d moves at most 2 d sin(a / 2) between any
+  orientation on that arc and the end orientation, so the padded translation-only sweep contains the shape at every
+  instant of a motion that interpolates the position linearly and the orientation along the shortest arc: a turning
+  craft cannot pass through anything within the tick. The pad is a bound, so contacts can come early by up to it
+  (0.8 m for a point 8 m out turning 0.1 rad). Proximity is measured at the end pose without the pad. A sphere
+  mover is never padded (its core is the reference point).
+- *Narrow phase.* Mover pieces (sub-shapes, or the one sphere/capsule of a non-compound mover) against the other
+  row: static shapes and meshes per mover piece (`s3_sweep_capsule_*`, the sphere functions for a sphere piece at
+  its offset centre, `s3mesh_sweep_lim` with the best toi so far as its limit); another mover per pair of pieces,
+  that mover held at its start position with the relative displacement. The contact is the earliest over the
+  pieces; equal toi keeps the lower mover piece, then the lower other piece. `c*_sub` name them. Contacts per
+  mover and their (toi, slot) order are unchanged: a row still contributes at most one contact.
+- *Broadphase and proximity.* A compound or padded mover's bounds are the union of every piece's end spheres at
+  `prev` and at `pos` with the padded radii (plus the margin and slack as before). `prox_dist` is the smallest over
+  the pieces (and the other mover's pieces) of core distance minus the unpadded radii; a mesh is searched within
+  min(margin, best so far) plus the piece radius. Gate crossings stay on the reference point's segment.
+- *Compatibility.* A mover with `compound` 0xFFFFFFFF and `rot0` all zero takes exactly the `space3d.query_shape`
+  code (its lanes equal that operator's bit for bit, and `c*_sub` are 0xFFFFFFFF); worlds using the other three
+  operators are untouched (their records, constants hashes and digests are unchanged). Constants hash
+  `36ada49c...` (SHA-256 of `space3d_compound_constants_text()`).
+- *Cost.* Per mover and candidate: n pieces against a static row (n mesh walks for a mesh, each limited by the best
+  toi so far), n x m piece pairs against another mover (at most 64 rounded-parallelogram sweeps), one quaternion
+  product and a square root for the turn per mover row.
+
+Evidence: `test_space3d_mesh` (S3MESH02: accessors and reach, every truncated prefix, trailing bytes, compounds with
+0 or 9 sub-shapes or a range beyond the table, coordinates beyond 4,096 m, negative radius, compounds-only sets;
+`s3mesh_sweep_lim` against the unlimited sweep on 3,600 random soup sweeps: a limit at or after the first hit finds
+it bit for bit, an earlier limit finds nothing earlier). `test_space3d_ops` (descriptor, hash, record loading and
+refusal across records; known answers: the sub-shape that touches first (toi 0.45 vs 0.9 for the other piece, sub
+ids), two compound movers head-on (one toi, opposite normals, swapped sub pairs), a compound against a box mesh
+(hull piece at toi 0.75; rotated 90 degrees, a wing piece at 0.375), a turn of 0.1 rad padding a piece 8 m out by
+0.79967 m (toi conservative by the 2^-20 rounding term only); 12 random scenes with `compound` none and `rot0`
+zero: every `space3d.query_shape` lane bit-identical; a one-capsule compound equal to the capsule mover on every
+contact lane; 24 random scenes of compounds, unknown indices, capsule movers, turns up to 0.3 rad and meshes:
+broadphase equals brute force on every lane in the 20 untruncated scenes, repeat bit-identical; no tunnelling:
+4,000 cases of a 4-piece craft or a twin capsule moving 15.17 m (1,820 m/s at 120 Hz) and turning up to 0.06 rad
+within the tick against a sphere, a capsule, a zero-thickness wall mesh or another such compound coming the other
+way, checked against a double-precision oracle of the true motion (linear position, slerp orientation, 257
+samples): every one of the 1,409 overlapping motions reports a contact no later than the first sampled overlap
+(0 missed, 0 late); with the turn pad disabled the same check finds 5 missed and 211 late). `host_ops` check 10
+(host API with compounds, meshes and a constant turn: one 720-tick call equals 720 single steps, two worlds on two
+threads equal the single-thread run, rollback in place and allocating over 120 ticks and replay seek + play are
+bit-identical). Native tier: the operator is compiled C under every tier (not lowered), as for the others.
 
 ## 3. Semantics
 

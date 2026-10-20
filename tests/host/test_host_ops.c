@@ -19,7 +19,10 @@
  *   7. tiers: reference for both IR systems, and native for racer.move when the library has the backend
  *      (racer.race uses emit_event and is refused): the pinned digest every time.
  *   8. capsule movers (space3d.query_shape): with z lanes zero every lane equals the space3d.query world's; with
- *      z0/z1 = -20/+20 pushed as tick-0 inputs, rollback (in place and allocating) and replay are bit-identical. */
+ *      z0/z1 = -20/+20 pushed as tick-0 inputs, rollback (in place and allocating) and replay are bit-identical.
+ *   9. operator data (space3d static meshes): refusals, world identity, rollback and replay with the data.
+ *  10. compound movers (space3d.query_compound) with a turn pad: one call equals single steps, two worlds on two
+ *      threads equal the single-thread run, rollback (in place and allocating) and replay are bit-identical. */
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -1089,6 +1092,282 @@ out:
     su_host_world_destroy(wb);
 }
 
+/* ---------- 10. compound movers: space3d.query_compound (2026-10-20) ---------- */
+
+static Bytes g_compound;
+static Bytes g_fixture_compound; /* g_fixture plus zero columns for the query_compound-only lanes */
+
+/* g_fixture with zero columns appended for the lanes only space3d.query_compound declares. Zero compound lanes
+ * select compound 0 for every mover. */
+static int make_compound_fixture(void) {
+    static const char *const extra[] = {"prox_margin.lo", "prox_margin.hi", "prox_slot", "prox_gen", "prox_dist.lo",
+                                        "prox_dist.hi",   "z0.lo",          "z0.hi",     "z1.lo",    "z1.hi",
+                                        "compound",       "c0_sub",         "c1_sub",    "rot0_w.lo", "rot0_w.hi",
+                                        "rot0_x.lo",      "rot0_x.hi",      "rot0_y.lo", "rot0_y.hi", "rot0_z.lo",
+                                        "rot0_z.hi"};
+    const size_t ne = sizeof extra / sizeof extra[0];
+    const char *ids = strstr((const char *)g_fixture.p, "\"entity_ids\":[");
+    size_t rows = 1, i, k, n = g_fixture.n, cap;
+    char *out;
+    while (n > 0u && (g_fixture.p[n - 1u] == 0 || g_fixture.p[n - 1u] == 10 || g_fixture.p[n - 1u] == 13 ||
+                      g_fixture.p[n - 1u] == 32)) {
+        n--;
+    }
+    if (ids == NULL || n < 2u || g_fixture.p[n - 1u] != '}' || g_fixture.p[n - 2u] != '}') {
+        return 0;
+    }
+    for (ids += 14; *ids != ']'; ids++) {
+        rows += *ids == ',';
+    }
+    cap = n + ne * (rows * 2u + 32u) + 16u;
+    out = malloc(cap);
+    if (out == NULL) {
+        return 0;
+    }
+    memcpy(out, g_fixture.p, n - 2u);
+    k = n - 2u;
+    for (i = 0; i < ne; i++) {
+        size_t r;
+        k += (size_t)sprintf(out + k, ",\"%s\":[", extra[i]);
+        for (r = 0; r < rows; r++) {
+            out[k++] = '0';
+            out[k++] = r + 1u < rows ? ',' : ']';
+        }
+    }
+    out[k++] = '}';
+    out[k++] = '}';
+    g_fixture_compound.p = (uint8_t *)out;
+    g_fixture_compound.n = k;
+    return 1;
+}
+
+/* Blob: mesh 0 = the box [-60, 60]^3; compound 0 = a long capsule (z -20..20, r 2), a crossing capsule
+ * (x -15..15 at z 4, r 1) and a sphere (0, 5, 10) r 2. */
+static void compound_blob(TBlob *b) {
+    SuV3 v[8];
+    uint32_t t[36];
+    TGeom g;
+    TPart p;
+    TMesh m, c;
+    TSub u[3];
+    SuV3 hv;
+    const int64_t one = (int64_t)1 << 32;
+    hv.x = hv.y = hv.z = 60 * one;
+    tbox_verts(hv, v);
+    tbox_tris(t);
+    g.nv = 8;
+    g.nt = 12;
+    g.v = v;
+    g.t = t;
+    p.geom = 0;
+    p.pos.x = p.pos.y = p.pos.z = 0;
+    p.rot.w = one;
+    p.rot.x = p.rot.y = p.rot.z = 0;
+    p.scale = one;
+    m.first = 0;
+    m.count = 1;
+    memset(u, 0, sizeof u);
+    u[0].a.z = -20 * one;
+    u[0].b.z = 20 * one;
+    u[0].r = 2 * one;
+    u[1].a.x = -15 * one;
+    u[1].b.x = 15 * one;
+    u[1].a.z = u[1].b.z = 4 * one;
+    u[1].r = one;
+    u[2].a.y = u[2].b.y = 5 * one;
+    u[2].a.z = u[2].b.z = 10 * one;
+    u[2].r = 2 * one;
+    c.first = 0;
+    c.count = 3;
+    tb_build2(b, &g, 1, &p, 1, &m, 1, u, 3, &c, 1);
+}
+
+/* Queues rot0 = (cos 0.02, sin 0.02, 0, 0) (a 0.04 rad turn about x from identity) for every mover: the turn pad is
+ * then in effect every tick. */
+static void push_rot0(SuHostWorld *w) {
+    uint32_t kind_id = 0, rw = 0, rx = 0, slot;
+    uint64_t rows = su_host_capacity(w);
+    SuHostError err;
+    check(su_host_field_id(w, "kind", &kind_id) == SU_OK && su_host_field_id(w, "rot0_w.lo", &rw) == SU_OK &&
+              su_host_field_id(w, "rot0_x.lo", &rx) == SU_OK,
+          "rot0 lanes present");
+    for (slot = 0; slot < rows; slot++) {
+        uint64_t e = 0;
+        uint32_t k = 0;
+        uint8_t alive = 0;
+        if (su_host_alive(w, slot, 1, &alive) != SU_OK || !alive || su_host_read(w, kind_id, slot, 1, &k) != SU_OK ||
+            k != 1u || su_host_entity_at(w, slot, &e) != SU_OK) {
+            continue;
+        }
+        check(su_host_input_push_i64(w, su_host_tick(w), e, rw, INT64_C(4294108331), &err) == SU_OK &&
+                  su_host_input_push_i64(w, su_host_tick(w), e, rx, INT64_C(85893619), &err) == SU_OK,
+              "push rot0: %s", err.message);
+    }
+}
+
+static SuHostWorld *make_compound_world(const TBlob *blob) {
+    SuHostWorld *w;
+    SuHostError err;
+    g_fix_cur = &g_fixture_compound;
+    w = make_world(&g_compound);
+    g_fix_cur = &g_fixture;
+    if (w != NULL) {
+        check(su_host_set_operator_data(w, NULL, blob->p, blob->n, &err) == SU_OK, "compound data: %s", err.message);
+        (void)push_meshes(w);
+        push_rot0(w);
+    }
+    return w;
+}
+
+static void test_compound_movers(void) {
+    SuHostWorld *w = NULL, *v = NULL;
+    TBlob blob;
+    ThreadJob a, b;
+    uint8_t d_end[32], d2[32];
+    uint8_t *snap = NULL, *bytes = NULL;
+    size_t snap_len = 0, got = 0, len = 0;
+    uint64_t done = 0;
+    uint32_t it, st, coll = 0, sub_id = 0;
+    char s_one[65], l_one[65], s_chunk[65], l_chunk[65];
+    SuReplayWriter *rw = NULL;
+    SuReplayOptions o;
+    SuReplay *r = NULL;
+    SuHostError err;
+    if (!make_compound_fixture()) {
+        check(0, "compound fixture");
+        return;
+    }
+    compound_blob(&blob);
+    memset(&a, 0, sizeof a);
+    memset(&b, 0, sizeof b);
+
+    /* (a) one 720-tick call vs 720 single steps vs two worlds on two threads: the same state and event log. */
+    w = make_compound_world(&blob);
+    if (w == NULL) {
+        goto out;
+    }
+    step_n(w, 720);
+    section_digests(w, s_one, l_one);
+    coll = count_collisions(w);
+    su_host_world_destroy(w);
+    w = make_compound_world(&blob);
+    if (w == NULL) {
+        goto out;
+    }
+    for (it = 0; it < 720u; it++) {
+        step_n(w, 1);
+    }
+    section_digests(w, s_chunk, l_chunk);
+    check(strcmp(s_one, s_chunk) == 0 && strcmp(l_one, l_chunk) == 0, "compound: 720 single steps equal one call");
+    check(su_host_field_id(w, "c0_sub", &sub_id) == SU_OK, "c0_sub lane");
+    su_host_world_destroy(w);
+    w = NULL;
+    a.w = make_compound_world(&blob);
+    b.w = make_compound_world(&blob);
+    if (a.w != NULL && b.w != NULL) {
+#if defined(_WIN32)
+        HANDLE ha = (HANDLE)_beginthreadex(NULL, 0, thread_main, &a, 0, NULL);
+        HANDLE hb = (HANDLE)_beginthreadex(NULL, 0, thread_main, &b, 0, NULL);
+        check(ha != 0 && hb != 0, "compound threads start");
+        if (ha != 0) {
+            WaitForSingleObject(ha, INFINITE);
+            CloseHandle(ha);
+        }
+        if (hb != 0) {
+            WaitForSingleObject(hb, INFINITE);
+            CloseHandle(hb);
+        }
+#else
+        pthread_t ta, tb;
+        int ra = pthread_create(&ta, NULL, thread_main, &a);
+        int rb = pthread_create(&tb, NULL, thread_main, &b);
+        check(ra == 0 && rb == 0, "compound threads start");
+        if (ra == 0) {
+            pthread_join(ta, NULL);
+        }
+        if (rb == 0) {
+            pthread_join(tb, NULL);
+        }
+#endif
+        check(strcmp(a.state, s_one) == 0 && strcmp(a.log, l_one) == 0 && strcmp(b.state, s_one) == 0 &&
+                  strcmp(b.log, l_one) == 0,
+              "compound: two worlds on two threads equal the single-thread run");
+    }
+    su_host_world_destroy(a.w);
+    su_host_world_destroy(b.w);
+    check(coll > 0u, "compound movers collide (%u collisions by tick 720)", (unsigned)coll);
+    check(strcmp(s_one, g_pin_state) != 0, "compound movers change the run (not the sphere pin)");
+
+    /* (b) rollback from tick 600 over 120 ticks, in place and allocating, in one call or 1 + 119. */
+    w = make_compound_world(&blob);
+    if (w == NULL) {
+        goto out;
+    }
+    step_n(w, 600);
+    su_host_snapshot_size(w, &snap_len);
+    snap = malloc(snap_len);
+    check(snap != NULL && su_host_snapshot_write(w, snap, snap_len, &got) == SU_OK && got == snap_len,
+          "compound anchor snapshot");
+    step_n(w, 120);
+    su_host_digest(w, d_end);
+    for (it = 0; it < 6u && snap != NULL; it++) {
+        st = it % 2u ? su_host_snapshot_restore(w, snap, snap_len, &err)
+                     : su_host_snapshot_restore_inplace(w, snap, snap_len, &err);
+        check(st == SU_OK && su_host_tick(w) == 600u, "compound restore %u", (unsigned)it);
+        step_n(w, it % 3u == 0u ? 120u : 1u);
+        if (it % 3u != 0u) {
+            step_n(w, 119);
+        }
+        su_host_digest(w, d2);
+        check(memcmp(d_end, d2, 32) == 0, "compound rollback %u re-simulates bit-identically", (unsigned)it);
+    }
+    su_host_world_destroy(w);
+    w = NULL;
+
+    /* (c) replay: recorded with the data, re-simulated in a world given the same data. */
+    g_fix_cur = &g_fixture_compound;
+    w = make_world(&g_compound);
+    g_fix_cur = &g_fixture;
+    if (w == NULL) {
+        goto out;
+    }
+    su_host_set_operator_data(w, NULL, blob.p, blob.n, &err);
+    memset(&o, 0, sizeof o);
+    o.struct_size = sizeof o;
+    o.keyframe_interval = 120;
+    o.digest_interval = 30;
+    check(su_replay_writer_begin(w, &o, &rw, &err) == SU_OK, "compound replay begin: %s", err.message);
+    if (rw != NULL) {
+        (void)push_meshes(w);
+        push_rot0(w);
+        check(su_replay_writer_step(rw, w, 360, &done, &err) == SU_OK && done == 360u, "compound replay step");
+        check(su_replay_writer_finish(rw, w, &bytes, &len) == SU_OK, "compound replay finish");
+        su_replay_writer_destroy(rw);
+    }
+    su_host_digest(w, d_end);
+    if (bytes != NULL && su_replay_open(bytes, len, &r, &err) == SU_OK) {
+        g_fix_cur = &g_fixture_compound;
+        v = make_world(&g_compound);
+        g_fix_cur = &g_fixture;
+        if (v != NULL) {
+            su_host_set_operator_data(v, NULL, blob.p, blob.n, &err);
+            check(su_replay_seek(r, v, 250, &err) == SU_OK && su_replay_play(r, v, 110, &done, &err) == SU_OK &&
+                      done == 110u,
+                  "compound replay seek + play: %s", err.message);
+            su_host_digest(v, d2);
+            check(memcmp(d_end, d2, 32) == 0, "compound replay equals the recorded world");
+            su_host_world_destroy(v);
+        }
+        su_replay_close(r);
+    }
+    su_replay_free(bytes);
+    printf("host_ops compound movers: %u collisions by tick 720 (racer.race count)\n", (unsigned)coll);
+out:
+    free(snap);
+    free(blob.p);
+    su_host_world_destroy(w);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: test_host_ops <racer fixture json>  (run from the repository root)\n");
@@ -1099,7 +1378,8 @@ int main(int argc, char **argv) {
         !load(&g_move_cap, "capsules/space3d_racer/move.capsule.json") ||
         !load(&g_move_lir, "capsules/space3d_racer/move.lir.json") ||
         !load(&g_query, "profiles/space3d/space3d_query.capsule.json") || 
-        !load(&g_shape, "profiles/space3d/space3d_query_shape.capsule.json") || !load(&g_fixture, argv[1]) ||
+        !load(&g_shape, "profiles/space3d/space3d_query_shape.capsule.json") ||
+        !load(&g_compound, "profiles/space3d/space3d_query_compound.capsule.json") || !load(&g_fixture, argv[1]) ||
         !read_pins()) {
         return 2;
     }
@@ -1112,6 +1392,7 @@ int main(int argc, char **argv) {
     test_tiers();
     test_capsule_movers();
     test_operator_data();
+    test_compound_movers();
     printf("host_ops: %u checks, %u failures\n", g_checks, g_failures);
     free(g_race_cap.p);
     free(g_race_lir.p);
@@ -1119,7 +1400,9 @@ int main(int argc, char **argv) {
     free(g_move_lir.p);
     free(g_query.p);
     free(g_shape.p);
+    free(g_compound.p);
     free(g_fixture_shape.p);
+    free(g_fixture_compound.p);
     free(g_fixture.p);
     return g_failures == 0u ? 0 : 1;
 }
