@@ -952,7 +952,10 @@ uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc 
     s->u.mat.f = d->factors;
     s->u.mat.paint = d->paint;
     memcpy(s->u.mat.tex, d->textures, sizeof s->u.mat.tex);
-    s->u.mat.pipeline = pipe_of(&d->factors);
+    s->u.mat.pipeline = d->overlay ? PIPE_OVERLAY + (d->factors.double_sided ? 1u : 0u) : pipe_of(&d->factors);
+    if (d->overlay) {
+        s->u.mat.f.alpha_mode = SU_ASSET_ALPHA_BLEND;
+    }
     memset(&u, 0, sizeof u);
     u.a[0] = p->specular;
     u.a[1] = p->dirt_amount;
@@ -1018,7 +1021,10 @@ uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d,
     s = &r->res[idx];
     s->u.mat.f = d->factors;
     memcpy(s->u.mat.tex, d->textures, sizeof s->u.mat.tex);
-    s->u.mat.pipeline = pipe_of(&d->factors);
+    s->u.mat.pipeline = d->overlay ? PIPE_OVERLAY + (d->factors.double_sided ? 1u : 0u) : pipe_of(&d->factors);
+    if (d->overlay) {
+        s->u.mat.f.alpha_mode = SU_ASSET_ALPHA_BLEND;
+    }
     s->u.mat.set = write_material_set(r, s->u.mat.tex, &s->u.mat.f, &s->u.mat.bound_ready);
     if (s->u.mat.set == VK_NULL_HANDLE) {
         free_slot(r, idx);
