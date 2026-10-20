@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bounded audio event graph v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "numeric_profile", "seed_policy", "sample_rate", "nodes", "events"],
+  "properties": {
+    "schema": {"const": "su_audio_events_v1"},
+    "numeric_profile": {"const": "audio_float_local_v1"},
+    "seed_policy": {"const": "event_emitter_sequence_v1"},
+    "sample_rate": {"type": "integer", "minimum": 1000, "maximum": 384000},
+    "nodes": {"type": "array", "minItems": 1, "maxItems": 65536, "items": {"$ref": "#/$defs/node"}},
+    "events": {"type": "array", "minItems": 1, "maxItems": 65536, "items": {"$ref": "#/$defs/event"}}
+  },
+  "$defs": {
+    "id": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+    "u32": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "float": {"type": "number", "minimum": -3.4028234663852886e38, "maximum": 3.4028234663852886e38},
+    "asset": {
+      "type": "object", "additionalProperties": false, "required": ["id", "generation"],
+      "properties": {"id": {"$ref": "#/$defs/id"}, "generation": {"$ref": "#/$defs/id"}}
+    },
+    "event": {
+      "type": "object", "additionalProperties": false, "required": ["id", "root"],
+      "properties": {"id": {"$ref": "#/$defs/id"}, "root": {"$ref": "#/$defs/id"}}
+    },
+    "weighted_child": {
+      "type": "object", "additionalProperties": false, "required": ["node", "weight"],
+      "properties": {"node": {"$ref": "#/$defs/id"}, "weight": {"$ref": "#/$defs/id"}}
+    },
+    "sequence_child": {
+      "type": "object", "additionalProperties": false, "required": ["node", "offset_frames"],
+      "properties": {"node": {"$ref": "#/$defs/id"}, "offset_frames": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}}
+    },
+    "switch_case": {
+      "type": "object", "additionalProperties": false, "required": ["value", "node"],
+      "properties": {"value": {"$ref": "#/$defs/u32"}, "node": {"$ref": "#/$defs/id"}}
+    },
+    "blend_point": {
+      "type": "object", "additionalProperties": false, "required": ["value", "node"],
+      "properties": {"value": {"$ref": "#/$defs/float"}, "node": {"$ref": "#/$defs/id"}}
+    },
+    "node": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["id", "type", "asset"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"}, "type": {"const": "sound"}, "asset": {"$ref": "#/$defs/asset"},
+            "gain": {"type": "number", "minimum": 0, "maximum": 3.4028234663852886e38, "default": 1},
+            "pitch": {"type": "number", "exclusiveMinimum": 0, "maximum": 64, "default": 1},
+            "bus_id": {"$ref": "#/$defs/u32", "default": 0}, "flags": {"enum": [0, 1, 2, 3], "default": 0}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["id", "type", "children"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"}, "type": {"const": "random"},
+            "children": {"type": "array", "minItems": 1, "maxItems": 262144, "items": {"$ref": "#/$defs/weighted_child"}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["id", "type", "children"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"}, "type": {"const": "sequence"},
+            "children": {"type": "array", "minItems": 1, "maxItems": 262144, "items": {"$ref": "#/$defs/sequence_child"}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["id", "type", "children"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"}, "type": {"const": "parallel"},
+            "children": {"type": "array", "minItems": 1, "maxItems": 262144, "items": {"$ref": "#/$defs/id"}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["id", "type", "switch_id", "default", "cases"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"}, "type": {"const": "switch"},
+            "switch_id": {"$ref": "#/$defs/id"}, "default": {"$ref": "#/$defs/id"},
+            "cases": {"type": "array", "maxItems": 262143, "items": {"$ref": "#/$defs/switch_case"}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["id", "type", "parameter_id", "points"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"}, "type": {"const": "blend"}, "parameter_id": {"$ref": "#/$defs/id"},
+            "points": {"type": "array", "minItems": 1, "maxItems": 262144, "items": {"$ref": "#/$defs/blend_point"}}
+          }
+        }
+      ]
+    }
+  }
+}
