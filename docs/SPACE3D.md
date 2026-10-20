@@ -16,9 +16,9 @@ A world that uses the operator has schema ID `space3d` and reserves these field 
 
 | ID | Field | Type | Operator access | Meaning |
 |---|---|---|---|---|
-| 1 | `kind` | u32 | read | 0 none, 1 mover (swept sphere; a capsule under `space3d.query_shape`), 2 sphere, 3 oriented box, 4 capsule, 5 rectangular gate, 6 disc gate, 7 elliptical gate |
+| 1 | `kind` | u32 | read | 0 none, 1 mover (swept sphere; a capsule under `space3d.query_shape`), 2 sphere, 3 oriented box, 4 capsule, 5 rectangular gate, 6 disc gate, 7 elliptical gate, 8 static mesh (see "Static meshes") |
 | 2 | `next_gate` | u32 | read | mover: `gate_index` of the gate it must cross next |
-| 3 | `gate_index` | u32 | read | gate: its index in the course |
+| 3 | `gate_index` | u32 | read | gate: its index in the course; static mesh (kind 8): its mesh index in the operator's mesh set |
 | 10, 12, 14 | `pos_x/y/z` | q32 | read | position at the end of the tick (movers), centre (others) |
 | 16, 18, 20 | `prev_x/y/z` | q32 | read | mover position at the start of the tick |
 | 22..28 | `rot_w/x/y/z` | q32 | read | unit orientation, local to world (boxes, capsules, gates) |
@@ -174,6 +174,74 @@ movers of +/-20 m: rollback over 120 ticks in place and allocating, and replay s
 snapshot at T/2, restore and re-step to T equal the straight run on every lane). Native tier: the operator is compiled
 C run identically under every tier (it is not lowered), so there is no separate native path to compare.
 
+**Static meshes (2026-10-20).** Analytic shapes fit real models poorly (a battleship wreck's box set holds 3.5 to
+7.6 times its solid volume, so contacts fire far from the visible hull). Every space3d operator (`space3d.query`,
+`space3d.query_prox`, `space3d.query_shape`) can also collide movers against triangle meshes, with no new lanes and no
+new records:
+
+- *Data.* A mesh set is immutable operator data handed to a world before its first step:
+  `su_host_set_operator_data(w, system_id or NULL, bytes, len, &err)` (`include/sutekh/host.h`). NULL gives it to every
+  host entry whose operator takes data (one parse, shared; a game with a second binding of the operator, for example
+  a look-ahead sensor, gets the same set). Format `S3MESH01` (`profiles/space3d/native/space3d_mesh.h`): triangle
+  geometries (q32 vertices, u32 indices), parts (a geometry placed in the mesh frame by position, unit rotation and
+  uniform q32 scale) and meshes (lists of parts; empty meshes allowed). Shared geometry with per-part scale keeps
+  instanced content (many scaled copies of one rock) small. Limits: 65,536 geometries, 2^20 parts and meshes, 2^24
+  vertices and triangles, coordinates within 2^20 m, scale in [2^-16, 2^16], rotations unit within 2^-16. Malformed
+  data is refused with `SU_E_PARSE` (or `SU_E_RESOURCE_LIMIT`) and a reason naming the table and index; nothing is
+  attached then.
+- *Identity.* The data is not world state (not in snapshots or digests) but it is part of the world identity:
+  `SHA-256("SUOPDATA\0" || identity || u32 entries || per entry: u32 schedule index || SHA-256(data))`. Snapshots and
+  replays only load into a world given the same bytes, so a replay cannot be re-simulated against other geometry.
+  Data is accepted once per entry and only before the first `su_host_step`.
+- *Rows.* A row of kind 8 is mesh `gate_index` placed at `pos` with orientation `rot` (mesh frame to world). It is a
+  collidable exactly when its operator instance holds a set with that mesh and the mesh has parts; otherwise (no set:
+  the `sutekh serve` worker, a world without data, an unknown index, an empty mesh) it is not collidable, and every
+  lane equals the result of the same world without the row, bit for bit. A world that never uses kind 8 is
+  unchanged: no record, constants hash or digest moves. Broadphase bounds are the mesh's bounds (union of its parts'
+  oriented bounds, padded 1/64 m) as an oriented box at the row's pose.
+- *Narrow phase.* The mover (sphere, or capsule under `space3d.query_shape`) is taken into the mesh frame, then into
+  each part's frame (`conj(rot) * (x - pos) / scale`; radius / scale) and swept against the triangles
+  (`space3d_geom.h`): a sphere against the face slab and the three edge capsules (`s3_sweep_sphere_tri`); a capsule
+  against its two end spheres and the rounded parallelograms of the three edges, or toi 0 when its core segment
+  crosses the triangle at the start (`s3_sweep_capsule_tri`). Triangles are two-sided surfaces, not solids: a mover
+  already inside a closed mesh without touching it does not collide (a game keeps movers out of closed meshes;
+  swept contacts never let one in). The result is the hit with the smallest (toi, part index, triangle index) over
+  every triangle of the mesh; its normal is that triangle's closest-feature normal rotated back to the world. A mesh
+  row contributes at most one contact per mover, in the usual (toi, slot) order with the other contacts.
+- *Proximity* (`space3d.query_prox`, `space3d.query_shape`): the core distance (point or segment to triangle,
+  `s3_dist_seg_tri`) to the nearest triangle, part distances multiplied by the part scale, minus the mover radius.
+  Only triangles within the mover's margin are searched; beyond it the row is not within the margin.
+- *Culling.* Geometry and part BVHs are built at load by a median split on the axis of largest centroid spread (stable
+  order by centroid key and index; leaves of at most 4), from exact integer bounds. Sweeps visit nodes whose bounds,
+  swept back by the mover's extent and padded by 1/64 m, the path enters no later than the best toi so far; each
+  triangle first passes a plane test (the swept core more than r + pad from its plane on one side is skipped).
+  Distances visit nodes whose box gap is within the best distance + pad. Every skipped triangle provably cannot
+  reach the reported minimum, so results do not depend on the traversal: tests compare culled and brute-force runs
+  bit for bit.
+- *Cost.* Per mover and mesh row: two frame changes, then a BVH walk; an exact triangle test is a fixed sequence of at
+  most 2 face and 15 edge root solves. Load: O(T log^2 T) integer work per geometry, at set time, never in a tick;
+  memory about 100 bytes per triangle plus 56 bytes per BVH node (at most 2 nodes per triangle).
+
+Evidence: `test_space3d_geom` (triangle known answers: face from both sides, edge, start contact, degenerate triangle
+equal to its segment, capsule face, start crossing and edge contacts, distances; 20,000 random sphere sweeps and
+6,000 random capsule sweeps against the double-precision reference (Ericson's closest point on a triangle, nested
+ternary search and bisection): 0 mismatches, worst toi error 6.6e-7 m and normal error 6.2e-7; 1,500 random
+segment-triangle distances within 1e-5 m; a mutant without the face slab fails 1,039 cases). `test_space3d_mesh`
+(blob refusals: every truncated prefix, magic, trailing bytes, index ranges, coordinates, part geometry, scale and
+rotation, mesh ranges, empty geometry; a box of 12 triangles at random poses, part rotations and scales against
+`s3_sweep_*_obb` for 5,927 sphere and capsule sweeps starting outside it: 0 mismatches, worst toi error 2.5e-7 m;
+3,600 sweeps and 3,600 distances on random soups of 800 triangles in 4 rotated, scaled parts: culled equals brute
+force bit for bit with 23 times fewer triangle tests; 4,000 crossings of a zero-thickness wall at 1,820 m/s (15.17 m
+per 120 Hz tick) by spheres of 0.25 m and ship-sized capsules (r 24 m, 18 m core) at up to 75 degrees: every one
+reports the first contact, worst error 2.2e-7 m). `test_space3d_ops` (an instance holds one set; the static context
+none; box and scaled triangle meshes give the known toi, normal and proximity; empty and unknown meshes never collide;
+24 random scenes with mesh rows: without a set every lane equals the scene with those rows removed, with a set
+broadphase equals brute force in the 18 untruncated scenes and a repeat is bit-identical). `host_ops` check 9
+(refusals leave the identity unchanged; same data, same identity, other data, other identity; data after a step or
+twice refused; a snapshot of a world without data does not load into one with it; the racer microcosm with its 48
+obstacles as triangle boxes collides only with the set, rolls back bit-identically, and its replay re-simulates in a
+world given the same data and is refused by one without).
+
 ## 3. Semantics
 
 **Broadphase.** Collidables are alive rows of kinds 1..4. Bounds: a mover's start and end spheres; a sphere; a box's rotated extents (plus one raw unit); a capsule's two end spheres; every bound widened by 4096 raw units (about 1 micrometre) so that rounding in the narrow phase's frame changes can never make it report a pair the broadphase dropped. Sweep axis: the axis with the largest spread of bound centres, ties to x, then y. Collidables are ordered by (minimum on that axis, slot) with a stable merge sort and swept; a pair whose intervals overlap on all three axes and that contains at least one mover becomes a candidate of each mover in it. At most 32 candidates are kept per mover (the first 32 in sweep order; flag 1). At most 2^22 overlapping-interval pairs are examined per tick; when that budget runs out every mover gets flag 4 and the remaining pairs are not examined. Both limits are deterministic functions of the world state.
@@ -189,6 +257,9 @@ C run identically under every tier (it is not lowered), so there is no separate 
 **Accuracy domain.** Results are bit-exact for every input. Geometric accuracy holds while the relative coordinates of a tested pair stay within about 16 km and radii and extents within about 4 km (squares stay inside Q32.32); outside that range intermediate values saturate deterministically.
 
 ## 4. Resource bounds
+
+Static meshes (section 2): the set is allocated once at `su_host_set_operator_data`, never in a tick; traversal uses
+fixed stacks of 128 entries (BVH depth is at most 25 for 2^24 triangles).
 
 Worlds above 65,536 rows are refused (`SU_E_RESOURCE_LIMIT`, before any store). Scratch is static (about 12 MiB, admitted at process start; no allocation in the tick). Work per tick: O(n log n) sort, at most 2^22 sweep pair examinations, at most 32 narrow-phase tests per mover, one gate test per mover. The operator is not reentrant (one world per worker process, as for the RTS operators).
 

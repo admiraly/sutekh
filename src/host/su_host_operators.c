@@ -7,6 +7,7 @@
 
 #include <string.h>
 
+#include "space3d_mesh.h"
 #include "space3d_ops.h"
 #include "sutekh/status.h"
 
@@ -21,10 +22,30 @@ static uint32_t space3d_create(uint64_t rows, void **inst) {
     return st;
 }
 
+/* Static mesh set (space3d_mesh.h): parsed once per su_host_set_operator_data call, shared by its instances. */
+static uint32_t space3d_data(void *inst, const uint8_t *data, size_t len, void **shared, char *why, size_t why_cap) {
+    S3MeshSet *set = (S3MeshSet *)*shared;
+    if (set == NULL) {
+        uint32_t st = s3mesh_set_create(data, len, &set, why, why_cap);
+        if (st != SU_OK) {
+            return st;
+        }
+        *shared = set;
+    }
+    return space3d_query_instance_set_meshes((Space3dCtx *)inst, set);
+}
+
+static void space3d_data_release(void *shared) {
+    s3mesh_set_release((S3MeshSet *)shared);
+}
+
 static const HostOperator k_operators[] = {
-    {&g_space3d_query_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy},
-    {&g_space3d_query_prox_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy},
-    {&g_space3d_query_shape_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy},
+    {&g_space3d_query_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
+     space3d_data_release},
+    {&g_space3d_query_prox_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
+     space3d_data_release},
+    {&g_space3d_query_shape_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
+     space3d_data_release},
 };
 
 #define HOST_OPERATOR_COUNT (sizeof k_operators / sizeof k_operators[0])

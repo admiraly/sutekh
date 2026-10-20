@@ -18,6 +18,8 @@
 #include "ir/su_num.h"
 #include "ir/su_sha256.h"
 #include "runtime/rts/host_decl.h"
+#include "s3mesh_blob.h"
+#include "space3d_mesh.h"
 #include "space3d_ops.h"
 #include "sutekh/status.h"
 #include "world/su_world.h"
@@ -39,6 +41,7 @@ static int g_failures = 0;
 #define NONE 0xFFFFFFFFu
 
 static const SuHostOpDesc *D = &g_space3d_query_desc;
+static Space3dCtx *g_inst = NULL; /* when set, run_scene runs the operator on this instance (static meshes) */
 
 /* ---------- scene: column arrays for every declared lane ---------- */
 
@@ -207,7 +210,7 @@ static uint32_t run_scene(const Scene *s, SuWorld **wout) {
     outs = wo;
     outs.binding_count = nout;
     outs.bindings = bout;
-    st = D->run(w, &inv, &outs, D->host_ctx);
+    st = D->run(w, &inv, &outs, g_inst != NULL ? (void *)g_inst : D->host_ctx);
     if (st == SU_OK) st = su_world_commit_staging(w, wid, nout);
     if (st == SU_OK) st = su_world_publish(w);
     else su_world_abort(w);
@@ -951,6 +954,219 @@ static void test_shape(void) {
     D = &g_space3d_query_desc;
 }
 
+/* ---------- static meshes (2026-10-20) ---------- */
+
+static void mesh_row(uint32_t r, SuV3 c, SuQuat q, uint32_t mesh) {
+    set32(SPACE3D_F_KIND, r, SPACE3D_KIND_MESH);
+    set3(SPACE3D_F_POS_X, r, c.x, c.y, c.z);
+    set_rot(r, q);
+    set32(SPACE3D_F_GATE_INDEX, r, mesh);
+}
+
+static void test_mesh(void) {
+    static uint32_t a[40 * MAXR], b[40 * MAXR], c[40 * MAXR];
+    SuV3 bv[8], tv[3];
+    uint32_t bt[36], tt[3] = {0, 1, 2}, seed, r, nw, compared = 0, flagged = 0, contacts = 0, mesh_contacts = 0;
+    TGeom g[2];
+    TPart p[2];
+    TMesh m[3];
+    TBlob blob;
+    S3MeshSet *set = NULL, *set2 = NULL;
+    Space3dCtx *inst = NULL;
+    char why[200];
+    Scene sc;
+    SuWorld *w = NULL, *w0 = NULL;
+
+    /* Mesh 0: the box [-5, 5]^3 as 12 triangles; mesh 1: one 20 m triangle in the plane z = 0, scaled 2 (40 m);
+     * mesh 2: empty. */
+    tbox_verts(V(Q(5), Q(5), Q(5)), bv);
+    tbox_tris(bt);
+    tv[0] = V(-Q(10), -Q(10), 0);
+    tv[1] = V(Q(10), -Q(10), 0);
+    tv[2] = V(0, Q(10), 0);
+    g[0].nv = 8;
+    g[0].nt = 12;
+    g[0].v = bv;
+    g[0].t = bt;
+    g[1].nv = 3;
+    g[1].nt = 1;
+    g[1].v = tv;
+    g[1].t = tt;
+    p[0].geom = 0;
+    p[0].pos = V(0, 0, 0);
+    p[0].rot = QID;
+    p[0].scale = ONE;
+    p[1].geom = 1;
+    p[1].pos = V(0, 0, 0);
+    p[1].rot = QID;
+    p[1].scale = Q(2);
+    m[0].first = 0;
+    m[0].count = 1;
+    m[1].first = 1;
+    m[1].count = 1;
+    m[2].first = 0;
+    m[2].count = 0;
+    tb_build(&blob, g, 2, p, 2, m, 3);
+    CHECK(s3mesh_set_create(blob.p, blob.n, &set, why, sizeof why) == SU_OK);
+    CHECK(s3mesh_set_create(blob.p, blob.n, &set2, why, sizeof why) == SU_OK);
+    free(blob.p);
+    CHECK(space3d_query_instance_create(MAXR, &inst) == SU_OK);
+    CHECK(space3d_query_instance_set_meshes(inst, set) == SU_OK);
+    CHECK(space3d_query_instance_set_meshes(inst, set2) == SU_E_INVALID_ARGUMENT); /* one set per instance */
+    CHECK(space3d_query_instance_set_meshes(space3d_query_ctx(), set2) == SU_E_INVALID_ARGUMENT); /* not static */
+    s3mesh_set_release(set2);
+    s3mesh_set_release(set); /* the instance keeps its reference */
+
+    D = &g_space3d_query_shape_desc;
+    /* Known: sphere mover r 1 from (-30, 0, 0) by +40 hits the box face x = -5 at x = -6: toi 0.6, normal -x.
+     * Capsule mover (z -4..4, r 1) from (10, 0, 20) by -30 in z hits the triangle mesh (row 2, at (10, 0, 0),
+     * 40 m wide) with its lower end at z = 1: toi (20 - 4 - 1) / 30 = 0.5, normal +z. Proximity: a sphere mover
+     * from (-60, 0, 0) to (-20, 0, 0) (r 1, margin 30) is 15 - 1 = 14 from the box face at its end. Rows 4 and 5
+     * (empty mesh, mesh index 9) never collide: a mover through them (row 6) has no contact. */
+    scene_init(&sc, 7);
+    mover(0, V(-Q(30), 0, 0), V(Q(10), 0, 0), ONE, 0);
+    mesh_row(1, V(0, 0, 0), QID, 0);
+    mesh_row(2, V(Q(10), 0, -Q(500)), QID, 1);
+    cap_mover(3, V(Q(10), 0, -Q(480)), V(Q(10), 0, -Q(510)), ONE, QID, -Q(4), Q(4));
+    mesh_row(4, V(0, Q(300), 0), QID, 2);
+    mesh_row(5, V(0, Q(300), 0), QID, 9);
+    mover(6, V(-Q(10), Q(300), 0), V(Q(10), Q(300), 0), ONE, 0);
+    g_inst = NULL; /* static context: no meshes, kind 8 rows ignored */
+    CHECK(run_scene(&sc, &w0) == SU_OK);
+    if (w0 != NULL) {
+        CHECK(rd32(w0, SPACE3D_F_HIT_COUNT, 0) == 0u && rd32(w0, SPACE3D_F_HIT_COUNT, 3) == 0u);
+    }
+    g_inst = inst;
+    CHECK(run_scene(&sc, &w) == SU_OK);
+    if (w != NULL) {
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 1u && cslot(w, 0, 0) == 1u);
+        CHECK(near64(ctoi(w, 0, 0), su_q32_div(Q(3), Q(5)), 4) && cn(w, 0, 0, 0) == -ONE && cn(w, 0, 0, 1) == 0 &&
+              cn(w, 0, 0, 2) == 0);
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 3) == 1u && cslot(w, 3, 0) == 2u);
+        CHECK(near64(ctoi(w, 3, 0), ONE / 2, 4) && cn(w, 3, 0, 2) == ONE);
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 6) == 0u);
+        CHECK(inst->last.mesh_tri_tests > 0u);
+        su_world_destroy(w);
+        w = NULL;
+    }
+    su_world_destroy(w0);
+    w0 = NULL;
+    scene_init(&sc, 2);
+    prox_mover(0, V(-Q(60), 0, 0), V(-Q(20), 0, 0), ONE, Q(30));
+    mesh_row(1, V(0, 0, 0), QID, 0);
+    CHECK(run_scene(&sc, &w) == SU_OK);
+    if (w != NULL) {
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 0u && rd32(w, SPACE3D_F_PROX_SLOT, 0) == 1u);
+        CHECK(near64(rdq(w, SPACE3D_F_PROX_DIST, 0), Q(14), 16));
+        su_world_destroy(w);
+        w = NULL;
+    }
+    /* Margin too small: no proximity. */
+    setq(SPACE3D_F_PROX_MARGIN, 0, Q(10));
+    CHECK(run_scene(&sc, &w) == SU_OK);
+    if (w != NULL) {
+        CHECK(rd32(w, SPACE3D_F_PROX_SLOT, 0) == NONE);
+        su_world_destroy(w);
+        w = NULL;
+    }
+
+    /* Without a set every lane equals the same scene with the kind 8 rows emptied (kind 0); random scenes with
+     * mesh rows: broadphase equals brute force when nothing is truncated, and a repeat is bit-identical. */
+    nw = write_lanes();
+    for (seed = 1; seed <= 24; seed++) {
+        uint32_t rows = 64u + (seed * 97u) % 500u;
+        int64_t span = 20 + (int64_t)(seed % 4u) * 40;
+        SuWorld *w1 = NULL, *w2 = NULL, *w3 = NULL;
+        int flags_any = 0;
+        g_rng = seed * UINT64_C(104729);
+        random_scene(&sc, rows, span);
+        for (r = 0; r < rows; r++) {
+            uint32_t k = g_col[SPACE3D_F_KIND][r];
+            if (k == SPACE3D_KIND_MOVER) {
+                setq(SPACE3D_F_PROX_MARGIN, r, (int64_t)(rng() % (uint64_t)(8 * ONE)) - ONE);
+                if (rng() % 2u == 0u) {
+                    SuQuat q0;
+                    q0.w = rq(1);
+                    q0.x = rq(1);
+                    q0.y = rq(1);
+                    q0.z = rq(1);
+                    set_rot(r, su_quat_normalize(q0));
+                    setq(SPACE3D_F_Z0, r, -(int64_t)(rng() % (uint64_t)(6 * ONE)));
+                    setq(SPACE3D_F_Z1, r, (int64_t)(rng() % (uint64_t)(6 * ONE)));
+                }
+            } else if ((k == SPACE3D_KIND_SPHERE || k == SPACE3D_KIND_BOX) && rng() % 2u == 0u) {
+                SuQuat q0;
+                q0.w = rq(1);
+                q0.x = rq(1);
+                q0.y = rq(1);
+                q0.z = rq(1);
+                set32(SPACE3D_F_KIND, r, SPACE3D_KIND_MESH);
+                set_rot(r, su_quat_normalize(q0));
+                set32(SPACE3D_F_GATE_INDEX, r, (uint32_t)(rng() % 4u)); /* 2, 3: never collide */
+            }
+        }
+        g_inst = NULL;
+        CHECK(run_scene(&sc, &w1) == SU_OK);
+        for (r = 0; r < rows; r++) {
+            if (g_col[SPACE3D_F_KIND][r] == SPACE3D_KIND_MESH) {
+                g_col[SPACE3D_F_KIND][r] = 0;
+                g_col[SPACE3D_F_GATE_INDEX][r] |= 0x80000000u; /* remember: restore below */
+            }
+        }
+        CHECK(run_scene(&sc, &w2) == SU_OK);
+        if (w1 != NULL && w2 != NULL) {
+            snapshot_out(w1, rows, a);
+            snapshot_out(w2, rows, b);
+            CHECK(memcmp(a, b, sizeof(uint32_t) * nw * rows) == 0); /* no set: kind 8 rows are not there */
+        }
+        su_world_destroy(w1);
+        su_world_destroy(w2);
+        w1 = w2 = NULL;
+        for (r = 0; r < rows; r++) {
+            if (g_col[SPACE3D_F_GATE_INDEX][r] & 0x80000000u) {
+                g_col[SPACE3D_F_GATE_INDEX][r] &= 0x7FFFFFFFu;
+                g_col[SPACE3D_F_KIND][r] = SPACE3D_KIND_MESH;
+            }
+        }
+        g_inst = inst;
+        CHECK(run_scene(&sc, &w1) == SU_OK);
+        CHECK(run_scene(&sc, &w2) == SU_OK);
+        inst->brute_force = 1;
+        CHECK(run_scene(&sc, &w3) == SU_OK);
+        inst->brute_force = 0;
+        if (w1 != NULL && w2 != NULL && w3 != NULL) {
+            snapshot_out(w1, rows, a);
+            snapshot_out(w2, rows, b);
+            snapshot_out(w3, rows, c);
+            CHECK(memcmp(a, b, sizeof(uint32_t) * nw * rows) == 0);
+            for (r = 0; r < rows; r++) {
+                uint32_t k, n = rd32(w1, SPACE3D_F_HIT_COUNT, r);
+                flags_any |= (rd32(w1, SPACE3D_F_HIT_FLAGS, r) &
+                              (SPACE3D_FLAG_CAND_TRUNCATED | SPACE3D_FLAG_SWEEP_BUDGET)) != 0u;
+                contacts += n;
+                for (k = 0; k < n; k++) {
+                    mesh_contacts += g_col[SPACE3D_F_KIND][cslot(w1, r, k)] == SPACE3D_KIND_MESH;
+                }
+            }
+            if (flags_any) {
+                flagged++;
+            } else {
+                compared++;
+                CHECK(memcmp(a, c, sizeof(uint32_t) * nw * rows) == 0); /* mesh bounds lose nothing */
+            }
+        }
+        su_world_destroy(w1);
+        su_world_destroy(w2);
+        su_world_destroy(w3);
+    }
+    printf("space3d mesh: %u scenes equal to brute force, %u truncated (repeat-only), %u contacts (%u with meshes)%c",
+           compared, flagged, contacts, mesh_contacts, 10);
+    CHECK(compared >= 16u && mesh_contacts > 50u);
+    g_inst = NULL;
+    space3d_query_instance_destroy(inst);
+    D = &g_space3d_query_desc;
+}
+
 int main(void) {
     test_descriptor();
     test_known();
@@ -958,6 +1174,7 @@ int main(void) {
     test_limits();
     test_prox();
     test_shape();
+    test_mesh();
     printf("test_space3d_ops: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

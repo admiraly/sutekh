@@ -10,6 +10,7 @@
 #include "ir/su_num.h"
 #include "ir/su_num_fast.h" /* exact inline equivalents (tests/num/test_num_fast.c) */
 #include "space3d_geom.h"
+#include "space3d_mesh.h"
 #include "sutekh/abi.h"
 #include "sutekh/status.h"
 #include "world/su_world.h"
@@ -77,7 +78,7 @@ static const SuHostField k_fields[] = {
 #define S3_NFIELDS (S3_NFIELDS_PROX - 6u)
 
 static Space3dScratch g_scratch;
-static Space3dCtx g_ctx = {{0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, &g_scratch};
+static Space3dCtx g_ctx = {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, &g_scratch, NULL};
 
 static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 static uint32_t query_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
@@ -282,7 +283,19 @@ uint32_t space3d_query_instance_create(uint32_t max_rows, Space3dCtx **out) {
 }
 
 void space3d_query_instance_destroy(void *ctx) {
+    if (ctx != NULL) {
+        s3mesh_set_release(((Space3dCtx *)ctx)->meshes);
+    }
     free(ctx);
+}
+
+uint32_t space3d_query_instance_set_meshes(Space3dCtx *ctx, struct S3MeshSet *set) {
+    if (ctx == NULL || set == NULL || ctx == &g_ctx || ctx->meshes != NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    s3mesh_set_retain(set);
+    ctx->meshes = set;
+    return SU_OK;
 }
 
 /* ---------- column access ---------- */
@@ -298,6 +311,8 @@ typedef struct Cols {
     uint32_t *prox_slot, *prox_gen, *prox_dist[2];
     const uint32_t *z[2][2]; /* query_shape only: z0, z1; [lo, hi] */
     int shape;
+    const S3MeshSet *meshes; /* static meshes (NULL: none) */
+    S3MeshStats *mst;
 } Cols;
 
 enum { F_POSX, F_POSY, F_POSZ, F_PREVX, F_PREVY, F_PREVZ, F_ROTW, F_ROTX, F_ROTY, F_ROTZ, F_RADIUS, F_HALFX,
@@ -409,6 +424,11 @@ static int is_collidable(uint32_t kind) {
     return kind >= SPACE3D_KIND_MOVER && kind <= SPACE3D_KIND_CAPSULE;
 }
 
+/* A kind 8 row collides when the instance holds a mesh set with a nonempty mesh gate_index. */
+static int is_mesh(const Cols *c, uint32_t r) {
+    return c->kind[r] == SPACE3D_KIND_MESH && s3mesh_valid(c->meshes, c->gate_index[r]);
+}
+
 /* Capsule end points: pos -/+ rot * (0, 0, half_z). */
 static void capsule_ends(const Cols *c, uint32_t r, SuV3 *a, SuV3 *b) {
     SuV3 axis = {0, 0, 0};
@@ -458,14 +478,19 @@ static int64_t prox_margin_of(const Cols *c, uint32_t r) {
 
 /* Surface distance (q32, >= 0) between mover m at its end position and collidable o (others at their end position
  * too): centre-to-shape distance minus the radii, clamped at 0. Every step is a profile operation in this order. */
-static int64_t prox_distance(const Cols *c, uint32_t m, uint32_t o) {
+static int64_t prox_distance(const Cols *c, uint32_t m, uint32_t o, int64_t margin) {
     SuV3 p = rd3(c, F_POSX, m);
     int64_t d;
     uint32_t ko = c->kind[o];
     SuV3 e0, e1, f0, f1;
     int mseg = mover_seg(c, m, &e0, &e1);
     int oseg = mover_seg(c, o, &f0, &f1);
-    if (mseg || oseg) {
+    if (ko == SPACE3D_KIND_MESH) {
+        /* Static mesh: core distance to its triangles, searched within margin + the mover's radius (a value
+         * beyond it means "not within the margin", which the caller drops). */
+        d = s3mesh_dist(c->meshes, c->gate_index[o], rd3(c, F_POSX, o), rdrot(c, o), p, e0, e1,
+                        su_q32_addf(margin, rdq(c, F_RADIUS, m)), c->mst);
+    } else if (mseg || oseg) {
         /* Capsule mover involved (query_shape): core segment distances. */
         if (ko == SPACE3D_KIND_BOX) {
             d = s3_dist_seg_obb(p, e0, e1, rd3(c, F_POSX, o), rdrot(c, o), rd3(c, F_HALFX, o));
@@ -528,6 +553,18 @@ static void row_bounds(Space3dScratch *s, const Cols *c, uint32_t r, uint32_t ki
         s3_bounds_sphere(rd3(c, F_POSX, r), rad, &lo, &hi);
     } else if (kind == SPACE3D_KIND_BOX) {
         s3_bounds_obb(rd3(c, F_POSX, r), rdrot(c, r), rd3(c, F_HALFX, r), &lo, &hi);
+    } else if (kind == SPACE3D_KIND_MESH) {
+        /* The mesh-frame bounds as an oriented box (half extents rounded up) at the row's pose. */
+        SuV3 mlo, mhi, h, ce;
+        SuQuat q = rdrot(c, r);
+        s3mesh_bounds(c->meshes, c->gate_index[r], &mlo, &mhi);
+        h.x = (su_q32_subf(mhi.x, mlo.x) + 1) / 2;
+        h.y = (su_q32_subf(mhi.y, mlo.y) + 1) / 2;
+        h.z = (su_q32_subf(mhi.z, mlo.z) + 1) / 2;
+        ce.x = su_q32_addf(mlo.x, h.x);
+        ce.y = su_q32_addf(mlo.y, h.y);
+        ce.z = su_q32_addf(mlo.z, h.z);
+        s3_bounds_obb(su_v3_addf(rd3(c, F_POSX, r), su_quat_rotatef(q, ce)), q, h, &lo, &hi);
     } else {
         SuV3 a, b;
         capsule_ends(c, r, &a, &b);
@@ -644,6 +681,9 @@ static S3Hit narrow(const Cols *c, uint32_t m, uint32_t o) {
     SuV3 e0, e1, f0, f1;
     int mseg = mover_seg(c, m, &e0, &e1);
     int oseg = mover_seg(c, o, &f0, &f1);
+    if (ko == SPACE3D_KIND_MESH) {
+        return s3mesh_sweep(c->meshes, c->gate_index[o], rd3(c, F_POSX, o), rdrot(c, o), c0, v, r, e0, e1, c->mst);
+    }
     if (mseg || oseg) {
         /* Capsule mover involved (query_shape). Another mover is taken at its start position with the relative
          * displacement, as for spheres. */
@@ -723,6 +763,7 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
     uint64_t pairs = 0;
     int budget_hit = 0;
     Space3dStats st;
+    S3MeshStats mst;
 
     if (rows64 > s->max_rows) {
         return SU_E_RESOURCE_LIMIT;
@@ -732,6 +773,13 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
         return SU_E_SCHEMA_MISMATCH;
     }
     memset(&st, 0, sizeof st);
+    {
+        S3MeshStats ms0;
+        memset(&ms0, 0, sizeof ms0);
+        mst = ms0;
+    }
+    c.meshes = ctx->meshes;
+    c.mst = &mst;
     st.rows = rows;
     if (rows > 0u && (su_world_alive_view(w, 0, rows, s->alive) != SU_OK ||
                       su_world_generation_view(w, 0, rows, s->gen) != SU_OK)) {
@@ -746,7 +794,7 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
         if (!s->alive[r]) {
             continue;
         }
-        if (is_collidable(k)) {
+        if (is_collidable(k) || is_mesh(&c, r)) {
             row_bounds(s, &c, r, k);
             if (prox && k == SPACE3D_KIND_MOVER) {
                 /* Proximity: a mover's bounds grow by its margin, so every collidable within it is a candidate. */
@@ -891,7 +939,7 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
                     if (o == r) {
                         continue;
                     }
-                    d = prox_distance(&c, r, o);
+                    d = prox_distance(&c, r, o, mg);
                     if (d <= mg && (pslot == S3_NONE || d < pdist)) {
                         pslot = o;
                         pdist = d;
@@ -940,6 +988,8 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
             wrq(c.prox_dist, r, pdist);
         }
     }
+    st.mesh_nodes = mst.nodes;
+    st.mesh_tri_tests = mst.tri_tests;
     if (ctx != NULL) {
         ctx->last = st;
     }

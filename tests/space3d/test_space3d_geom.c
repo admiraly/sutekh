@@ -192,10 +192,37 @@ static D3 drot(const double q[4], D3 v) {
 }
 
 typedef struct Shape {
-    int kind; /* 0 sphere, 1 capsule, 2 box */
-    D3 c, a, b, half;
+    int kind; /* 0 sphere, 1 capsule, 2 box, 3 triangle (a, b, t2) */
+    D3 c, a, b, half, t2;
     double r, q[4], qc[4];
 } Shape;
+
+/* Closest point of triangle a-b-c to p (Ericson, RTCD 5.1.5), double. */
+static D3 dtri_closest(D3 p, D3 a, D3 b, D3 c) {
+    D3 ab = dsub(b, a), ac = dsub(c, a), ap = dsub(p, a), bp, cp;
+    double d1 = ddot(ab, ap), d2 = ddot(ac, ap), d3, d4, d5, d6, va, vb, vc, v, w, den;
+    if (d1 <= 0 && d2 <= 0) return a;
+    bp = dsub(p, b);
+    d3 = ddot(ab, bp);
+    d4 = ddot(ac, bp);
+    if (d3 >= 0 && d4 <= d3) return b;
+    vc = d1 * d4 - d3 * d2;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0) return dadd(a, dsc(ab, d1 / (d1 - d3)));
+    cp = dsub(p, c);
+    d5 = ddot(ab, cp);
+    d6 = ddot(ac, cp);
+    if (d6 >= 0 && d5 <= d6) return c;
+    vb = d5 * d2 - d1 * d6;
+    if (vb <= 0 && d2 >= 0 && d6 <= 0) return dadd(a, dsc(ac, d2 / (d2 - d6)));
+    va = d3 * d6 - d5 * d4;
+    if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+        return dadd(b, dsc(dsub(c, b), (d4 - d3) / ((d4 - d3) + (d5 - d6))));
+    }
+    den = 1.0 / (va + vb + vc);
+    v = vb * den;
+    w = vc * den;
+    return dadd(a, dadd(dsc(ab, v), dsc(ac, w)));
+}
 
 static double clampd(double x, double lo, double hi) {
     return x < lo ? lo : (x > hi ? hi : x);
@@ -210,6 +237,8 @@ static double core_dist(const Shape *s, D3 p) {
         D3 d = dsub(s->b, s->a);
         double t = clampd(ddot(dsub(p, s->a), d) / ddot(d, d), 0, 1);
         return dlen(dsub(p, dadd(s->a, dsc(d, t))));
+    } else if (s->kind == 3) {
+        return dlen(dsub(p, dtri_closest(p, s->a, s->b, s->t2)));
     } else {
         D3 l = drot(s->qc, dsub(p, s->c));
         D3 cl = {clampd(l.x, -s->half.x, s->half.x), clampd(l.y, -s->half.y, s->half.y),
@@ -303,6 +332,14 @@ static void test_random(const char *label, int kind, int cases) {
             s.b = dv(sb);
             h = s3_sweep_sphere_capsule(c0, vq, r, sa, sb, rs);
             R = qd(r) + qd(rs);
+        } else if (kind == 3) {
+            SuV3 ta = V(rq(10), rq(10), rq(10)), tb = V(rq(10), rq(10), rq(10)), tc = V(rq(10), rq(10), rq(10));
+            S3Tri t = s3_tri_make(ta, tb, tc);
+            s.a = dv(ta);
+            s.b = dv(tb);
+            s.t2 = dv(tc);
+            h = s3_sweep_sphere_tri(c0, vq, r, &t);
+            R = qd(r);
         } else {
             SuQuat q0;
             q0.w = rq(1);
@@ -349,6 +386,8 @@ static void test_random(const char *label, int kind, int cases) {
                 D3 d = dsub(s.b, s.a);
                 double t = clampd(ddot(dsub(p, s.a), d) / ddot(d, d), 0, 1);
                 nref = dsub(p, dadd(s.a, dsc(d, t)));
+            } else if (kind == 3) {
+                nref = dsub(p, dtri_closest(p, s.a, s.b, s.t2));
             } else {
                 D3 l = drot(s.qc, dsub(p, s.c));
                 D3 cl = {clampd(l.x, -s.half.x, s.half.x), clampd(l.y, -s.half.y, s.half.y),
@@ -374,6 +413,55 @@ static void test_random(const char *label, int kind, int cases) {
            "worst normal err %.3g\n", label, cases, compared, hits, grazing, mism, worst_t, worst_n);
     CHECK(mism == 0);
     CHECK(hits > cases / 10);
+}
+
+/* ---------- triangles (2026-10-20) ---------- */
+
+static void test_tri_known(void) {
+    /* Triangle (0,0,0) (10,0,0) (0,10,0): normal +z. */
+    S3Tri t = s3_tri_make(V(0, 0, 0), V(Q(10), 0, 0), V(0, Q(10), 0));
+    S3Tri dg = s3_tri_make(V(0, 0, 0), V(0, 0, 0), V(0, Q(10), 0));
+    S3Hit h, hc;
+    CHECK(t.n.x == 0 && t.n.y == 0 && t.n.z == ONE);
+    CHECK(dg.n.x == 0 && dg.n.y == 0 && dg.n.z == 0);
+    /* 1. Face from above and below: sphere r 1 at (2, 2, +-5) moving 10 towards the plane: toi 0.4, normal +-z. */
+    h = s3_sweep_sphere_tri(V(Q(2), Q(2), Q(5)), V(0, 0, -Q(10)), ONE, &t);
+    CHECK(h.hit && near_q(h.toi, su_q32_div(Q(2), Q(5)), 2) && h.n.z == ONE && h.n.x == 0 && h.n.y == 0);
+    h = s3_sweep_sphere_tri(V(Q(2), Q(2), -Q(5)), V(0, 0, Q(10)), ONE, &t);
+    CHECK(h.hit && near_q(h.toi, su_q32_div(Q(2), Q(5)), 2) && h.n.z == -ONE);
+    /* 2. Edge ab (y = 0) in the plane: from (5, -3, 0) moving +y by 10: contact at y = -1, toi 0.2, normal -y. */
+    h = s3_sweep_sphere_tri(V(Q(5), -Q(3), 0), V(0, Q(10), 0), ONE, &t);
+    CHECK(h.hit && near_q(h.toi, su_q32_div(ONE, Q(5)), 2) && h.n.y == -ONE && h.n.x == 0 && h.n.z == 0);
+    /* 3. Miss beside the hypotenuse; start contact (centre 0.5 above the face): toi 0, normal +z. */
+    CHECK(!s3_sweep_sphere_tri(V(Q(8), Q(8), Q(5)), V(0, 0, -Q(10)), ONE, &t).hit);
+    h = s3_sweep_sphere_tri(V(Q(2), Q(2), ONE / 2), V(Q(5), 0, 0), ONE, &t);
+    CHECK(h.hit && h.toi == 0 && h.n.z == ONE);
+    /* 4. Degenerate triangle: only its edges collide, like the segment (0,0,0)-(0,10,0). */
+    h = s3_sweep_sphere_tri(V(-Q(5), Q(4), 0), V(Q(10), 0, 0), ONE, &dg);
+    hc = s3_sweep_sphere_capsule(V(-Q(5), Q(4), 0), V(Q(10), 0, 0), ONE, V(0, 0, 0), V(0, Q(10), 0), 0);
+    CHECK(h.hit && hc.hit && h.toi == hc.toi && h.n.x == hc.n.x && h.n.y == hc.n.y && h.n.z == hc.n.z);
+    /* 5. Capsule lying flat (segment x +- 3) at (2, 2, 5) falling by 10: face contact at z = 1, toi 0.4. */
+    h = s3_sweep_capsule_tri(V(Q(2), Q(2), Q(5)), V(0, 0, -Q(10)), ONE, V(-Q(3), 0, 0), V(Q(3), 0, 0), &t);
+    CHECK(h.hit && near_q(h.toi, su_q32_div(Q(2), Q(5)), 2) && h.n.z == ONE);
+    /* 6. Segment crossing the face at the start: toi 0, face normal on the reference point's side. */
+    h = s3_sweep_capsule_tri(V(Q(2), Q(2), ONE / 4), V(ONE, 0, 0), ONE / 10, V(0, 0, -Q(3)), V(0, 0, Q(3)), &t);
+    CHECK(h.hit && h.toi == 0 && h.n.z == ONE);
+    /* 7. Edge against segment: vertical segment (z +- 3) at (-5, 5, 0) moving +x by 10 reaches edge ca (x = 0)
+     * at x = -1: toi 0.4, normal -x (a sphere mover at the same point also hits; one 5 m above misses). */
+    h = s3_sweep_capsule_tri(V(-Q(5), Q(5), 0), V(Q(10), 0, 0), ONE, V(0, 0, -Q(3)), V(0, 0, Q(3)), &t);
+    CHECK(h.hit && near_q(h.toi, su_q32_div(Q(2), Q(5)), 2) && h.n.x == -ONE && h.n.y == 0 && h.n.z == 0);
+    CHECK(!s3_sweep_sphere_tri(V(-Q(5), Q(5), Q(5)), V(Q(10), 0, 0), ONE, &t).hit);
+    h = s3_sweep_capsule_tri(V(-Q(5), Q(5), Q(5)), V(Q(10), 0, 0), ONE, V(0, 0, -Q(5)), V(0, 0, Q(1)), &t);
+    CHECK(h.hit && near_q(h.toi, su_q32_div(Q(2), Q(5)), 2) && h.n.x == -ONE);
+    /* 8. Distances: point above the face 5; past vertex a at (-3, -4, 0): 5; a segment through the face: 0;
+     * offsets point from the triangle to the point. */
+    CHECK(near_q(s3_dist_seg_tri(V(Q(2), Q(2), Q(5)), V(0, 0, 0), V(0, 0, 0), &t), Q(5), 2));
+    CHECK(near_q(s3_dist_seg_tri(V(-Q(3), -Q(4), 0), V(0, 0, 0), V(0, 0, 0), &t), Q(5), 4));
+    CHECK(s3_dist_seg_tri(V(Q(2), Q(2), 0), V(0, 0, -ONE), V(0, 0, ONE), &t) == 0);
+    {
+        SuV3 o = s3_tri_offset(&t, V(Q(2), Q(2), -Q(5)));
+        CHECK(o.x == 0 && o.y == 0 && o.z == -Q(5));
+    }
 }
 
 /* ---------- capsule movers (2026-10-18) ---------- */
@@ -499,6 +587,8 @@ static D3 core_closest(const Shape *s, D3 p) {
         D3 d = dsub(s->b, s->a);
         double t = clampd(ddot(dsub(p, s->a), d) / ddot(d, d), 0, 1);
         return dadd(s->a, dsc(d, t));
+    } else if (s->kind == 3) {
+        return dtri_closest(p, s->a, s->b, s->t2);
     } else {
         D3 l = drot(s->qc, dsub(p, s->c));
         D3 cl = {clampd(l.x, -s->half.x, s->half.x), clampd(l.y, -s->half.y, s->half.y),
@@ -548,6 +638,32 @@ static void test_capsule_random(const char *label, int kind, int cases) {
             s.b = dv(sb);
             h = s3_sweep_capsule_capsule(c0, vq, r, e0, e1, sa, sb, rs);
             R = qd(r) + qd(rs);
+        } else if (kind == 3) {
+            SuV3 ta = V(rq(10), rq(10), rq(10)), tb = V(rq(10), rq(10), rq(10)), tc = V(rq(10), rq(10), rq(10));
+            S3Tri t = s3_tri_make(ta, tb, tc);
+            s.a = dv(ta);
+            s.b = dv(tb);
+            s.t2 = dv(tc);
+            h = s3_sweep_capsule_tri(c0, vq, r, e0, e1, &t);
+            R = qd(r);
+            if (i % 4 == 0) {
+                /* Core distance against the reference (segment to triangle at the start). */
+                CapRef cd;
+                double dref, dgot;
+                cd.s = &s;
+                cd.c0 = dv(c0);
+                cd.v = dv(V(0, 0, 0));
+                cd.e0 = dv(e0);
+                cd.e1 = dv(e1);
+                dref = cap_seg_dist(&cd, 0, NULL);
+                dgot = qd(s3_dist_seg_tri(c0, e0, e1, &t));
+                if (fabs(dref - dgot) > 1e-5) {
+                    mism++;
+                    if (mism <= 5) {
+                        fprintf(stderr, "%s case %d: distance %.9f, reference %.9f\n", label, i, dgot, dref);
+                    }
+                }
+            }
         } else {
             q0.w = rq(1);
             q0.x = rq(1);
@@ -630,6 +746,9 @@ int main(void) {
     test_capsule_random("capsule_sphere", 0, 6000);
     test_capsule_random("capsule_capsule", 1, 6000);
     test_capsule_random("capsule_obb", 2, 6000);
+    test_tri_known();
+    test_random("sphere_tri", 3, 20000);
+    test_capsule_random("capsule_tri", 3, 6000);
     printf("test_space3d_geom: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

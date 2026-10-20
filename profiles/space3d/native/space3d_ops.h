@@ -39,6 +39,8 @@
 #define SPACE3D_KIND_GATE_RECT 5u  /* gate rectangle: pos, rot (normal = local +z), half_x, half_y */
 #define SPACE3D_KIND_GATE_DISC 6u  /* gate disc: pos, rot, radius */
 #define SPACE3D_KIND_GATE_ELLIPSE 7u /* gate ellipse: pos, rot, semi-axes half_x (local x), half_y (local y) */
+#define SPACE3D_KIND_MESH 8u       /* static mesh: pos, rot, mesh index in gate_index (2026-10-20; collides only
+                                    * when the operator instance holds a mesh set with that mesh, else ignored) */
 
 /* hit_flags bits */
 #define SPACE3D_FLAG_CAND_TRUNCATED 1u    /* more than SPACE3D_CAND_MAX candidates overlapped */
@@ -91,6 +93,8 @@ typedef struct Space3dStats {
     uint64_t candidates;      /* mover candidates kept */
     uint64_t narrow_tests;    /* narrow-phase calls */
     uint64_t contacts;        /* contacts found (before the per-mover cap) */
+    uint64_t mesh_nodes;      /* static meshes: BVH nodes visited (sweeps and distances) */
+    uint64_t mesh_tri_tests;  /* static meshes: exact triangle tests */
 } Space3dStats;
 
 /* Per-row scratch of one operator instance (sized for max_rows rows). The temporal-coherence cache (prev_*) only
@@ -108,10 +112,12 @@ typedef struct Space3dScratch {
     uint32_t prev_n, prev_axis;
 } Space3dScratch;
 
+struct S3MeshSet;
 typedef struct Space3dCtx {
     Space3dStats last;
     int brute_force;          /* test seam: nonzero skips the broadphase and tests every mover pair (O(n^2)) */
     Space3dScratch *scratch;  /* never NULL for a usable context */
+    struct S3MeshSet *meshes; /* static meshes (instances only; NULL: kind 8 rows are ignored) */
 } Space3dCtx;
 
 extern const SuHostOpDesc g_space3d_query_desc;
@@ -138,6 +144,12 @@ Space3dCtx *space3d_query_ctx(void);
  * Returns SU_OK, SU_E_INVALID_ARGUMENT or SU_E_RESOURCE_LIMIT. */
 uint32_t space3d_query_instance_create(uint32_t max_rows, Space3dCtx **out);
 void space3d_query_instance_destroy(void *ctx); /* NULL-safe; matches su_sched_set_host_instance's free_fn */
+/* Static meshes (2026-10-20, docs/SPACE3D.md "Static meshes"): gives an instance a mesh set (space3d_mesh.h;
+ * retained, released with the instance). Rows of kind SPACE3D_KIND_MESH then collide as mesh gate_index of the
+ * set, placed at the row's pos/rot: swept contacts and proximity like any collidable. An instance holds one set,
+ * given once (SU_E_INVALID_ARGUMENT for NULL or a second set); the static context never holds one. Without a set,
+ * results are those of the operator without meshes, bit for bit. */
+uint32_t space3d_query_instance_set_meshes(Space3dCtx *ctx, struct S3MeshSet *set);
 /* Canonical constants text (its SHA-256 is the descriptor's constants_hash). */
 const char *space3d_constants_text(void);
 const char *space3d_prox_constants_text(void);

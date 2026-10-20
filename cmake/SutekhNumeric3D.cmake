@@ -109,7 +109,8 @@ sutekh_apply_warnings(test_ir04)
 add_test(NAME ir04 COMMAND test_ir04 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # space3d (docs/SPACE3D.md): narrow phase, broadphase and the space3d.query host operator.
-add_library(su_space3d STATIC profiles/space3d/native/space3d_geom.c profiles/space3d/native/space3d_ops.c)
+add_library(su_space3d STATIC profiles/space3d/native/space3d_geom.c profiles/space3d/native/space3d_mesh.c
+            profiles/space3d/native/space3d_ops.c)
 target_include_directories(su_space3d PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/profiles/space3d/native")
 target_link_libraries(su_space3d PUBLIC su_world su_ir)
 sutekh_apply_warnings(su_space3d)
@@ -120,6 +121,14 @@ if(UNIX)
 endif()
 sutekh_apply_warnings(test_space3d_geom)
 add_test(NAME space3d_geom COMMAND test_space3d_geom)
+# Static meshes: blob validation, triangle box vs analytic box, culled vs brute traversal, tunnelling.
+add_executable(test_space3d_mesh tests/space3d/test_space3d_mesh.c)
+target_link_libraries(test_space3d_mesh PRIVATE su_space3d)
+if(UNIX)
+    target_link_libraries(test_space3d_mesh PRIVATE m) # the double-precision references of the test only
+endif()
+sutekh_apply_warnings(test_space3d_mesh)
+add_test(NAME space3d_mesh COMMAND test_space3d_mesh)
 # The operator on a real world, its declaration and host record (host_decl.c compiled in: no control plane).
 add_executable(test_space3d_ops tests/space3d/test_space3d_ops.c src/runtime/rts/host_decl.c)
 target_link_libraries(test_space3d_ops PRIVATE su_space3d su_ents)
