@@ -108,3 +108,51 @@ release tails and bit-identical PCM under variable external chunks.
 The test reports one 48,000-frame scalar render's CPU-clock observation and
 runtime payload size. It is not a latency distribution or performance gate.
 No new direct-device or cross-platform exact-PCM guarantee is claimed.
+
+## Integration evidence (2026-10-20)
+
+Windows 11 x64, Intel Core i5-12400F, Clang 23.1.3 and MSVC 19.44.35229.
+The exact A04 index snapshot was exported with
+`git checkout-index --all --force --prefix=build-pack/`. Its isolated strict
+Clang Debug build passed all eleven audio CTests, including graph allocation
+and callback side-effect instrumentation. Commands from the worktree:
+
+```powershell
+. ./tools/env-windows.ps1
+cmake --build build-a01-accepted --target test_audio_event test_audio_graph test_audio_graph_alloc test_audio_spatial test_audio_asset test_audio_callback test_audio test_audio_stream test_audio_lowpass test_audio_adpcm test_audio_device -j 4
+ctest --test-dir build-a01-accepted -R '^audio_' --output-on-failure
+cmake --build build-event -j 4
+ctest --test-dir build-event --output-on-failure -j 4
+cmake --build build-event-cl --target test_audio_event test_audio_graph test_audio_graph_alloc test_audio_spatial test_audio_asset test_audio_callback test_audio test_audio_stream test_audio_lowpass test_audio_adpcm test_audio_device -j 4
+ctest --test-dir build-event-cl -R '^audio_' --output-on-failure
+cmake --build build-event-ogg --target test_audio_event test_audio_graph test_audio_graph_alloc test_audio_spatial test_audio_asset test_audio_callback test_audio test_audio_stream test_audio_lowpass test_audio_adpcm test_audio_device -j 4
+ctest --test-dir build-event-ogg -R '^audio_' --output-on-failure
+```
+
+The build directories were configured with native and Vulkan rendering disabled;
+`build-event-cl` uses MSVC Debug and `build-event-ogg` uses Clang Release with
+pinned optional import/Ogg dependencies enabled. The MSVC compiler and Windows
+SDK tools were added to PATH before its build. All eleven affected tests passed
+in both configurations. The full Clang Debug run based on main `9971957` passed
+111 tests, with the two POSIX-only tests explicitly skipped, zero failures.
+Later incoming render work requires its own merged-tree CI; these local counts
+are not claims about tests added after that build.
+
+Local source SHA-256 values for this A04 checkpoint:
+
+| Path | SHA-256 |
+| --- | --- |
+| `include/sutekh/audio_event.h` | `2F69F2B67FD4AED6F54240AB1B40310AD656CF7EAF649594A8DCB99BB37D21BB` |
+| `src/audio/su_audio_event.c` | `01434B620E10361F87BAF9DDDD613593F96D7987A9AEB365443AE100691376A9` |
+| `src/audio/su_audio_event_int.h` | `D88FDB51611D76A8AB28E4C12D6AA795AF77FFAC25FE9C48ECD61229AE33F4DB` |
+| `src/audio/su_audio_mix.c` | `86165714D1A34D5A20F4E65F6CB49493BF3574E370D18E0AFC4ADD2319117C83` |
+| `tests/audio/test_audio_event.c` | `59259D78F4807F52F70FF3A06CF17B6E01028C8540FE55A73A67522109C3D1D5` |
+
+`build-a01-accepted/test_audio_event.exe` SHA-256:
+`A5E37D2A2E5B02260337BEB07A030569019816CB0C5EF30F58EEEC961FB6EEF1`.
+`build-event-cl/test_audio_event.exe` SHA-256:
+`7C7229739C6E9B714F029AEEEDD6E0FFE8DC8901116559EE119F71B62621BD95`.
+Source/artifact hashes identify these local observations, not reproducible-build
+guarantees. ASan coverage is presently the graph component; full event-runtime
+sanitizer, concurrent adapter stress and long-duration device profiling remain
+unrun. Cross-platform repository CI is a required merge gate.
