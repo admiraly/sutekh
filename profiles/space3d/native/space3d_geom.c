@@ -657,3 +657,213 @@ void s3_bounds_obb(SuV3 c, SuQuat q, SuV3 half, SuV3 *lo, SuV3 *hi) {
     *lo = su_v3_subf(c, e);
     *hi = su_v3_addf(c, e);
 }
+
+/* ---------- triangles (static meshes, 2026-10-20) ---------- */
+S3Tri s3_tri_make(SuV3 a, SuV3 b, SuV3 c) {
+    S3Tri t;
+    t.a = a;
+    t.b = b;
+    t.c = c;
+    t.n = su_v3_normalizef(su_v3_crossf(su_v3_subf(b, a), su_v3_subf(c, a)));
+    return t;
+}
+
+/* The projection of p along n lies in the closed triangle (each edge function (q - p0) x (p - p0) . n >= 0).
+ * Always 0 for a degenerate triangle (zero normal). */
+static int tri_inside(const S3Tri *t, SuV3 p) {
+    if (v3_is_zero(t->n)) {
+        return 0;
+    }
+    if (su_v3_dotf(su_v3_crossf(su_v3_subf(t->b, t->a), su_v3_subf(p, t->a)), t->n) < 0) {
+        return 0;
+    }
+    if (su_v3_dotf(su_v3_crossf(su_v3_subf(t->c, t->b), su_v3_subf(p, t->b)), t->n) < 0) {
+        return 0;
+    }
+    return su_v3_dotf(su_v3_crossf(su_v3_subf(t->a, t->c), su_v3_subf(p, t->c)), t->n) >= 0;
+}
+
+static void tri_edge(const S3Tri *t, int k, SuV3 *pa, SuV3 *pb) {
+    *pa = k == 0 ? t->a : (k == 1 ? t->b : t->c);
+    *pb = k == 0 ? t->b : (k == 1 ? t->c : t->a);
+}
+
+/* P minus its closest point on the segment pa-pb. */
+static SuV3 seg_offset(SuV3 P, SuV3 pa, SuV3 pb) {
+    SuV3 d = su_v3_subf(pb, pa);
+    int64_t H = su_v3_lenf(d);
+    SuV3 ax;
+    int64_t k;
+    if (H == 0) {
+        return su_v3_subf(P, pa);
+    }
+    ax = su_v3_normalizef(d);
+    k = clamp_q(su_v3_dotf(su_v3_subf(P, pa), ax), 0, H);
+    return su_v3_subf(P, su_v3_addf(pa, su_v3_scalef(ax, k)));
+}
+
+SuV3 s3_tri_offset(const S3Tri *t, SuV3 P) {
+    SuV3 best = v3(0, 0, 0);
+    int64_t bd = 0;
+    int k;
+    if (tri_inside(t, P)) {
+        return su_v3_scalef(t->n, su_v3_dotf(su_v3_subf(P, t->a), t->n));
+    }
+    for (k = 0; k < 3; k++) {
+        SuV3 pa, pb, off;
+        int64_t dd;
+        tri_edge(t, k, &pa, &pb);
+        off = seg_offset(P, pa, pb);
+        dd = su_v3_dotf(off, off);
+        if (k == 0 || dd < bd) {
+            best = off;
+            bd = dd;
+        }
+    }
+    return best;
+}
+
+/* Unit normal from an offset (triangle point -> P); when it is zero, the face normal on P's side (+n on the
+ * plane), or +z for a degenerate triangle. */
+static SuV3 tri_normal(const S3Tri *t, SuV3 off, SuV3 P) {
+    SuV3 n = su_v3_normalizef(off);
+    if (!v3_is_zero(n)) {
+        return n;
+    }
+    if (v3_is_zero(t->n)) {
+        return v3(0, 0, ONE);
+    }
+    return su_v3_dotf(su_v3_subf(P, t->a), t->n) >= 0 ? t->n : su_v3_scalef(t->n, -ONE);
+}
+
+/* Earliest s in [0, len] at which c0 + s u is within R of the triangle: face slab first, then the three edges;
+ * the smallest s wins (equal s keeps the earlier feature). */
+static int ray_tri(const S3Tri *t, SuV3 c0, SuV3 u, int64_t len, int64_t R, int64_t *s_out) {
+    int found = 0, k;
+    int64_t best = 0, s = 0;
+    if (!v3_is_zero(t->n)) {
+        int64_t h0 = su_v3_dotf(su_v3_subf(c0, t->a), t->n), dn = su_v3_dotf(u, t->n);
+        int64_t nR = su_q32_neg(R);
+        if (h0 >= nR && h0 <= R) {
+            if (tri_inside(t, c0)) {
+                *s_out = 0;
+                return 1;
+            }
+        } else if (len > 0 && ((h0 > R && dn < 0) || (h0 < nR && dn > 0))) {
+            s = h0 > R ? su_q32_divf(su_q32_subf(h0, R), su_q32_neg(dn)) : su_q32_divf(su_q32_subf(nR, h0), dn);
+            if (s < 0) {
+                s = 0;
+            }
+            if (s <= len && tri_inside(t, su_v3_addf(c0, su_v3_scalef(u, s)))) {
+                best = s;
+                found = 1;
+            }
+        }
+    }
+    for (k = 0; k < 3; k++) {
+        SuV3 pa, pb;
+        tri_edge(t, k, &pa, &pb);
+        if (ray_seg(c0, u, len, pa, pb, R, &s) && (!found || s < best)) {
+            best = s;
+            found = 1;
+        }
+    }
+    if (found) {
+        *s_out = best;
+    }
+    return found;
+}
+
+S3Hit s3_sweep_sphere_tri(SuV3 c0, SuV3 v, int64_t r, const S3Tri *t) {
+    S3Hit h;
+    int64_t len = su_v3_lenf(v), s = 0;
+    SuV3 u = su_v3_normalizef(v), pc;
+    h.hit = 0;
+    h.toi = 0;
+    h.n = v3(0, 0, 0);
+    if (!ray_tri(t, c0, u, len, r, &s)) {
+        return h;
+    }
+    pc = su_v3_addf(c0, su_v3_scalef(u, s));
+    h.hit = 1;
+    h.toi = toi_of(s, len);
+    h.n = tri_normal(t, s3_tri_offset(t, pc), pc);
+    return h;
+}
+
+/* The segment A-B crosses the (non-degenerate) triangle: its end points are on opposite sides of the plane, or one
+ * is on it, and the crossing point is inside. A segment in the plane does not count (its contacts are the end
+ * spheres' and the edges'). */
+static int seg_tri_cross(const S3Tri *t, SuV3 A, SuV3 B) {
+    int64_t d0, d1, tt;
+    if (v3_is_zero(t->n)) {
+        return 0;
+    }
+    d0 = su_v3_dotf(su_v3_subf(A, t->a), t->n);
+    d1 = su_v3_dotf(su_v3_subf(B, t->a), t->n);
+    if ((d0 > 0 && d1 > 0) || (d0 < 0 && d1 < 0) || d0 == d1) {
+        return 0;
+    }
+    tt = clamp_q(su_q32_divf(d0, su_q32_subf(d0, d1)), 0, ONE);
+    return tri_inside(t, su_v3_addf(A, su_v3_scalef(su_v3_subf(B, A), tt)));
+}
+
+S3Hit s3_sweep_capsule_tri(SuV3 c0, SuV3 v, int64_t r, SuV3 e0, SuV3 e1, const S3Tri *t) {
+    S3Hit h, hk;
+    SuV3 A = su_v3_addf(c0, e0), B = su_v3_addf(c0, e1), u;
+    int64_t len, s = 0;
+    int k;
+    if (seg_tri_cross(t, A, B)) {
+        h.hit = 1;
+        h.toi = 0;
+        h.n = tri_normal(t, v3(0, 0, 0), c0);
+        return h;
+    }
+    h = s3_sweep_sphere_tri(A, v, r, t);
+    hk = s3_sweep_sphere_tri(B, v, r, t);
+    if (hk.hit && (!h.hit || hk.toi < h.toi)) {
+        h = hk;
+    }
+    len = su_v3_lenf(v);
+    u = su_v3_normalizef(v);
+    for (k = 0; k < 3; k++) {
+        SuV3 pa, pb;
+        Para p;
+        int64_t toi;
+        tri_edge(t, k, &pa, &pb);
+        p = para_make(pa, pb, e0, e1);
+        if (!ray_para(&p, c0, u, len, r, &s)) {
+            continue;
+        }
+        toi = toi_of(s, len);
+        if (!h.hit || toi < h.toi) {
+            SuV3 pc = su_v3_addf(c0, su_v3_scalef(u, s));
+            h.hit = 1;
+            h.toi = toi;
+            h.n = tri_normal(t, para_offset(&p, pc), pc);
+        }
+    }
+    return h;
+}
+
+int64_t s3_dist_seg_tri(SuV3 p, SuV3 e0, SuV3 e1, const S3Tri *t) {
+    SuV3 A = su_v3_addf(p, e0), B = su_v3_addf(p, e1);
+    int64_t d, dk;
+    int k;
+    if (seg_tri_cross(t, A, B)) {
+        return 0;
+    }
+    d = su_v3_lenf(s3_tri_offset(t, A));
+    if (e0.x == e1.x && e0.y == e1.y && e0.z == e1.z) {
+        return d;
+    }
+    dk = su_v3_lenf(s3_tri_offset(t, B));
+    d = dk < d ? dk : d;
+    for (k = 0; k < 3; k++) {
+        SuV3 pa, pb;
+        tri_edge(t, k, &pa, &pb);
+        dk = s3_dist_seg_seg(p, e0, e1, pa, pb);
+        d = dk < d ? dk : d;
+    }
+    return d;
+}

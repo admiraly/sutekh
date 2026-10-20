@@ -67,6 +67,29 @@ S3Hit s3_sweep_capsule_obb(SuV3 c0, SuV3 v, int64_t r, SuV3 e0, SuV3 e1, SuV3 ce
 int64_t s3_dist_seg_seg(SuV3 p, SuV3 e0, SuV3 e1, SuV3 a, SuV3 b);
 int64_t s3_dist_seg_obb(SuV3 p, SuV3 e0, SuV3 e1, SuV3 center, SuQuat q, SuV3 half);
 
+/* Triangles (static meshes, 2026-10-20). A triangle a-b-c with its unit normal n = normalize((b - a) x (c - a))
+ * (zero for a degenerate triangle: only its edges collide). The contact sets are the closed triangle (both sides:
+ * a mesh is a surface, not a solid). Same toi / normal contract as the sweeps above; the normal comes from the
+ * closest pair of core points at the contact (triangle point to mover centre or core segment), falling back to the
+ * face normal on the mover's side when that pair coincides. */
+typedef struct S3Tri {
+    SuV3 a, b, c, n;
+} S3Tri;
+S3Tri s3_tri_make(SuV3 a, SuV3 b, SuV3 c);
+/* Sphere mover: the earliest of the face slab (entry through the plane at distance r, hit point inside the
+ * triangle) and the three edge capsules (ab, bc, ca); equal s keeps the earlier feature. */
+S3Hit s3_sweep_sphere_tri(SuV3 c0, SuV3 v, int64_t r, const S3Tri *t);
+/* Capsule mover (core c + e0 .. c + e1): a core segment that crosses the triangle at the start reports toi 0 with
+ * the face normal on the reference point's side; otherwise the earliest of the two end-sphere sweeps
+ * (s3_sweep_sphere_tri at c0 + e0, then c0 + e1) and the three edge sweeps (rounded parallelograms of the edges
+ * ab, bc, ca against the segment), equal toi keeping the earlier feature. Exact: the first touch of a segment and
+ * a triangle is at an end point of the segment or between the segment and a triangle edge. */
+S3Hit s3_sweep_capsule_tri(SuV3 c0, SuV3 v, int64_t r, SuV3 e0, SuV3 e1, const S3Tri *t);
+/* Core distance (no radius) from the segment p + e0 .. p + e1 (e0 = e1: a point) to the triangle. */
+int64_t s3_dist_seg_tri(SuV3 p, SuV3 e0, SuV3 e1, const S3Tri *t);
+/* P minus its closest point on the triangle. */
+SuV3 s3_tri_offset(const S3Tri *t, SuV3 P);
+
 /* World-space axis-aligned bounds of the shapes (inclusive; used by the broadphase). */
 void s3_bounds_sphere(SuV3 c, int64_t r, SuV3 *lo, SuV3 *hi);
 void s3_bounds_obb(SuV3 c, SuQuat q, SuV3 half, SuV3 *lo, SuV3 *hi);

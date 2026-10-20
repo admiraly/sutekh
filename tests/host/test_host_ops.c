@@ -29,6 +29,7 @@
 #include "ir/su_sha256.h"
 #include "sutekh/host.h"
 #include "sutekh/replay.h"
+#include "../space3d/s3mesh_blob.h"
 
 #if defined(_WIN32)
 #include <process.h>
@@ -886,6 +887,208 @@ static void test_capsule_movers(void) {
     g_fix_cur = &g_fixture;
 }
 
+/* ---------- 9. operator data: space3d static meshes (2026-10-20) ---------- */
+
+/* Blob: mesh 0 = the box [-h, h]^3 as 12 triangles. */
+static void mesh_blob(TBlob *b, int64_t h) {
+    SuV3 v[8];
+    uint32_t t[36];
+    TGeom g;
+    TPart p;
+    TMesh m;
+    SuV3 hv;
+    hv.x = hv.y = hv.z = h;
+    tbox_verts(hv, v);
+    tbox_tris(t);
+    g.nv = 8;
+    g.nt = 12;
+    g.v = v;
+    g.t = t;
+    p.geom = 0;
+    p.pos.x = p.pos.y = p.pos.z = 0;
+    p.rot.w = (int64_t)1 << 32;
+    p.rot.x = p.rot.y = p.rot.z = 0;
+    p.scale = (int64_t)1 << 32;
+    m.first = 0;
+    m.count = 1;
+    tb_build(b, &g, 1, &p, 1, &m, 1);
+}
+
+/* Queues kind = 8 (mesh) and gate_index = 0 for every static obstacle row (kinds 2..4) at the current tick;
+ * returns how many rows. */
+static uint32_t push_meshes(SuHostWorld *w) {
+    uint32_t kind_id = 0, gi_id = 0, slot, n = 0;
+    uint64_t rows = su_host_capacity(w);
+    SuHostError err;
+    check(su_host_field_id(w, "kind", &kind_id) == SU_OK && su_host_field_id(w, "gate_index", &gi_id) == SU_OK,
+          "kind and gate_index lanes");
+    for (slot = 0; slot < rows; slot++) {
+        SuHostInput in[2];
+        uint64_t e = 0;
+        uint32_t k = 0;
+        uint8_t alive = 0;
+        if (su_host_alive(w, slot, 1, &alive) != SU_OK || !alive || su_host_read(w, kind_id, slot, 1, &k) != SU_OK ||
+            k < 2u || k > 4u || su_host_entity_at(w, slot, &e) != SU_OK) {
+            continue;
+        }
+        in[0].entity = e;
+        in[0].field_id = kind_id;
+        in[0].value = 8u;
+        in[1].entity = e;
+        in[1].field_id = gi_id;
+        in[1].value = 0u;
+        check(su_host_input_push(w, su_host_tick(w), in, 2u, &err) == SU_OK, "push mesh row: %s", err.message);
+        n++;
+    }
+    return n;
+}
+
+static uint32_t count_collisions(const SuHostWorld *w) {
+    uint32_t hid = 0, i, c = 0, a;
+    su_host_field_id(w, "collisions", &hid);
+    for (i = 0; i < (uint32_t)su_host_capacity(w); i++) {
+        a = 0;
+        su_host_read(w, hid, i, 1, &a);
+        c += a;
+    }
+    return c;
+}
+
+static void test_operator_data(void) {
+    SuHostWorld *w = make_world(&g_query), *w2 = make_world(&g_query), *w3 = make_world(&g_query), *wb = NULL;
+    SuHostWorld *v = NULL;
+    TBlob blob, blob2;
+    uint8_t id0[32], id1[32], id2[32], d_end[32], d2[32];
+    uint8_t *snap = NULL, *bytes = NULL;
+    size_t snap_len = 0, got = 0, len = 0;
+    uint64_t done = 0;
+    uint32_t st, it, nm, ca, cb;
+    SuHostError err;
+    SuReplayWriter *rw = NULL;
+    SuReplayOptions o;
+    SuReplay *r = NULL;
+    static const uint8_t junk[24] = {'S', '3', 'M', 'E', 'S', 'H', '0', '1', 9, 0, 0, 0};
+    mesh_blob(&blob, (int64_t)60 << 32);
+    mesh_blob(&blob2, (int64_t)61 << 32);
+    if (w == NULL || w2 == NULL || w3 == NULL) {
+        goto out;
+    }
+    /* (a) refusals and identity. */
+    su_host_world_identity(w, id0);
+    check(su_host_set_operator_data(w, NULL, NULL, 0, &err) == SU_E_INVALID_ARGUMENT, "operator data: NULL refused");
+    st = su_host_set_operator_data(w, NULL, junk, sizeof junk, &err);
+    check(st == SU_E_PARSE && strstr(err.message, "space3d.query") != NULL, "operator data: malformed blob refused "
+          "(%s: %s)", su_host_status_name(st), err.message);
+    check(su_host_set_operator_data(w, "racer.move", blob.p, blob.n, &err) == SU_E_INVALID_ARGUMENT,
+          "operator data: an IR system takes none");
+    su_host_world_identity(w, id1);
+    check(memcmp(id0, id1, 32) == 0, "refusals leave the identity unchanged");
+    st = su_host_set_operator_data(w, NULL, blob.p, blob.n, &err);
+    check(st == SU_OK, "operator data accepted: %s", err.message);
+    su_host_world_identity(w, id1);
+    check(memcmp(id0, id1, 32) != 0, "operator data changes the world identity");
+    check(su_host_set_operator_data(w, NULL, blob.p, blob.n, &err) == SU_E_INVALID_ARGUMENT,
+          "operator data given twice refused");
+    check(su_host_set_operator_data(w2, "space3d.query", blob.p, blob.n, &err) == SU_OK, "by system id");
+    su_host_world_identity(w2, id2);
+    check(memcmp(id1, id2, 32) == 0, "same data, same identity");
+    step_n(w3, 1);
+    check(su_host_set_operator_data(w3, NULL, blob.p, blob.n, &err) == SU_E_INVALID_ARGUMENT &&
+              strstr(err.message, "first step") != NULL,
+          "operator data after a step refused");
+    su_host_snapshot_size(w3, &snap_len);
+    snap = malloc(snap_len);
+    check(snap != NULL && su_host_snapshot_write(w3, snap, snap_len, &got) == SU_OK, "snapshot without data");
+    check(snap != NULL && su_host_snapshot_restore(w, snap, snap_len, &err) != SU_OK,
+          "a snapshot of a world without data does not load into one with data");
+    free(snap);
+    snap = NULL;
+    su_host_world_destroy(w3);
+    w3 = make_world(&g_query);
+    if (w3 != NULL) {
+        check(su_host_set_operator_data(w3, NULL, blob2.p, blob2.n, &err) == SU_OK, "other data");
+        su_host_world_identity(w3, id2);
+        check(memcmp(id1, id2, 32) != 0, "other data, other identity");
+    }
+
+    /* (b) obstacles turned into 12-triangle boxes collide only in the world that has the meshes; rollback. */
+    wb = make_world(&g_query);
+    nm = push_meshes(w);
+    if (wb != NULL) {
+        (void)push_meshes(wb);
+        step_n(wb, 720);
+        cb = count_collisions(wb);
+    } else {
+        cb = 0;
+    }
+    step_n(w, 600);
+    su_host_snapshot_size(w, &snap_len);
+    snap = malloc(snap_len);
+    check(snap != NULL && su_host_snapshot_write(w, snap, snap_len, &got) == SU_OK && got == snap_len,
+          "mesh anchor snapshot");
+    step_n(w, 120);
+    ca = count_collisions(w);
+    su_host_digest(w, d_end);
+    for (it = 0; it < 6u && snap != NULL; it++) {
+        st = it % 2u ? su_host_snapshot_restore(w, snap, snap_len, &err)
+                     : su_host_snapshot_restore_inplace(w, snap, snap_len, &err);
+        check(st == SU_OK && su_host_tick(w) == 600u, "mesh restore %u", (unsigned)it);
+        step_n(w, 120);
+        su_host_digest(w, d2);
+        check(memcmp(d_end, d2, 32) == 0, "mesh rollback %u re-simulates bit-identically", (unsigned)it);
+    }
+    check(nm > 0u && ca > 0u, "mesh rows collide (%u rows, %u collisions)", (unsigned)nm, (unsigned)ca);
+    printf("host_ops operator data: %u obstacle rows as meshes, collisions by tick 720: %u with the mesh set, %u "
+           "without (kind 8 ignored)\n", (unsigned)nm, (unsigned)ca, (unsigned)cb);
+
+    /* (c) replay: recorded with data, replayed into a world given the same data; refused without it. */
+    su_host_world_destroy(w2);
+    w2 = make_world(&g_query);
+    if (w2 == NULL) {
+        goto out;
+    }
+    su_host_set_operator_data(w2, NULL, blob.p, blob.n, &err);
+    memset(&o, 0, sizeof o);
+    o.struct_size = sizeof o;
+    o.keyframe_interval = 120;
+    o.digest_interval = 30;
+    check(su_replay_writer_begin(w2, &o, &rw, &err) == SU_OK, "mesh replay begin: %s", err.message);
+    if (rw != NULL) {
+        (void)push_meshes(w2);
+        check(su_replay_writer_step(rw, w2, 360, &done, &err) == SU_OK && done == 360u, "mesh replay step");
+        check(su_replay_writer_finish(rw, w2, &bytes, &len) == SU_OK, "mesh replay finish");
+        su_replay_writer_destroy(rw);
+    }
+    su_host_digest(w2, d_end);
+    if (bytes != NULL && su_replay_open(bytes, len, &r, &err) == SU_OK) {
+        v = make_world(&g_query);
+        if (v != NULL) {
+            check(su_replay_seek(r, v, 250, &err) != SU_OK, "a replay with data refuses a world without it");
+            su_host_world_destroy(v);
+        }
+        v = make_world(&g_query);
+        if (v != NULL) {
+            su_host_set_operator_data(v, NULL, blob.p, blob.n, &err);
+            check(su_replay_seek(r, v, 250, &err) == SU_OK && su_replay_play(r, v, 110, &done, &err) == SU_OK &&
+                      done == 110u,
+                  "mesh replay seek + play: %s", err.message);
+            su_host_digest(v, d2);
+            check(memcmp(d_end, d2, 32) == 0, "mesh replay equals the recorded world");
+            su_host_world_destroy(v);
+        }
+        su_replay_close(r);
+    }
+    su_replay_free(bytes);
+out:
+    free(snap);
+    free(blob.p);
+    free(blob2.p);
+    su_host_world_destroy(w);
+    su_host_world_destroy(w2);
+    su_host_world_destroy(w3);
+    su_host_world_destroy(wb);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: test_host_ops <racer fixture json>  (run from the repository root)\n");
@@ -908,6 +1111,7 @@ int main(int argc, char **argv) {
     test_independence();
     test_tiers();
     test_capsule_movers();
+    test_operator_data();
     printf("host_ops: %u checks, %u failures\n", g_checks, g_failures);
     free(g_race_cap.p);
     free(g_race_lir.p);

@@ -26,6 +26,11 @@ typedef struct HostOperator {
     const char *operator_name;
     uint32_t (*create)(uint64_t rows, void **inst);
     void (*destroy)(void *inst);
+    /* Operator data (su_host_set_operator_data; NULL: the operator takes none). *shared is NULL for the first
+     * instance of one call and keeps whatever that call parsed for the next ones (released by data_release after
+     * the call); why receives a reason on failure. */
+    uint32_t (*set_data)(void *inst, const uint8_t *data, size_t len, void **shared, char *why, size_t why_cap);
+    void (*data_release)(void *shared);
 } HostOperator;
 
 const HostOperator *su_host_operator_find(const char *system_id);
@@ -44,6 +49,8 @@ struct SuHostWorld {
     uint32_t rec_cap;
     SuEnts *rb_ents;               /* scratch for su_host_snapshot_restore_inplace (allocated on first use) */
     SuEventLog *rb_log;
+    uint32_t stepped;              /* su_host_step ran at least one tick */
+    uint32_t opdata_mask;          /* bit i: schedule entry i received operator data */
 };
 
 #endif

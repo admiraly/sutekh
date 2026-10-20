@@ -439,6 +439,16 @@ Owner-authorized downstream work outside the milestone order (extension of `plan
 
 Downstream request work outside the milestone order (M3 gates unchanged). Implemented and tested: `SU_LIMIT_FIELDS` raised from 256 to 1,024 lanes (no persisted format stores it); IR 0.4 (`LIVE_IR_SPEC.md` "IR 0.4", artifact format 4) with u32 `and/or/xor/not/shl/shr/div/rem`, i64 `and/or/xor/not`, a capsule-level `row_filter` (masked u32 equality; filtered rows keep their values and run nothing), `gather_u32/_i32/_i64/_q32` (a field of another row by slot, entry state) and `find_eq_u32` (lowest slot whose field equals a key: first claimant by slot order), with a whole-table view for chunked runs (`su_vm_context_set_table_view`). Both VM tiers implement every operation; the native scalar lowering covers the bit operations and the row filter and refuses cross-row reads (`ir_0_4_gather_not_lowered`). Tests: `ir04`, `host04`, `ir04_diff`, `ir04_native_diff`. Not done: a discard binding for host-operator output lanes, native cross-row reads, reductions other than `find_eq_u32`.
 
+## space3d static meshes and operator data (20 October 2026)
+
+Downstream request work outside the milestone order (M3 gates unchanged). Implemented and tested: triangle sweeps and
+distances in the space3d narrow phase (`s3_sweep_sphere_tri`, `s3_sweep_capsule_tri`, `s3_dist_seg_tri`); immutable
+mesh sets (`profiles/space3d/native/space3d_mesh.[ch]`, blob format `S3MESH01`: shared geometries, scaled and rotated
+parts, meshes, integer BVHs with traversal-independent results); row kind 8 (static mesh, index in `gate_index`) in
+every space3d operator, active only with a set and otherwise bit-identical to the operator without meshes; host API
+`su_host_set_operator_data` (operator data before the first step, folded into the world identity). Evidence:
+`docs/SPACE3D.md` "Static meshes" (space3d_geom, space3d_mesh, space3d_ops, host_ops check 9).
+
 ## Simulation runtime: rollback budget, planned VM tier, native IR 0.3, space3d binding (18 October 2026)
 
 Owner-authorized downstream work outside the milestone order (`planning/amendments/2026-10-18-sim-runtime.md`; M3 gates unchanged). Implemented and tested: a rollback resimulation benchmark (`racer_microcosm --rollback`, `run_bench.py --rollback-evidence`); the planned VM tier (default; bit-identical to the reference interpreter, selectable with `SUTEKH_VM_TIER=reference`) with exact fast numerics (`src/ir/su_num_fast.h`); per-call tick state reuse in the entity runtime; cheaper space3d set-up; the native tier building and passing its tests on Windows x64 (Win64 ABI checked for scalar and AVX2 kernels; the four control-plane qualification drivers ported); a native IR 0.3 scalar lowering differential-tested against the VM; `world.create` of IR 0.3 modules fixed and covered through `sutekh serve` (`space3d_serve`); schema-relative binding of host operators (`su_host_load_bound`, `docs/SPACE3D.md`). Windows clang ctest 84/84 (default) and 97/97 (`SUTEKH_NATIVE=ON`). Observations: `planning/evidence/sim-runtime/` (K = 12 rollback at N = 256: reference 124 %, planned 44 %, native 29 % of the 8.33 ms budget at p50). Handoff with unrun items: `planning/handoffs/2026-10-18-sim-runtime.md`.

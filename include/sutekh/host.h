@@ -319,6 +319,18 @@ SU_HOST_API uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint6
  * operator name (for example "space3d_ops_v1"). */
 SU_HOST_API uint32_t su_host_operator_count(void);
 SU_HOST_API uint32_t su_host_operator_info(uint32_t index, const char **system_id, const char **operator_name);
+/* Operator data (additive, API version 1; 2026-10-20): immutable bytes an operator reads at run time, for example
+ * the static mesh set of the space3d operators (docs/SPACE3D.md, "Static meshes"; blob format in
+ * profiles/space3d/native/space3d_mesh.h). Every host entry named system_id (NULL: every host entry whose operator
+ * takes data; they must be of one family) parses the bytes (one parse, shared) and keeps them for the world's
+ * life. Only before the world's first su_host_step, once per entry; the caller may free data on return. The data
+ * is not world state (not in snapshots or digests) but it is part of the world identity: the identity becomes
+ * SHA-256("SUOPDATA\0" || previous identity || u32 entry count || per entry: u32 schedule index ||
+ * SHA-256(data)), so snapshots and replays only load into a world given the same data. Failures:
+ * SU_E_INVALID_ARGUMENT (NULL/empty data, the world has stepped, no matching entry takes data, an entry already has
+ * data), else the operator's parse status (SU_E_PARSE, SU_E_RESOURCE_LIMIT) with its reason in err->message. */
+SU_HOST_API uint32_t su_host_set_operator_data(SuHostWorld *w, const char *system_id, const uint8_t *data,
+                                               size_t len, SuHostError *err);
 
 /* ---- execution tiers (additive, API version 1; 2026-10-18) ----
  * Every tier gives bit-identical results (states, events, digests): the tiers are differential-tested against

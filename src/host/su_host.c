@@ -710,6 +710,97 @@ uint32_t su_host_world_identity(const SuHostWorld *w, uint8_t out[32]) {
     return SU_OK;
 }
 
+/* Operator data (2026-10-20): every host entry named system_id (NULL: every host entry whose operator takes data)
+ * receives the bytes; one parse is shared by the entries of one call. All-or-nothing: the entries are checked
+ * before any receives data. The world identity becomes SHA-256("SUOPDATA\0" || previous identity || u32 entry
+ * count || per entry: u32 index || SHA-256(data)), so snapshots and replays of a world without (or with other) data
+ * are refused. */
+uint32_t su_host_set_operator_data(SuHostWorld *w, const char *system_id, const uint8_t *data, size_t len,
+                                   SuHostError *err) {
+    uint32_t i, n = 0, st = SU_OK, mask = 0;
+    void *shared = NULL;
+    const HostOperator *first_op = NULL;
+    char why[200];
+    clear_err(err);
+    if (w == NULL || data == NULL || len == 0u) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "world, data or length is NULL/0");
+    }
+    if (w->stepped) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                       "operator data must be set before the world's first step");
+    }
+    for (i = 0; i < w->sched.count; i++) {
+        const SuSysEntry *e = &w->sched.sys[i];
+        const HostOperator *op;
+        if (e->kind != SU_SYS_KIND_HOST || (system_id != NULL && strcmp(e->system_id, system_id) != 0)) {
+            continue;
+        }
+        op = su_host_operator_find(e->system_id);
+        if (op == NULL || op->set_data == NULL) {
+            if (system_id != NULL) {
+                return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX, "host operator %s takes no data",
+                               e->system_id);
+            }
+            continue;
+        }
+        if ((w->opdata_mask >> i) & 1u) {
+            return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX, "host operator %s already has data",
+                           e->system_id);
+        }
+        if (first_op != NULL && op->set_data != first_op->set_data) {
+            return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                           "operators of different families in one call; name the system");
+        }
+        first_op = op;
+        mask |= 1u << i;
+        n++;
+    }
+    if (n == 0u) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "no host operator %s%stakes data",
+                       system_id != NULL ? system_id : "", system_id != NULL ? " " : "");
+    }
+    why[0] = '\0';
+    for (i = 0; i < w->sched.count && st == SU_OK; i++) {
+        if ((mask >> i) & 1u) {
+            st = first_op->set_data(w->sched.sys[i].host_inst, data, len, &shared, why, sizeof why);
+            if (st != SU_OK) {
+                set_err(err, st, i, UINT64_MAX, "operator data refused by %s: %s", w->sched.sys[i].system_id,
+                        why[0] != '\0' ? why : su_host_status_name(st));
+            }
+        }
+    }
+    if (shared != NULL && first_op->data_release != NULL) {
+        first_op->data_release(shared);
+    }
+    if (st != SU_OK) {
+        /* An entry that already took the data keeps it only on success: recreate is not possible here, so a
+         * partial failure is only reachable by out-of-memory after the parse; report it as is. */
+        return st;
+    }
+    {
+        SuSha256 c;
+        uint8_t h[32], b[4];
+        su_sha256_init(&c);
+        su_sha256_update(&c, data, len);
+        su_sha256_final(&c, h);
+        su_sha256_init(&c);
+        su_sha256_update(&c, (const uint8_t *)"SUOPDATA", 9u);
+        su_sha256_update(&c, w->identity, 32u);
+        put_u32(b, n);
+        su_sha256_update(&c, b, 4u);
+        for (i = 0; i < w->sched.count; i++) {
+            if ((mask >> i) & 1u) {
+                put_u32(b, i);
+                su_sha256_update(&c, b, 4u);
+                su_sha256_update(&c, h, 32u);
+            }
+        }
+        su_sha256_final(&c, w->identity);
+    }
+    w->opdata_mask |= mask;
+    return SU_OK;
+}
+
 /* ---------- entities ---------- */
 
 static uint32_t log_record(SuHostWorld *w, uint32_t kind, uint32_t slot, uint32_t a, uint32_t b) {
@@ -1158,6 +1249,7 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
             drop_record(w, find_record(w, t));
         }
         n++;
+        w->stepped = 1u;
     }
     if (done != NULL) {
         *done = n;
