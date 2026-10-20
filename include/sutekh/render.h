@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 7u
+#define SU_RENDER_API_VERSION 8u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -279,6 +279,22 @@ typedef struct SuFxLayers {
     float angular_fade;
 } SuFxLayers;
 
+enum {
+    SU_DISTORT_NONE = 0,
+    SU_DISTORT_NORMAL = 1,
+    SU_DISTORT_VORTEX = 2,
+    SU_DISTORT_RING = 3
+};
+
+typedef struct SuFxDistortion {
+    float strength;
+    float falloff;
+    float chromatic_split;
+    float ring_radius;
+    float ring_width;
+    uint32_t mode;
+} SuFxDistortion;
+
 typedef struct SuFxBatch {
     SuRenderHandle texture;            /* a READY 2D texture */
     uint32_t blend;                    /* SU_FX_BLEND_* */
@@ -288,6 +304,7 @@ typedef struct SuFxBatch {
     float soft_distance;               /* world units; > 0: soft particles (see above); 0 = hard, as before */
     uint32_t flags;                    /* SU_FX_BATCH_*; 0 = drawn in batch order, as before */
     SuFxLayers layers;
+    SuFxDistortion distortion;
 } SuFxBatch;
 
 typedef struct SuRenderFxMaterialDesc {
@@ -296,6 +313,7 @@ typedef struct SuRenderFxMaterialDesc {
     uint32_t two_sided;
     uint32_t wrap_u, wrap_v;
     float soft_distance;
+    SuFxDistortion distortion;
 } SuRenderFxMaterialDesc;
 
 /* A batch covering the vertices written to buffer since first_vertex (take first_vertex = buffer->count before
@@ -842,6 +860,8 @@ typedef struct SuRenderFrameDesc {
     uint32_t haze_count;
     const SuRenderFlame *flames;
     uint32_t flame_count;
+    SuRenderHandle distortion_cube;
+    float distortion_cube_intensity;
 } SuRenderFrameDesc;
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object
@@ -911,6 +931,7 @@ typedef struct SuRenderStats {
     float shadow_cascade_texel[4]; /* world units per texel of each cascade */
     uint32_t haze_volumes_drawn;
     uint32_t flames_drawn, flames_skipped, flame_draws;
+    uint32_t distortion_draws;
 } SuRenderStats;
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given

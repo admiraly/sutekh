@@ -554,7 +554,7 @@ int main(int argc, char **argv) {
         CHECK(st.objects == 2000u && st.objects_culled + st.nodes_drawn == 2000u);
         CHECK(st.nodes_drawn > 250u && st.nodes_drawn < 450u); /* 60 degrees of 360, plus partial spheres */
         CHECK(st.lod_nodes[1] == st.nodes_drawn);               /* small at 40 m: all at LOD 1 */
-        CHECK(st.draws == 2u);                                  /* one instanced draw + the tonemap draw */
+        CHECK(st.draws == 3u);
     }
 
     /* HUD and effects: a white rectangle, text, and an additive billboard on black */

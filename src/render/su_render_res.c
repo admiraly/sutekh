@@ -1053,7 +1053,8 @@ uint32_t su_render_fx_material_create(SuRenderer *renderer, const SuRenderFxMate
     }
     if (renderer == NULL || desc == NULL || out == NULL || desc->blend > SU_FX_BLEND_PREMUL ||
         desc->wrap_u > SU_FX_WRAP_MIRROR || desc->wrap_v > SU_FX_WRAP_MIRROR ||
-        !isfinite(desc->soft_distance) || desc->soft_distance < 0.0f || !su_rvk_fx_layers_valid(&desc->layers)) {
+        !isfinite(desc->soft_distance) || desc->soft_distance < 0.0f || !su_rvk_fx_layers_valid(&desc->layers) ||
+        !su_rvk_distortion_valid(&desc->distortion)) {
         return SU_E_INVALID_ARGUMENT;
     }
     for (layer = 0; layer < 3u; layer++) {

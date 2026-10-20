@@ -269,6 +269,9 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
         uint32_t run = 1;
         const SubGpu *sub;
         int pass = it->pipe >= PIPE_BLEND ? 2 : it->pipe >= PIPE_OVERLAY ? 1 : 0;
+        if (it->kind == 2u && r->res[it->mat].u.mat.fx.distortion.mode != SU_DISTORT_NONE) {
+            pass = 3;
+        }
         if (pass != blend_pass) {
             i++;
             continue;
@@ -353,11 +356,14 @@ static void fx_mesh_draw(SuRenderer *renderer, Frame *fr, VkCommandBuffer cmd, u
     }
     su_rvk_fx_push(&push, &material->layers, frame->time_seconds, material->soft_distance, frame->camera.near_z,
                    material->wrap_u, material->wrap_v);
+    su_rvk_distortion_push(&push, &material->distortion);
     mesh = &renderer->res[draw->mesh].u.mesh;
     sub = &mesh->subs[draw->sub];
     buffers[0] = mesh->vb.buf;
     buffers[1] = fr->draw_inst.buf;
-    renderer->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer->fxmesh_pipe[draw->pipe - PIPE_BLEND]);
+    renderer->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        material->distortion.mode != SU_DISTORT_NONE ? renderer->distortion_mesh_pipe[material->two_sided != 0u ? 1u : 0u] :
+                                              renderer->fxmesh_pipe[draw->pipe - PIPE_BLEND]);
     renderer->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer->fxtex_layout, 0, 3, sets, 0, NULL);
     renderer->f.vkCmdPushConstants(cmd, renderer->fxtex_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);
     renderer->f.vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);

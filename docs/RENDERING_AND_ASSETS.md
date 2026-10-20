@@ -131,6 +131,10 @@ passes on the tested hardware. Diagnostic bisect and validation evidence: `plann
 
 ### 2.3 Analytic haze
 
+Scene-colour distortion is available on FX quads and resident FX meshes, with
+procedural vortex/ring primitives, depth rejection and optional chromatic/cube
+shading. See [Scene-colour distortion](SCENE_DISTORTION.md).
+
 `SuRenderFrameDesc.haze` submits depth-clipped ellipsoid and box media with exact
 polynomial density integration, additive or extinction-over composition, and
 optional sun/shadow lighting. No volumes means no change to existing frames.
