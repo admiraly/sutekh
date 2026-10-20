@@ -10,7 +10,7 @@
   "steps": {
     "A01": "local_validated_pending_ci",
     "A02": "local_validated_pending_ci",
-    "A03": "implementation",
+    "A03": "local_validated_pending_ci",
     "A04": "implementation"
   },
   "write_scope": [

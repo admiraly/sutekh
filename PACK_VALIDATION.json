@@ -1,7 +1,7 @@
 {
   "scope": "specification_pack_and_python_example_model_only",
   "status": "passed",
-  "strict_json_files_checked": 435,
+  "strict_json_files_checked": 436,
   "task_dag_nodes_checked": 38,
   "positive_fixture_checks": 10,
   "negative_ir_checks": 7,
@@ -9,7 +9,7 @@
   "internal_markdown_links_checked": 95,
   "json_schema": {
     "status": "passed",
-    "schemas_checked": 6,
+    "schemas_checked": 7,
     "instances_checked": 7
   },
   "native_engine_compilation": "not_run",
