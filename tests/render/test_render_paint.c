@@ -166,6 +166,8 @@ static void quad_mesh(SuAssetVertex *v, uint32_t *idx) {
         v[i].tangent[3] = 1.0f;
         v[i].uv0[0] = (xy[i][0] + 1.0f) * 0.5f;
         v[i].uv0[1] = (1.0f - xy[i][1]) * 0.5f;
+        v[i].uv1[0] = v[i].uv0[1];
+        v[i].uv1[1] = v[i].uv0[0];
     }
     idx[0] = 0;
     idx[1] = 1;
@@ -1746,7 +1748,8 @@ static void test_specular_color(void) {
     CHECK(fabs(lin(px(g_img, qx(0.75f), 128)[0]) - 0.75 * 192.0 / 255.0 / 3.14159265) < 0.009);
     paint.d.extra_tex_info[0] = SU_ASSET_TEX_INFO(1, 0, 0);
     CHECK(shoot(&scene, &paint, g_img));
-    CHECK(abs((int)px(g_img, qx(0.25f), 128)[0] - (int)px(g_img, qx(0.75f), 128)[0]) < 3);
+    CHECK(fabs(lin(px(g_img, qx(0.75f), qx(0.25f))[0]) - 0.75 * 64.0 / 255.0 / 3.14159265) < 0.009);
+    CHECK(fabs(lin(px(g_img, qx(0.25f), qx(0.75f))[0]) - 0.75 * 192.0 / 255.0 / 3.14159265) < 0.009);
     printf("specular: linear/sRGB F0, factor, swizzle, independent diffuse, direct/ambient and normal conventions\n");
 }
 
@@ -1787,7 +1790,8 @@ static void test_paint_detail(void) {
     paint.d.detail_rotation = 0;
     paint.d.extra_tex_info[3] = SU_ASSET_TEX_INFO(1, SU_ASSET_WRAP_CLAMP, SU_ASSET_WRAP_CLAMP);
     CHECK(shoot(&scene, &paint, g_img));
-    CHECK(memcmp(g_ref, g_img, sizeof g_img) == 0);
+    CHECK(same_px(px(g_ref, qx(0.375f), qx(0.125f)), px(g_img, qx(0.375f), qx(0.125f))));
+    CHECK(px(g_img, qx(0.125f), qx(0.375f))[0] < px(g_ref, qx(0.125f), qx(0.375f))[0] - 50);
     paint.d.extra_tex_info[3] = 0;
     paint.d.detail_strength = 0.5f;
     CHECK(shoot(&scene, &paint, g_img));
