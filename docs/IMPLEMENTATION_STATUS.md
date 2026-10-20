@@ -439,6 +439,18 @@ Owner-authorized downstream work outside the milestone order (extension of `plan
 
 Downstream request work outside the milestone order (M3 gates unchanged). Implemented and tested: `SU_LIMIT_FIELDS` raised from 256 to 1,024 lanes (no persisted format stores it); IR 0.4 (`LIVE_IR_SPEC.md` "IR 0.4", artifact format 4) with u32 `and/or/xor/not/shl/shr/div/rem`, i64 `and/or/xor/not`, a capsule-level `row_filter` (masked u32 equality; filtered rows keep their values and run nothing), `gather_u32/_i32/_i64/_q32` (a field of another row by slot, entry state) and `find_eq_u32` (lowest slot whose field equals a key: first claimant by slot order), with a whole-table view for chunked runs (`su_vm_context_set_table_view`). Both VM tiers implement every operation; the native scalar lowering covers the bit operations and the row filter and refuses cross-row reads (`ir_0_4_gather_not_lowered`). Tests: `ir04`, `host04`, `ir04_diff`, `ir04_native_diff`. Not done: a discard binding for host-operator output lanes, native cross-row reads, reductions other than `find_eq_u32`.
 
+## space3d compound movers (20 October 2026)
+
+Downstream request work outside the milestone order (M3 gates unchanged). Implemented and tested: a fourth space3d
+operator, `space3d.query_compound` (record `profiles/space3d/space3d_query_compound.capsule.json`): movers made of up
+to 8 capsules/spheres fixed in their local frame (compound table in the operator data, blob format `S3MESH02`),
+swept against every row kind including static meshes and other compound movers, with the sub-shapes of each contact
+reported (`c0_sub`, `c1_sub`); a conservative turn bound from the start-of-tick orientation (`rot0` lanes: every
+core point padded by 2 d sin(a / 2)), so a craft turning within the tick cannot pass through anything; with no
+compound and no `rot0` the operator equals `space3d.query_shape` bit for bit. `s3mesh_sweep_lim` (a sweep limited
+to toi <= tmax). Evidence: `docs/SPACE3D.md` "Compound movers" (space3d_mesh, space3d_ops incl. a 4,000-case
+no-tunnelling oracle at 1,820 m/s, host_ops check 10).
+
 ## space3d static meshes and operator data (20 October 2026)
 
 Downstream request work outside the milestone order (M3 gates unchanged). Implemented and tested: triangle sweeps and

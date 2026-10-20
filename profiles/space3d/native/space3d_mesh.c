@@ -41,6 +41,10 @@ typedef struct S3Part {
     SuV3 lo, hi; /* mesh-frame bounds */
 } S3Part;
 
+typedef struct S3Comp {
+    uint32_t first, count; /* sub-shapes [first, first + count) of S3MeshSet.sub */
+} S3Comp;
+
 typedef struct S3Mesh {
     uint32_t first, nparts; /* parts [first, first + nparts) of S3MeshSet.part, in this mesh's BVH order */
     uint32_t node0;         /* first node in S3MeshSet.top (valid when nparts > 0) */
@@ -54,6 +58,9 @@ struct S3MeshSet {
     S3Part *part;
     S3Mesh *mesh;
     S3Node *top;
+    uint32_t ncomp, nsub; /* compound shapes (S3MESH02) */
+    S3SubShape *sub;
+    S3Comp *comp;
     int brute;
 };
 
@@ -124,6 +131,11 @@ static int coord_ok(int64_t c) {
 
 static int v3_ok(SuV3 a) {
     return coord_ok(a.x) && coord_ok(a.y) && coord_ok(a.z);
+}
+
+static int sub_coord_ok(SuV3 a) {
+    return a.x >= -S3MESH_COMPOUND_COORD && a.x <= S3MESH_COMPOUND_COORD && a.y >= -S3MESH_COMPOUND_COORD &&
+           a.y <= S3MESH_COMPOUND_COORD && a.z >= -S3MESH_COMPOUND_COORD && a.z <= S3MESH_COMPOUND_COORD;
 }
 
 static void say(char *why, size_t cap, const char *msg, uint32_t index) {
@@ -253,6 +265,8 @@ static void set_free(S3MeshSet *s) {
     free(s->part);
     free(s->mesh);
     free(s->top);
+    free(s->sub);
+    free(s->comp);
     free(s);
 }
 
@@ -343,7 +357,8 @@ uint32_t s3mesh_set_create(const uint8_t *data, size_t len, S3MeshSet **out, cha
     Rd r;
     S3MeshSet *s;
     uint32_t i, st = SU_E_PARSE, *nv = NULL, *nt = NULL, *tmp = NULL, *order = NULL;
-    uint64_t tv = 0, tt = 0, top_cap = 0;
+    uint64_t tv = 0, tt = 0, top_cap = 0, hdr = 20u, tail = 0;
+    int v2;
     SuV3 *plo = NULL, *phi = NULL;
     S3Part *raw = NULL;
     if (why != NULL && cap > 0u) {
@@ -353,8 +368,12 @@ uint32_t s3mesh_set_create(const uint8_t *data, size_t len, S3MeshSet **out, cha
         return SU_E_INVALID_ARGUMENT;
     }
     *out = NULL;
-    if (len < 20u || memcmp(data, S3MESH_MAGIC, 8u) != 0) {
-        say(why, cap, "not an S3MESH01 blob (magic)", 0);
+    v2 = len >= 8u && memcmp(data, S3MESH_MAGIC2, 8u) == 0;
+    if (v2) {
+        hdr = 28u;
+    }
+    if (len < hdr || (!v2 && memcmp(data, S3MESH_MAGIC, 8u) != 0)) {
+        say(why, cap, "not an S3MESH01 or S3MESH02 blob (magic)", 0);
         return SU_E_PARSE;
     }
     s = (S3MeshSet *)calloc(1u, sizeof *s);
@@ -369,6 +388,16 @@ uint32_t s3mesh_set_create(const uint8_t *data, size_t len, S3MeshSet **out, cha
     s->ngeom = rd_u32(&r);
     s->npart = rd_u32(&r);
     s->nmesh = rd_u32(&r);
+    if (v2) {
+        s->ncomp = rd_u32(&r);
+        s->nsub = rd_u32(&r);
+        if (s->ncomp > S3MESH_MAX_COMPOUNDS || s->nsub > S3MESH_MAX_SUBSHAPES) {
+            say(why, cap, "too many compounds or sub-shapes", 0);
+            st = SU_E_RESOURCE_LIMIT;
+            goto fail;
+        }
+        tail = 56u * (uint64_t)s->nsub + 8u * (uint64_t)s->ncomp;
+    }
     if (s->ngeom > S3MESH_MAX_GEOMS || s->npart > S3MESH_MAX_PARTS || s->nmesh > S3MESH_MAX_MESHES) {
         say(why, cap, "too many geometries, parts or meshes", 0);
         st = SU_E_RESOURCE_LIMIT;
@@ -401,8 +430,8 @@ uint32_t s3mesh_set_create(const uint8_t *data, size_t len, S3MeshSet **out, cha
         goto fail;
     }
     /* Exact size check before reading the arrays. */
-    if ((uint64_t)len != 20u + 8u * (uint64_t)s->ngeom + 24u * tv + 12u * tt + 68u * (uint64_t)s->npart +
-                            8u * (uint64_t)s->nmesh) {
+    if ((uint64_t)len != hdr + 8u * (uint64_t)s->ngeom + 24u * tv + 12u * tt + 68u * (uint64_t)s->npart +
+                            8u * (uint64_t)s->nmesh + tail) {
         say(why, cap, "blob size does not match its tables", 0);
         goto fail;
     }
@@ -483,6 +512,50 @@ uint32_t s3mesh_set_create(const uint8_t *data, size_t len, S3MeshSet **out, cha
             goto fail;
         }
         top_cap += 2u * (uint64_t)m->nparts;
+    }
+    if (v2) {
+        s->sub = (S3SubShape *)calloc((size_t)s->nsub + 1u, sizeof *s->sub);
+        s->comp = (S3Comp *)calloc((size_t)s->ncomp + 1u, sizeof *s->comp);
+        if (s->sub == NULL || s->comp == NULL) {
+            st = SU_E_RESOURCE_LIMIT;
+            goto fail;
+        }
+        for (i = 0; i < s->nsub; i++) {
+            S3SubShape *u = &s->sub[i];
+            int64_t la, lb;
+            u->a.x = rd_i64(&r);
+            u->a.y = rd_i64(&r);
+            u->a.z = rd_i64(&r);
+            u->b.x = rd_i64(&r);
+            u->b.y = rd_i64(&r);
+            u->b.z = rd_i64(&r);
+            u->r = rd_i64(&r);
+            if (r.bad) {
+                say(why, cap, "blob ends inside the sub-shape table", i);
+                goto fail;
+            }
+            if (!sub_coord_ok(u->a) || !sub_coord_ok(u->b) || u->r < 0 || u->r > S3MESH_COMPOUND_COORD) {
+                say(why, cap, "sub-shape coordinate or radius beyond 4096 m (or a negative radius)", i);
+                goto fail;
+            }
+            /* reach: max(|a|, |b|) rounded up (su_v3_lenf may round down by a raw unit) */
+            la = su_q32_addf(su_v3_lenf(u->a), 1);
+            lb = su_q32_addf(su_v3_lenf(u->b), 1);
+            u->reach = la > lb ? la : lb;
+        }
+        for (i = 0; i < s->ncomp; i++) {
+            S3Comp *cp = &s->comp[i];
+            cp->first = rd_u32(&r);
+            cp->count = rd_u32(&r);
+            if (r.bad) {
+                say(why, cap, "blob ends inside the compound table", i);
+                goto fail;
+            }
+            if (cp->count == 0u || cp->count > S3MESH_COMPOUND_MAX || (uint64_t)cp->first + cp->count > s->nsub) {
+                say(why, cap, "compound with 0 or more than 8 sub-shapes, or a range beyond the sub-shape table", i);
+                goto fail;
+            }
+        }
     }
     if (r.off != r.len) {
         say(why, cap, "trailing bytes", 0);
@@ -574,6 +647,19 @@ uint32_t s3mesh_triangles(const S3MeshSet *s) {
     return s != NULL ? s->ntris_total : 0u;
 }
 
+uint32_t s3mesh_compound_count(const S3MeshSet *s) {
+    return s != NULL ? s->ncomp : 0u;
+}
+
+const S3SubShape *s3mesh_compound(const S3MeshSet *s, uint32_t index, uint32_t *n) {
+    if (s == NULL || index >= s->ncomp) {
+        *n = 0;
+        return NULL;
+    }
+    *n = s->comp[index].count;
+    return s->sub + s->comp[index].first;
+}
+
 /* ---------- queries ---------- */
 
 /* Slab test of c0 + t v, t in [0, 1], against [lo - emax, hi - emin] (the box swept back by the mover's extent).
@@ -629,6 +715,7 @@ typedef struct Best {
     uint32_t part; /* blob part id */
     uint32_t tri;  /* blob triangle id */
     int have;
+    int64_t tmax; /* search limit while there is no hit (s3mesh_sweep_lim) */
 } Best;
 
 static int better(const Best *b, int64_t toi, uint32_t part, uint32_t tri) {
@@ -673,7 +760,7 @@ static void geom_sweep(const S3MeshSet *s, const S3Geom *g, const Sweep *q, int6
     while (sp > 0u) {
         uint32_t ni = stack[--sp];
         const S3Node *nd = &g->node[ni];
-        int64_t lim = best->have ? best->h.toi : ONE, te = 0;
+        int64_t lim = best->have ? best->h.toi : best->tmax, te = 0;
         if (!s->brute && enter[sp] > lim) {
             continue;
         }
@@ -737,6 +824,11 @@ static void geom_sweep(const S3MeshSet *s, const S3Geom *g, const Sweep *q, int6
 
 S3Hit s3mesh_sweep(const S3MeshSet *s, uint32_t mesh, SuV3 pos, SuQuat rot, SuV3 c0, SuV3 v, int64_t r, SuV3 e0,
                    SuV3 e1, S3MeshStats *st) {
+    return s3mesh_sweep_lim(s, mesh, pos, rot, c0, v, r, e0, e1, ONE, st);
+}
+
+S3Hit s3mesh_sweep_lim(const S3MeshSet *s, uint32_t mesh, SuV3 pos, SuQuat rot, SuV3 c0, SuV3 v, int64_t r, SuV3 e0,
+                       SuV3 e1, int64_t tmax, S3MeshStats *st) {
     S3Hit out;
     Best best;
     Sweep qm;
@@ -745,6 +837,7 @@ S3Hit s3mesh_sweep(const S3MeshSet *s, uint32_t mesh, SuV3 pos, SuQuat rot, SuV3
     uint32_t stack[STACK_MAX];
     uint32_t sp = 0;
     memset(&best, 0, sizeof best);
+    best.tmax = tmax;
     out.hit = 0;
     out.toi = 0;
     out.n = v3(0, 0, 0);
@@ -764,7 +857,7 @@ S3Hit s3mesh_sweep(const S3MeshSet *s, uint32_t mesh, SuV3 pos, SuQuat rot, SuV3
     while (sp > 0u) {
         uint32_t ni = stack[--sp];
         const S3Node *nd = &s->top[ni];
-        int64_t lim = best.have ? best.h.toi : ONE, te = 0;
+        int64_t lim = best.have ? best.h.toi : tmax, te = 0;
         if (st != NULL) {
             st->nodes++;
         }

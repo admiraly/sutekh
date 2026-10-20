@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
  *
  * space3d static meshes (profiles/space3d/native/space3d_mesh.c):
- *   - blob validation: every malformed table is refused with SU_E_PARSE / SU_E_RESOURCE_LIMIT and a reason;
+ *   - blob validation: every malformed table is refused with SU_E_PARSE / SU_E_RESOURCE_LIMIT and a reason, for
+ *     S3MESH01 and for S3MESH02 (compound shapes; accessors and reach);
+ *   - s3mesh_sweep_lim against the unlimited sweep (in the culled-vs-brute cases);
  *   - a box made of 12 triangles answers like the analytic oriented box (s3_sweep_*_obb) for sphere and capsule
  *     movers starting outside it, at random poses and part scales (toi within 1e-5 m, normals within 1e-4);
  *   - culled traversal equals brute force (every part, every triangle) bit for bit on random triangle soups with
@@ -192,6 +194,112 @@ static void test_blob(void) {
     free(b.p);
 }
 
+/* ---------- S3MESH02: compound table (2026-10-20) ---------- */
+
+static void test_blob2(void) {
+    SuV3 v[3];
+    uint32_t t[3] = {0, 1, 2}, n = 0;
+    TGeom g;
+    TPart p;
+    TMesh m, c[2];
+    TSub u[3];
+    TBlob b;
+    char why[200];
+    S3MeshSet *s = NULL;
+    const S3SubShape *sh;
+    v[0] = V(0, 0, 0);
+    v[1] = V(Q(10), 0, 0);
+    v[2] = V(0, Q(10), 0);
+    g.nv = 3;
+    g.nt = 1;
+    g.v = v;
+    g.t = t;
+    p.geom = 0;
+    p.pos = V(0, 0, 0);
+    p.rot = QID;
+    p.scale = ONE;
+    m.first = 0;
+    m.count = 1;
+    u[0].a = V(0, 0, -Q(8));
+    u[0].b = V(0, 0, Q(8));
+    u[0].r = Q(2);
+    u[1].a = V(Q(3), Q(4), 0); /* a sphere: a == b, reach 5 */
+    u[1].b = u[1].a;
+    u[1].r = ONE;
+    u[2].a = V(-Q(6), 0, 0);
+    u[2].b = V(Q(6), 0, Q(1));
+    u[2].r = ONE / 2;
+    c[0].first = 0;
+    c[0].count = 2;
+    c[1].first = 1;
+    c[1].count = 2;
+    tb_build2(&b, &g, 1, &p, 1, &m, 1, u, 3, c, 2);
+    CHECK(s3mesh_set_create(b.p, b.n, &s, why, sizeof why) == SU_OK && s != NULL);
+    CHECK(s3mesh_count(s) == 1u && s3mesh_valid(s, 0) && s3mesh_compound_count(s) == 2u);
+    sh = s3mesh_compound(s, 0, &n);
+    CHECK(sh != NULL && n == 2u && sh[0].r == Q(2) && sh[0].reach >= Q(8) && sh[0].reach <= Q(8) + 2);
+    CHECK(sh != NULL && sh[1].reach >= Q(5) && sh[1].reach <= Q(5) + 2);
+    sh = s3mesh_compound(s, 1, &n);
+    CHECK(sh != NULL && n == 2u && sh[1].r == ONE / 2);
+    CHECK(s3mesh_compound(s, 2, &n) == NULL && n == 0u);
+    CHECK(s3mesh_compound(NULL, 0, &n) == NULL && n == 0u && s3mesh_compound_count(NULL) == 0u);
+    s3mesh_set_release(s);
+    /* Every truncated prefix, a trailing byte. */
+    {
+        size_t k;
+        int all = 1;
+        for (k = 0; k < b.n; k++) {
+            TBlob x = b;
+            x.n = k;
+            all &= try_blob(&x, why, sizeof why) != SU_OK;
+        }
+        CHECK(all);
+        tb_u32(&b, 0);
+        CHECK(try_blob(&b, why, sizeof why) == SU_E_PARSE);
+        free(b.p);
+    }
+    /* A compound with 0 or 9 sub-shapes, or a range beyond the table. */
+    c[1].count = 0;
+    tb_build2(&b, &g, 1, &p, 1, &m, 1, u, 3, c, 2);
+    CHECK(try_blob(&b, why, sizeof why) == SU_E_PARSE && strstr(why, "compound") != NULL);
+    free(b.p);
+    c[1].count = 9;
+    tb_build2(&b, &g, 1, &p, 1, &m, 1, u, 3, c, 2);
+    CHECK(try_blob(&b, why, sizeof why) == SU_E_PARSE);
+    free(b.p);
+    c[1].count = 3;
+    tb_build2(&b, &g, 1, &p, 1, &m, 1, u, 3, c, 2);
+    CHECK(try_blob(&b, why, sizeof why) == SU_E_PARSE);
+    free(b.p);
+    c[1].count = 2;
+    /* Coordinate beyond 4096 m, negative or too large radius. */
+    u[2].b.y = S3MESH_COMPOUND_COORD + 1;
+    tb_build2(&b, &g, 1, &p, 1, &m, 1, u, 3, c, 2);
+    CHECK(try_blob(&b, why, sizeof why) == SU_E_PARSE && strstr(why, "sub-shape") != NULL);
+    free(b.p);
+    u[2].b.y = 0;
+    u[2].r = -1;
+    tb_build2(&b, &g, 1, &p, 1, &m, 1, u, 3, c, 2);
+    CHECK(try_blob(&b, why, sizeof why) == SU_E_PARSE);
+    free(b.p);
+    u[2].r = S3MESH_COMPOUND_COORD + 1;
+    tb_build2(&b, &g, 1, &p, 1, &m, 1, u, 3, c, 2);
+    CHECK(try_blob(&b, why, sizeof why) == SU_E_PARSE);
+    free(b.p);
+    u[2].r = ONE / 2;
+    /* Compounds only (no geometry, parts or meshes); an S3MESH01 set has no compounds. */
+    tb_build2(&b, &g, 0, &p, 0, &m, 0, u, 3, c, 2);
+    CHECK(s3mesh_set_create(b.p, b.n, &s, why, sizeof why) == SU_OK && s3mesh_count(s) == 0u &&
+          s3mesh_compound_count(s) == 2u);
+    s3mesh_set_release(s);
+    free(b.p);
+    tb_build(&b, &g, 1, &p, 1, &m, 1);
+    CHECK(s3mesh_set_create(b.p, b.n, &s, why, sizeof why) == SU_OK && s3mesh_compound_count(s) == 0u &&
+          s3mesh_compound(s, 0, &n) == NULL);
+    s3mesh_set_release(s);
+    free(b.p);
+}
+
 /* ---------- box made of triangles vs the analytic box ---------- */
 
 static void test_box(void) {
@@ -349,6 +457,18 @@ static void test_brute(void) {
             h2 = s3mesh_sweep(s, mesh, pos, rot, c0, v, r, e0, e1, &sb);
             d2 = s3mesh_dist(s, mesh, pos, rot, c0, e0, e1, lim, &sb);
             s3mesh_set_brute(s, 0);
+            /* s3mesh_sweep_lim (2026-10-20): a limit at or after the first hit finds that hit exactly; a limit
+             * before it finds nothing earlier than it. */
+            {
+                int64_t tl = rpos(0, 1);
+                S3Hit h3 = s3mesh_sweep_lim(s, mesh, pos, rot, c0, v, r, e0, e1, h1.hit ? h1.toi : tl, NULL);
+                S3Hit h4 = s3mesh_sweep_lim(s, mesh, pos, rot, c0, v, r, e0, e1, tl > ONE ? ONE : tl, NULL);
+                if (h3.hit != h1.hit || h3.toi != h1.toi || h3.n.x != h1.n.x || h3.n.y != h1.n.y ||
+                    h3.n.z != h1.n.z || (h4.hit && (!h1.hit || h4.toi < h1.toi)) ||
+                    (h1.hit && h1.toi <= tl && (!h4.hit || h4.toi != h1.toi))) {
+                    mism++;
+                }
+            }
             culled_tests += sc.tri_tests;
             brute_tests += sb.tri_tests;
             sweeps++;
@@ -521,6 +641,7 @@ int main(void) {
     g_rng = UINT64_C(20261020);
     test_known();
     test_blob();
+    test_blob2();
     test_box();
     test_brute();
     test_tunnel();

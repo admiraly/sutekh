@@ -22,7 +22,18 @@
  *   M x { u32 first part, u32 part count (0: an empty mesh, never collides) }
  * Limits: G <= 65536, P and M <= 2^20, total vertices and triangles <= 2^24, every geometry has >= 1 triangle,
  * |coordinate| <= 2^20 m in the geometry and in the mesh frame (scaled bounds), |rotation|^2 within 2^-16 of 1,
- * 2^-16 <= scale <= 2^16. Degenerate triangles are allowed (only their edges collide). */
+ * 2^-16 <= scale <= 2^16. Degenerate triangles are allowed (only their edges collide).
+ *
+ * Blob format "S3MESH02" (2026-10-20, compound movers; docs/SPACE3D.md "Compound movers"): S3MESH01 plus a table of
+ * compound shapes for space3d.query_compound movers. Same layout with two more counts in the header and two more
+ * tables at the end:
+ *   magic[8] "S3MESH02"
+ *   u32 geometries G, u32 parts P, u32 meshes M, u32 compounds C, u32 sub-shapes S
+ *   (the S3MESH01 tables, as above)
+ *   S x { i64[3] a, i64[3] b, i64 radius }   (q32 raw, the mover's local frame; a == b: a sphere)
+ *   C x { u32 first sub-shape, u32 count (1..S3MESH_COMPOUND_MAX) }
+ * Limits: C <= 65536, S <= 2^20, |coordinate| <= S3MESH_COMPOUND_COORD, 0 <= radius <= S3MESH_COMPOUND_COORD.
+ * G, P and M may be 0 (a set of compounds only). */
 #ifndef SU_PROFILES_SPACE3D_MESH_H
 #define SU_PROFILES_SPACE3D_MESH_H
 
@@ -39,6 +50,11 @@
 #define S3MESH_MAX_TRIS (1u << 24)
 #define S3MESH_LEAF 4u                         /* items per BVH leaf (at most) */
 #define S3MESH_PAD (INT64_C(1) << 26)          /* 1/64 m: culling slack (bounds, quick plane reject) */
+#define S3MESH_MAGIC2 "S3MESH02"
+#define S3MESH_MAX_COMPOUNDS 65536u
+#define S3MESH_MAX_SUBSHAPES (1u << 20)
+#define S3MESH_COMPOUND_MAX 8u                        /* sub-shapes per compound */
+#define S3MESH_COMPOUND_COORD (INT64_C(1) << 44)      /* 4096 m: sub-shape coordinates and radii */
 
 typedef struct S3MeshSet S3MeshSet;
 
@@ -70,6 +86,24 @@ S3Hit s3mesh_sweep(const S3MeshSet *s, uint32_t mesh, SuV3 pos, SuQuat rot, SuV3
  * (limit >= 0). */
 int64_t s3mesh_dist(const S3MeshSet *s, uint32_t mesh, SuV3 pos, SuQuat rot, SuV3 p, SuV3 e0, SuV3 e1,
                     int64_t limit, S3MeshStats *st);
+
+/* As s3mesh_sweep, but only hits with toi <= tmax (q32, in [0, ONE]) are searched for: the result is the hit with
+ * the smallest (toi, part index, triangle index) among those with toi <= tmax, or may be any later hit (or none)
+ * when there is none. s3mesh_sweep is s3mesh_sweep_lim with tmax = ONE. */
+S3Hit s3mesh_sweep_lim(const S3MeshSet *s, uint32_t mesh, SuV3 pos, SuQuat rot, SuV3 c0, SuV3 v, int64_t r, SuV3 e0,
+                       SuV3 e1, int64_t tmax, S3MeshStats *st);
+
+/* Compound shapes (S3MESH02). A sub-shape is the capsule of radius r about the segment a-b in the mover's local
+ * frame (a == b: a sphere); reach = an upper bound of max(|a|, |b|) (q32, rounded up). */
+typedef struct S3SubShape {
+    SuV3 a, b;
+    int64_t r;
+    int64_t reach;
+} S3SubShape;
+uint32_t s3mesh_compound_count(const S3MeshSet *s); /* 0 for NULL or an S3MESH01 set */
+/* Sub-shapes of compound `index` (*n = 1..S3MESH_COMPOUND_MAX), or NULL (*n = 0) when s is NULL or has no such
+ * compound. */
+const S3SubShape *s3mesh_compound(const S3MeshSet *s, uint32_t index, uint32_t *n);
 
 /* Test seam: brute != 0 visits every part and triangle (no culling); results must not change. */
 void s3mesh_set_brute(S3MeshSet *s, int brute);

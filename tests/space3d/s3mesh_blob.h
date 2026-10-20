@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 admiraly
  * SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
  *
- * Test helper: writes S3MESH01 blobs (profiles/space3d/native/space3d_mesh.h) from in-memory tables. Header-only,
+ * Test helper: writes S3MESH01 and S3MESH02 blobs (profiles/space3d/native/space3d_mesh.h) from in-memory tables. Header-only,
  * static functions; used by test_space3d_mesh.c, test_space3d_ops.c and the host tests. */
 #ifndef SU_TESTS_S3MESH_BLOB_H
 #define SU_TESTS_S3MESH_BLOB_H
@@ -99,6 +99,40 @@ static inline void tb_build(TBlob *out, const TGeom *g, uint32_t ng, const TPart
     for (i = 0; i < nm; i++) {
         tb_u32(out, m[i].first);
         tb_u32(out, m[i].count);
+    }
+}
+
+/* S3MESH02 (compound movers): sub-shapes (a, b, radius; mover frame) and compounds (first, count). */
+typedef struct TSub {
+    SuV3 a, b;
+    int64_t r;
+} TSub;
+
+/* Writes an S3MESH02 blob: the S3MESH01 tables of tb_build plus the sub-shape and compound tables. */
+static inline void tb_build2(TBlob *out, const TGeom *g, uint32_t ng, const TPart *p, uint32_t np, const TMesh *m,
+                             uint32_t nm, const TSub *s, uint32_t ns, const TMesh *c, uint32_t nc) {
+    TBlob b1;
+    uint32_t i;
+    tb_build(&b1, g, ng, p, np, m, nm);
+    memset(out, 0, sizeof *out);
+    tb_put(out, "S3MESH02", 8u);
+    tb_put(out, b1.p + 8, 12u); /* G, P, M */
+    tb_u32(out, nc);
+    tb_u32(out, ns);
+    tb_put(out, b1.p + 20, b1.n - 20u);
+    free(b1.p);
+    for (i = 0; i < ns; i++) {
+        tb_i64(out, s[i].a.x);
+        tb_i64(out, s[i].a.y);
+        tb_i64(out, s[i].a.z);
+        tb_i64(out, s[i].b.x);
+        tb_i64(out, s[i].b.y);
+        tb_i64(out, s[i].b.z);
+        tb_i64(out, s[i].r);
+    }
+    for (i = 0; i < nc; i++) {
+        tb_u32(out, c[i].first);
+        tb_u32(out, c[i].count);
     }
 }
 

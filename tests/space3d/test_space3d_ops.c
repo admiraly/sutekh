@@ -7,9 +7,12 @@
  *   - hand-built scenes with known results (contacts, ordering, symmetry, gates, dead rows, zero rows);
  *   - seeded random scenes: broadphase output equals the brute-force (no broadphase) output on every output lane
  *     when no truncation flag is set, and two runs are bit-identical;
- *   - candidate truncation and the row limit.
+ *   - candidate truncation and the row limit;
+ *   - query_prox, query_shape, static meshes, and compound movers with turning (query_compound: known answers,
+ *     equality with query_shape when unused, broadphase vs brute force, and a no-tunnelling oracle in doubles).
  * Run from the repository root (reads profiles/space3d/space3d_query.capsule.json). */
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,7 +49,7 @@ static Space3dCtx *g_inst = NULL; /* when set, run_scene runs the operator on th
 /* ---------- scene: column arrays for every declared lane ---------- */
 
 #define MAXR 4096u
-static uint32_t g_col[80][MAXR]; /* indexed by field id */
+static uint32_t g_col[96][MAXR]; /* indexed by field id */
 
 typedef struct Scene {
     uint32_t rows;
@@ -137,13 +140,13 @@ static SuV3 V(int64_t x, int64_t y, int64_t z) {
 /* Builds the world (descriptor lanes), runs the operator once, publishes. Returns the status; *wout keeps the
  * world for reading (NULL on creation failure). */
 static uint32_t run_scene(const Scene *s, SuWorld **wout) {
-    SuWorldFieldDesc fd[80];
+    SuWorldFieldDesc fd[96];
     SuWorldDesc wd;
-    uint32_t ids[MAXR], wid[80];
+    uint32_t ids[MAXR], wid[96];
     SuWorld *w = NULL;
     SuInvocation wi, inv;
     SuOutputs wo, outs;
-    SuColumnBinding bin[80], bout[80];
+    SuColumnBinding bin[96], bout[96];
     uint32_t i, r, st, nin = 0, nout = 0;
     for (i = 0; i < D->field_count; i++) {
         fd[i].id = D->fields[i].id;
@@ -1167,6 +1170,700 @@ static void test_mesh(void) {
     D = &g_space3d_query_desc;
 }
 
+/* ---------- compound movers and turning: space3d.query_compound (2026-10-20) ---------- */
+
+static void cmp_mover(uint32_t r, SuV3 prev, SuV3 pos, SuQuat rot, uint32_t compound) {
+    mover(r, prev, pos, ONE, 0);
+    set_rot(r, rot);
+    set32(SPACE3D_F_COMPOUND, r, compound);
+}
+
+static void set_rot0(uint32_t r, SuQuat q) {
+    setq(SPACE3D_F_ROT0_W, r, q.w);
+    setq(SPACE3D_F_ROT0_X, r, q.x);
+    setq(SPACE3D_F_ROT0_Y, r, q.y);
+    setq(SPACE3D_F_ROT0_Z, r, q.z);
+}
+
+/* Unit quaternion of angle a (radians) about the unit axis (x, y, z), from doubles (tests only). */
+static SuQuat quat_axis(double x, double y, double z, double a) {
+    SuQuat q;
+    double s = sin(a / 2.0);
+    q.w = (int64_t)llround(cos(a / 2.0) * 4294967296.0);
+    q.x = (int64_t)llround(x * s * 4294967296.0);
+    q.y = (int64_t)llround(y * s * 4294967296.0);
+    q.z = (int64_t)llround(z * s * 4294967296.0);
+    return q;
+}
+
+/* ---- double-precision oracle of the true motion (position lerp, orientation slerp along the shortest arc) ---- */
+
+typedef struct DV {
+    double x, y, z;
+} DV;
+
+static DV dv(double x, double y, double z) {
+    DV r;
+    r.x = x;
+    r.y = y;
+    r.z = z;
+    return r;
+}
+static DV dq3(SuV3 a) { return dv((double)a.x / 4294967296.0, (double)a.y / 4294967296.0, (double)a.z / 4294967296.0); }
+static DV dadd(DV a, DV b) { return dv(a.x + b.x, a.y + b.y, a.z + b.z); }
+static DV dsub(DV a, DV b) { return dv(a.x - b.x, a.y - b.y, a.z - b.z); }
+static DV dscale(DV a, double s) { return dv(a.x * s, a.y * s, a.z * s); }
+static double ddot(DV a, DV b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+static DV dcross(DV a, DV b) { return dv(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x); }
+
+typedef struct DQ {
+    double w, x, y, z;
+} DQ;
+
+static DQ dquat(SuQuat q) {
+    DQ r;
+    double n;
+    r.w = (double)q.w / 4294967296.0;
+    r.x = (double)q.x / 4294967296.0;
+    r.y = (double)q.y / 4294967296.0;
+    r.z = (double)q.z / 4294967296.0;
+    n = sqrt(r.w * r.w + r.x * r.x + r.y * r.y + r.z * r.z);
+    r.w /= n;
+    r.x /= n;
+    r.y /= n;
+    r.z /= n;
+    return r;
+}
+
+static DQ dslerp(DQ a, DQ b, double t) {
+    double d = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z, th, s, ka, kb, n;
+    DQ r;
+    if (d < 0) {
+        b.w = -b.w;
+        b.x = -b.x;
+        b.y = -b.y;
+        b.z = -b.z;
+        d = -d;
+    }
+    if (d > 0.9999999) {
+        ka = 1.0 - t;
+        kb = t;
+    } else {
+        th = acos(d);
+        s = sin(th);
+        ka = sin((1.0 - t) * th) / s;
+        kb = sin(t * th) / s;
+    }
+    r.w = ka * a.w + kb * b.w;
+    r.x = ka * a.x + kb * b.x;
+    r.y = ka * a.y + kb * b.y;
+    r.z = ka * a.z + kb * b.z;
+    n = sqrt(r.w * r.w + r.x * r.x + r.y * r.y + r.z * r.z);
+    r.w /= n;
+    r.x /= n;
+    r.y /= n;
+    r.z /= n;
+    return r;
+}
+
+static DV drot(DQ q, DV v) {
+    DV u = dv(q.x, q.y, q.z);
+    DV t = dscale(dcross(u, v), 2.0);
+    return dadd(dadd(v, dscale(t, q.w)), dcross(u, t));
+}
+
+/* Closest distance between segments p1-q1 and p2-q2 (Ericson, RTCD 5.1.9). */
+static double dseg_seg(DV p1, DV q1, DV p2, DV q2) {
+    DV d1 = dsub(q1, p1), d2 = dsub(q2, p2), r = dsub(p1, p2);
+    double a = ddot(d1, d1), e = ddot(d2, d2), f = ddot(d2, r), s, t;
+    if (a <= 1e-12 && e <= 1e-12) {
+        s = t = 0;
+    } else if (a <= 1e-12) {
+        s = 0;
+        t = f / e;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+    } else {
+        double c = ddot(d1, r);
+        if (e <= 1e-12) {
+            t = 0;
+            s = -c / a;
+            s = s < 0 ? 0 : s > 1 ? 1 : s;
+        } else {
+            double b = ddot(d1, d2), den = a * e - b * b;
+            s = den > 1e-12 ? (b * f - c * e) / den : 0;
+            s = s < 0 ? 0 : s > 1 ? 1 : s;
+            t = (b * s + f) / e;
+            if (t < 0) {
+                t = 0;
+                s = -c / a;
+                s = s < 0 ? 0 : s > 1 ? 1 : s;
+            } else if (t > 1) {
+                t = 1;
+                s = (b - c) / a;
+                s = s < 0 ? 0 : s > 1 ? 1 : s;
+            }
+        }
+    }
+    {
+        DV c1 = dadd(p1, dscale(d1, s)), c2 = dadd(p2, dscale(d2, t)), dd = dsub(c1, c2);
+        return sqrt(ddot(dd, dd));
+    }
+}
+
+typedef struct OPiece {
+    DV a, b;
+    double r;
+} OPiece;
+
+/* A moving compound in doubles: pieces (local), start/end position and orientation. */
+typedef struct OBody {
+    uint32_t n;
+    OPiece p[8];
+    DV p0, p1;
+    DQ q0, q1;
+} OBody;
+
+static void obody_at(const OBody *o, double t, uint32_t i, DV *a, DV *b) {
+    DQ q = dslerp(o->q0, o->q1, t);
+    DV c = dadd(dscale(o->p0, 1.0 - t), dscale(o->p1, t));
+    *a = dadd(c, drot(q, o->p[i].a));
+    *b = dadd(c, drot(q, o->p[i].b));
+}
+
+/* Obstacles of the oracle: 0 sphere/capsule (segment a-b, radius r), 1 the plane x = wall_x (a large wall mesh),
+ * 2 another moving compound. Returns the smallest surface distance at time t (negative: overlap). */
+typedef struct OObst {
+    int kind;
+    DV a, b;
+    double r, wall_x;
+    OBody other;
+} OObst;
+
+static double oracle_dist(const OBody *m, const OObst *ob, double t) {
+    double best = 1e30;
+    uint32_t i, j;
+    for (i = 0; i < m->n; i++) {
+        DV a, b;
+        double d;
+        obody_at(m, t, i, &a, &b);
+        if (ob->kind == 0) {
+            d = dseg_seg(a, b, ob->a, ob->b) - ob->r - m->p[i].r;
+        } else if (ob->kind == 1) {
+            double h0 = a.x - ob->wall_x, h1 = b.x - ob->wall_x;
+            d = (h0 > 0) != (h1 > 0) ? 0 : (fabs(h0) < fabs(h1) ? fabs(h0) : fabs(h1));
+            d -= m->p[i].r;
+        } else {
+            d = 1e30;
+            for (j = 0; j < ob->other.n; j++) {
+                DV c, e;
+                double dj;
+                obody_at(&ob->other, t, j, &c, &e);
+                dj = dseg_seg(a, b, c, e) - ob->other.p[j].r - m->p[i].r;
+                d = dj < d ? dj : d;
+            }
+        }
+        best = d < best ? d : best;
+    }
+    return best;
+}
+
+static int64_t rpos_q(int64_t lo, int64_t hi) { /* q32 in [lo, hi] m */
+    return lo * ONE + (int64_t)(rng() % (uint64_t)((hi - lo) * ONE + 1));
+}
+
+static SuQuat rquat_q(void) {
+    SuQuat q0;
+    q0.w = rq(1);
+    q0.x = rq(1);
+    q0.y = rq(1);
+    q0.z = rq(1);
+    return su_quat_normalize(q0);
+}
+
+/* Small rotation: q * (angle up to amax about a random axis). */
+static SuQuat turn_q(SuQuat q, double amax) {
+    double x = (double)rq(1), y = (double)rq(1), z = (double)rq(1), n = sqrt(x * x + y * y + z * z);
+    double a = amax * (double)(rng() % 1000u) / 999.0;
+    if (n < 1e-9) {
+        return q;
+    }
+    return su_quat_normalize(su_quat_mul(q, quat_axis(x / n, y / n, z / n, a)));
+}
+
+static void test_compound(void) {
+    static uint32_t a[48 * MAXR], b[48 * MAXR], c[48 * MAXR];
+    const SuHostOpDesc *shape = &g_space3d_query_shape_desc;
+    SuSha256 sh;
+    uint8_t h[32];
+    char msg[256], why[200];
+    uint32_t i, sv = 0, gen = 0, seed, r, nw, ns, compared = 0, flagged = 0, contacts = 0, sub_contacts = 0;
+    SuLirModule *decl = NULL;
+    Scene s;
+    SuWorld *w = NULL, *w2 = NULL, *w3 = NULL;
+    SuV3 bv[8], wv[4];
+    uint32_t bt[36], wt[6] = {0, 1, 2, 0, 2, 3};
+    TGeom g[2];
+    TPart p[2];
+    TMesh m[2], cm[6];
+    TSub u[16];
+    TBlob blob;
+    S3MeshSet *set = NULL;
+    Space3dCtx *inst = NULL;
+
+    D = &g_space3d_query_compound_desc;
+    CHECK(su_host_desc_validate(D) == SU_OK);
+    CHECK(D->field_count == shape->field_count + 11u);
+    for (i = 0; i < shape->field_count; i++) {
+        CHECK(D->fields[i].id == shape->fields[i].id && D->fields[i].access == shape->fields[i].access &&
+              strcmp(D->fields[i].name, shape->fields[i].name) == 0);
+    }
+    su_sha256_init(&sh);
+    su_sha256_update(&sh, space3d_compound_constants_text(), strlen(space3d_compound_constants_text()));
+    su_sha256_final(&sh, h);
+    CHECK(memcmp(h, D->constants_hash, 32) == 0);
+    CHECK(su_host_load("profiles/space3d/space3d_query_compound.capsule.json", NULL, D, &decl, &sv, &gen, msg,
+                       sizeof msg) == SU_OK);
+    su_host_decl_free(decl);
+    decl = NULL;
+    CHECK(su_host_load("profiles/space3d/space3d_query_compound.capsule.json", NULL, shape, &decl, &sv, &gen, msg,
+                       sizeof msg) != SU_OK && decl == NULL);
+    CHECK(su_host_load("profiles/space3d/space3d_query_shape.capsule.json", NULL, D, &decl, &sv, &gen, msg,
+                       sizeof msg) != SU_OK && decl == NULL);
+
+    /* Set: mesh 0 = the box [-5, 5]^3; mesh 1 = a 2 km wall in the plane x = 0 (two triangles).
+     * Compounds: 0 = "T": capsule along local x (-10..10, r 1) + sphere at (0, 0, 8) r 2;
+     *            1 = the single capsule z -4..4, r 1 (as a query_shape capsule mover);
+     *            2 = a ship-like body: hull capsule z -20..15 r 5, wings x -18..18 at z 5 r 2, fin y 0..8 at z 12
+     *                r 1.5, nose sphere (0, 0, -24) r 3;
+     *            3 = sphere at the origin r 2 (a sphere mover);
+     *            4 = two parallel capsules (y = +/-3, z -6..6, r 1). */
+    tbox_verts(V(Q(5), Q(5), Q(5)), bv);
+    tbox_tris(bt);
+    wv[0] = V(0, -Q(1000), -Q(1000));
+    wv[1] = V(0, Q(1000), -Q(1000));
+    wv[2] = V(0, Q(1000), Q(1000));
+    wv[3] = V(0, -Q(1000), Q(1000));
+    g[0].nv = 8;
+    g[0].nt = 12;
+    g[0].v = bv;
+    g[0].t = bt;
+    g[1].nv = 4;
+    g[1].nt = 2;
+    g[1].v = wv;
+    g[1].t = wt;
+    for (i = 0; i < 2u; i++) {
+        p[i].geom = i;
+        p[i].pos = V(0, 0, 0);
+        p[i].rot = QID;
+        p[i].scale = ONE;
+        m[i].first = i;
+        m[i].count = 1;
+    }
+    u[0].a = V(-Q(10), 0, 0);
+    u[0].b = V(Q(10), 0, 0);
+    u[0].r = ONE;
+    u[1].a = V(0, 0, Q(8));
+    u[1].b = u[1].a;
+    u[1].r = Q(2);
+    u[2].a = V(0, 0, -Q(4));
+    u[2].b = V(0, 0, Q(4));
+    u[2].r = ONE;
+    u[3].a = V(0, 0, -Q(20));
+    u[3].b = V(0, 0, Q(15));
+    u[3].r = Q(5);
+    u[4].a = V(-Q(18), 0, Q(5));
+    u[4].b = V(Q(18), 0, Q(5));
+    u[4].r = Q(2);
+    u[5].a = V(0, 0, Q(12));
+    u[5].b = V(0, Q(8), Q(12));
+    u[5].r = Q(3) / 2;
+    u[6].a = V(0, 0, -Q(24));
+    u[6].b = u[6].a;
+    u[6].r = Q(3);
+    u[7].a = V(0, 0, 0);
+    u[7].b = u[7].a;
+    u[7].r = Q(2);
+    u[8].a = V(0, Q(3), -Q(6));
+    u[8].b = V(0, Q(3), Q(6));
+    u[8].r = ONE;
+    u[9].a = V(0, -Q(3), -Q(6));
+    u[9].b = V(0, -Q(3), Q(6));
+    u[9].r = ONE;
+    cm[0].first = 0;
+    cm[0].count = 2;
+    cm[1].first = 2;
+    cm[1].count = 1;
+    cm[2].first = 3;
+    cm[2].count = 4;
+    cm[3].first = 7;
+    cm[3].count = 1;
+    cm[4].first = 8;
+    cm[4].count = 2;
+    tb_build2(&blob, g, 2, p, 2, m, 2, u, 10, cm, 5);
+    CHECK(s3mesh_set_create(blob.p, blob.n, &set, why, sizeof why) == SU_OK);
+    free(blob.p);
+    CHECK(space3d_query_instance_create(MAXR, &inst) == SU_OK);
+    if (set == NULL || inst == NULL) {
+        return;
+    }
+    CHECK(space3d_query_instance_set_meshes(inst, set) == SU_OK);
+    s3mesh_set_release(set);
+    g_inst = inst;
+
+    /* Known 1: the T (compound 0) moves +z by 20 from the origin towards a sphere r 1 at (0, 0, 20): its sphere piece
+     * (z + 8, r 2) touches first, at z = 9: toi 0.45, normal -z, sub 1 (the capsule piece alone: z = 18). Row 2, the
+     * same T 100 m away rotated 180 degrees about x (the sphere piece at the back), touches with the capsule piece at
+     * toi 0.9. */
+    scene_init(&s, 4);
+    cmp_mover(0, V(0, 0, 0), V(0, 0, Q(20)), QID, 0);
+    sphere(1, V(0, 0, Q(20)), ONE);
+    cmp_mover(2, V(Q(100), 0, 0), V(Q(100), 0, Q(20)), quat_axis(1, 0, 0, 3.141592653589793), 0);
+    sphere(3, V(Q(100), 0, Q(20)), ONE);
+    CHECK(run_scene(&s, &w) == SU_OK);
+    if (w != NULL) {
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 1u && cslot(w, 0, 0) == 1u);
+        CHECK(near64(ctoi(w, 0, 0), su_q32_div(Q(9), Q(20)), 4) && near64(cn(w, 0, 0, 2), -ONE, 4));
+        CHECK(rd32(w, SPACE3D_F_C0_SUB, 0) == (1u | 0xFFFF0000u) && rd32(w, SPACE3D_F_C1_SUB, 0) == NONE);
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 2) == 1u && cslot(w, 2, 0) == 3u);
+        CHECK(near64(ctoi(w, 2, 0), su_q32_div(Q(18), Q(20)), 4));
+        CHECK(rd32(w, SPACE3D_F_C0_SUB, 2) == (0u | 0xFFFF0000u));
+        CHECK(rd32(w, SPACE3D_F_C0_SUB, 1) == NONE && rd32(w, SPACE3D_F_C0_SUB, 3) == NONE);
+        su_world_destroy(w);
+        w = NULL;
+    }
+    /* Known 2: two compound movers head-on along x: the ship body (compound 2, axis along world x by 90 degrees
+     * about y: local -z (nose) -> world -x... ) row 0 from x = -100 to 0 and the T row 1 (capsule along local x =
+     * world x) from x = 100 to 0. Row 0's nose sphere (local z -24 -> world x +24 after the rotation by -90 about
+     * y) meets the T capsule end (x - 10): both report each other at one toi with opposite normals and swapped sub
+     * pairs. */
+    scene_init(&s, 2);
+    cmp_mover(0, V(-Q(100), 0, 0), V(0, 0, 0), quat_axis(0, 1, 0, -1.5707963267948966), 2);
+    cmp_mover(1, V(Q(100), 0, 0), V(0, 0, 0), QID, 0);
+    CHECK(run_scene(&s, &w) == SU_OK);
+    if (w != NULL) {
+        /* gap closes at 200 m per tick: nose tip x0 + 24 + 3 vs T end x1 - 10 - 1: 200 t = 200 - 38 */
+        double want = (200.0 - 38.0) / 200.0;
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 1u && rd32(w, SPACE3D_F_HIT_COUNT, 1) == 1u);
+        CHECK(near64(ctoi(w, 0, 0), (int64_t)(want * 4294967296.0), 64) && near64(ctoi(w, 1, 0), ctoi(w, 0, 0), 64));
+        CHECK(near64(cn(w, 0, 0, 0), -ONE, 64) && near64(cn(w, 1, 0, 0), ONE, 64));
+        CHECK(rd32(w, SPACE3D_F_C0_SUB, 0) == (3u | (0u << 16)) && rd32(w, SPACE3D_F_C0_SUB, 1) == (0u | (3u << 16)));
+        su_world_destroy(w);
+        w = NULL;
+    }
+    /* Known 3: the ship body against the box mesh: moving -y from y = 40 at x = 0 (axis along z): the wing capsule
+     * (y 0, r 2; x -18..18 at z 5) and the hull (r 5) reach y = 5 + 5 first (hull, sub 0, toi (40 - 10) / 40);
+     * rotated 90 degrees about z the wings point along y: the wing tip (y -18 - 2) touches at y = 25: toi 15 / 40,
+     * sub 1. */
+    scene_init(&s, 4);
+    cmp_mover(0, V(0, Q(40), 0), V(0, 0, 0), QID, 2);
+    mesh_row(1, V(0, 0, 0), QID, 0);
+    cmp_mover(2, V(Q(300), Q(40), 0), V(Q(300), 0, 0), quat_axis(0, 0, 1, 1.5707963267948966), 2);
+    mesh_row(3, V(Q(300), 0, 0), QID, 0);
+    CHECK(run_scene(&s, &w) == SU_OK);
+    if (w != NULL) {
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 0) == 1u && near64(ctoi(w, 0, 0), su_q32_div(Q(30), Q(40)), 8));
+        CHECK(rd32(w, SPACE3D_F_C0_SUB, 0) == (0u | 0xFFFF0000u) && near64(cn(w, 0, 0, 1), ONE, 8));
+        CHECK(rd32(w, SPACE3D_F_HIT_COUNT, 2) == 1u && near64(ctoi(w, 2, 0), su_q32_div(Q(15), Q(40)), 64));
+        CHECK(rd32(w, SPACE3D_F_C0_SUB, 2) == (1u | 0xFFFF0000u));
+        su_world_destroy(w);
+        w = NULL;
+    }
+    /* Known 4: turning. Compound 0's sphere piece (reach 8, r 2) moves +x by 20 towards a sphere r 1 at (20, 0, 8):
+     * no turn: centre distance 3 at x = 17, toi 0.85. With rot0 = 0.1 rad about y before rot = identity, the piece
+     * is padded by 2 * 8 * sin(0.05) = 0.79967 m: toi (17 - 0.79967) / 20. Proximity is unpadded (margin 50 at the
+     * end, x = 20: 3 - 3 = 0 -> clamped 0). */
+    scene_init(&s, 2);
+    cmp_mover(0, V(0, 0, 0), V(Q(20), 0, 0), QID, 0);
+    sphere(1, V(Q(20), 0, Q(8)), ONE);
+    CHECK(run_scene(&s, &w) == SU_OK);
+    set_rot0(0, quat_axis(0, 1, 0, 0.1));
+    CHECK(run_scene(&s, &w2) == SU_OK);
+    if (w != NULL && w2 != NULL) {
+        double pad = 2.0 * 8.0 * sin(0.05);
+        CHECK(near64(ctoi(w, 0, 0), su_q32_div(Q(17), Q(20)), 8));
+        CHECK(near64(ctoi(w2, 0, 0), (int64_t)((17.0 - pad) / 20.0 * 4294967296.0), 8192)); /* pad: +2^-20 sin */
+        CHECK(ctoi(w2, 0, 0) < (int64_t)((17.0 - pad) / 20.0 * 4294967296.0)); /* conservative */
+    }
+    su_world_destroy(w);
+    su_world_destroy(w2);
+    w = w2 = NULL;
+
+    /* Compound none, rot0 zero: every query_shape lane equals space3d.query_shape bit for bit (random scenes with
+     * capsule movers and meshes); c*_sub are NONE. A one-capsule compound (1) equals the capsule mover z -4..4 r 1
+     * on every contact lane (proximity off). */
+    nw = write_lanes();
+    for (seed = 1; seed <= 12; seed++) {
+        uint32_t rows = 64u + (seed * 131u) % 500u;
+        int64_t span = 20 + (int64_t)(seed % 4u) * 40;
+        int same = 1, subs_none = 1;
+        g_rng = seed * UINT64_C(2654435761);
+        random_scene(&s, rows, span);
+        for (r = 0; r < rows; r++) {
+            uint32_t k = g_col[SPACE3D_F_KIND][r];
+            set32(SPACE3D_F_COMPOUND, r, NONE);
+            if (k == SPACE3D_KIND_MOVER) {
+                setq(SPACE3D_F_PROX_MARGIN, r, (int64_t)(rng() % (uint64_t)(8 * ONE)) - ONE);
+                if (rng() % 2u == 0u) {
+                    set_rot(r, rquat_q());
+                    setq(SPACE3D_F_Z0, r, -(int64_t)(rng() % (uint64_t)(6 * ONE)));
+                    setq(SPACE3D_F_Z1, r, (int64_t)(rng() % (uint64_t)(6 * ONE)));
+                }
+            } else if (k == SPACE3D_KIND_SPHERE && rng() % 2u == 0u) {
+                mesh_row(r, V(rq(span), rq(span), rq(span)), rquat_q(), 0);
+            }
+        }
+        D = shape;
+        ns = write_lanes();
+        CHECK(run_scene(&s, &w) == SU_OK);
+        D = &g_space3d_query_compound_desc;
+        CHECK(run_scene(&s, &w2) == SU_OK);
+        if (w != NULL && w2 != NULL) {
+            D = shape;
+            snapshot_out(w, rows, a);
+            D = &g_space3d_query_compound_desc;
+            snapshot_out(w2, rows, b);
+            same = memcmp(a, b, sizeof(uint32_t) * ns * rows) == 0;
+            if (!same) {
+                uint32_t q;
+                for (q = 0; q < ns * rows; q++) {
+                    if (a[q] != b[q]) {
+                        fprintf(stderr, "compound off: seed %u lane %u row %u: shape %u compound %u%c", seed, q / rows,
+                                q % rows, a[q], b[q], 10);
+                        break;
+                    }
+                }
+            }
+            for (r = 0; r < rows; r++) {
+                subs_none &= s.dead[r] || (rd32(w2, SPACE3D_F_C0_SUB, r) == NONE && rd32(w2, SPACE3D_F_C1_SUB, r) == NONE);
+            }
+        }
+        CHECK(same && subs_none && ns + 2u == nw);
+        su_world_destroy(w);
+        su_world_destroy(w2);
+        w = w2 = NULL;
+        /* one-capsule compound vs the capsule mover: contact lanes (base write lanes) equal */
+        for (r = 0; r < rows; r++) {
+            if (g_col[SPACE3D_F_KIND][r] == SPACE3D_KIND_MOVER) {
+                setq(SPACE3D_F_PROX_MARGIN, r, 0);
+                setq(SPACE3D_F_RADIUS, r, ONE);
+                setq(SPACE3D_F_Z0, r, -Q(4));
+                setq(SPACE3D_F_Z1, r, Q(4));
+            }
+        }
+        CHECK(run_scene(&s, &w) == SU_OK);
+        for (r = 0; r < rows; r++) {
+            if (g_col[SPACE3D_F_KIND][r] == SPACE3D_KIND_MOVER) {
+                setq(SPACE3D_F_Z0, r, 0);
+                setq(SPACE3D_F_Z1, r, 0);
+                setq(SPACE3D_F_RADIUS, r, 0); /* not used by a compound */
+                set32(SPACE3D_F_COMPOUND, r, 1u);
+            }
+        }
+        CHECK(run_scene(&s, &w2) == SU_OK);
+        if (w != NULL && w2 != NULL) {
+            uint32_t k, eq = 1;
+            for (r = 0; r < rows; r++) {
+                for (k = 40u; k <= 61u; k++) {
+                    eq &= rd32(w, k, r) == rd32(w2, k, r);
+                }
+            }
+            CHECK(eq);
+        }
+        su_world_destroy(w);
+        su_world_destroy(w2);
+        w = w2 = NULL;
+    }
+
+    /* Random compound scenes (every compound, random orientations and turns, meshes): broadphase equals brute force
+     * on every lane when nothing is truncated; a repeat is bit-identical. */
+    for (seed = 1; seed <= 24; seed++) {
+        uint32_t rows = 64u + (seed * 89u) % 300u;
+        int64_t span = 60 + (int64_t)(seed % 4u) * 40;
+        int flags_any = 0;
+        g_rng = seed * UINT64_C(40503);
+        random_scene(&s, rows, span);
+        for (r = 0; r < rows; r++) {
+            uint32_t k = g_col[SPACE3D_F_KIND][r];
+            set32(SPACE3D_F_COMPOUND, r, NONE);
+            if (k == SPACE3D_KIND_MOVER) {
+                SuQuat q = rquat_q();
+                setq(SPACE3D_F_PROX_MARGIN, r, (int64_t)(rng() % (uint64_t)(12 * ONE)) - ONE);
+                set_rot(r, q);
+                if (rng() % 4u != 0u) {
+                    set32(SPACE3D_F_COMPOUND, r, (uint32_t)(rng() % 6u)); /* 5: unknown index */
+                } else {
+                    setq(SPACE3D_F_Z0, r, -(int64_t)(rng() % (uint64_t)(6 * ONE)));
+                    setq(SPACE3D_F_Z1, r, (int64_t)(rng() % (uint64_t)(6 * ONE)));
+                }
+                if (rng() % 2u == 0u) {
+                    set_rot0(r, turn_q(q, 0.3));
+                }
+            } else if (k == SPACE3D_KIND_SPHERE && rng() % 3u == 0u) {
+                mesh_row(r, V(rq(span), rq(span), rq(span)), rquat_q(), (uint32_t)(rng() % 3u));
+            }
+        }
+        CHECK(run_scene(&s, &w) == SU_OK);
+        CHECK(run_scene(&s, &w2) == SU_OK);
+        inst->brute_force = 1;
+        CHECK(run_scene(&s, &w3) == SU_OK);
+        inst->brute_force = 0;
+        if (w != NULL && w2 != NULL && w3 != NULL) {
+            snapshot_out(w, rows, a);
+            snapshot_out(w2, rows, b);
+            snapshot_out(w3, rows, c);
+            CHECK(memcmp(a, b, sizeof(uint32_t) * nw * rows) == 0);
+            for (r = 0; r < rows; r++) {
+                uint32_t n = rd32(w, SPACE3D_F_HIT_COUNT, r);
+                flags_any |= (rd32(w, SPACE3D_F_HIT_FLAGS, r) &
+                              (SPACE3D_FLAG_CAND_TRUNCATED | SPACE3D_FLAG_SWEEP_BUDGET)) != 0u;
+                contacts += n;
+                sub_contacts += n > 0u && rd32(w, SPACE3D_F_C0_SUB, r) != NONE;
+            }
+            if (flags_any) {
+                flagged++;
+            } else {
+                compared++;
+                CHECK(memcmp(a, c, sizeof(uint32_t) * nw * rows) == 0); /* compound bounds lose nothing */
+            }
+        }
+        su_world_destroy(w);
+        su_world_destroy(w2);
+        su_world_destroy(w3);
+        w = w2 = w3 = NULL;
+    }
+    printf("space3d compound: %u scenes equal to brute force, %u truncated (repeat-only), %u contacts (%u with "
+           "sub-shapes)%c",
+           compared, flagged, contacts, sub_contacts, 10);
+    CHECK(compared >= 16u && sub_contacts > 100u);
+
+    /* Conservative turning and no tunnelling at 1820 m/s (15.17 m per 120 Hz tick): the ship body (compound 2) or
+     * the twin capsules (4), translating 15.17 m and turning up to 0.06 rad within the tick (position lerp,
+     * orientation slerp), against a sphere, a capsule, the zero-thickness wall mesh or another such compound moving
+     * the other way at the same speed. Whenever the true motion overlaps the obstacle at a sampled time t (double
+     * precision, 256 samples, overlap beyond 1e-6 m), the operator reports a contact with toi <= t. */
+    {
+        uint32_t cases = 0, overlaps = 0, missed = 0, late = 0, kinds[4] = {0, 0, 0, 0};
+        double worst_early = 0;
+        const double v = 1820.0 / 120.0;
+        g_rng = UINT64_C(20261020);
+        for (i = 0; i < 4000u; i++) {
+            OBody mb, ob;
+            OObst obs;
+            uint32_t ci = rng() % 2u == 0u ? 2u : 4u, cj = rng() % 2u == 0u ? 2u : 4u, k, n = 0, kind = i % 4u;
+            const S3SubShape *sp;
+            SuQuat q1 = rquat_q(), q0 = turn_q(q1, 0.06), o1 = rquat_q(), o0 = turn_q(o1, 0.06);
+            double dx = (double)rq(1), dy = (double)rq(1), dz = (double)rq(1), dn, tt = -1;
+            SuV3 p0, p1, op0, op1, dir;
+            dn = sqrt(dx * dx + dy * dy + dz * dz);
+            if (dn < 1e-3) {
+                continue;
+            }
+            /* direction and start: the path passes the origin region at a random offset */
+            dir = V((int64_t)(dx / dn * v * 4294967296.0), (int64_t)(dy / dn * v * 4294967296.0),
+                    (int64_t)(dz / dn * v * 4294967296.0));
+            p0 = su_v3_add(V(rq(20), rq(20), rq(20)), su_v3_scale(dir, -rpos_q(0, 1) - ONE / 4));
+            p1 = su_v3_add(p0, dir);
+            sp = s3mesh_compound(set, ci, &n);
+            mb.n = n;
+            for (k = 0; k < n; k++) {
+                mb.p[k].a = dq3(sp[k].a);
+                mb.p[k].b = dq3(sp[k].b);
+                mb.p[k].r = (double)sp[k].r / 4294967296.0;
+            }
+            mb.p0 = dq3(p0);
+            mb.p1 = dq3(p1);
+            mb.q0 = dquat(q0);
+            mb.q1 = dquat(q1);
+            scene_init(&s, 2);
+            cmp_mover(0, p0, p1, q1, ci);
+            set_rot0(0, q0);
+            memset(&obs, 0, sizeof obs);
+            obs.kind = kind == 3u ? 2 : kind == 2u ? 1 : 0;
+            if (kind == 0u) {
+                SuV3 cc = V(rq(10), rq(10), rq(10));
+                int64_t rr = rpos_q(0, 3) + ONE / 4;
+                sphere(1, cc, rr);
+                obs.a = obs.b = dq3(cc);
+                obs.r = (double)rr / 4294967296.0;
+            } else if (kind == 1u) {
+                SuV3 cc = V(rq(10), rq(10), rq(10));
+                SuQuat cq = rquat_q();
+                int64_t hl = rpos_q(0, 20), rr = rpos_q(0, 2) + ONE / 4;
+                SuV3 ax = su_quat_rotate(cq, V(0, 0, hl));
+                capsule(1, cc, cq, hl, rr);
+                obs.a = dq3(su_v3_sub(cc, ax));
+                obs.b = dq3(su_v3_add(cc, ax));
+                obs.r = (double)rr / 4294967296.0;
+            } else if (kind == 2u) {
+                /* the wall x = wx (mesh 1 in its own frame is the plane x = 0) */
+                int64_t wx = rq(5);
+                mesh_row(1, V(wx, 0, 0), QID, 1);
+                obs.wall_x = (double)wx / 4294967296.0;
+            } else {
+                SuV3 oc = V(rq(15), rq(15), rq(15));
+                op0 = su_v3_add(oc, su_v3_scale(dir, rpos_q(0, 1) + ONE / 4));
+                op1 = su_v3_sub(op0, dir);
+                cmp_mover(1, op0, op1, o1, cj);
+                set_rot0(1, o0);
+                sp = s3mesh_compound(set, cj, &n);
+                ob.n = n;
+                for (k = 0; k < n; k++) {
+                    ob.p[k].a = dq3(sp[k].a);
+                    ob.p[k].b = dq3(sp[k].b);
+                    ob.p[k].r = (double)sp[k].r / 4294967296.0;
+                }
+                ob.p0 = dq3(op0);
+                ob.p1 = dq3(op1);
+                ob.q0 = dquat(o0);
+                ob.q1 = dquat(o1);
+                obs.other = ob;
+            }
+            cases++;
+            for (k = 0; k <= 256u; k++) {
+                double t = (double)k / 256.0;
+                if (oracle_dist(&mb, &obs, t) < -1e-6) {
+                    tt = t;
+                    break;
+                }
+            }
+            CHECK(run_scene(&s, &w) == SU_OK);
+            if (w == NULL) {
+                continue;
+            }
+            if (tt >= 0) {
+                overlaps++;
+                kinds[kind]++;
+                if (rd32(w, SPACE3D_F_HIT_COUNT, 0) == 0u) {
+                    missed++;
+                    if (missed <= 5u) {
+                        fprintf(stderr, "compound tunnel case %u kind %u: overlap at t %.4f, no contact\n", i, kind,
+                                tt);
+                    }
+                } else {
+                    double toi = (double)ctoi(w, 0, 0) / 4294967296.0;
+                    if (toi > tt + 1e-6) {
+                        late++;
+                        if (late <= 5u) {
+                            fprintf(stderr, "compound tunnel case %u kind %u: overlap at t %.4f, contact at %.6f\n",
+                                    i, kind, tt, toi);
+                        }
+                    }
+                    worst_early = tt - toi > worst_early ? tt - toi : worst_early;
+                }
+            }
+            su_world_destroy(w);
+            w = NULL;
+        }
+        printf("space3d compound tunnelling: %u cases, %u overlap (sphere %u, capsule %u, wall %u, mover %u), %u "
+               "missed, %u late; earliest contact %.3f tick before the first sampled overlap%c",
+               cases, overlaps, kinds[0], kinds[1], kinds[2], kinds[3], missed, late, worst_early, 10);
+        CHECK(missed == 0u && late == 0u && kinds[0] > 50u && kinds[1] > 50u && kinds[2] > 50u && kinds[3] > 50u);
+    }
+    g_inst = NULL;
+    space3d_query_instance_destroy(inst);
+    D = &g_space3d_query_desc;
+}
+
 int main(void) {
     test_descriptor();
     test_known();
@@ -1175,6 +1872,7 @@ int main(void) {
     test_prox();
     test_shape();
     test_mesh();
+    test_compound();
     printf("test_space3d_ops: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
