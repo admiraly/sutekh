@@ -599,6 +599,33 @@ static void test_host_extensions(void) {
     CHECK(su_audio_system_create(&s.desc, &system, message) != SU_OK && system == NULL);
     s.desc.doppler = 0.0f;
 
+    /* SU_AUDIO_LIMIT_EVENT counts per posted event: one physical voice each for events 1 and 2 */
+    {
+        SuAudioTrigger trigger;
+        SuAudioInstance instance;
+        SuAudioVoiceStats voices;
+        uint32_t posts;
+        s.desc.policy_count = 0u;
+        s.desc.default_policy.physical_limit = 1u;
+        s.desc.default_policy.limit_scope = SU_AUDIO_LIMIT_EVENT;
+        CHECK(su_audio_system_create(&s.desc, &system, message) == SU_OK);
+        memset(&trigger, 0, sizeof trigger);
+        trigger.struct_size = sizeof trigger;
+        trigger.session_generation = 1u;
+        for (posts = 0; posts < 3u; posts++) {
+            trigger.event_id = posts < 2u ? 1u : 2u;
+            trigger.commit_seq = posts + 1u;
+            CHECK(su_audio_system_post(system, &trigger, &instance, NULL) == SU_OK);
+        }
+        CHECK(su_audio_system_render(system, offline_pcm, 256u) == SU_OK);
+        su_audio_voice_pool_stats(su_audio_system_voices(system), &voices);
+        CHECK(voices.logical == 3u && voices.physical == 2u);
+        su_audio_system_destroy(system);
+        s.desc.policy_count = 1u;
+        s.desc.default_policy.physical_limit = 0u;
+        s.desc.default_policy.limit_scope = 0u;
+    }
+
     /* Doppler: 200 Hz approaching at a tenth of the speed of sound plays at 343 / (343 - 34.3) = 1.111x */
     render_loop(&s, 1, &plain_rms, &plain_count);
     s.desc.doppler = 1.0f;

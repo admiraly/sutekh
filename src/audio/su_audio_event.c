@@ -31,6 +31,7 @@ typedef struct EventInstance {
     uint32_t state;
     uint32_t count;
     uint32_t scope;
+    uint32_t event_id;     /* the posted event: SU_AUDIO_LIMIT_EVENT scopes of its voices */
     uint64_t order;
     SuAudioEmitter emitter;
     EventLeaf *leaves;
@@ -364,6 +365,7 @@ uint32_t su_audio_event_post(SuAudioEvents *events, const SuAudioTrigger *trigge
     }
     instance->state = 1u;
     instance->scope = trigger->scope_id;
+    instance->event_id = trigger->event_id;
     instance->emitter = trigger->emitter;
     instance->order = ++events->order;
     events->stats.instances++;
@@ -705,6 +707,7 @@ static void pooled_start(SuAudioEvents *events, uint64_t now, uint64_t end) {
             }
             desc.clip = leaf->clip;
             desc.gain = 1.0f;
+            desc.event_id = instance->event_id;
             desc.node_id = leaf->data.node_id;
             desc.bus_id = leaf->data.bus_id;
             desc.emitter = instance->emitter;
@@ -1508,6 +1511,7 @@ static void instance_io(SuAudioStateIo *io, EventInstance *instance) {
     SU_STATE(io, instance->state);
     SU_STATE(io, instance->count);
     SU_STATE(io, instance->scope);
+    SU_STATE(io, instance->event_id);
     SU_STATE(io, instance->order);
     SU_STATE(io, instance->emitter);
 }
