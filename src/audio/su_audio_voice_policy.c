@@ -20,6 +20,7 @@ typedef struct VoiceDsp {
     float gl, gr, gl_prev, gr_prev;
     float lp_alpha, lp_target, lp_step;
     float lp_l, lp_r;
+    float lp_hz;              /* cut-off of lp_target (coefficient cache) */
 } VoiceDsp;
 
 typedef struct PoolVoice {
@@ -255,12 +256,14 @@ uint32_t su_audio_voice_set_controls(SuAudioVoicePool *pool, SuAudioLogicalVoice
         dsp->pos = (double)voice->cursor;
         dsp->lp_alpha = 1.0f;
         dsp->lp_target = 1.0f;
+        dsp->lp_hz = 0.0f;
     }
     dsp->gl = controls->gain_left;
     dsp->gr = controls->gain_right;
     dsp->pitch = controls->pitch;
     dsp->mono_mix = controls->mono_mix != 0u;
-    alpha = lowpass_alpha(pool, controls->lowpass_hz);
+    alpha = controls->lowpass_hz == dsp->lp_hz ? dsp->lp_target : lowpass_alpha(pool, controls->lowpass_hz);
+    dsp->lp_hz = controls->lowpass_hz;
     if (dsp->fresh && !voice->played) {
         dsp->lp_alpha = dsp->lp_target = alpha;
         dsp->lp_remain = 0u;
@@ -847,6 +850,7 @@ static void dsp_state(SuAudioStateIo *io, VoiceDsp *dsp) {
     SU_STATE(io, dsp->lp_step);
     SU_STATE(io, dsp->lp_l);
     SU_STATE(io, dsp->lp_r);
+    SU_STATE(io, dsp->lp_hz);
 }
 
 static void desc_state(SuAudioStateIo *io, SuAudioLogicalDesc *desc) {

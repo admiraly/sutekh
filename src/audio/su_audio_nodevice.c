@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "sutekh/audio.h"
+#include "su_audio_int.h"
 
 uint32_t su_audio_device_open(SuAudioMixer *m, SuAudioDevice **out, SuAudioDeviceInfo *info, char message[256]) {
     (void)m;
@@ -20,6 +21,14 @@ uint32_t su_audio_device_open(SuAudioMixer *m, SuAudioDevice **out, SuAudioDevic
 
 void su_audio_device_close(SuAudioDevice *d) {
     (void)d;
+}
+
+uint32_t su_audio_device_open_pull(uint32_t sample_rate, SuAudioPullFn pull, void *user, SuAudioDevice **out,
+                                   SuAudioDeviceInfo *info, char message[256]) {
+    (void)sample_rate;
+    (void)pull;
+    (void)user;
+    return su_audio_device_open(NULL, out, info, message);
 }
 
 uint64_t su_audio_device_frames(const SuAudioDevice *d) {

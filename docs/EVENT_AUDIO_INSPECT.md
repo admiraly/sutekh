@@ -19,9 +19,10 @@ read-only view (`src/audio/su_audio_event_view.h`, one appended accessor in
 serializes rendering, not from a device callback.
 
 Bus entries describe authored `bus_id` routing tags of event voices. The voice
-pool (A05), bus tree (A06), parameters/music (A07) and clustering (A08) are
-standalone components composed by the owner; they are not wired into the event
-runtime, and the acceptance manifest says so.
+pool (A05), bus tree (A06), parameters/music (A07) and clustering (A08) can be
+composed by an owner or driven by the integrated runtime
+([EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md)); the acceptance
+manifest lists their integration status.
 
 Component diagnostics: `su_audio_inspect_bus_json` (per-bus peak, RMS, true
 peak, fader, duck and window attenuation in execution order),
@@ -54,9 +55,11 @@ digests to a WAV artifact, verifies the WAV payload hashes to the session's PCM
 digest (`SU_E_SCHEMA_MISMATCH` otherwise) and lists component capabilities and
 compatibility gaps. The engine writes no files.
 
-The control-plane methods `audio.inspect`, `audio.trace.begin/end` and
-`audio.render.offline` are not registered; they remain proposals and are listed
-as a gap in the manifest.
+The control-plane methods `audio.inspect`, `audio.trace.read`,
+`audio.trace.stats` and `audio.render.offline` are implemented by
+`su_audio_system_control` for a host's control plane. The engine's agent
+control plane (world and capsule methods) does not host an audio system, so
+they are not registered there.
 
 ## Acceptance fixture and command
 

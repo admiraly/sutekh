@@ -382,7 +382,38 @@ sutekh_apply_warnings(test_audio_inspect)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/audio_inspect_export")
 add_test(NAME audio_inspect COMMAND test_audio_inspect "${CMAKE_CURRENT_BINARY_DIR}/audio_inspect_export")
 add_executable(test_audio_acceptance tests/audio/test_audio_acceptance.c)
-target_link_libraries(test_audio_acceptance PRIVATE su_audio_inspect)
+target_include_directories(test_audio_acceptance PRIVATE src)
+target_link_libraries(test_audio_acceptance PRIVATE su_audio_system)
 sutekh_apply_warnings(test_audio_acceptance)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/audio_acceptance_export")
 add_test(NAME audio_acceptance COMMAND test_audio_acceptance "${CMAKE_CURRENT_BINARY_DIR}/audio_acceptance_export")
+# Combined audio system: owns the integrated runtime, output (offline, ring or device), journal, telemetry,
+# checkpoints and control-plane methods.
+add_library(su_audio_system STATIC src/audio/su_audio_system.c)
+target_include_directories(su_audio_system PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
+target_link_libraries(su_audio_system PUBLIC su_audio_inspect)
+sutekh_apply_warnings(su_audio_system)
+add_executable(test_audio_system tests/audio/test_audio_system.c)
+target_include_directories(test_audio_system PRIVATE src)
+target_link_libraries(test_audio_system PRIVATE su_audio_system)
+sutekh_apply_warnings(test_audio_system)
+add_test(NAME audio_system COMMAND test_audio_system)
+# Steady-state allocation check: every integrated-runtime source compiled with counting allocators.
+add_library(su_audio_system_alloc_objs OBJECT src/audio/su_audio_system.c src/audio/su_audio_event.c
+    src/audio/su_audio_graph.c src/audio/su_audio_voice_policy.c src/audio/su_audio_bus.c
+    src/audio/su_audio_parameter.c src/audio/su_audio_music.c src/audio/su_audio_cluster.c
+    src/audio/su_audio_inspect.c src/audio/su_audio_offline.c)
+target_include_directories(su_audio_system_alloc_objs PRIVATE "${SUTEKH_CONTRACT_INCLUDE}" src)
+target_compile_definitions(su_audio_system_alloc_objs PRIVATE
+    malloc=sys_malloc calloc=sys_calloc realloc=sys_realloc free=sys_free)
+sutekh_apply_warnings(su_audio_system_alloc_objs)
+add_executable(test_audio_system_alloc tests/audio/test_audio_system.c $<TARGET_OBJECTS:su_audio_system_alloc_objs>)
+target_include_directories(test_audio_system_alloc PRIVATE src)
+target_compile_definitions(test_audio_system_alloc PRIVATE SU_AUDIO_SYSTEM_ALLOC_TEST=1)
+target_link_libraries(test_audio_system_alloc PRIVATE su_audio su_ir)
+sutekh_apply_warnings(test_audio_system_alloc)
+add_test(NAME audio_system_alloc COMMAND test_audio_system_alloc)
+# Measured CPU cost of the integrated runtime (not a test; run it from an optimised build).
+add_executable(bench_audio_system bench/audio/bench_audio_system.c)
+target_link_libraries(bench_audio_system PRIVATE su_audio_system)
+sutekh_apply_warnings(bench_audio_system)

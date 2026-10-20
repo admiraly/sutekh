@@ -3,7 +3,60 @@
 The A01-A10 components are wired into one runtime here. Without a hook, the
 event runtime still mixes through its private legacy mixer exactly as before
 (`audio_event`, `audio_offline` and `audio_inspect` tests are unchanged). The
-legacy `sutekh/audio.h` mixer and device API are untouched.
+legacy `sutekh/audio.h` mixer and device API are untouched. Games normally use
+the single owner object below; the per-component hooks underneath it are
+documented in the following sections. Moving a game from the legacy mixer:
+[EVENT_AUDIO_MIGRATION.md](EVENT_AUDIO_MIGRATION.md).
+
+## One system object
+
+`sutekh/audio_system.h`: `su_audio_system_create(&desc, &system, message)`
+builds and wires everything from one descriptor and owns it: scene (with the
+authored curves), voice pool and policy rules, optional bus tree, parameters,
+music (with its segments) and cluster, the event runtime attached to them, an
+optional command journal and A10 telemetry ring, and the output:
+
+- `SU_AUDIO_OUTPUT_OFFLINE`: `su_audio_system_render(system, out, frames)`
+  pulls frames; any chunking gives the same stream.
+- `SU_AUDIO_OUTPUT_RING`: `su_audio_system_update` renders whole quanta until a
+  render-ahead ring of `ring_frames` is full; `su_audio_system_ring_read` reads
+  it (silence and an `underrun_frames` count when it runs dry).
+- `SU_AUDIO_OUTPUT_DEVICE`: as `RING`, read by the output device thread (WASAPI
+  pull mode). The owner calls `update` once per game frame; the device thread
+  only touches the lock-free single-producer/single-consumer ring. A host
+  without a device gets `SU_E_UNSUPPORTED_METHOD` and a message.
+
+Presentation commands go through journaled wrappers with the component
+semantics: `post`, `stop` (instance, emitter or scope), `param_set`,
+`switch_set`, `emitter_create/update/destroy`, `listener_set`,
+`music_transition` and `bus_gain`. Each journal entry records the number of
+frames the runtime had produced when it was issued, so
+`su_audio_system_replay` reproduces the session in a fresh `OFFLINE` system.
+The real-time path (ring or device) and the offline path (journal replay) give
+identical PCM within one build (`audio_system`, `audio_acceptance`).
+
+`su_audio_system_checkpoint_save/load` wrap the direct checkpoints below with a
+16-byte header that records how many journal commands preceded the save.
+`su_audio_system_checkpoint_verify(desc, journal, count, blob, bytes, frames)`
+is the replay verifier: it replays the journal to the checkpoint in one fresh
+system, loads the checkpoint into another, renders `frames` more in both
+(applying later commands) and requires identical PCM.
+
+`su_audio_system_control(system, method, params, len, out, capacity,
+&written)` implements the control-plane methods for a host's structured
+control plane (`su_audio_system_method(i)` lists them):
+
+| Method | Result |
+| --- | --- |
+| `audio.inspect` | One JSON object: clock, ring and journal state, payload bytes, the A10 snapshot of instances/voices/emitters/buses, voice-pool stats with reason names, bus meters, parameter and cluster diagnostics |
+| `audio.trace.read` | Drains up to 1024 telemetry entries as A10 trace JSON (posts, stops, emitter moves and listener changes with stable reason codes) |
+| `audio.trace.stats` | Telemetry capacity, queued, recorded, dropped, drained and per-reason counts |
+| `audio.render.offline` | `{"frames":N}` (default: frames produced so far, at most ten minutes): replays the journal into a fresh offline system and reports frames, command count, PCM SHA-256, sample peak, 4x true peak and BS.1770 integrated loudness |
+
+Outputs carry numeric IDs and handles only. `render.offline` allocates its
+temporary system and PCM; the other methods use storage allocated at creation.
+The engine's agent control plane (world and capsule methods) does not host an
+audio system, so these methods are not registered there; a host exposes them.
 
 ## Voices and spatial filtering
 
@@ -149,3 +202,60 @@ a `BUS_GAIN_DB` binding reaching -12 dB on its fader, music metered on its own
 bus, and the soft limiter bending an 18 dB overdrive to at most full scale.
 Clustering and checkpoint cases are described above. The suite also passes
 under clang AddressSanitizer.
+
+`ctest -R '^audio_system(_alloc)?$'` (`tests/audio/test_audio_system.c`): a
+ring session driven per game frame (posts on three emitters, an emitter move,
+a stop with release, a bus fader binding, per-bus voice limits, clustering)
+read in 441/480/97-frame device chunks equals the journal replay bit for bit
+with no underruns; an empty ring delivers counted silence; a checkpoint
+restored directly continues like the uninterrupted render and passes the
+replay verifier, while a corrupted one fails it; all four control methods,
+including the offline render's PCM digest against the live stream; device
+output either opens or reports why not. The `_alloc` build compiles every
+integrated-runtime source with counting allocators and requires zero
+allocations after creation over ten seconds of posts, emitter moves,
+parameter changes, clustering, telemetry, journaling and checkpoint saves
+(payload 1.24 MB for that configuration). `audio_acceptance` adds an
+integrated stage that runs the A10 slice through one `SuAudioSystem` (ring
+output, per-bus voice limits, ducking, a parameter-driven fader, clustering,
+telemetry, inspection and an offline report) and requires the real-time and
+offline PCM to be identical.
+
+## Measured cost
+
+`bench_audio_system [seconds] [json] [physical]` (`bench/audio`) renders
+offline on one thread: 512 logical looping spatial voices on 256 emitters that
+move every 2048 frames, 64 physical voices (4 hero-reserved, 16 steal tails),
+16 buses with 8 sidechain ducks (half delayed), gain and pitch bindings on
+every voice plus one bus-fader binding (parameters move every half second), 3
+stereo music stems and clustering (voices and pre-master buses, 16 outputs),
+master soft limiter. Clang 23.1.3 `-O3` (CMake Release), Windows 11, Intel
+Core i5-12400F, 10 s of audio, CPU time from `clock()`, three runs:
+
+| Configuration | CPU per second of audio |
+| --- | --- |
+| Full (above) | 90.1 to 91.0 ms (about 9% of one core) |
+| Without clustering | 80.6 to 81.7 ms |
+| Voices only (no buses, parameters or music; no clustering) | 60.1 to 60.4 ms |
+| Full, 32 physical voices | 69.7 ms |
+| Full, 128 physical voices | 157.9 ms |
+
+About 37 ms of the voices-only figure is per-quantum control work for the 512
+logical voices (scene resolve, curve, pan and ranking every 128 frames) and is
+paid even when few voices are physical; the rest scales with physical voices.
+These are offline throughput figures, not a device-callback latency
+distribution, which remains unmeasured.
+
+## Not covered
+
+- Switch and blend choices are made when an instance expands; `CONTINUE`/`FADE`
+  switch changes and blend parameter moves do not re-select the branches of a
+  playing instance.
+- The bus tree's authored-loudness window has no automatic input from voices.
+- Clustering produces object metadata and a reference mix; no object or
+  height renderer consumes it, and the stereo output does not depend on it.
+- Checkpoints are valid within the build that wrote them. Legacy (unattached)
+  runtimes keep the A09 replay checkpoints only.
+- The control methods are not registered with the agent control plane.
+- On an underrun the device plays silence and the system counts it; no
+  device-callback latency distribution has been measured.

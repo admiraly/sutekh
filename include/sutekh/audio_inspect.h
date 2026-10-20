@@ -152,8 +152,8 @@ uint32_t su_audio_trace_csv(const SuAudioTelemetryEntry *entries, uint32_t count
 
 /* Component diagnostics. Bus meters are read in execution order (reset != 0
  * restarts each meter window); voice pools and parameters report their stats
- * with stable reason names. These components are composed by the owner; they
- * are not wired into the event runtime. */
+ * with stable reason names. They work for standalone components and for those
+ * driven by the integrated runtime (su_audio_events_attach, SuAudioSystem). */
 uint32_t su_audio_inspect_bus_json(SuAudioBusTree *tree, int reset, char *out, size_t capacity, size_t *written);
 uint32_t su_audio_inspect_voice_pool_json(const SuAudioVoicePool *pool, char *out, size_t capacity,
     size_t *written);

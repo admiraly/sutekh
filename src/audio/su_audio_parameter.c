@@ -216,6 +216,9 @@ static int slot_segment(const ParamSlot *slot, uint64_t t) {
 static ParamSlot *scoped_slot(const SuAudioParams *params, uint32_t kind, uint64_t key,
                               uint32_t is_switch, uint32_t def_index) {
     uint32_t i;
+    if (params->stats.scoped_values == 0u) {
+        return NULL; /* nothing scoped: global values only */
+    }
     for (i = 0u; i < params->desc.max_scoped_values; i++) {
         ParamSlot *slot = &params->scoped[i];
         if (slot->used && slot->kind == kind && slot->key == key && slot->is_switch == is_switch
