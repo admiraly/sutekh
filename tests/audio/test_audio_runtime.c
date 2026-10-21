@@ -8,6 +8,7 @@
 #include "sutekh/audio_event.h"
 #include "sutekh/audio_parameter.h"
 #include "sutekh/audio_cluster.h"
+#include "../../src/audio/su_audio_event_view.h"
 
 static unsigned checks;
 static unsigned failures;
@@ -421,7 +422,8 @@ static const char mix_json[] =
     "{\"id\":5,\"type\":\"blend\",\"parameter_id\":9,\"points\":[{\"value\":0,\"node\":1},{\"value\":1,\"node\":3}]}],"
     "\"events\":[{\"id\":1,\"root\":1},{\"id\":2,\"root\":2},{\"id\":3,\"root\":4},{\"id\":4,\"root\":5}]}";
 
-enum { MIX_GAIN = 1, MIX_BUS_GAIN = 2, MIX_MUSIC = 4, MIX_PITCH = 8 };
+enum { MIX_GAIN = 1, MIX_BUS_GAIN = 2, MIX_MUSIC = 4, MIX_PITCH = 8,
+       MIX_FIRST_ONLY = 16, MIX_FADE = 32, MIX_SMOOTH_BLEND = 64 };
 
 typedef struct MixRig {
     SuAudioAssets *assets;
@@ -434,7 +436,8 @@ typedef struct MixRig {
     uint64_t seq;
 } MixRig;
 
-static void mix_create(MixRig *rig, uint32_t flags, float knee) {
+static void mix_create_config(MixRig *rig, uint32_t flags, float knee, const char *json,
+    uint32_t expansion, uint32_t leaves) {
     static const SuAudioBindingPoint identity[2] = {{-24.0f, -24.0f}, {0.0f, 0.0f}};
     static const SuAudioBindingPoint fader[2] = {{0.0f, 0.0f}, {1.0f, -12.0f}};
     static const SuAudioBindingPoint octave[2] = {{0.0f, 1.0f}, {1.0f, 2.0f}};
@@ -455,6 +458,7 @@ static void mix_create(MixRig *rig, uint32_t flags, float knee) {
     SuAudioEventsHook hook;
     uint32_t binding_count = 0u;
     uint32_t index;
+    limits.max_expansion = expansion;
     memset(rig, 0, sizeof *rig);
     CHECK(su_audio_assets_create(8u, 1u << 20, &rig->assets) == SU_OK);
     clip.channels = 1u;
@@ -468,13 +472,13 @@ static void mix_create(MixRig *rig, uint32_t flags, float knee) {
     clip.samples = ramp;
     clip.frames = TONE;
     CHECK(su_audio_asset_prepare(rig->assets, 3u, &clip, &ref) == SU_OK);
-    CHECK(su_audio_graph_prepare(mix_json, sizeof mix_json - 1u, rig->assets, &limits, &rig->graph,
+    CHECK(su_audio_graph_prepare(json, strlen(json), rig->assets, &limits, &rig->graph,
         &diagnostic) == SU_OK);
     memset(&desc, 0, sizeof desc);
     desc.struct_size = sizeof desc;
     desc.sample_rate = RATE;
     desc.max_instances = 16u;
-    desc.max_leaves_per_instance = 4u;
+    desc.max_leaves_per_instance = leaves;
     desc.max_logical_voices = 64u;
     desc.command_capacity = 16u;
     desc.project_seed = 5u;
@@ -483,6 +487,7 @@ static void mix_create(MixRig *rig, uint32_t flags, float knee) {
     memset(defs, 0, sizeof defs);
     defs[0].id = 9u;
     defs[0].max_value = 1.0f;
+    if (flags & MIX_SMOOTH_BLEND) defs[0].smoothing_frames = 512u;
     defs[1].id = 1u;
     defs[1].min_value = -24.0f;
     defs[2].id = 2u;
@@ -492,6 +497,11 @@ static void mix_create(MixRig *rig, uint32_t flags, float knee) {
     sw.id = 5u;
     sw.default_value = 1u;
     sw.policy = SU_AUDIO_SWITCH_CONTINUE;
+    if (flags & MIX_FIRST_ONLY) sw.policy = SU_AUDIO_SWITCH_FIRST_ONLY;
+    if (flags & MIX_FADE) {
+        sw.policy = SU_AUDIO_SWITCH_FADE;
+        sw.fade_frames = 512u;
+    }
     memset(bindings, 0, sizeof bindings);
     if (flags & MIX_GAIN) {
         bindings[binding_count].param_id = 1u;
@@ -599,6 +609,10 @@ static void mix_create(MixRig *rig, uint32_t flags, float knee) {
     CHECK(su_audio_events_attach(rig->events, &hook) == SU_OK);
 }
 
+static void mix_create(MixRig *rig, uint32_t flags, float knee) {
+    mix_create_config(rig, flags, knee, mix_json, 16u, 4u);
+}
+
 static void mix_destroy(MixRig *rig) {
     su_audio_events_destroy(rig->events);
     su_audio_music_destroy(rig->music);
@@ -609,7 +623,7 @@ static void mix_destroy(MixRig *rig) {
     CHECK(su_audio_assets_destroy(rig->assets) == SU_OK);
 }
 
-static void mix_post(MixRig *rig, uint32_t event_id, uint64_t at) {
+static SuAudioInstance mix_post(MixRig *rig, uint32_t event_id, uint64_t at) {
     SuAudioTrigger trigger;
     SuAudioInstance instance = 0u;
     memset(&trigger, 0, sizeof trigger);
@@ -619,9 +633,9 @@ static void mix_post(MixRig *rig, uint32_t event_id, uint64_t at) {
     trigger.commit_seq = rig->seq++;
     trigger.session_generation = 1u;
     CHECK(su_audio_event_post(rig->events, &trigger, &instance, NULL) == SU_OK);
+    return instance;
 }
 
-/* Switch and blend nodes expand from the parameter state at the trigger time. */
 static void test_switch_blend(void) {
     MixRig rig;
     SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
@@ -645,11 +659,177 @@ static void test_switch_blend(void) {
         float error = fabsf(out_a[(12000u + index) * 2u] - expected);
         worst = error > worst ? error : worst;
     }
-    CHECK(worst < 1.0e-6f);
+    CHECK(worst == 0.0f);
     mix_destroy(&rig);
 }
 
-/* GAIN_DB and PITCH bindings modulate every voice of the runtime. */
+static void check_live_gains(MixRig *rig, uint32_t slot, float first, float second) {
+    SuAudioEventsDesc desc;
+    SuAudioEventInstanceView instance;
+    SuAudioEventLeafView leaves[2];
+    CHECK(su_audio_events_view(rig->events, slot, &desc, &instance, leaves, 2u) == SU_OK);
+    CHECK(instance.count == 2u);
+    CHECK(leaves[0].data.gain == first);
+    CHECK(leaves[1].data.gain == second);
+}
+
+static void test_live_switches(void) {
+    static const uint32_t flags[] = {0u, MIX_FIRST_ONLY, MIX_FADE};
+    SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+    uint32_t policy;
+    for (policy = 0u; policy < 3u; policy++) {
+        MixRig rig;
+        SuAudioInstance handle;
+        SuAudioParamScope instance_scope;
+        uint32_t now;
+        mix_create(&rig, flags[policy], 0.0f);
+        if (policy == 1u) CHECK(su_audio_switch_set_at(rig.params, global, 5u, 2u, 0u) == SU_OK);
+        handle = mix_post(&rig, 3u, 0u);
+        instance_scope.kind = SU_AUDIO_SCOPE_INSTANCE;
+        instance_scope.key = handle;
+        CHECK(su_audio_switch_set_at(rig.params, global, 5u, policy == 1u ? 1u : 2u, 256u) == SU_OK);
+        CHECK(su_audio_switch_set_at(rig.params, instance_scope, 5u, 99u, 1280u) == SU_OK);
+        for (now = 0u; now < 2048u; now += 128u) {
+            float weight = policy == 1u ? 1.0f : now < 256u ? 0.0f : 1.0f;
+            if (policy == 2u && now >= 256u && now < 768u) weight = (float)(now - 256u) / 512.0f;
+            if (now >= 1280u && policy != 1u)
+                weight = policy == 2u && now < 1792u ? 1.0f - (float)(now - 1280u) / 512.0f : 0.0f;
+            CHECK(su_audio_events_render(rig.events, out_a + (size_t)now * 2u, 128u) == SU_OK);
+            check_live_gains(&rig, 0u, weight, 1.0f - weight);
+        }
+        CHECK(out_a[1024u * 2u] == ramp[1024u]);
+        CHECK(out_a[1920u * 2u] == (policy == 1u ? ramp[1920u] : tone[1920u]));
+        mix_destroy(&rig);
+    }
+}
+
+static void test_live_blends(void) {
+    MixRig rig;
+    SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+    SuAudioParamScope instance_scope = {SU_AUDIO_SCOPE_INSTANCE, 0u};
+    uint32_t now;
+    mix_create(&rig, MIX_SMOOTH_BLEND, 0.0f);
+    instance_scope.key = mix_post(&rig, 4u, 0u);
+    CHECK(su_audio_param_set_at(rig.params, global, 9u, 1.0f, 256u) == SU_OK);
+    CHECK(su_audio_param_set_at(rig.params, instance_scope, 9u, 0.0f, 1280u) == SU_OK);
+    for (now = 0u; now < 2048u; now += 128u) {
+        float weight = now < 256u ? 0.0f : now < 768u ? (float)(now - 256u) / 512.0f : 1.0f;
+        if (now >= 1280u) weight = now < 1792u ? 1.0f - (float)(now - 1280u) / 512.0f : 0.0f;
+        CHECK(su_audio_events_render(rig.events, out_a + (size_t)now * 2u, 128u) == SU_OK);
+        check_live_gains(&rig, 0u, 1.0f - weight, weight);
+    }
+    CHECK(out_a[1024u * 2u] == ramp[1024u]);
+    CHECK(out_a[1920u * 2u] == tone[1920u]);
+    mix_destroy(&rig);
+}
+
+static const char nested_json[] =
+    "{\"schema\":\"su_audio_events_v1\",\"numeric_profile\":\"audio_float_local_v1\","
+    "\"seed_policy\":\"event_emitter_sequence_v1\",\"sample_rate\":48000,\"nodes\":["
+    "{\"id\":1,\"type\":\"sound\",\"asset\":{\"id\":1,\"generation\":1},\"gain\":0.5,\"flags\":1},"
+    "{\"id\":3,\"type\":\"sound\",\"asset\":{\"id\":3,\"generation\":3},\"gain\":0.25,\"flags\":1},"
+    "{\"id\":4,\"type\":\"switch\",\"switch_id\":5,\"default\":1,\"cases\":[{\"value\":2,\"node\":5}]},"
+    "{\"id\":5,\"type\":\"blend\",\"parameter_id\":9,\"points\":[{\"value\":0,\"node\":1},"
+    "{\"value\":0.5,\"node\":3},{\"value\":1,\"node\":1}]},"
+    "{\"id\":6,\"type\":\"sequence\",\"children\":[{\"node\":4,\"offset_frames\":256},{\"node\":7,\"offset_frames\":512}]},"
+    "{\"id\":7,\"type\":\"random\",\"children\":[{\"node\":1,\"weight\":1},{\"node\":3,\"weight\":1}]}],"
+    "\"events\":[{\"id\":3,\"root\":6},{\"id\":4,\"root\":5}]}";
+
+static void test_live_nested_bounds(void) {
+    MixRig rig;
+    SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+    SuAudioEventLeafView leaves[8];
+    SuAudioEventsDesc desc;
+    SuAudioEventInstanceView instance;
+    uint32_t random_node, quantum;
+    mix_create_config(&rig, 0u, 0.0f, nested_json, 16u, 8u);
+    CHECK(su_audio_switch_set_at(rig.params, global, 5u, 2u, 0u) == SU_OK);
+    CHECK(su_audio_param_set_at(rig.params, global, 9u, 0.25f, 0u) == SU_OK);
+    CHECK(su_audio_param_set_at(rig.params, global, 9u, 0.75f, 512u) == SU_OK);
+    CHECK(su_audio_switch_set_at(rig.params, global, 5u, 99u, 768u) == SU_OK);
+    (void)mix_post(&rig, 3u, 0u);
+    CHECK(su_audio_events_view(rig.events, 0u, &desc, &instance, leaves, 8u) == SU_OK);
+    CHECK(instance.count == 5u);
+    random_node = leaves[4].data.node_id;
+    for (quantum = 0u; quantum < 8u; quantum++) {
+        CHECK(su_audio_events_render(rig.events, out_a, 128u) == SU_OK);
+        CHECK(su_audio_events_view(rig.events, 0u, &desc, &instance, leaves, 8u) == SU_OK);
+        CHECK(leaves[0].data.gain == (quantum < 4u ? 0.25f : 0.0f));
+        CHECK(leaves[1].data.gain == (quantum < 6u ? 0.125f : 0.0f));
+        CHECK(leaves[2].data.gain == (quantum >= 4u && quantum < 6u ? 0.25f : 0.0f));
+        CHECK(leaves[3].data.gain == (quantum >= 6u ? 0.5f : 0.0f));
+        CHECK(leaves[4].data.node_id == random_node);
+        CHECK(leaves[0].start_sample == 256u && leaves[3].start_sample == 256u);
+        CHECK(leaves[4].start_sample == 512u);
+    }
+    mix_destroy(&rig);
+    for (quantum = 0u; quantum < 2u; quantum++) {
+        SuAudioTrigger trigger;
+        SuAudioGraphDiagnostic diagnostic;
+        SuAudioInstance handle = 1u;
+        SuAudioEventStats stats;
+        mix_create_config(&rig, 0u, 0.0f, nested_json, quantum == 0u ? 4u : 16u,
+            quantum == 0u ? 8u : 4u);
+        memset(&trigger, 0, sizeof trigger);
+        trigger.struct_size = sizeof trigger;
+        trigger.event_id = 3u;
+        trigger.session_generation = 1u;
+        CHECK(su_audio_event_post(rig.events, &trigger, &handle, &diagnostic) == SU_E_RESOURCE_LIMIT);
+        CHECK(handle == 0u);
+        CHECK(strcmp(diagnostic.bound, quantum == 0u ? "max_expansion" : "capacity") == 0);
+        su_audio_events_stats(rig.events, &stats);
+        CHECK(stats.instances == 0u && stats.logical_voices == 0u && stats.refused == 1u);
+        trigger.event_id = 4u;
+        CHECK(su_audio_event_post(rig.events, &trigger, &handle, NULL) == SU_OK);
+        mix_destroy(&rig);
+    }
+}
+
+static void live_checkpoint_setup(MixRig *rig, uint32_t flags) {
+    SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+    mix_create(rig, flags | MIX_SMOOTH_BLEND, 0.0f);
+    CHECK(su_audio_switch_set_at(rig->params, global, 5u, 2u, 0u) == SU_OK);
+    (void)mix_post(rig, 3u, 100u);
+    (void)mix_post(rig, 4u, 0u);
+    CHECK(su_audio_switch_set_at(rig->params, global, 5u, 1u, 256u) == SU_OK);
+    CHECK(su_audio_switch_set_at(rig->params, global, 5u, 2u, 768u) == SU_OK);
+    CHECK(su_audio_switch_set_at(rig->params, global, 5u, 99u, 1408u) == SU_OK);
+    CHECK(su_audio_param_set_at(rig->params, global, 9u, 1.0f, 256u) == SU_OK);
+    CHECK(su_audio_param_set_at(rig->params, global, 9u, 0.0f, 768u) == SU_OK);
+}
+
+static void test_live_checkpoints(void) {
+    static const uint32_t positions[] = {1u, 127u, 128u, 257u, 511u, 641u, 1001u, 1601u};
+    static const uint32_t flags[] = {0u, MIX_FIRST_ONLY, MIX_FADE};
+    static uint8_t saved[1u << 18], saved_again[1u << 18];
+    float expected[2048u * 2u];
+    uint32_t policy, position_index;
+    for (policy = 0u; policy < 3u; policy++) {
+        MixRig reference;
+        live_checkpoint_setup(&reference, flags[policy]);
+        CHECK(su_audio_events_render(reference.events, expected, 2048u) == SU_OK);
+        mix_destroy(&reference);
+        for (position_index = 0u; position_index < sizeof positions / sizeof positions[0]; position_index++) {
+            MixRig replay, restored;
+            uint32_t position = positions[position_index];
+            size_t written = 0u, written_again = 0u;
+            live_checkpoint_setup(&replay, flags[policy]);
+            CHECK(su_audio_events_render(replay.events, out_a, position) == SU_OK);
+            CHECK(memcmp(out_a, expected, (size_t)position * 2u * sizeof(float)) == 0);
+            CHECK(su_audio_events_checkpoint_save(replay.events, saved, sizeof saved, &written) == SU_OK);
+            mix_create(&restored, flags[policy] | MIX_SMOOTH_BLEND, 0.0f);
+            CHECK(su_audio_events_checkpoint_load(restored.events, saved, written) == SU_OK);
+            CHECK(su_audio_events_checkpoint_save(restored.events, saved_again, sizeof saved_again, &written_again) == SU_OK);
+            CHECK(written == written_again && memcmp(saved, saved_again, written) == 0);
+            CHECK(su_audio_events_render(restored.events, out_b, 2048u - position) == SU_OK);
+            CHECK(memcmp(out_b, expected + (size_t)position * 2u,
+                (size_t)(2048u - position) * 2u * sizeof(float)) == 0);
+            mix_destroy(&replay);
+            mix_destroy(&restored);
+        }
+    }
+}
+
 static void test_voice_bindings(void) {
     MixRig rig;
     SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
@@ -1164,6 +1344,10 @@ int main(void) {
     test_cluster_feed();
     test_checkpoints();
     test_switch_blend();
+    test_live_switches();
+    test_live_blends();
+    test_live_nested_bounds();
+    test_live_checkpoints();
     test_voice_bindings();
     test_buses_music_limiter();
     test_attach_validation();
