@@ -10,6 +10,13 @@ into its bus with `su_audio_bus_mix`, then calls `su_audio_bus_process` once
 per block; the integrated event runtime does this itself for its voices and
 music (see [EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md)).
 
+The integrated runtime also reports authored loudness from its optional
+`SuAudioLoudnessRule` metadata every quantum, using the loudest physically
+rendered source or steal tail on each routed bus. Virtual voices do not hold
+the HDR window open. The rules do not enable HDR and do not infer loudness
+from PCM; without matching metadata the bus remains unreported. Details and
+the combined-system configuration are in the integration guide.
+
 ## API
 
 | Call | Purpose |

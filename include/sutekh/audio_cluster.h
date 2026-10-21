@@ -15,6 +15,14 @@ extern "C" {
 typedef struct SuAudioCluster SuAudioCluster;
 
 #define SU_AUDIO_CLUSTER_MAX_OBJECTS 65536u
+#define SU_AUDIO_CLUSTER_MAX_SPEAKERS 16u
+
+typedef struct SuAudioSpeakerLayout {
+    uint32_t count;
+    SuVec3f directions[SU_AUDIO_CLUSTER_MAX_SPEAKERS];
+    uint32_t bed_left;
+    uint32_t bed_right;
+} SuAudioSpeakerLayout;
 
 enum {
     SU_AUDIO_CLUSTER_BED = 1u,      /* passes through to the bed, never spatialized */
@@ -107,6 +115,10 @@ uint32_t su_audio_cluster_update(SuAudioCluster *cluster, const SuAudioClusterOb
  * Advances crossfades and the clock by `frames`. */
 uint32_t su_audio_cluster_render(SuAudioCluster *cluster, const SuAudioClusterObject *objects, uint32_t count,
                                  uint32_t frames, float *out_stereo);
+uint32_t su_audio_speaker_layout_validate(const SuAudioSpeakerLayout *layout);
+uint32_t su_audio_cluster_render_speakers(SuAudioCluster *cluster, const SuAudioClusterObject *objects,
+                                         uint32_t count, uint32_t frames, const SuAudioSpeakerLayout *layout,
+                                         float *out);
 uint32_t su_audio_cluster_outputs(const SuAudioCluster *cluster, SuAudioClusterOutput *out, uint32_t capacity,
                                   uint32_t *count);
 uint32_t su_audio_cluster_assoc(const SuAudioCluster *cluster, SuAudioClusterAssoc *out, uint32_t capacity,
