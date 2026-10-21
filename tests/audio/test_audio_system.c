@@ -100,7 +100,7 @@ typedef struct Setup {
     SuAudioParamBinding binding;
     SuAudioParamsDesc params;
     SuAudioClusterDesc cluster;
-    SuAudioVoicePolicyRule rules[1];
+    SuAudioVoicePolicyRule rules[2];
     SuAudioSystemDesc desc;
 } Setup;
 
@@ -845,6 +845,232 @@ static void test_host_extensions(void) {
 
 #endif
 
+#ifndef SU_AUDIO_SYSTEM_ALLOC_TEST
+static uint32_t admission_post(SuAudioSystem *system, uint32_t event_id, uint64_t at, uint64_t seq,
+                                SuAudioInstance *instance) {
+    SuAudioTrigger trigger;
+    memset(&trigger, 0, sizeof trigger);
+    trigger.struct_size = sizeof trigger;
+    trigger.event_id = event_id;
+    trigger.sample_time = at;
+    trigger.commit_seq = seq;
+    trigger.session_generation = 1u;
+    return su_audio_system_post(system, &trigger, instance, NULL);
+}
+
+static void test_admission_cooldown(void) {
+    Setup setup;
+    SuAudioSystem *system = NULL;
+    SuAudioSystem *restored = NULL;
+    SuAudioInstance first = 0u;
+    SuAudioInstance instance = 0u;
+    SuAudioEventStats stats;
+    const SuAudioSystemCommand *journal = NULL;
+    uint32_t count = 0u;
+    size_t written = 0u;
+    size_t repeat_bytes = 0u;
+    static uint8_t repeat[sizeof blob];
+    setup_init(&setup, SU_AUDIO_OUTPUT_OFFLINE);
+    setup.rules[0].bus_id = 0u;
+    setup.rules[0].event_id = 1u;
+    setup.rules[0].min_retrigger_frames = 256u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 1u, &instance) == SU_E_AUDIO_COOLDOWN && instance == 0u);
+    CHECK(admission_post(system, 1u, 255u, 1u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(admission_post(system, 2u, 0u, 1u, &instance) == SU_OK);
+    CHECK(su_audio_system_checkpoint_save(system, blob, sizeof blob, &written) == SU_OK);
+    CHECK(su_audio_system_checkpoint_save(system, repeat, sizeof repeat, &repeat_bytes) == SU_OK);
+    CHECK(written == repeat_bytes && memcmp(blob, repeat, written) == 0);
+    CHECK(su_audio_system_create(&setup.desc, &restored, NULL) == SU_OK);
+    CHECK(su_audio_system_checkpoint_load(restored, blob, written) == SU_OK);
+    CHECK(admission_post(restored, 1u, 255u, 2u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(admission_post(system, 1u, 256u, 2u, &instance) == SU_OK);
+    CHECK(admission_post(restored, 1u, 256u, 2u, &instance) == SU_OK);
+    CHECK(admission_post(system, 1u, 128u, 3u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(su_audio_system_control(system, "audio.trace.read", "{}", 2u, text, sizeof text, &repeat_bytes) == SU_OK);
+    CHECK(strstr(text, "cooldown") != NULL && strstr(text, "SU_E_AUDIO_COOLDOWN") != NULL);
+    {
+        SuAudioTelemetryStats telemetry;
+        su_audio_trace_stats(su_audio_system_telemetry(system), &telemetry);
+        CHECK(telemetry.reasons[SU_AUDIO_TRACE_REASON_COOLDOWN] == 3u);
+    }
+    CHECK(su_audio_system_journal(system, &journal, &count) == SU_OK);
+    CHECK(su_audio_system_checkpoint_verify(&setup.desc, journal, count, blob, written, 1024u) == SU_OK);
+    su_audio_events_stats(su_audio_system_events(system), &stats);
+    CHECK(stats.admitted == 3u && stats.refused == 3u && stats.instances == 3u);
+    CHECK(su_audio_system_render(system, offline_pcm, 512u) == SU_OK);
+    CHECK(su_audio_system_render(restored, ring_pcm, 1u) == SU_OK);
+    CHECK(su_audio_system_render(restored, ring_pcm + 2u, 511u) == SU_OK);
+    CHECK(memcmp(offline_pcm, ring_pcm, 512u * 2u * sizeof(float)) == 0);
+    su_audio_system_destroy(restored);
+    restored = NULL;
+    setup.rules[0].min_retrigger_frames++;
+    CHECK(su_audio_system_create(&setup.desc, &restored, NULL) == SU_OK);
+    CHECK(su_audio_system_checkpoint_load(restored, blob, written) == SU_E_SCHEMA_MISMATCH);
+    su_audio_system_destroy(restored);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[0].min_retrigger_frames = 10000u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 999u, 0u, 0u, &instance) != SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 0u, &instance) == SU_OK);
+    CHECK(su_audio_system_render(system, offline_pcm, 8192u) == SU_OK);
+    CHECK(su_audio_system_checkpoint_save(system, blob, sizeof blob, &written) == SU_OK);
+    CHECK(admission_post(system, 1u, 9999u, 1u, &instance) == SU_E_AUDIO_COOLDOWN);
+    restored = NULL;
+    CHECK(su_audio_system_create(&setup.desc, &restored, NULL) == SU_OK);
+    CHECK(su_audio_system_checkpoint_load(restored, blob, written) == SU_OK);
+    CHECK(admission_post(restored, 1u, 9999u, 1u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(admission_post(restored, 1u, 10000u, 1u, &instance) == SU_OK);
+    su_audio_system_destroy(restored);
+    su_audio_system_destroy(system);
+    setup_free(&setup);
+}
+
+static void test_admission_atomic(void) {
+    static const char parallel_graph[] =
+        "{\"schema\":\"su_audio_events_v1\",\"numeric_profile\":\"audio_float_local_v1\","
+        "\"seed_policy\":\"event_emitter_sequence_v1\",\"sample_rate\":48000,\"nodes\":["
+        "{\"id\":1,\"type\":\"sound\",\"asset\":{\"id\":1,\"generation\":1}},"
+        "{\"id\":3,\"type\":\"sound\",\"asset\":{\"id\":1,\"generation\":1}},"
+        "{\"id\":4,\"type\":\"parallel\",\"children\":[1,3]}],"
+        "\"events\":[{\"id\":1,\"root\":4},{\"id\":2,\"root\":1},{\"id\":3,\"root\":3}]}";
+    SuAudioGraphLimits limits = {16u, 32u, 8u, 16u, 8192u};
+    Setup setup;
+    SuAudioSystem *system = NULL;
+    SuAudioInstance first = 0u;
+    SuAudioInstance instance = 0u;
+    SuAudioEventStats stats;
+    setup_init(&setup, SU_AUDIO_OUTPUT_OFFLINE);
+    su_audio_graph_release(setup.graph);
+    setup.graph = NULL;
+    CHECK(su_audio_graph_prepare(parallel_graph, sizeof parallel_graph - 1u, setup.assets, &limits,
+        &setup.graph, NULL) == SU_OK);
+    setup.desc.graph = setup.graph;
+    setup.rules[0].bus_id = 0u;
+    setup.rules[0].node_id = 1u;
+    setup.rules[0].min_retrigger_frames = 512u;
+    setup.rules[1].node_id = 3u;
+    setup.rules[1].group_id = 7u;
+    setup.desc.policy_count = 2u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 3u, 0u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY && instance == 0u);
+    CHECK(admission_post(system, 2u, 0u, 1u, &instance) == SU_OK);
+    su_audio_events_stats(su_audio_system_events(system), &stats);
+    CHECK(stats.instances == 2u && stats.logical_voices == 2u && stats.admitted == 2u && stats.refused == 1u);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[0].node_id = 0u;
+    setup.rules[0].group_id = 7u;
+    setup.desc.policy_count = 1u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 0u, &first) == SU_OK);
+    su_audio_events_stats(su_audio_system_events(system), &stats);
+    CHECK(stats.logical_voices == 2u);
+    CHECK(admission_post(system, 1u, 512u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[0].group_id = 0u;
+    setup.desc.events.max_instances = 1u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 2u, 0u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 2u, 20000u, 1u, &instance) == SU_E_RESOURCE_LIMIT);
+    CHECK(su_audio_system_render(system, offline_pcm, 8192u) == SU_OK);
+    CHECK(admission_post(system, 2u, 8192u, 1u, &instance) == SU_OK);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.desc.events.max_instances = 4u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 2u, UINT64_MAX - 512u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 2u, UINT64_MAX - 1u, 1u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(admission_post(system, 2u, UINT64_MAX, 1u, &instance) == SU_OK);
+    su_audio_system_destroy(system);
+    setup_free(&setup);
+}
+
+static void test_admission_groups(void) {
+    Setup setup;
+    SuAudioSystem *system = NULL;
+    SuAudioSystem *restored = NULL;
+    SuAudioInstance first = 0u;
+    SuAudioInstance instance = 0u;
+    size_t written = 0u;
+    size_t text_bytes = 0u;
+    setup_init(&setup, SU_AUDIO_OUTPUT_OFFLINE);
+    setup.rules[0].bus_id = 0u;
+    setup.rules[0].event_id = 1u;
+    setup.rules[0].group_id = 7u;
+    setup.rules[1].event_id = 2u;
+    setup.rules[1].group_id = 7u;
+    setup.rules[1].policy.priority = 100u;
+    setup.desc.policy_count = 2u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 1u, 128u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 2u, 128u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY && instance == 0u);
+    CHECK(su_audio_system_checkpoint_save(system, blob, sizeof blob, &written) == SU_OK);
+    CHECK(su_audio_system_create(&setup.desc, &restored, NULL) == SU_OK);
+    CHECK(su_audio_system_checkpoint_load(restored, blob, written) == SU_OK);
+    CHECK(admission_post(restored, 2u, 128u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    CHECK(su_audio_system_render(system, offline_pcm, 256u) == SU_OK);
+    CHECK(admission_post(system, 2u, 256u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    CHECK(su_audio_system_stop(system, SU_AUDIO_SYSTEM_CMD_STOP_INSTANCE, first, 256u, 256u) == SU_OK);
+    CHECK(admission_post(system, 2u, 256u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    CHECK(su_audio_system_render(system, offline_pcm, 128u) == SU_OK);
+    CHECK(admission_post(system, 2u, 384u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    CHECK(su_audio_system_render(system, offline_pcm, 512u) == SU_OK);
+    CHECK(admission_post(system, 2u, 896u, 1u, &instance) == SU_OK);
+    CHECK(su_audio_system_control(system, "audio.trace.read", "{}", 2u, text, sizeof text, &text_bytes) == SU_OK);
+    CHECK(strstr(text, "group_busy") != NULL && strstr(text, "SU_E_AUDIO_GROUP_BUSY") != NULL);
+    {
+        SuAudioTelemetryStats telemetry;
+        su_audio_trace_stats(su_audio_system_telemetry(system), &telemetry);
+        CHECK(telemetry.reasons[SU_AUDIO_TRACE_REASON_GROUP_BUSY] == 4u);
+    }
+    su_audio_system_destroy(restored);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[1].group_id = 8u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 2u, 0u, 1u, &instance) == SU_OK);
+    CHECK(su_audio_system_render(system, offline_pcm, 8192u) == SU_OK);
+    CHECK(admission_post(system, 1u, 8192u, 2u, &instance) == SU_OK);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[0].event_id = 0u;
+    setup.rules[0].node_id = 2u;
+    setup.rules[0].min_retrigger_frames = 256u;
+    setup.rules[0].group_id = 0u;
+    setup.desc.policy_count = 1u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 2u, 0u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 2u, 255u, 1u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(admission_post(system, 1u, 0u, 1u, &instance) == SU_OK);
+    CHECK(admission_post(system, 2u, 256u, 2u, &instance) == SU_OK);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[0].min_retrigger_frames = 0u;
+    setup.rules[0].group_id = 9u;
+    setup.desc.voices.audibility_floor = 1000.0f;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 2u, 0u, 0u, &first) == SU_OK);
+    CHECK(su_audio_system_render(system, offline_pcm, 128u) == SU_OK);
+    {
+        SuAudioVoiceStats voices;
+        su_audio_voice_pool_stats(su_audio_system_voices(system), &voices);
+        CHECK(voices.virtual_voices == 1u && voices.physical == 0u);
+    }
+    CHECK(admission_post(system, 2u, 128u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    CHECK(su_audio_system_stop(system, SU_AUDIO_SYSTEM_CMD_STOP_INSTANCE, first, 128u, 0u) == SU_OK);
+    CHECK(su_audio_system_render(system, offline_pcm, 128u) == SU_OK);
+    CHECK(admission_post(system, 2u, 256u, 1u, &instance) == SU_OK);
+    su_audio_system_destroy(system);
+    setup_free(&setup);
+}
+#endif
+
 #ifdef SU_AUDIO_SYSTEM_ALLOC_TEST
 /* After creation, ten seconds of posts, spatial updates, parameter changes, stops, clustering, telemetry,
  * journaling and checkpoint saves allocate nothing. */
@@ -894,6 +1120,9 @@ int main(void) {
     test_host_extensions();
     test_pull_render();
     test_sum_groups();
+    test_admission_cooldown();
+    test_admission_groups();
+    test_admission_atomic();
 #endif
     printf("audio_system: %u checks, %u failures\n", checks, failures);
     return failures == 0u ? 0 : 1;

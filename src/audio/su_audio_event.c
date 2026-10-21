@@ -44,6 +44,12 @@ typedef struct EventStop {
     uint32_t release_frames;
 } EventStop;
 
+typedef struct EventPolicy {
+    SuAudioVoicePolicyRule rule;
+    uint64_t last_start;
+    uint32_t has_start;
+} EventPolicy;
+
 struct SuAudioEvents {
     SuAudioEventsDesc desc;
     SuAudioAssets *assets;
@@ -63,7 +69,7 @@ struct SuAudioEvents {
     uint32_t consumed;
     /* integrated mode */
     SuAudioVoicePool *pool;
-    SuAudioVoicePolicyRule *policies;
+    EventPolicy *policies;
     uint32_t policy_count;
     SuAudioVoicePolicy default_policy;
     uint64_t trigger_seq;
@@ -264,6 +270,60 @@ void su_audio_events_update(SuAudioEvents *events) {
     }
 }
 
+static uint32_t leaf_rule(const SuAudioEvents *events, const SuAudioGraphLeaf *data, uint32_t event_id) {
+    uint32_t index;
+    for (index = 0; index < events->policy_count; index++) {
+        const SuAudioVoicePolicyRule *rule = &events->policies[index].rule;
+        if ((rule->node_id == 0u || rule->node_id == data->node_id)
+            && (rule->bus_id == 0u || rule->bus_id == data->bus_id)
+            && (rule->event_id == 0u || rule->event_id == event_id)) {
+            return index;
+        }
+    }
+    return events->policy_count;
+}
+
+static uint32_t admission_check(const SuAudioEvents *events, const SuAudioTrigger *trigger, size_t count) {
+    size_t index;
+    for (index = 0; index < count; index++) {
+        uint32_t rule_index = leaf_rule(events, &events->scratch[index], trigger->event_id);
+        const EventPolicy *policy;
+        uint32_t slot;
+        if (rule_index == events->policy_count) {
+            continue;
+        }
+        policy = &events->policies[rule_index];
+        if (policy->rule.min_retrigger_frames != 0u && policy->has_start
+            && (trigger->sample_time < policy->last_start
+                || trigger->sample_time - policy->last_start < policy->rule.min_retrigger_frames)) {
+            return SU_E_AUDIO_COOLDOWN;
+        }
+        if (policy->rule.group_id == 0u) {
+            continue;
+        }
+        for (slot = 0; slot < events->desc.max_instances; slot++) {
+            const EventInstance *active = &events->instances[slot];
+            uint32_t leaf_index;
+            if (active->state != 1u) {
+                continue;
+            }
+            for (leaf_index = 0; leaf_index < active->count; leaf_index++) {
+                const EventLeaf *leaf = &active->leaves[leaf_index];
+                uint32_t active_rule;
+                if (leaf->state == 2u) {
+                    continue;
+                }
+                active_rule = leaf_rule(events, &leaf->data, active->event_id);
+                if (active_rule < events->policy_count
+                    && events->policies[active_rule].rule.group_id == policy->rule.group_id) {
+                    return SU_E_AUDIO_GROUP_BUSY;
+                }
+            }
+        }
+    }
+    return SU_OK;
+}
+
 uint32_t su_audio_event_post(SuAudioEvents *events, const SuAudioTrigger *trigger,
                              SuAudioInstance *out, SuAudioGraphDiagnostic *diagnostic) {
     size_t count = 0u;
@@ -320,6 +380,11 @@ uint32_t su_audio_event_post(SuAudioEvents *events, const SuAudioTrigger *trigge
         events->stats.refused++;
         return status;
     }
+    status = admission_check(events, trigger, count);
+    if (status != SU_OK) {
+        events->stats.refused++;
+        return status;
+    }
     if (count > events->desc.max_logical_voices - events->stats.logical_voices) {
         events->stats.refused++;
         return SU_E_RESOURCE_LIMIT;
@@ -358,6 +423,13 @@ uint32_t su_audio_event_post(SuAudioEvents *events, const SuAudioTrigger *trigge
         instance->count = 0u;
         events->stats.refused++;
         return status != SU_OK ? status : SU_E_SCHEMA_MISMATCH;
+    }
+    for (index = 0; index < count; index++) {
+        uint32_t rule_index = leaf_rule(events, &events->scratch[index], trigger->event_id);
+        if (rule_index < events->policy_count) {
+            events->policies[rule_index].last_start = trigger->sample_time;
+            events->policies[rule_index].has_start = 1u;
+        }
     }
     instance->generation++;
     if (instance->generation == 0u) {
@@ -566,16 +638,10 @@ static void refresh_scene(SuAudioEvents *events) {
 
 /* ---- integrated mode: leaves drive the voice pool ---- */
 
-static const SuAudioVoicePolicy *leaf_policy(const SuAudioEvents *events, const SuAudioGraphLeaf *data) {
-    uint32_t index;
-    for (index = 0; index < events->policy_count; index++) {
-        const SuAudioVoicePolicyRule *rule = &events->policies[index];
-        if ((rule->node_id == 0u || rule->node_id == data->node_id)
-            && (rule->bus_id == 0u || rule->bus_id == data->bus_id)) {
-            return &rule->policy;
-        }
-    }
-    return &events->default_policy;
+static const SuAudioVoicePolicy *leaf_policy(const SuAudioEvents *events, const SuAudioGraphLeaf *data,
+                                            uint32_t event_id) {
+    uint32_t index = leaf_rule(events, data, event_id);
+    return index < events->policy_count ? &events->policies[index].rule.policy : &events->default_policy;
 }
 
 static SuVec3f rotate_inverse(SuQuatf q, SuVec3f v) {
@@ -705,7 +771,7 @@ static void pooled_start(SuAudioEvents *events, uint64_t now, uint64_t end) {
             }
             memset(&desc, 0, sizeof desc);
             desc.struct_size = sizeof desc;
-            desc.policy = *leaf_policy(events, &leaf->data);
+            desc.policy = *leaf_policy(events, &leaf->data, instance->event_id);
             if ((leaf->data.flags & SU_AUDIO_LOOP) != 0u) {
                 desc.policy.flags |= SU_AUDIO_VOICE_LOOP;
             }
@@ -1090,7 +1156,7 @@ static uint32_t cluster_attach(SuAudioEvents *events, SuAudioVoicePool *pool, Su
 uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *hook) {
     SuAudioVoiceStats pool_stats;
     SuAudioVoicePoolDesc pool_desc;
-    SuAudioVoicePolicyRule *policies = NULL;
+    EventPolicy *policies = NULL;
     SuAudioParams *params = NULL;
     SuAudioBusTree *buses = NULL;
     SuAudioMusic *music = NULL;
@@ -1239,8 +1305,8 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
         events->due = NULL;
         return status;
     }
-    if (policies != NULL) {
-        memcpy(policies, hook->policies, (size_t)hook->policy_count * sizeof *policies);
+    for (index = 0; index < hook->policy_count; index++) {
+        policies[index].rule = hook->policies[index];
     }
     for (index = 0; index < route_count; index++) {
         routes[index] = route_mem + (size_t)index * SU_AUDIO_EVENT_QUANTUM * 2u;
@@ -1486,6 +1552,14 @@ static uint64_t layout_fingerprint(const SuAudioEvents *events) {
     hash = fnv_u64(hash, pool_desc.hero_reserve);
     hash = fnv_u64(hash, pool_desc.transition_reserve);
     hash = fnv_u64(hash, events->policy_count);
+    for (index = 0; index < events->policy_count; index++) {
+        const SuAudioVoicePolicyRule *rule = &events->policies[index].rule;
+        hash = fnv_u64(hash, rule->node_id);
+        hash = fnv_u64(hash, rule->bus_id);
+        hash = fnv_u64(hash, rule->event_id);
+        hash = fnv_u64(hash, rule->min_retrigger_frames);
+        hash = fnv_u64(hash, rule->group_id);
+    }
     hash = fnv_u64(hash, events->route_count);
     for (index = 0; events->route_ids != NULL && index < events->route_count; index++) {
         hash = fnv_u64(hash, events->route_ids[index]);
@@ -1547,6 +1621,10 @@ static uint32_t events_io(SuAudioEvents *events, SuAudioStateIo *io) {
     uint32_t index;
     SU_STATE(io, events->order);
     SU_STATE(io, events->trigger_seq);
+    for (index = 0; index < events->policy_count; index++) {
+        SU_STATE(io, events->policies[index].last_start);
+        SU_STATE(io, events->policies[index].has_start);
+    }
     SU_STATE(io, events->cursor);
     SU_STATE(io, events->stats);
     SU_STATE(io, events->stop_count);
@@ -1607,6 +1685,15 @@ static uint32_t scan_assets(SuAudioEvents *events, const uint8_t *body, size_t b
     io.capacity = bytes;
     SU_STATE(&io, copy.order);
     SU_STATE(&io, copy.trigger_seq);
+    for (index = 0; index < events->policy_count; index++) {
+        uint64_t last_start;
+        uint32_t has_start;
+        SU_STATE(&io, last_start);
+        SU_STATE(&io, has_start);
+        if (io.failed || has_start > 1u) {
+            return SU_E_SCHEMA_MISMATCH;
+        }
+    }
     SU_STATE(&io, copy.cursor);
     SU_STATE(&io, copy.stats);
     SU_STATE(&io, copy.stop_count);
