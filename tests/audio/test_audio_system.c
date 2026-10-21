@@ -100,7 +100,7 @@ typedef struct Setup {
     SuAudioParamBinding binding;
     SuAudioParamsDesc params;
     SuAudioClusterDesc cluster;
-    SuAudioVoicePolicyRule rules[1];
+    SuAudioVoicePolicyRule rules[2];
     SuAudioSystemDesc desc;
 } Setup;
 
@@ -423,6 +423,245 @@ static void test_checkpoint_verify(void) {
     CHECK(su_audio_system_checkpoint_verify(&s.desc, journal, count, blob, written, 4800u) == SU_E_SCHEMA_MISMATCH);
     su_audio_system_destroy(system);
     setup_free(&s);
+}
+
+static void test_streamed_music(void) {
+    Setup setup;
+    SuAudioMusicDesc music = {sizeof music, RATE, 4u, 0u};
+    SuAudioTempoPoint tempo = {0u, 1000000u};
+    SuAudioMusicSegmentDesc segments[2];
+    SuAudioMusicStreamSource sources[2];
+    SuAudioSystem *streamed = NULL;
+    SuAudioSystem *resident = NULL;
+    SuAudioSystem *replayed = NULL;
+    SuAudioAssetRef ref;
+    SuAudioClip clip;
+    SuMusicTransition transition;
+    const SuAudioSystemCommand *journal = NULL;
+    uint32_t count = 0u;
+    uint32_t position;
+    uint32_t index;
+    const uint32_t checkpoint_frame = 15616u;
+    uint64_t cue = 1000u;
+    size_t wav_bytes = 0u;
+    size_t checkpoint_bytes = 0u;
+    float *pcm = (float *)malloc(24000u * 2u * sizeof(float));
+    uint8_t *wav = (uint8_t *)malloc(44u + 24000u * 2u * sizeof(float));
+    FILE *file;
+    CHECK(pcm != NULL && wav != NULL);
+    if (pcm == NULL || wav == NULL) {
+        free(pcm);
+        free(wav);
+        return;
+    }
+    for (index = 0u; index < 24000u; index++) {
+        pcm[index * 2u] = (float)(index % 997u) / 4000.0f;
+        pcm[index * 2u + 1u] = 0.0f - (float)(index % 541u) / 3000.0f;
+    }
+    CHECK(su_audio_wav_encode_f32(pcm, 24000u, RATE, wav, 44u + 24000u * 2u * sizeof(float),
+        &wav_bytes) == SU_OK);
+    file = fopen("streamed_music_test.wav", "wb");
+    CHECK(file != NULL);
+    if (file == NULL) {
+        free(pcm);
+        free(wav);
+        return;
+    }
+    CHECK(fwrite(wav, 1u, wav_bytes, file) == wav_bytes);
+    CHECK(fclose(file) == 0);
+    setup_init(&setup, SU_AUDIO_OUTPUT_OFFLINE);
+    clip.channels = 2u;
+    clip.sample_rate = RATE;
+    clip.frames = 24000u;
+    clip.samples = pcm;
+    CHECK(su_audio_asset_prepare(setup.assets, 3u, &clip, &ref) == SU_OK);
+    memset(segments, 0, sizeof segments);
+    memset(sources, 0, sizeof sources);
+    sources[0].bytes = wav;
+    sources[0].byte_count = wav_bytes;
+    sources[0].ring_frames = 2048u;
+    sources[1].path = "streamed_music_test.wav";
+    sources[1].ring_frames = 3072u;
+    for (index = 0u; index < 2u; index++) {
+        segments[index].struct_size = sizeof segments[index];
+        segments[index].segment_id = index + 1u;
+        segments[index].stream_stems = &sources[index];
+        segments[index].stem_count = index == 0u ? 2u : 1u;
+        segments[index].tempo = &tempo;
+        segments[index].tempo_count = 1u;
+        segments[index].beats_per_bar = 4u;
+        segments[index].cue_frames = &cue;
+        segments[index].cue_count = 1u;
+        segments[index].length_frames = 24000u;
+        segments[index].loop = 1u;
+    }
+    setup.desc.music = &music;
+    setup.desc.segments = segments;
+    setup.desc.segment_count = 2u;
+    setup.desc.music_bus_id = 30u;
+    CHECK(su_audio_system_create(&setup.desc, &streamed, NULL) == SU_OK);
+    {
+        SuAudioAssetRef resident_stems[2];
+        resident_stems[0] = ref;
+        resident_stems[1] = ref;
+        for (index = 0u; index < 2u; index++) {
+            segments[index].stream_stems = NULL;
+            segments[index].stems = resident_stems;
+        }
+        CHECK(su_audio_system_create(&setup.desc, &resident, NULL) == SU_OK);
+    }
+    for (index = 0u; index < 2u; index++) {
+        segments[index].stream_stems = &sources[index];
+        segments[index].stems = NULL;
+    }
+    memset(&transition, 0, sizeof transition);
+    transition.struct_size = sizeof transition;
+    transition.segment_id = 1u;
+    transition.late_policy = SU_AUDIO_MUSIC_LATE_NEXT;
+    for (position = 0u; position < FRAMES; position += 128u) {
+        if (position == 0u || position == 128u || position == 4096u || position == 15232u
+            || position == 32768u || position == 65536u) {
+            uint64_t boundary = 0u;
+            uint64_t expected = 0u;
+            transition.sync = position == 128u ? SU_AUDIO_MUSIC_BEAT
+                : position == 4096u ? SU_AUDIO_MUSIC_BAR
+                : position == 15232u ? SU_AUDIO_MUSIC_CUE
+                : position == 32768u ? SU_AUDIO_MUSIC_SEGMENT_END : SU_AUDIO_MUSIC_IMMEDIATE;
+            transition.segment_id = position == 15232u || position == 32768u ? 2u : 1u;
+            transition.fade_in_frames = position == 0u ? 0u : 701u;
+            transition.fade_out_frames = transition.fade_in_frames;
+            transition.stinger.id = position == 0u ? 0u : 1u;
+            transition.stinger.generation = 1u;
+            transition.stinger_gain = 0.1f;
+            CHECK(su_audio_system_music_transition(streamed, &transition, position, &boundary) == SU_OK);
+            CHECK(su_audio_system_music_transition(resident, &transition, position, &expected) == SU_OK);
+            CHECK(boundary == expected);
+            CHECK(boundary == (position == 128u ? 2880u : position == 4096u ? 14400u
+                : position == 15232u ? 15400u : position == 32768u ? 39400u : position));
+        }
+        if (position == checkpoint_frame) {
+            CHECK(su_audio_system_checkpoint_save(streamed, blob, sizeof blob, &checkpoint_bytes) == SU_OK);
+        }
+        CHECK(su_audio_system_render(streamed, offline_pcm + position * 2u, 17u) == SU_OK);
+        CHECK(su_audio_system_render(streamed, offline_pcm + position * 2u + 34u, 111u) == SU_OK);
+        CHECK(su_audio_system_render(resident, ring_pcm + position * 2u, 128u) == SU_OK);
+    }
+    CHECK(memcmp(offline_pcm, ring_pcm, sizeof offline_pcm) == 0);
+    CHECK(su_audio_system_journal(streamed, &journal, &count) == SU_OK && count == 6u);
+    CHECK(su_audio_system_checkpoint_verify(&setup.desc, journal, count, blob, checkpoint_bytes, 48000u) == SU_OK);
+    CHECK(su_audio_system_create(&setup.desc, &replayed, NULL) == SU_OK);
+    CHECK(su_audio_system_replay(replayed, journal, count, FRAMES, ring_pcm) == SU_OK);
+    CHECK(memcmp(offline_pcm, ring_pcm, sizeof offline_pcm) == 0);
+    CHECK(su_audio_system_checkpoint_load(replayed, blob, checkpoint_bytes) == SU_OK);
+    CHECK(su_audio_system_render(replayed, ring_pcm, 17001u) == SU_OK);
+    CHECK(memcmp(offline_pcm + checkpoint_frame * 2u, ring_pcm, 17001u * 2u * sizeof(float)) == 0);
+    su_audio_system_destroy(replayed);
+    replayed = NULL;
+    {
+        static const char params[] = "{\"frames\":96000}";
+        SuSha256 hash;
+        uint8_t digest[32];
+        char hex[65];
+        size_t written = 0u;
+        su_sha256_init(&hash);
+        su_sha256_update(&hash, offline_pcm, sizeof offline_pcm);
+        su_sha256_final(&hash, digest);
+        su_sha256_hex(digest, hex);
+        CHECK(su_audio_system_control(streamed, "audio.render.offline", params, sizeof params - 1u,
+            text, sizeof text, &written) == SU_OK);
+        CHECK(strstr(text, hex) != NULL);
+    }
+    wav[44u] ^= 1u;
+    CHECK(su_audio_system_create(&setup.desc, &replayed, NULL) == SU_OK);
+    CHECK(su_audio_system_checkpoint_load(replayed, blob, checkpoint_bytes) == SU_E_SCHEMA_MISMATCH);
+    CHECK(su_audio_system_clock(replayed) == 0u);
+    su_audio_system_destroy(replayed);
+    wav[44u] ^= 1u;
+    su_audio_system_destroy(resident);
+    su_audio_system_destroy(streamed);
+    {
+        SuAudioMusic *probe = NULL;
+        SuAudioMusicStreamSource invalid[2];
+        SuAudioMusicSegmentDesc segment = segments[0];
+        SuAudioAssetStats before;
+        SuAudioAssetStats after;
+        segment.stream_stems = invalid;
+        segment.segment_id = 3u;
+        invalid[0] = sources[0];
+        invalid[1] = sources[1];
+        CHECK(su_audio_music_create(&music, setup.assets, &probe) == SU_OK);
+        invalid[1].ring_frames = 1u;
+        CHECK(su_audio_music_segment_add(probe, &segment) == SU_E_INVALID_ARGUMENT);
+        invalid[1] = sources[1];
+        invalid[1].bytes = wav;
+        CHECK(su_audio_music_segment_add(probe, &segment) == SU_E_INVALID_ARGUMENT);
+        invalid[1].path = NULL;
+        invalid[1].byte_count = 0u;
+        CHECK(su_audio_music_segment_add(probe, &segment) == SU_E_INVALID_ARGUMENT);
+        invalid[1].byte_count = (size_t)0x80000000u;
+        CHECK(su_audio_music_segment_add(probe, &segment) == SU_E_INVALID_ARGUMENT);
+        invalid[1].bytes = NULL;
+        CHECK(su_audio_music_segment_add(probe, &segment) == SU_E_INVALID_ARGUMENT);
+        invalid[1].path = "missing-streamed-music-file.wav";
+        CHECK(su_audio_music_segment_add(probe, &segment) == SU_E_IO);
+        invalid[1] = sources[1];
+        invalid[0] = sources[1];
+        invalid[1] = sources[0];
+        wav[24u] = 0x44u;
+        wav[25u] = 0xacu;
+        CHECK(su_audio_music_segment_add(probe, &segment) == SU_E_SCHEMA_MISMATCH);
+        wav[24u] = 0x80u;
+        wav[25u] = 0xbbu;
+        su_audio_assets_stats(setup.assets, &before);
+        CHECK(su_audio_music_segment_add(probe, &segment) == SU_OK);
+        su_audio_assets_stats(setup.assets, &after);
+        CHECK(before.resident_bytes == after.resident_bytes);
+        su_audio_music_destroy(probe);
+    }
+    {
+        SuAudioMusic *long_music = NULL;
+        SuAudioMusicSegmentDesc segment = segments[1];
+        uint8_t header[44];
+        uint32_t data_bytes = 24000u * 2u * 4u * 360u;
+        uint32_t byte;
+        memcpy(header, wav, sizeof header);
+        for (byte = 0u; byte < 4u; byte++) {
+            header[4u + byte] = (uint8_t)((data_bytes + 36u) >> (byte * 8u));
+            header[40u + byte] = (uint8_t)(data_bytes >> (byte * 8u));
+        }
+        file = fopen("streamed_music_test.wav", "wb");
+        CHECK(file != NULL);
+        if (file != NULL) {
+            CHECK(fwrite(header, 1u, sizeof header, file) == sizeof header);
+            for (index = 0u; index < 360u; index++) {
+                CHECK(fwrite(wav + 44u, 1u, wav_bytes - 44u, file) == wav_bytes - 44u);
+            }
+            CHECK(fclose(file) == 0);
+            segment.length_frames = (uint64_t)24000u * 360u;
+            segment.loop = 0u;
+            CHECK(su_audio_music_create(&music, setup.assets, &long_music) == SU_OK);
+            CHECK(su_audio_music_segment_add(long_music, &segment) == SU_OK);
+            transition.segment_id = 2u;
+            transition.sync = SU_AUDIO_MUSIC_IMMEDIATE;
+            transition.fade_in_frames = 0u;
+            transition.fade_out_frames = 0u;
+            transition.stinger.id = 0u;
+            CHECK(su_audio_music_transition(long_music, &transition, 0u, NULL) == SU_OK);
+            for (index = 0u; index < 360u; index++) {
+                CHECK(su_audio_music_render(long_music, ring_pcm, 24000u) == SU_OK);
+                CHECK(memcmp(ring_pcm, pcm, 24000u * 2u * sizeof(float)) == 0);
+            }
+            CHECK(su_audio_music_render(long_music, ring_pcm, 7u) == SU_OK);
+            for (index = 0u; index < 14u; index++) {
+                CHECK(ring_pcm[index] == 0.0f);
+            }
+            su_audio_music_destroy(long_music);
+        }
+    }
+    setup_free(&setup);
+    CHECK(remove("streamed_music_test.wav") == 0);
+    free(wav);
+    free(pcm);
 }
 
 static void test_control_methods(void) {
@@ -894,6 +1133,232 @@ static void test_host_extensions(void) {
 
 #endif
 
+#ifndef SU_AUDIO_SYSTEM_ALLOC_TEST
+static uint32_t admission_post(SuAudioSystem *system, uint32_t event_id, uint64_t at, uint64_t seq,
+                                SuAudioInstance *instance) {
+    SuAudioTrigger trigger;
+    memset(&trigger, 0, sizeof trigger);
+    trigger.struct_size = sizeof trigger;
+    trigger.event_id = event_id;
+    trigger.sample_time = at;
+    trigger.commit_seq = seq;
+    trigger.session_generation = 1u;
+    return su_audio_system_post(system, &trigger, instance, NULL);
+}
+
+static void test_admission_cooldown(void) {
+    Setup setup;
+    SuAudioSystem *system = NULL;
+    SuAudioSystem *restored = NULL;
+    SuAudioInstance first = 0u;
+    SuAudioInstance instance = 0u;
+    SuAudioEventStats stats;
+    const SuAudioSystemCommand *journal = NULL;
+    uint32_t count = 0u;
+    size_t written = 0u;
+    size_t repeat_bytes = 0u;
+    static uint8_t repeat[sizeof blob];
+    setup_init(&setup, SU_AUDIO_OUTPUT_OFFLINE);
+    setup.rules[0].bus_id = 0u;
+    setup.rules[0].event_id = 1u;
+    setup.rules[0].min_retrigger_frames = 256u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 1u, &instance) == SU_E_AUDIO_COOLDOWN && instance == 0u);
+    CHECK(admission_post(system, 1u, 255u, 1u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(admission_post(system, 2u, 0u, 1u, &instance) == SU_OK);
+    CHECK(su_audio_system_checkpoint_save(system, blob, sizeof blob, &written) == SU_OK);
+    CHECK(su_audio_system_checkpoint_save(system, repeat, sizeof repeat, &repeat_bytes) == SU_OK);
+    CHECK(written == repeat_bytes && memcmp(blob, repeat, written) == 0);
+    CHECK(su_audio_system_create(&setup.desc, &restored, NULL) == SU_OK);
+    CHECK(su_audio_system_checkpoint_load(restored, blob, written) == SU_OK);
+    CHECK(admission_post(restored, 1u, 255u, 2u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(admission_post(system, 1u, 256u, 2u, &instance) == SU_OK);
+    CHECK(admission_post(restored, 1u, 256u, 2u, &instance) == SU_OK);
+    CHECK(admission_post(system, 1u, 128u, 3u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(su_audio_system_control(system, "audio.trace.read", "{}", 2u, text, sizeof text, &repeat_bytes) == SU_OK);
+    CHECK(strstr(text, "cooldown") != NULL && strstr(text, "SU_E_AUDIO_COOLDOWN") != NULL);
+    {
+        SuAudioTelemetryStats telemetry;
+        su_audio_trace_stats(su_audio_system_telemetry(system), &telemetry);
+        CHECK(telemetry.reasons[SU_AUDIO_TRACE_REASON_COOLDOWN] == 3u);
+    }
+    CHECK(su_audio_system_journal(system, &journal, &count) == SU_OK);
+    CHECK(su_audio_system_checkpoint_verify(&setup.desc, journal, count, blob, written, 1024u) == SU_OK);
+    su_audio_events_stats(su_audio_system_events(system), &stats);
+    CHECK(stats.admitted == 3u && stats.refused == 3u && stats.instances == 3u);
+    CHECK(su_audio_system_render(system, offline_pcm, 512u) == SU_OK);
+    CHECK(su_audio_system_render(restored, ring_pcm, 1u) == SU_OK);
+    CHECK(su_audio_system_render(restored, ring_pcm + 2u, 511u) == SU_OK);
+    CHECK(memcmp(offline_pcm, ring_pcm, 512u * 2u * sizeof(float)) == 0);
+    su_audio_system_destroy(restored);
+    restored = NULL;
+    setup.rules[0].min_retrigger_frames++;
+    CHECK(su_audio_system_create(&setup.desc, &restored, NULL) == SU_OK);
+    CHECK(su_audio_system_checkpoint_load(restored, blob, written) == SU_E_SCHEMA_MISMATCH);
+    su_audio_system_destroy(restored);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[0].min_retrigger_frames = 10000u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 999u, 0u, 0u, &instance) != SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 0u, &instance) == SU_OK);
+    CHECK(su_audio_system_render(system, offline_pcm, 8192u) == SU_OK);
+    CHECK(su_audio_system_checkpoint_save(system, blob, sizeof blob, &written) == SU_OK);
+    CHECK(admission_post(system, 1u, 9999u, 1u, &instance) == SU_E_AUDIO_COOLDOWN);
+    restored = NULL;
+    CHECK(su_audio_system_create(&setup.desc, &restored, NULL) == SU_OK);
+    CHECK(su_audio_system_checkpoint_load(restored, blob, written) == SU_OK);
+    CHECK(admission_post(restored, 1u, 9999u, 1u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(admission_post(restored, 1u, 10000u, 1u, &instance) == SU_OK);
+    su_audio_system_destroy(restored);
+    su_audio_system_destroy(system);
+    setup_free(&setup);
+}
+
+static void test_admission_atomic(void) {
+    static const char parallel_graph[] =
+        "{\"schema\":\"su_audio_events_v1\",\"numeric_profile\":\"audio_float_local_v1\","
+        "\"seed_policy\":\"event_emitter_sequence_v1\",\"sample_rate\":48000,\"nodes\":["
+        "{\"id\":1,\"type\":\"sound\",\"asset\":{\"id\":1,\"generation\":1}},"
+        "{\"id\":3,\"type\":\"sound\",\"asset\":{\"id\":1,\"generation\":1}},"
+        "{\"id\":4,\"type\":\"parallel\",\"children\":[1,3]}],"
+        "\"events\":[{\"id\":1,\"root\":4},{\"id\":2,\"root\":1},{\"id\":3,\"root\":3}]}";
+    SuAudioGraphLimits limits = {16u, 32u, 8u, 16u, 8192u};
+    Setup setup;
+    SuAudioSystem *system = NULL;
+    SuAudioInstance first = 0u;
+    SuAudioInstance instance = 0u;
+    SuAudioEventStats stats;
+    setup_init(&setup, SU_AUDIO_OUTPUT_OFFLINE);
+    su_audio_graph_release(setup.graph);
+    setup.graph = NULL;
+    CHECK(su_audio_graph_prepare(parallel_graph, sizeof parallel_graph - 1u, setup.assets, &limits,
+        &setup.graph, NULL) == SU_OK);
+    setup.desc.graph = setup.graph;
+    setup.rules[0].bus_id = 0u;
+    setup.rules[0].node_id = 1u;
+    setup.rules[0].min_retrigger_frames = 512u;
+    setup.rules[1].node_id = 3u;
+    setup.rules[1].group_id = 7u;
+    setup.desc.policy_count = 2u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 3u, 0u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY && instance == 0u);
+    CHECK(admission_post(system, 2u, 0u, 1u, &instance) == SU_OK);
+    su_audio_events_stats(su_audio_system_events(system), &stats);
+    CHECK(stats.instances == 2u && stats.logical_voices == 2u && stats.admitted == 2u && stats.refused == 1u);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[0].node_id = 0u;
+    setup.rules[0].group_id = 7u;
+    setup.desc.policy_count = 1u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 0u, &first) == SU_OK);
+    su_audio_events_stats(su_audio_system_events(system), &stats);
+    CHECK(stats.logical_voices == 2u);
+    CHECK(admission_post(system, 1u, 512u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[0].group_id = 0u;
+    setup.desc.events.max_instances = 1u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 2u, 0u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 2u, 20000u, 1u, &instance) == SU_E_RESOURCE_LIMIT);
+    CHECK(su_audio_system_render(system, offline_pcm, 8192u) == SU_OK);
+    CHECK(admission_post(system, 2u, 8192u, 1u, &instance) == SU_OK);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.desc.events.max_instances = 4u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 2u, UINT64_MAX - 512u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 2u, UINT64_MAX - 1u, 1u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(admission_post(system, 2u, UINT64_MAX, 1u, &instance) == SU_OK);
+    su_audio_system_destroy(system);
+    setup_free(&setup);
+}
+
+static void test_admission_groups(void) {
+    Setup setup;
+    SuAudioSystem *system = NULL;
+    SuAudioSystem *restored = NULL;
+    SuAudioInstance first = 0u;
+    SuAudioInstance instance = 0u;
+    size_t written = 0u;
+    size_t text_bytes = 0u;
+    setup_init(&setup, SU_AUDIO_OUTPUT_OFFLINE);
+    setup.rules[0].bus_id = 0u;
+    setup.rules[0].event_id = 1u;
+    setup.rules[0].group_id = 7u;
+    setup.rules[1].event_id = 2u;
+    setup.rules[1].group_id = 7u;
+    setup.rules[1].policy.priority = 100u;
+    setup.desc.policy_count = 2u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 1u, 128u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 2u, 128u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY && instance == 0u);
+    CHECK(su_audio_system_checkpoint_save(system, blob, sizeof blob, &written) == SU_OK);
+    CHECK(su_audio_system_create(&setup.desc, &restored, NULL) == SU_OK);
+    CHECK(su_audio_system_checkpoint_load(restored, blob, written) == SU_OK);
+    CHECK(admission_post(restored, 2u, 128u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    CHECK(su_audio_system_render(system, offline_pcm, 256u) == SU_OK);
+    CHECK(admission_post(system, 2u, 256u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    CHECK(su_audio_system_stop(system, SU_AUDIO_SYSTEM_CMD_STOP_INSTANCE, first, 256u, 256u) == SU_OK);
+    CHECK(admission_post(system, 2u, 256u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    CHECK(su_audio_system_render(system, offline_pcm, 128u) == SU_OK);
+    CHECK(admission_post(system, 2u, 384u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    CHECK(su_audio_system_render(system, offline_pcm, 512u) == SU_OK);
+    CHECK(admission_post(system, 2u, 896u, 1u, &instance) == SU_OK);
+    CHECK(su_audio_system_control(system, "audio.trace.read", "{}", 2u, text, sizeof text, &text_bytes) == SU_OK);
+    CHECK(strstr(text, "group_busy") != NULL && strstr(text, "SU_E_AUDIO_GROUP_BUSY") != NULL);
+    {
+        SuAudioTelemetryStats telemetry;
+        su_audio_trace_stats(su_audio_system_telemetry(system), &telemetry);
+        CHECK(telemetry.reasons[SU_AUDIO_TRACE_REASON_GROUP_BUSY] == 4u);
+    }
+    su_audio_system_destroy(restored);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[1].group_id = 8u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 1u, 0u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 2u, 0u, 1u, &instance) == SU_OK);
+    CHECK(su_audio_system_render(system, offline_pcm, 8192u) == SU_OK);
+    CHECK(admission_post(system, 1u, 8192u, 2u, &instance) == SU_OK);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[0].event_id = 0u;
+    setup.rules[0].node_id = 2u;
+    setup.rules[0].min_retrigger_frames = 256u;
+    setup.rules[0].group_id = 0u;
+    setup.desc.policy_count = 1u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 2u, 0u, 0u, &first) == SU_OK);
+    CHECK(admission_post(system, 2u, 255u, 1u, &instance) == SU_E_AUDIO_COOLDOWN);
+    CHECK(admission_post(system, 1u, 0u, 1u, &instance) == SU_OK);
+    CHECK(admission_post(system, 2u, 256u, 2u, &instance) == SU_OK);
+    su_audio_system_destroy(system);
+    system = NULL;
+    setup.rules[0].min_retrigger_frames = 0u;
+    setup.rules[0].group_id = 9u;
+    setup.desc.voices.audibility_floor = 1000.0f;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(admission_post(system, 2u, 0u, 0u, &first) == SU_OK);
+    CHECK(su_audio_system_render(system, offline_pcm, 128u) == SU_OK);
+    {
+        SuAudioVoiceStats voices;
+        su_audio_voice_pool_stats(su_audio_system_voices(system), &voices);
+        CHECK(voices.virtual_voices == 1u && voices.physical == 0u);
+    }
+    CHECK(admission_post(system, 2u, 128u, 1u, &instance) == SU_E_AUDIO_GROUP_BUSY);
+    CHECK(su_audio_system_stop(system, SU_AUDIO_SYSTEM_CMD_STOP_INSTANCE, first, 128u, 0u) == SU_OK);
+    CHECK(su_audio_system_render(system, offline_pcm, 128u) == SU_OK);
+    CHECK(admission_post(system, 2u, 256u, 1u, &instance) == SU_OK);
+    su_audio_system_destroy(system);
+    setup_free(&setup);
+}
+#endif
+
 #ifdef SU_AUDIO_SYSTEM_ALLOC_TEST
 /* After creation, ten seconds of posts, spatial updates, parameter changes, stops, clustering, telemetry,
  * journaling and checkpoint saves allocate nothing. */
@@ -938,12 +1403,16 @@ int main(void) {
 #else
     test_paths_identical();
     test_checkpoint_verify();
+    test_streamed_music();
     test_control_methods();
     test_device_output();
     test_host_extensions();
     test_loudness_and_objects();
     test_pull_render();
     test_sum_groups();
+    test_admission_cooldown();
+    test_admission_groups();
+    test_admission_atomic();
 #endif
     printf("audio_system: %u checks, %u failures\n", checks, failures);
     return failures == 0u ? 0 : 1;

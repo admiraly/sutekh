@@ -27,6 +27,57 @@ instance and trigger sequence).
 `limit_scope` (global/event/emitter/bus/node), `virtual_mode`,
 `wake_deadline_frames`, `release_frames` and flags (`LOOP`, `HERO`).
 
+## Post-time admission in the integrated runtime
+
+`SuAudioVoicePolicyRule` (passed through `SuAudioSystemDesc.policies` or the
+event hook) selects leaves by `node_id`, `bus_id` and `event_id`; zero is a
+wildcard and the first matching rule wins for both admission and ranking.
+The appended admission fields default to zero, preserving existing behavior:
+
+- `min_retrigger_frames`: minimum interval between successful posts matching
+  that rule. The rule owns one shared timeline, across emitters and matching
+  leaves. Select an `event_id` for an event cooldown, or a `node_id` for a node
+  cooldown. A wildcard can deliberately share a cooldown across a family.
+- `group_id`: a nonzero exclusive-group ID. Any live matching leaf with that
+  ID refuses the entire new post, regardless of priority or audibility.
+  Different rules can share a group; different groups remain independent.
+  This is refuse-new, not steal-oldest; physical ranking is unchanged.
+
+Admission happens in `su_audio_event_post` after expansion and before asset
+pins or logical-voice allocation. All leaves of one post are admitted or
+refused together; layers within that post may share a group or cooldown rule.
+Cooldown uses the trigger's absolute `sample_time`, not the render clock,
+wall time or a leaf's delayed start. The exact interval boundary is allowed;
+out-of-order timestamps earlier than the last admitted timestamp are refused
+when cooldown is enabled. Only a successful post changes history. Completion,
+stops and commit-session changes do not reset cooldown history.
+
+Groups reserve admission immediately, including scheduled/delayed starts,
+virtual voices and stop-release/steal tails, until their leaves finish and
+the runtime renders/reaps them. Posting a future timestamp does not predict
+completion or execute queued stops. Use rendering to advance occupancy.
+The group check does not rank a replacement or let an old line resume later.
+
+Refusals return `SU_E_AUDIO_COOLDOWN` (22) or `SU_E_AUDIO_GROUP_BUSY` (23),
+leave the instance handle zero, increment event `refused`, and do not advance
+the commit watermark. System telemetry records the stable reasons `cooldown`
+and `group_busy`, also counted by `audio.trace.stats`; journal replay checks
+the returned statuses. If multiple leaves fail, expansion order selects the
+first failure (cooldown precedes the group check for each leaf).
+
+Direct event checkpoints are version 2: they include each rule's last
+successful timestamp and initialized flag, even after every instance has
+finished. Groups derive occupancy from the saved leaves, so no redundant
+group counters exist. Admission selectors/settings enter the configuration
+fingerprint; a mismatched configuration or older blob is rejected. The
+separate replay-based offline checkpoint format is unchanged.
+
+`audio_system` tests cover sample-zero initialization, exact boundaries,
+backdated posts, independent events/nodes/groups, higher-priority busy
+refusal, pending/playing/releasing occupancy, stop and natural completion,
+trace reasons, journal verification, byte-repeatable saves, idle/active
+checkpoint history and chunk-independent PCM continuation.
+
 ## Ranking
 
 At every quantum boundary, after expiry, live logical voices are ordered by

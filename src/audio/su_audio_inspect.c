@@ -58,6 +58,10 @@ uint32_t su_audio_trace_reason(uint32_t kind, uint32_t status, uint64_t sample_t
         return SU_AUDIO_TRACE_REASON_OK;
     case SU_E_RESOURCE_LIMIT:
         return SU_AUDIO_TRACE_REASON_POOL_FULL;
+    case SU_E_AUDIO_COOLDOWN:
+        return SU_AUDIO_TRACE_REASON_COOLDOWN;
+    case SU_E_AUDIO_GROUP_BUSY:
+        return SU_AUDIO_TRACE_REASON_GROUP_BUSY;
     case SU_E_STALE_REVISION:
         return SU_AUDIO_TRACE_REASON_DUPLICATE;
     case SU_E_STALE_HANDLE:
@@ -71,7 +75,7 @@ uint32_t su_audio_trace_reason(uint32_t kind, uint32_t status, uint64_t sample_t
 
 const char *su_audio_trace_reason_name(uint32_t reason) {
     static const char *const names[SU_AUDIO_TRACE_REASON_COUNT] = {
-        "ok", "pool_full", "duplicate", "late", "stale_handle", "graph", "invalid"};
+        "ok", "pool_full", "duplicate", "late", "stale_handle", "graph", "invalid", "cooldown", "group_busy"};
     return reason < SU_AUDIO_TRACE_REASON_COUNT ? names[reason] : "unknown";
 }
 
