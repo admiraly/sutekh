@@ -63,6 +63,11 @@ typedef struct SuAudioSystemDesc {
                                             * and checkpoint verification run without them (silence) */
     uint32_t input_count;
     uint32_t render;                       /* SU_AUDIO_RENDER_* (RING/DEVICE output; ignored offline) */
+    const SuAudioLoudnessRule *loudness_rules;
+    uint32_t loudness_rule_count;
+    const SuAudioSpeakerLayout *speaker_layout;
+    SuAudioObjectOutputFn object_output;
+    void *object_user;
 } SuAudioSystemDesc;
 
 enum {

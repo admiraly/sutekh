@@ -208,6 +208,11 @@ uint32_t su_audio_system_create(const SuAudioSystemDesc *desc, SuAudioSystem **o
     hook.speed_of_sound = desc->speed_of_sound;
     hook.inputs = desc->inputs;
     hook.input_count = desc->input_count;
+    hook.loudness_rules = desc->loudness_rules;
+    hook.loudness_rule_count = desc->loudness_rule_count;
+    hook.speaker_layout = desc->speaker_layout;
+    hook.object_output = desc->object_output;
+    hook.object_user = desc->object_user;
     status = su_audio_events_attach(system->events, &hook);
     if (status != SU_OK) {
         message_set(message, "components rejected by the event runtime (rates, capacities, clocks or knee)");

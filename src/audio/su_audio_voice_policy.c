@@ -11,6 +11,8 @@
 
 /* Integrated playback state of a controlled voice or tail (see SuAudioVoiceControls). */
 typedef struct VoiceDsp {
+    uint32_t authored_loudness;
+    float loudness_db;
     uint32_t controlled;
     uint32_t mono_mix;
     uint32_t fresh;           /* next quantum starts from the target gains and pitch (no ramp) */
@@ -631,7 +633,7 @@ static void render_tail(SuAudioVoicePool *pool, PoolTail *tail, float *out) {
 
 /* Renders a physical or stopping voice for the quantum. Returns nonzero when the voice must be freed, with the
  * reason in *reason. */
-static int render_voice(SuAudioVoicePool *pool, PoolVoice *voice, float *out, uint32_t *reason) {
+static int render_voice(SuAudioVoicePool *pool, PoolVoice *voice, float *out, uint32_t *reason, float *loudness) {
     const SuAudioClip *clip = voice->desc.clip;
     int loop = (voice->desc.policy.flags & SU_AUDIO_VOICE_LOOP) != 0u;
     uint32_t f = voice->start_at > pool->clock ? (uint32_t)(voice->start_at - pool->clock) : 0u;
@@ -674,6 +676,9 @@ static int render_voice(SuAudioVoicePool *pool, PoolVoice *voice, float *out, ui
             voice->release_remain--;
             env *= (float)voice->release_remain / (float)voice->release_total;
         }
+        if (loudness != NULL && dsp->authored_loudness && dsp->loudness_db > *loudness) {
+            *loudness = dsp->loudness_db;
+        }
         if (dsp->controlled) {
             int more = dsp_frame(dsp, clip, loop, f, env, out + f * 2u, mono);
             voice->cursor = (uint64_t)dsp->pos;
@@ -698,14 +703,21 @@ static int render_voice(SuAudioVoicePool *pool, PoolVoice *voice, float *out, ui
     return 0;
 }
 
-static void render_quantum(SuAudioVoicePool *pool, float *const *routes, uint32_t route_count) {
+static void render_quantum(SuAudioVoicePool *pool, float *const *routes, uint32_t route_count, float *loudness) {
     uint32_t i, transitions = 0u, physical = 0u, virt = 0u;
+    if (loudness != NULL) {
+        for (i = 0u; i < route_count; i++) loudness[i] = -200.0f;
+    }
     pool->captured = 0u;
     rank(pool);
     for (i = 0u; i < pool->desc.transition_reserve; ++i) {
         PoolTail *tail = &pool->tails[i];
         if (!tail->remain) continue;
         transitions++;
+        if (loudness != NULL && tail->dsp.authored_loudness) {
+            uint32_t route = tail->route < route_count ? tail->route : 0u;
+            if (tail->dsp.loudness_db > loudness[route]) loudness[route] = tail->dsp.loudness_db;
+        }
         render_tail(pool, tail, routes[tail->route < route_count ? tail->route : 0u]);
     }
     for (i = 0u; i < pool->desc.max_logical; ++i) {
@@ -734,7 +746,8 @@ static void render_quantum(SuAudioVoicePool *pool, float *const *routes, uint32_
         }
         if (voice->state != SU_AUDIO_VOICE_PHYSICAL && voice->state != SU_AUDIO_VOICE_STOPPING) continue;
         physical++;
-        if (render_voice(pool, voice, routes[voice->route < route_count ? voice->route : 0u], &reason)) {
+        if (render_voice(pool, voice, routes[voice->route < route_count ? voice->route : 0u], &reason,
+            loudness != NULL ? &loudness[voice->route < route_count ? voice->route : 0u] : NULL)) {
             free_voice(pool, voice, reason);
         }
     }
@@ -756,7 +769,7 @@ uint32_t su_audio_voice_pool_render(SuAudioVoicePool *pool, float *out, uint32_t
             float *route = pool->cache;
             if (pool->clock > UINT64_MAX - Q) return SU_E_RESOURCE_LIMIT;
             memset(pool->cache, 0, sizeof pool->cache);
-            render_quantum(pool, &route, 1u);
+            render_quantum(pool, &route, 1u, NULL);
             pool->cache_pos = 0u;
         }
         take = Q - pool->cache_pos;
@@ -768,10 +781,20 @@ uint32_t su_audio_voice_pool_render(SuAudioVoicePool *pool, float *out, uint32_t
     return SU_OK;
 }
 
-uint32_t su_audio_voice_pool_quantum(SuAudioVoicePool *pool, float *const *routes, uint32_t route_count) {
+uint32_t su_audio_voice_pool_quantum(SuAudioVoicePool *pool, float *const *routes, uint32_t route_count,
+                                    float *loudness) {
     if (!pool || !routes || route_count == 0u || pool->cache_pos != Q) return SU_E_INVALID_ARGUMENT;
     if (pool->clock > UINT64_MAX - Q) return SU_E_RESOURCE_LIMIT;
-    render_quantum(pool, routes, route_count);
+    render_quantum(pool, routes, route_count, loudness);
+    return SU_OK;
+}
+
+uint32_t su_audio_voice_set_loudness(SuAudioVoicePool *pool, SuAudioLogicalVoice handle, float loudness_db) {
+    PoolVoice *voice;
+    uint32_t status = handle_index(pool, handle, &voice);
+    if (status != SU_OK || !finite_f(loudness_db)) return SU_E_INVALID_ARGUMENT;
+    voice->dsp.authored_loudness = 1u;
+    voice->dsp.loudness_db = loudness_db;
     return SU_OK;
 }
 
@@ -834,6 +857,8 @@ uint32_t su_audio_voice_pool_captured(const SuAudioVoicePool *pool) {
 }
 
 static void dsp_state(SuAudioStateIo *io, VoiceDsp *dsp) {
+    SU_STATE(io, dsp->authored_loudness);
+    SU_STATE(io, dsp->loudness_db);
     SU_STATE(io, dsp->controlled);
     SU_STATE(io, dsp->mono_mix);
     SU_STATE(io, dsp->fresh);

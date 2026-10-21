@@ -114,6 +114,13 @@ struct SuAudioEvents {
     uint32_t leaf_map_size;
     uint32_t *due;
     float cluster_mix[SU_AUDIO_EVENT_QUANTUM * 2u];
+    SuAudioLoudnessRule loudness_rules[SU_AUDIO_EVENTS_MAX_LOUDNESS_RULES];
+    uint32_t loudness_rule_count;
+    float route_loudness[SU_AUDIO_BUS_MAX];
+    SuAudioSpeakerLayout speaker_layout;
+    SuAudioObjectOutputFn object_output;
+    void *object_user;
+    float speaker_mix[SU_AUDIO_EVENT_QUANTUM * SU_AUDIO_CLUSTER_MAX_SPEAKERS];
 };
 
 static SuAudioInstance instance_handle(uint32_t slot, uint32_t generation) {
@@ -834,6 +841,17 @@ static void pooled_start(SuAudioEvents *events, uint64_t now, uint64_t end) {
             desc.trigger_seq = ++events->trigger_seq;
             status = su_audio_voice_add_at(events->pool, &desc, leaf->at < now ? now : leaf->at, &leaf->logical);
             if (status == SU_OK) {
+                uint32_t rule;
+                for (rule = 0u; rule < events->loudness_rule_count; rule++) {
+                    const SuAudioLoudnessRule *loudness = &events->loudness_rules[rule];
+                    if ((loudness->node_id == 0u || loudness->node_id == leaf->data.node_id)
+                        && (loudness->bus_id == 0u || loudness->bus_id == leaf->data.bus_id)) {
+                        status = su_audio_voice_set_loudness(events->pool, leaf->logical, loudness->loudness_db);
+                        break;
+                    }
+                }
+            }
+            if (status == SU_OK) {
                 status = su_audio_voice_set_tag(events->pool, leaf->logical,
                     ((uint64_t)leaf->data.asset.generation << 32) | leaf->data.asset.id);
             }
@@ -1015,6 +1033,15 @@ static uint32_t feed_cluster(SuAudioEvents *events) {
     if (su_audio_cluster_update(events->cluster, events->objects, count) != SU_OK) {
         return SU_E_RESOURCE_LIMIT;
     }
+    if (events->object_output != NULL) {
+        uint32_t status = su_audio_cluster_render_speakers(events->cluster, events->objects, count,
+            SU_AUDIO_EVENT_QUANTUM, &events->speaker_layout, events->speaker_mix);
+        if (status == SU_OK) {
+            events->object_output(events->object_user, events->speaker_mix, SU_AUDIO_EVENT_QUANTUM,
+                events->speaker_layout.count, events->stats.render_clock);
+        }
+        return status;
+    }
     return su_audio_cluster_render(events->cluster, events->objects, count, SU_AUDIO_EVENT_QUANTUM,
         events->cluster_mix);
 }
@@ -1066,7 +1093,8 @@ static uint32_t render_quantum_pooled(SuAudioEvents *events) {
     pooled_stops(events, end);
     pooled_controls(events);
     memset(events->route_mem, 0, (size_t)events->route_count * SU_AUDIO_EVENT_QUANTUM * 2u * sizeof(float));
-    status = su_audio_voice_pool_quantum(events->pool, events->routes, events->route_count);
+    status = su_audio_voice_pool_quantum(events->pool, events->routes, events->route_count,
+        events->loudness_rule_count != 0u ? events->route_loudness : NULL);
     if (status != SU_OK) {
         return status;
     }
@@ -1080,6 +1108,11 @@ static uint32_t render_quantum_pooled(SuAudioEvents *events) {
         for (route = 0u; route < events->route_count && status == SU_OK; route++) {
             status = su_audio_bus_mix(events->buses, events->route_ids[route], events->routes[route],
                 SU_AUDIO_EVENT_QUANTUM);
+            if (status == SU_OK && events->loudness_rule_count != 0u
+                && events->route_loudness[route] > SU_AUDIO_LOUDNESS_SILENT) {
+                status = su_audio_bus_set_loudness(events->buses, events->route_ids[route],
+                    events->route_loudness[route]);
+            }
         }
         if (events->music != NULL && status == SU_OK) {
             status = su_audio_bus_mix(events->buses, events->music_bus_id, events->music_buffer,
@@ -1273,6 +1306,23 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
         return SU_E_INVALID_ARGUMENT;
     }
     su_audio_events_update(events);
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, loudness_rule_count)) {
+        if (hook->loudness_rule_count > SU_AUDIO_EVENTS_MAX_LOUDNESS_RULES
+            || (hook->loudness_rule_count != 0u && hook->loudness_rules == NULL)) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        for (index = 0u; index < hook->loudness_rule_count; index++) {
+            if (!isfinite(hook->loudness_rules[index].loudness_db)) return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, speaker_layout) && hook->speaker_layout != NULL) {
+        if (!SU_AUDIO_EVENTS_HOOK_HAS(hook, object_user) || hook->object_output == NULL
+            || hook->cluster == NULL || su_audio_speaker_layout_validate(hook->speaker_layout) != SU_OK) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+    } else if (SU_AUDIO_EVENTS_HOOK_HAS(hook, object_output) && hook->object_output != NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
     su_audio_voice_pool_stats(hook->voices, &pool_stats);
     su_audio_voice_pool_desc(hook->voices, &pool_desc);
     if (pool_desc.max_logical < events->desc.max_logical_voices
@@ -1425,6 +1475,18 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     events->routes = routes;
     events->route_count = route_count;
     events->pool = hook->voices;
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, loudness_rule_count)) {
+        events->loudness_rule_count = hook->loudness_rule_count;
+        if (hook->loudness_rule_count != 0u) {
+            memcpy(events->loudness_rules, hook->loudness_rules,
+                (size_t)hook->loudness_rule_count * sizeof *hook->loudness_rules);
+        }
+    }
+    if (SU_AUDIO_EVENTS_HOOK_HAS(hook, speaker_layout) && hook->speaker_layout != NULL) {
+        events->speaker_layout = *hook->speaker_layout;
+        events->object_output = hook->object_output;
+        events->object_user = hook->object_user;
+    }
     events->stats.runtime_bytes += (uint64_t)route_count * (SU_AUDIO_EVENT_QUANTUM * 2u * sizeof *route_mem
         + sizeof *routes + sizeof *route_ids) + (uint64_t)(param_count + 1u) * sizeof *param_values
         + (((uint64_t)events->desc.max_instances + 1u) * switch_count + 1u) * sizeof *switch_values
@@ -1643,6 +1705,27 @@ static uint64_t layout_fingerprint(const SuAudioEvents *events) {
     hash = fnv_u64(hash, pool_desc.hero_reserve);
     hash = fnv_u64(hash, pool_desc.transition_reserve);
     hash = fnv_u64(hash, events->policy_count);
+    hash = fnv_u64(hash, events->loudness_rule_count);
+    for (index = 0u; index < events->loudness_rule_count; index++) {
+        hash = fnv_u64(hash, events->loudness_rules[index].node_id);
+        hash = fnv_u64(hash, events->loudness_rules[index].bus_id);
+        memcpy(&knee_bits, &events->loudness_rules[index].loudness_db, sizeof knee_bits);
+        hash = fnv_u64(hash, knee_bits);
+    }
+    hash = fnv_u64(hash, events->object_output != NULL);
+    if (events->object_output != NULL) {
+        hash = fnv_u64(hash, events->speaker_layout.count);
+        hash = fnv_u64(hash, events->speaker_layout.bed_left);
+        hash = fnv_u64(hash, events->speaker_layout.bed_right);
+        for (index = 0u; index < events->speaker_layout.count; index++) {
+            memcpy(&knee_bits, &events->speaker_layout.directions[index].x, sizeof knee_bits);
+            hash = fnv_u64(hash, knee_bits);
+            memcpy(&knee_bits, &events->speaker_layout.directions[index].y, sizeof knee_bits);
+            hash = fnv_u64(hash, knee_bits);
+            memcpy(&knee_bits, &events->speaker_layout.directions[index].z, sizeof knee_bits);
+            hash = fnv_u64(hash, knee_bits);
+        }
+    }
     for (index = 0; index < events->policy_count; index++) {
         const SuAudioVoicePolicyRule *rule = &events->policies[index].rule;
         hash = fnv_u64(hash, rule->node_id);

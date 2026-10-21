@@ -436,6 +436,25 @@ static void test_attach_validation(void) {
     CHECK(su_audio_voice_pool_create(&pool_desc, &pool) == SU_OK);
     hook.voices = pool;
     hook.version = SU_AUDIO_EVENTS_HOOK_VERSION;
+    hook.loudness_rule_count = 1u;
+    CHECK(su_audio_events_attach(rig.events, &hook) == SU_E_INVALID_ARGUMENT);
+    {
+        SuAudioLoudnessRule loudness = {0u, 0u, NAN};
+        hook.loudness_rules = &loudness;
+        CHECK(su_audio_events_attach(rig.events, &hook) == SU_E_INVALID_ARGUMENT);
+        loudness.loudness_db = 0.0f;
+        hook.loudness_rule_count = SU_AUDIO_EVENTS_MAX_LOUDNESS_RULES + 1u;
+        CHECK(su_audio_events_attach(rig.events, &hook) == SU_E_INVALID_ARGUMENT);
+        hook.loudness_rules = NULL;
+        hook.loudness_rule_count = 0u;
+    }
+    {
+        SuAudioSpeakerLayout layout;
+        memset(&layout, 0, sizeof layout);
+        hook.speaker_layout = &layout;
+        CHECK(su_audio_events_attach(rig.events, &hook) == SU_E_INVALID_ARGUMENT);
+        hook.speaker_layout = NULL;
+    }
     (void)post(&rig, 1u, 0u, 0u);
     CHECK(su_audio_events_attach(rig.events, &hook) == SU_E_RESOURCE_LIMIT);
     rig_destroy(&rig);
@@ -455,7 +474,8 @@ static const char mix_json[] =
     "\"events\":[{\"id\":1,\"root\":1},{\"id\":2,\"root\":2},{\"id\":3,\"root\":4},{\"id\":4,\"root\":5}]}";
 
 enum { MIX_GAIN = 1, MIX_BUS_GAIN = 2, MIX_MUSIC = 4, MIX_PITCH = 8,
-       MIX_FIRST_ONLY = 16, MIX_FADE = 32, MIX_SMOOTH_BLEND = 64 };
+       MIX_FIRST_ONLY = 16, MIX_FADE = 32, MIX_SMOOTH_BLEND = 64, MIX_HDR = 128, MIX_LOUDNESS = 256,
+       MIX_STEAL = 512 };
 
 typedef struct MixRig {
     SuAudioAssets *assets;
@@ -573,6 +593,7 @@ static void mix_create_config(MixRig *rig, uint32_t flags, float knee, const cha
     buses[3].id = 40u;
     for (index = 1u; index < 4u; index++) {
         buses[index].parent = 1u;
+        buses[index].hdr = 1u;
     }
     memset(&duck, 0, sizeof duck);
     duck.source = 10u;
@@ -591,12 +612,14 @@ static void mix_create_config(MixRig *rig, uint32_t flags, float knee, const cha
     tree_desc.bus_count = 4u;
     tree_desc.rules = &duck;
     tree_desc.rule_count = 1u;
+    tree_desc.hdr.enabled = (flags & MIX_HDR) != 0u;
+    tree_desc.hdr.window_db = 30.0f;
     CHECK(su_audio_bus_tree_create(&tree_desc, &rig->tree, &bus_diag) == SU_OK);
     memset(&pool_desc, 0, sizeof pool_desc);
     pool_desc.struct_size = sizeof pool_desc;
     pool_desc.sample_rate = RATE;
     pool_desc.max_logical = 64u;
-    pool_desc.max_physical = 16u;
+    pool_desc.max_physical = (flags & MIX_STEAL) != 0u ? 1u : 16u;
     pool_desc.transition_reserve = 4u;
     CHECK(su_audio_voice_pool_create(&pool_desc, &rig->pool) == SU_OK);
     memset(&hook, 0, sizeof hook);
@@ -607,6 +630,27 @@ static void mix_create_config(MixRig *rig, uint32_t flags, float knee, const cha
     hook.params = rig->params;
     hook.buses = rig->tree;
     hook.limiter_knee = knee;
+    if (flags & MIX_STEAL) {
+        SuAudioVoicePolicyRule priority;
+        memset(&priority, 0, sizeof priority);
+        priority.node_id = 2u;
+        priority.policy.priority = 100;
+        hook.policies = &priority;
+        hook.policy_count = 1u;
+        hook.default_policy.release_frames = 256u;
+        if (flags & MIX_LOUDNESS) {
+            static const SuAudioLoudnessRule loudness[] = {{1u, 10u, 20.0f}, {2u, 30u, -40.0f}};
+            hook.loudness_rules = loudness;
+            hook.loudness_rule_count = 2u;
+        }
+        CHECK(su_audio_events_attach(rig->events, &hook) == SU_OK);
+        return;
+    }
+    if (flags & MIX_LOUDNESS) {
+        static const SuAudioLoudnessRule loudness[] = {{1u, 10u, 20.0f}, {2u, 30u, -40.0f}, {0u, 0u, 5.0f}};
+        hook.loudness_rules = loudness;
+        hook.loudness_rule_count = 3u;
+    }
     if (flags & MIX_MUSIC) {
         static const SuAudioAssetRef stems[1] = {{2u, 2u}};
         static const SuAudioTempoPoint tempo[1] = {{0u, 120000u}};
@@ -947,7 +991,23 @@ typedef struct FullRig {
     SuAudioEmitter emitters[2];
     SuAudioInstance handles[64];
     uint32_t posted;
+    uint64_t object_hash;
+    uint64_t object_frames;
 } FullRig;
+
+static void object_output(void *user, const float *pcm, uint32_t frames, uint32_t channels, uint64_t time) {
+    FullRig *rig = user;
+    uint32_t sample;
+    CHECK(channels == 4u && frames == SU_AUDIO_EVENT_QUANTUM);
+    rig->object_hash ^= time;
+    for (sample = 0u; sample < frames * channels; sample++) {
+        uint32_t bits;
+        CHECK(isfinite(pcm[sample]));
+        memcpy(&bits, &pcm[sample], sizeof bits);
+        rig->object_hash = (rig->object_hash ^ bits) * UINT64_C(1099511628211);
+    }
+    rig->object_frames += frames;
+}
 
 static void full_create(FullRig *rig, int with_cluster, uint32_t physical) {
     static const SuAudioBindingPoint identity[2] = {{-24.0f, -24.0f}, {0.0f, 0.0f}};
@@ -1149,6 +1209,21 @@ static void full_create(FullRig *rig, int with_cluster, uint32_t physical) {
         hook.cluster = rig->cluster;
         hook.cluster_inputs = SU_AUDIO_EVENTS_CLUSTER_VOICES | SU_AUDIO_EVENTS_CLUSTER_BUSES;
     }
+    if (with_cluster == 2) {
+        SuAudioSpeakerLayout layout;
+        memset(&layout, 0, sizeof layout);
+        layout.count = 4u;
+        layout.directions[0].x = -1.0f;
+        layout.directions[1].x = 1.0f;
+        layout.directions[2].y = 1.0f;
+        layout.directions[3].z = -1.0f;
+        layout.bed_right = 1u;
+        hook.speaker_layout = &layout;
+        hook.object_output = object_output;
+        hook.object_user = rig;
+        CHECK(su_audio_events_attach(m->events, &hook) == SU_OK);
+        return;
+    }
     CHECK(su_audio_events_attach(m->events, &hook) == SU_OK);
 }
 
@@ -1284,6 +1359,101 @@ static void script_run(FullRig *rig, uint32_t from, uint32_t to, float *out) {
 static float full_a[FULL_FRAMES * 2u];
 static float full_b[FULL_FRAMES * 2u];
 static uint8_t blob[1u << 20];
+
+static void test_authored_loudness(void) {
+    MixRig plain;
+    MixRig authored;
+    MixRig restored;
+    SuAudioBusMeter meter;
+    size_t written = 0u;
+    mix_create(&plain, 0u, 0.0f);
+    mix_create(&authored, MIX_LOUDNESS, 0.0f);
+    mix_post(&plain, 1u, 0u);
+    mix_post(&authored, 1u, 0u);
+    CHECK(su_audio_events_render(plain.events, out_a, 1024u) == SU_OK);
+    CHECK(su_audio_events_render(authored.events, out_b, 1024u) == SU_OK);
+    CHECK(memcmp(out_a, out_b, 2048u * sizeof(float)) == 0);
+    mix_destroy(&plain);
+    mix_destroy(&authored);
+    mix_create(&authored, MIX_HDR | MIX_LOUDNESS, 0.0f);
+    mix_create(&restored, MIX_HDR | MIX_LOUDNESS, 0.0f);
+    mix_post(&authored, 1u, 0u);
+    mix_post(&authored, 2u, 0u);
+    CHECK(su_audio_events_render(authored.events, out_a, 1u) == SU_OK);
+    CHECK(su_audio_bus_meter_read(authored.tree, 10u, &meter, 0) == SU_OK);
+    CHECK(meter.hdr_db == 20.0f);
+    CHECK(su_audio_bus_meter_read(authored.tree, 30u, &meter, 0) == SU_OK);
+    CHECK(meter.hdr_db == 200.0f);
+    CHECK(su_audio_events_checkpoint_save(authored.events, blob, sizeof blob, &written) == SU_OK);
+    CHECK(su_audio_events_checkpoint_load(restored.events, blob, written) == SU_OK);
+    CHECK(su_audio_events_render(authored.events, out_a, 8192u) == SU_OK);
+    CHECK(su_audio_events_render(restored.events, out_b, 8192u) == SU_OK);
+    CHECK(memcmp(out_a, out_b, 16384u * sizeof(float)) == 0);
+    CHECK(su_audio_bus_meter_read(authored.tree, 30u, &meter, 0) == SU_OK);
+    CHECK(meter.hdr_db == 0.0f);
+    mix_destroy(&authored);
+    mix_destroy(&restored);
+    mix_create(&plain, MIX_HDR, 0.0f);
+    CHECK(su_audio_events_checkpoint_load(plain.events, blob, written) == SU_E_SCHEMA_MISMATCH);
+    mix_post(&plain, 1u, 0u);
+    CHECK(su_audio_events_render(plain.events, out_a, 128u) == SU_OK);
+    CHECK(su_audio_bus_meter_read(plain.tree, 10u, &meter, 0) == SU_OK);
+    CHECK(meter.hdr_db == 0.0f);
+    mix_destroy(&plain);
+    mix_create(&authored, MIX_HDR | MIX_LOUDNESS | MIX_STEAL, 0.0f);
+    mix_post(&authored, 1u, 127u);
+    mix_post(&authored, 2u, 128u);
+    CHECK(su_audio_events_render(authored.events, out_a, 128u) == SU_OK);
+    CHECK(su_audio_bus_meter_read(authored.tree, 10u, &meter, 0) == SU_OK);
+    CHECK(meter.hdr_db == 20.0f);
+    CHECK(su_audio_events_render(authored.events, out_a, 128u) == SU_OK);
+    CHECK(su_audio_bus_meter_read(authored.tree, 10u, &meter, 0) == SU_OK);
+    CHECK(meter.hdr_db == 20.0f);
+    CHECK(su_audio_events_render(authored.events, out_a, 128u) == SU_OK);
+    CHECK(su_audio_bus_meter_read(authored.tree, 10u, &meter, 0) == SU_OK);
+    CHECK(meter.hdr_db == 20.0f);
+    CHECK(su_audio_events_render(authored.events, out_a, 128u) == SU_OK);
+    CHECK(su_audio_bus_meter_read(authored.tree, 10u, &meter, 0) == SU_OK);
+    CHECK(meter.hdr_db == 0.0f);
+    {
+        SuAudioVoiceStats stats;
+        su_audio_voice_pool_stats(authored.pool, &stats);
+        CHECK(stats.stolen == 1u && stats.virtual_voices == 1u);
+    }
+    mix_destroy(&authored);
+}
+
+static void test_object_output(void) {
+    FullRig plain;
+    FullRig rendered;
+    FullRig restored;
+    size_t written = 0u;
+    build_script();
+    full_create(&plain, 1, 3u);
+    full_create(&rendered, 2, 3u);
+    full_create(&restored, 2, 3u);
+    script_run(&plain, 0u, 9001u, full_a);
+    script_run(&rendered, 0u, 9001u, full_b);
+    CHECK(memcmp(full_a, full_b, 18002u * sizeof(float)) == 0);
+    CHECK(rendered.object_frames == su_audio_events_clock(rendered.mix.events));
+    CHECK(rendered.object_hash != 0u);
+    CHECK(su_audio_events_checkpoint_save(rendered.mix.events, blob, sizeof blob, &written) == SU_OK);
+    CHECK(su_audio_events_checkpoint_load(restored.mix.events, blob, written) == SU_OK);
+    memcpy(restored.handles, rendered.handles, sizeof restored.handles);
+    restored.posted = rendered.posted;
+    restored.mix.seq = rendered.mix.seq;
+    rendered.object_hash = 0u;
+    rendered.object_frames = 0u;
+    script_run(&rendered, 9001u, FULL_FRAMES, full_a);
+    script_run(&restored, 9001u, FULL_FRAMES, full_b);
+    CHECK(memcmp(full_a + 18002u, full_b + 18002u, (FULL_FRAMES - 9001u) * 2u * sizeof(float)) == 0);
+    CHECK(rendered.object_hash == restored.object_hash);
+    CHECK(rendered.object_frames == restored.object_frames);
+    CHECK(su_audio_events_checkpoint_load(plain.mix.events, blob, written) == SU_E_SCHEMA_MISMATCH);
+    full_destroy(&plain);
+    full_destroy(&rendered);
+    full_destroy(&restored);
+}
 
 /* Clustering consumes voice identity and pre-master buses without changing the stereo output. */
 static void test_cluster_feed(void) {
@@ -1425,6 +1595,8 @@ int main(int argc, char **argv) {
         }
     }
     synthesize();
+    test_authored_loudness();
+    test_object_output();
     test_shared_spatial_controls();
     test_cluster_feed();
     test_checkpoints();
