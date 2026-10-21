@@ -10,6 +10,7 @@ typedef struct SuAudioBusGain {
     float gain_db;
 } SuAudioBusGain;
 
+uint64_t su_audio_music_config_hash(const SuAudioMusic *music);
 uint32_t su_audio_switch_mix_latched(const SuAudioParams *params, SuAudioParamTarget target,
     SuAudioSwitchId id, uint32_t initial, uint64_t start, uint64_t now, SuAudioSwitchMix *out);
 

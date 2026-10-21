@@ -202,6 +202,13 @@ typedef struct SuAudioTempoPoint {
     uint32_t bpm_milli;
 } SuAudioTempoPoint;
 
+typedef struct SuAudioMusicStreamSource {
+    const char *path;
+    const void *bytes;
+    size_t byte_count;
+    uint32_t ring_frames;
+} SuAudioMusicStreamSource;
+
 typedef struct SuAudioMusicSegmentDesc {
     uint32_t struct_size;
     uint32_t segment_id;
@@ -214,6 +221,7 @@ typedef struct SuAudioMusicSegmentDesc {
     uint32_t cue_count;
     uint64_t length_frames;
     uint32_t loop;
+    const SuAudioMusicStreamSource *stream_stems;
 } SuAudioMusicSegmentDesc;
 
 typedef struct SuMusicTransition {
