@@ -57,9 +57,10 @@ compatibility gaps. The engine writes no files.
 
 The control-plane methods `audio.inspect`, `audio.trace.read`,
 `audio.trace.stats` and `audio.render.offline` are implemented by
-`su_audio_system_control` for a host's control plane. The engine's agent
-control plane (world and capsule methods) does not host an audio system, so
-they are not registered there.
+`su_audio_system_control` for a host's control plane. A host can also register
+its system with the engine's agent control plane through
+`SuAgentConfig.audio_system`; see [AGENT_RPC.md](AGENT_RPC.md) for discovery,
+request validation, lifetime and local-session authorization requirements.
 
 ## Acceptance fixture and command
 

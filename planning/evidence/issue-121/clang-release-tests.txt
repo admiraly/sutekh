@@ -1,0 +1,295 @@
+Test project C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/i121/build-i121
+        Start  55: migration_model
+        Start  79: host_ops_fixture
+        Start  76: host_replay_record
+        Start  10: num_model
+  1/139 Test  #55: migration_model ...................   Passed    0.10 sec
+  2/139 Test  #79: host_ops_fixture ..................   Passed    0.10 sec
+        Start  15: space3d_geom
+        Start  16: space3d_mesh
+  3/139 Test  #76: host_replay_record ................   Passed    0.10 sec
+        Start  17: space3d_ops
+  4/139 Test  #16: space3d_mesh ......................   Passed   25.97 sec
+        Start  26: rts_native_diff
+  5/139 Test  #15: space3d_geom ......................   Passed   26.00 sec
+        Start  12: ir03_diff
+  6/139 Test  #17: space3d_ops .......................   Passed   28.71 sec
+        Start  13: ir04_diff
+  7/139 Test  #10: num_model .........................   Passed   34.17 sec
+        Start  21: tick_workers
+  8/139 Test  #26: rts_native_diff ...................   Passed   10.61 sec
+        Start  99: render_texfx
+  9/139 Test  #13: ir04_diff .........................   Passed   11.59 sec
+        Start 100: render_paint
+ 10/139 Test  #12: ir03_diff .........................   Passed   14.49 sec
+        Start 114: audio_stream
+ 11/139 Test  #99: render_texfx ......................   Passed    4.37 sec
+        Start  20: scheduler
+ 12/139 Test #100: render_paint ......................   Passed    2.83 sec
+        Start  96: render_bloom
+ 13/139 Test #114: audio_stream ......................   Passed    3.44 sec
+        Start 118: audio_callback
+ 14/139 Test  #21: tick_workers ......................   Passed   11.35 sec
+        Start 102: demo_offscreen_rollback
+ 15/139 Test #118: audio_callback ....................   Passed    2.26 sec
+        Start 117: audio_asset
+ 16/139 Test  #96: render_bloom ......................   Passed    3.29 sec
+        Start  73: host_rollback_dll
+ 17/139 Test #102: demo_offscreen_rollback ...........   Passed    1.59 sec
+        Start  72: host_rollback
+ 18/139 Test #117: audio_asset .......................   Passed    1.42 sec
+        Start 132: audio_system
+ 19/139 Test  #73: host_rollback_dll .................   Passed    1.19 sec
+        Start  40: recovery
+ 20/139 Test  #72: host_rollback .....................   Passed    1.26 sec
+        Start  32: rts_model_digest
+ 21/139 Test #132: audio_system ......................***Failed    1.42 sec
+line 596: su_audio_system_journal(system, &journal, &count) == SU_OK && count > 10u
+audio_system: PULL render, 19 owner frames with a 150 ms stall, 0 underruns, replay identical
+audio_system: sum groups add gain, pitch and low-pass terms
+audio_system: 4368 checks, 1 failures
+
+        Start  33: rts_ctrl_engine
+ 22/139 Test  #32: rts_model_digest ..................   Passed    2.16 sec
+        Start  80: host_ops
+ 23/139 Test  #33: rts_ctrl_engine ...................   Passed    1.67 sec
+        Start  18: control
+ 24/139 Test  #80: host_ops ..........................   Passed    1.70 sec
+ 25/139 Test  #40: recovery ..........................   Passed    4.51 sec
+        Start  44: cmdq
+        Start  81: host_ops_dll
+ 26/139 Test  #18: control ...........................   Passed    1.80 sec
+        Start  97: render_particles
+ 27/139 Test  #81: host_ops_dll ......................   Passed    1.55 sec
+        Start  31: rts_replay_engine
+ 28/139 Test  #97: render_particles ..................   Passed    1.72 sec
+        Start 107: render_assets
+ 29/139 Test  #31: rts_replay_engine .................   Passed    1.55 sec
+        Start  29: rts_load_engine
+ 30/139 Test #107: render_assets .....................   Passed    1.93 sec
+        Start   7: num_fast
+ 31/139 Test  #29: rts_load_engine ...................   Passed    1.09 sec
+        Start  57: migration_runtime
+ 32/139 Test   #7: num_fast ..........................   Passed    1.20 sec
+        Start  34: reload
+ 33/139 Test  #34: reload ............................   Passed    1.16 sec
+        Start   9: num
+ 34/139 Test  #57: migration_runtime .................   Passed    2.66 sec
+        Start  95: render_haze
+ 35/139 Test   #9: num ...............................   Passed    1.30 sec
+        Start  98: render_flame
+ 36/139 Test  #95: render_haze .......................   Passed    1.09 sec
+        Start  93: render_offscreen
+ 37/139 Test  #98: render_flame ......................   Passed    0.98 sec
+        Start   2: entities
+ 38/139 Test  #93: render_offscreen ..................   Passed    0.77 sec
+        Start  94: render_distortion
+ 39/139 Test  #44: cmdq ..............................   Passed    8.90 sec
+        Start 129: audio_offline
+ 40/139 Test   #2: entities ..........................   Passed    1.26 sec
+        Start 115: audio_device
+ 41/139 Test  #94: render_distortion .................   Passed    1.22 sec
+        Start  56: migration
+ 42/139 Test #129: audio_offline .....................   Passed    1.20 sec
+        Start  61: rts_e2e_edges
+ 43/139 Test  #56: migration .........................   Passed    0.71 sec
+        Start   8: num_fast_portable
+ 44/139 Test #115: audio_device ......................   Passed    0.95 sec
+        Start  28: rts_replay
+ 45/139 Test  #28: rts_replay ........................   Passed    0.56 sec
+        Start 124: audio_controls_identical
+ 46/139 Test   #8: num_fast_portable .................   Passed    0.90 sec
+        Start 138: space3d_serve
+ 47/139 Test  #61: rts_e2e_edges .....................   Passed    2.08 sec
+        Start 108: render_ghost
+ 48/139 Test #124: audio_controls_identical ..........   Passed    1.00 sec
+        Start 109: render_sampler
+ 49/139 Test #138: space3d_serve .....................   Passed    0.94 sec
+        Start  85: host_rollback_bench_smoke
+ 50/139 Test #108: render_ghost ......................   Passed    0.84 sec
+        Start 103: asset_pak
+ 51/139 Test  #85: host_rollback_bench_smoke .........   Passed    0.61 sec
+        Start  30: rts_caps_engine
+ 52/139 Test #109: render_sampler ....................   Passed    0.72 sec
+        Start  67: rts_b1_hidden
+ 53/139 Test #103: asset_pak .........................   Passed    0.48 sec
+        Start  27: rts_ref_m3_mutants
+ 54/139 Test  #27: rts_ref_m3_mutants ................   Passed    0.25 sec
+        Start 123: audio_runtime
+ 55/139 Test  #30: rts_caps_engine ...................   Passed    0.68 sec
+        Start  62: rts_projectile_mutant
+ 56/139 Test  #67: rts_b1_hidden .....................   Passed    0.74 sec
+        Start  65: rts_b2_hidden
+ 57/139 Test #123: audio_runtime .....................   Passed    0.33 sec
+        Start  68: rts_b1_install
+ 58/139 Test  #62: rts_projectile_mutant .............   Passed    0.32 sec
+        Start 133: audio_system_alloc
+ 59/139 Test  #65: rts_b2_hidden .....................   Passed    0.41 sec
+        Start 137: space3d_racer_replay
+ 60/139 Test #133: audio_system_alloc ................   Passed    0.24 sec
+        Start  66: rts_b2_install
+ 61/139 Test  #68: rts_b1_install ....................   Passed    0.36 sec
+        Start  64: rts_b3_install
+ 62/139 Test #137: space3d_racer_replay ..............   Passed    0.24 sec
+        Start  63: rts_b3_hidden
+ 63/139 Test  #66: rts_b2_install ....................   Passed    0.24 sec
+        Start 131: audio_acceptance
+ 64/139 Test  #64: rts_b3_install ....................   Passed    0.23 sec
+        Start  75: host_replay
+ 65/139 Test  #63: rts_b3_hidden .....................   Passed    0.22 sec
+        Start  92: render_shaders_fresh
+ 66/139 Test #131: audio_acceptance ..................   Passed    0.17 sec
+        Start 128: audio_voice_policy
+ 67/139 Test  #75: host_replay .......................   Passed    0.19 sec
+        Start  42: containment_win
+ 68/139 Test  #92: render_shaders_fresh ..............   Passed    0.13 sec
+        Start  54: entity_tick
+ 69/139 Test #128: audio_voice_policy ................   Passed    0.16 sec
+        Start  69: rts_behavior_regeneration
+ 70/139 Test  #69: rts_behavior_regeneration .........   Passed    0.10 sec
+        Start  35: snapshot_cp
+ 71/139 Test  #42: containment_win ...................   Passed    0.24 sec
+        Start   1: world
+ 72/139 Test  #54: entity_tick .......................   Passed    0.27 sec
+        Start 120: audio_cluster
+ 73/139 Test   #1: world .............................   Passed    0.10 sec
+        Start 130: audio_inspect
+ 74/139 Test  #35: snapshot_cp .......................   Passed    0.21 sec
+        Start  58: migration_alloc_points
+ 75/139 Test #120: audio_cluster .....................   Passed    0.14 sec
+        Start 139: space3d_racer_generated
+ 76/139 Test  #58: migration_alloc_points ............   Passed    0.08 sec
+        Start 101: demo_headless_rollback
+ 77/139 Test #130: audio_inspect .....................   Passed    0.13 sec
+        Start  59: migration_alloc_points_selftest
+ 78/139 Test  #59: migration_alloc_points_selftest ...   Passed    0.05 sec
+        Start  84: example_arena_generated
+ 79/139 Test #139: space3d_racer_generated ...........   Passed    0.09 sec
+        Start 126: audio_parameter
+ 80/139 Test #101: demo_headless_rollback ............   Passed    0.11 sec
+        Start 113: audio_lowpass
+ 81/139 Test  #84: example_arena_generated ...........   Passed    0.06 sec
+        Start 111: render_font_fresh
+ 82/139 Test #113: audio_lowpass .....................   Passed    0.07 sec
+        Start  83: example_arena_host_respond
+ 83/139 Test #111: render_font_fresh .................   Passed    0.05 sec
+        Start  87: input_win32
+ 84/139 Test #126: audio_parameter ...................   Passed    0.12 sec
+        Start  82: example_arena_host
+ 85/139 Test  #87: input_win32 .......................   Passed    0.05 sec
+ 86/139 Test  #82: example_arena_host ................   Passed    0.05 sec
+        Start  24: rts_native_ops
+        Start 127: audio_bus
+ 87/139 Test  #83: example_arena_host_respond ........   Passed    0.12 sec
+        Start   4: ir
+ 88/139 Test  #24: rts_native_ops ....................   Passed    0.05 sec
+        Start 116: audio_adpcm
+ 89/139 Test #127: audio_bus .........................   Passed    0.08 sec
+        Start 112: audio_mixer
+ 90/139 Test #116: audio_adpcm .......................   Passed    0.05 sec
+        Start  22: host_entry
+ 91/139 Test   #4: ir ................................   Passed    0.06 sec
+        Start  25: rts_native_records
+ 92/139 Test  #25: rts_native_records ................   Passed    0.03 sec
+        Start  52: world_entities
+ 93/139 Test #112: audio_mixer .......................   Passed    0.06 sec
+        Start  11: ir03
+ 94/139 Test  #52: world_entities ....................   Passed    0.06 sec
+ 95/139 Test  #11: ir03 ..............................   Passed    0.07 sec
+        Start 106: asset_gltf
+        Start 105: asset_dds
+ 96/139 Test #106: asset_gltf ........................   Passed    0.04 sec
+        Start  88: render_util
+ 97/139 Test  #22: host_entry ........................   Passed    0.15 sec
+        Start  37: world_restore_null
+ 98/139 Test #105: asset_dds .........................   Passed    0.06 sec
+        Start  71: host_api_dll
+ 99/139 Test  #88: render_util .......................   Passed    0.07 sec
+100/139 Test  #37: world_restore_null ................   Passed    0.07 sec
+101/139 Test  #71: host_api_dll ......................   Passed    0.04 sec
+        Start  43: hardening
+        Start  77: host_replay_verify_dll
+        Start  70: host_api
+102/139 Test  #70: host_api ..........................   Passed    0.05 sec
+        Start  48: rts_control_domains
+103/139 Test  #43: hardening .........................   Passed    0.06 sec
+        Start   5: vm
+104/139 Test  #77: host_replay_verify_dll ............   Passed    0.08 sec
+        Start  89: haze_math
+105/139 Test   #5: vm ................................   Passed    0.04 sec
+        Start  78: example_minimal_host
+106/139 Test  #48: rts_control_domains ...............   Passed    0.05 sec
+        Start  47: rts_world_spawn_batch
+107/139 Test  #89: haze_math .........................   Passed    0.07 sec
+        Start  23: host_restore
+108/139 Test  #47: rts_world_spawn_batch .............   Passed    0.06 sec
+        Start 135: host04
+109/139 Test  #78: example_minimal_host ..............   Passed    0.06 sec
+        Start 136: space3d_bind
+110/139 Test #135: host04 ............................   Passed    0.06 sec
+111/139 Test  #23: host_restore ......................   Passed    0.07 sec
+        Start  49: cmdq_percap
+        Start 122: audio_graph_alloc
+112/139 Test #136: space3d_bind ......................   Passed    0.07 sec
+        Start  36: world_ext_retired
+113/139 Test #122: audio_graph_alloc .................   Passed    0.03 sec
+        Start  38: lir_oom
+114/139 Test  #49: cmdq_percap .......................   Passed    0.04 sec
+        Start  46: rts_world_set_fields
+115/139 Test  #46: rts_world_set_fields ..............   Passed    0.03 sec
+        Start  53: churn
+116/139 Test  #36: world_ext_retired .................   Passed    0.06 sec
+        Start  14: ir04
+117/139 Test  #38: lir_oom ...........................   Passed    0.05 sec
+        Start 110: render_portable
+118/139 Test #110: render_portable ...................   Passed    0.05 sec
+119/139 Test  #14: ir04 ..............................   Passed    0.06 sec
+120/139 Test  #53: churn .............................   Passed    0.07 sec
+        Start 134: host03
+        Start  90: particles
+        Start   3: world_acct
+121/139 Test #134: host03 ............................   Passed    0.04 sec
+        Start  86: input_map
+122/139 Test  #90: particles .........................   Passed    0.05 sec
+        Start  74: host_clock
+123/139 Test   #3: world_acct ........................   Passed    0.05 sec
+        Start 104: asset_bc
+124/139 Test  #86: input_map .........................   Passed    0.05 sec
+        Start 125: audio_event
+125/139 Test #104: asset_bc ..........................   Passed    0.05 sec
+        Start  45: cmdq_admission
+126/139 Test  #74: host_clock ........................   Passed    0.06 sec
+        Start   6: vm_tiers
+127/139 Test  #45: cmdq_admission ....................   Passed    0.03 sec
+        Start  19: snapshot
+128/139 Test #125: audio_event .......................   Passed    0.05 sec
+        Start 121: audio_graph
+129/139 Test   #6: vm_tiers ..........................   Passed    0.04 sec
+        Start 119: audio_spatial
+130/139 Test #121: audio_graph .......................   Passed    0.02 sec
+        Start  91: point_lights_math
+131/139 Test #119: audio_spatial .....................   Passed    0.03 sec
+        Start  39: path_fifo
+132/139 Test  #19: snapshot ..........................   Passed    0.05 sec
+        Start  41: containment
+133/139 Test  #91: point_lights_math .................   Passed    0.04 sec
+134/139 Test  #41: containment .......................***Skipped   0.04 sec
+135/139 Test  #39: path_fifo .........................***Skipped   0.10 sec
+136/139 Test  #20: scheduler .........................   Passed   28.74 sec
+        Start  50: rts_capacity
+137/139 Test  #50: rts_capacity ......................   Passed    3.09 sec
+        Start  60: rts_snapshot_limit
+138/139 Test  #60: rts_snapshot_limit ................   Passed    3.02 sec
+        Start  51: rts_churn
+139/139 Test  #51: rts_churn .........................   Passed    1.30 sec
+
+99% tests passed, 1 tests failed out of 139
+
+Total Test time (real) =  77.22 sec
+
+The following tests did not run:
+	 39 - path_fifo (Skipped)
+	 41 - containment (Skipped)
+
+The following tests FAILED:
+	132 - audio_system (Failed)
