@@ -1,0 +1,104 @@
+{
+  "issue": 122,
+  "date": "2026-10-21",
+  "branch": "feat/issue-122-loudness-objects",
+  "base_commit": "7aa23242a98fc29ebcd364b3a806129c69f7d1c1",
+  "profile": "audio_float_local_v1",
+  "source_sha256": {
+    "include/sutekh/audio_cluster.h": "2b7039700a53c6d9e110d555b2fb0d0fdd46968dd1bff4eecf3ceb172790bb09",
+    "include/sutekh/audio_event.h": "3c0321e3921f248a913112e85407301bdf2b23f695d6b9967bccf3e6b1dc9610",
+    "include/sutekh/audio_system.h": "1a5a02974b8b176378c3db48d6abcdef89ec817af6c95e5c6382b1b6ca1aa182",
+    "src/audio/su_audio_cluster.c": "4af28356da02e32a0eac3ae4eeb6fb07b876af9c8a438ca33c0dc3eb4aa3d373",
+    "src/audio/su_audio_event.c": "414bfab06848be7331d9456a5f1355d8c5178f50247abb109ef7b70907fa6fa5",
+    "src/audio/su_audio_system.c": "c6eb9c84c0520b7f7443767e5e266662ac63223023905aa2a38a0ad3ee28f06f",
+    "src/audio/su_audio_voice_int.h": "8ed4c855e9d0eef6d4eb370705784319fe4f8508ba3272a28128b19854207368",
+    "src/audio/su_audio_voice_policy.c": "06025b49728bf864830fa74d6748caf88da8b9627087dbe8665d463844de68a1",
+    "tests/audio/test_audio_cluster.c": "149bbf1b539a26371a3c741167e1950897110f3f0fb2e0781d7603b38afbba6b",
+    "tests/audio/test_audio_runtime.c": "98af267baee16352eaaf70d19bb3f7ba2f18f093906c6f2f6f4b09d20a6a3f06",
+    "tests/audio/test_audio_system.c": "d563c6d382f971d91011bb431790238a8b2d55110e84bc6488224f570e9f03c0"
+  },
+  "artifact_sha256": {
+    "build-i122/test_audio_runtime.exe": "c0eef3f61e4f0055eff41df74e2cd0f2ce27174cd7b2bfa4652adeb2dde54240",
+    "build-i122/test_audio_cluster.exe": "96b54b4c4eca28ca2a733460a63b29b549b6afae0f22d0d0dd81616a891a3b60",
+    "build-i122/test_audio_system.exe": "e6a03dc5207325bc1c9afc62e02d7f36ea8f9736c088b5464008fc52427ed0d0",
+    "build-i122/test_audio_system_alloc.exe": "332f90b75b630fdd49b1875eb763378fc3e254d78685dcfb5cf592acc0d43649",
+    "build-i122-msvc/test_audio_runtime.exe": "04d3b6adb9e67ad48696dac8cb3f06384c59b78b7e357b80bed40b37d437bced",
+    "build-i122-msvc/test_audio_cluster.exe": "b3b7bcbfeee10b38996778e3188783a3273297bb979bce193be9bf3625b239d0",
+    "build-i122-msvc/test_audio_system.exe": "4eea51e1d645007e2ae2499a65700bb4855ec68bc793a11a86d8d37baf08ec1f",
+    "build-i122-msvc/test_audio_system_alloc.exe": "ff1f3507ead976ba18d8a9fb1f456e814960cc35d82e0948825b9368e48af02f",
+    "build-i122-asan/test_audio_runtime.exe": "44ee8b845ddd1ca4c78fcebea50482c2c445d2c1ef4b9e8546a6735289dae636",
+    "build-i122-asan/test_audio_cluster.exe": "f2bed4d4f129ee7f1309871f7fa06f6b9b2d261442aaa63b4cdecb850a01a77a",
+    "build-i122-asan/test_audio_system.exe": "4f751a4950072910c5cae6c44ebf163840f3223cf04633d09c722cd8120e7e95",
+    "build-i122-asan/test_audio_system_alloc.exe": "d85c8a599fd121916f350967063a49893f34289d0a136ac2d9f6c6b38bd60c40"
+  },
+  "builds": [
+    {
+      "directory": "build-i122",
+      "compiler": "Clang 23.1.3",
+      "flags": "C17 -Wall -Wextra -Werror -pedantic Debug",
+      "configure": "cmake -S . -B build-i122 -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=OFF",
+      "build": "cmake --build build-i122 -j 4",
+      "test": "ctest --test-dir build-i122 --output-on-failure -j 4",
+      "exit_code": 0,
+      "passed": 123,
+      "skipped": [
+        "path_fifo",
+        "containment"
+      ],
+      "failed": 0,
+      "ctest_wall_seconds": 77.77,
+      "audio_sequential": {
+        "command": "ctest --test-dir build-i122 -R '^audio_' --output-on-failure -j 1",
+        "passed": 21,
+        "failed": 0,
+        "exit_code": 0
+      }
+    },
+    {
+      "directory": "build-i122-msvc",
+      "compiler": "MSVC 19.44.35229",
+      "flags": "C17 /W4 /WX Debug",
+      "configure": "cmake -S . -B build-i122-msvc -G Ninja -DCMAKE_C_COMPILER=cl -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=OFF",
+      "build": "cmake --build build-i122-msvc -j 4 --target test_audio_runtime test_audio_cluster test_audio_system test_audio_system_alloc test_audio_voice_policy test_audio_bus test_audio_acceptance",
+      "test": "ctest --test-dir build-i122-msvc -R '^(audio_runtime|audio_cluster|audio_system|audio_system_alloc|audio_voice_policy|audio_bus|audio_acceptance)$' --output-on-failure -j 1",
+      "passed": 7,
+      "failed": 0,
+      "exit_code": 0,
+      "ctest_wall_seconds": 2.78
+    },
+    {
+      "directory": "build-i122-asan",
+      "compiler": "Clang 23.1.3",
+      "flags": "C17 -Wall -Wextra -Werror -pedantic -fsanitize=address Debug",
+      "configure": "cmake -S . -B build-i122-asan -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Debug -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=OFF -DCMAKE_C_FLAGS=-fsanitize=address",
+      "build": "cmake --build build-i122-asan --target test_audio_runtime test_audio_cluster test_audio_voice_policy test_audio_system test_audio_system_alloc test_audio_acceptance -j 4",
+      "test": "ctest --test-dir build-i122-asan -R '^(audio_runtime|audio_cluster|audio_voice_policy|audio_system|audio_system_alloc|audio_acceptance)$' --output-on-failure --timeout 45 -j 1",
+      "passed": 6,
+      "failed": 0,
+      "exit_code": 0,
+      "ctest_wall_seconds": 4.21
+    }
+  ],
+  "regressions": {
+    "audio_runtime_checks": 356719,
+    "audio_cluster_checks": 863,
+    "voice_policy_trace_hash": "28b457861b3f619c",
+    "stereo_bit_identity": "passed",
+    "partial_quantum_hdr_checkpoint_pcm": "passed",
+    "partial_quantum_speaker_checkpoint_hash": "passed",
+    "speaker_crossfade_chunk_identity": "passed",
+    "speaker_steady_state_allocations": 0
+  },
+  "earlier_attempts": [
+    "MSVC configure initially lacked SDK rc/mt on PATH; fixed environment, final build passed.",
+    "One parallel MSVC audio_system run under concurrent full-suite load hit existing PULL test count > 10u timing assertion. Immediate isolated rerun and final sequential run passed; unrelated test unchanged.",
+    "Initial ASan test invocation lacked the runtime DLL directory on PATH and stalled at loader startup; stopped only that worktree test/ctest process and reran with the LLVM runtime directory on PATH."
+  ],
+  "unrun": [
+    "GCC 16.2/Linux (no local toolchain)",
+    "Vulkan renderer (disabled)",
+    "native tier (disabled)",
+    "PR CI (not awaited)"
+  ],
+  "performance_claims": null
+}

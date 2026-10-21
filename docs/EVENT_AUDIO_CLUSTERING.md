@@ -101,11 +101,45 @@ blocks: update about 25-40 us, stereo reference render about 460 us per block;
 prepared payload 92352 bytes for 256 objects. Preparation (create) allocates;
 steady state does not. These are observations, not a latency distribution.
 
+## Speaker-layout reference renderer
+
+`su_audio_cluster_render_speakers(cluster, objects, count, frames, layout, out)`
+is an alternative to `su_audio_cluster_render`, not a second render of the
+same quantum: both advance the shared clock and membership crossfades.
+It consumes the same last-updated object array and writes interleaved PCM
+with `layout.count` channels. Render reads each object's PCM starting at frame
+zero; advance those pointers when splitting one updated array across calls.
+`su_audio_speaker_layout_validate` validates a layout without changing state.
+
+`SuAudioSpeakerLayout` contains 2-16 finite, nonzero speaker directions in
+listener coordinates (x right, y up, z as in the object directions), plus
+distinct zero-based `bed_left` and `bed_right` channel indices. Directions
+are normalized at render time. Stereo beds pass through to those channels;
+mono beds use equal-power left/right gains. Other channels receive no beds.
+
+Directional outputs use the assigned cluster centroid, or their dedicated
+output direction, never the original member direction as a substitute for
+clustering. For each speaker the weight is `max(0, dot(direction, speaker))^2`;
+weights are normalized to unit summed squared gain. A non-directional output
+uses equal power across every speaker. If every speaker faces away, the
+nearest speaker is selected (layout order breaks ties). Previous/current
+output gains crossfade per sample with the existing membership ramp, and
+draining references retire at the same frame as in the stereo renderer.
+The same linear crossfade law has the same possible midpoint energy dip as
+the stereo reference. Rendering allocates nothing. Invalid layouts, IDs or
+PCM/channel descriptors are rejected before output or cluster state changes.
+
+The integrated runtime and combined system can deliver this reference output
+to an optional per-quantum callback independently of stereo; see
+[EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md).
+
 ## Not covered
 
 Update cost scales with objects times cluster slots (`max_objects`), and budget
-merges are quadratic in live clusters; both are bounded by the descriptor. Only
-the CPU stereo reference exists: no object/height backend adapter is admitted.
+merges are quadratic in live clusters; both are bounded by the descriptor.
+The CPU speaker panner supports height but is not VBAP or an HRTF renderer.
+There is no platform object/height backend, multichannel device adapter,
+speaker calibration or LFE/bass management.
 The integrated event runtime feeds clustering from voice identity and
 pre-master bus outputs, with RMS measured from the rendered PCM; see
 [EVENT_AUDIO_INTEGRATION.md](EVENT_AUDIO_INTEGRATION.md).

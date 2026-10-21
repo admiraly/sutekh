@@ -629,6 +629,115 @@ uint32_t su_audio_cluster_render(SuAudioCluster *cluster, const SuAudioClusterOb
     return SU_OK;
 }
 
+uint32_t su_audio_speaker_layout_validate(const SuAudioSpeakerLayout *layout) {
+    uint32_t channel;
+    if (layout == NULL || layout->count < 2u || layout->count > SU_AUDIO_CLUSTER_MAX_SPEAKERS
+        || layout->bed_left >= layout->count || layout->bed_right >= layout->count
+        || layout->bed_left == layout->bed_right) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (channel = 0u; channel < layout->count; channel++) {
+        SuVec3f direction = layout->directions[channel];
+        if (!isfinite(direction.x) || !isfinite(direction.y) || !isfinite(direction.z)
+            || is_zero(normalize(direction))) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    return SU_OK;
+}
+
+static void speaker_gains(SuVec3f direction, const SuVec3f *speakers, uint32_t count, float *gains) {
+    double energy = 0.0;
+    double nearest_dot = -2.0;
+    uint32_t nearest = 0u;
+    uint32_t channel;
+    for (channel = 0u; channel < count; channel++) {
+        double dot = (double)direction.x * speakers[channel].x + (double)direction.y * speakers[channel].y
+            + (double)direction.z * speakers[channel].z;
+        double weight = is_zero(direction) ? 1.0 : (dot > 0.0 ? dot * dot : 0.0);
+        if (dot > nearest_dot) {
+            nearest_dot = dot;
+            nearest = channel;
+        }
+        gains[channel] = (float)weight;
+        energy += weight * weight;
+    }
+    if (energy > 1e-20) {
+        float scale = (float)(1.0 / sqrt(energy));
+        for (channel = 0u; channel < count; channel++) gains[channel] *= scale;
+    } else {
+        memset(gains, 0, (size_t)count * sizeof *gains);
+        gains[nearest] = 1.0f;
+    }
+}
+
+uint32_t su_audio_cluster_render_speakers(SuAudioCluster *cluster, const SuAudioClusterObject *objects,
+                                         uint32_t count, uint32_t frames, const SuAudioSpeakerLayout *layout,
+                                         float *out) {
+    SuVec3f speakers[SU_AUDIO_CLUSTER_MAX_SPEAKERS];
+    ObjState *states;
+    uint32_t index;
+    uint32_t channel;
+    uint32_t frame;
+    if (cluster == NULL || out == NULL || (count != 0u && objects == NULL)
+        || su_audio_speaker_layout_validate(layout) != SU_OK
+        || count != cluster->counts[cluster->current] || cluster->clock > UINT64_MAX - frames
+        || (size_t)frames > SIZE_MAX / layout->count / sizeof *out) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    states = cluster->states[cluster->current];
+    for (index = 0u; index < count; index++) {
+        const SuAudioClusterObject *object;
+        if (states[index].input >= count) return SU_E_INVALID_ARGUMENT;
+        object = &objects[states[index].input];
+        if (object->id != states[index].id || object->pcm == NULL
+            || (object->channels != 1u && object->channels != 2u)) return SU_E_INVALID_ARGUMENT;
+    }
+    for (channel = 0u; channel < layout->count; channel++) {
+        speakers[channel] = normalize(layout->directions[channel]);
+    }
+    memset(out, 0, (size_t)frames * layout->count * sizeof *out);
+    for (index = 0u; index < count; index++) {
+        ObjState *state = &states[index];
+        const SuAudioClusterObject *object = &objects[state->input];
+        float current[SU_AUDIO_CLUSTER_MAX_SPEAKERS];
+        float previous[SU_AUDIO_CLUSTER_MAX_SPEAKERS];
+        uint32_t fade = cluster->desc.crossfade_frames;
+        if (state->role == SU_AUDIO_CLUSTER_ROLE_BED) {
+            for (frame = 0u; frame < frames; frame++) {
+                size_t offset = (size_t)frame * layout->count;
+                out[offset + layout->bed_left] += object->channels == 2u
+                    ? object->pcm[(size_t)frame * 2u] : object->pcm[frame] * DOWNMIX_GAIN;
+                out[offset + layout->bed_right] += object->channels == 2u
+                    ? object->pcm[(size_t)frame * 2u + 1u] : object->pcm[frame] * DOWNMIX_GAIN;
+            }
+            continue;
+        }
+        speaker_gains(output_dir(cluster, state), speakers, layout->count, current);
+        speaker_gains(state->prev_dir, speakers, layout->count, previous);
+        for (frame = 0u; frame < frames; frame++) {
+            float sample = object->channels == 2u
+                ? (object->pcm[(size_t)frame * 2u] + object->pcm[(size_t)frame * 2u + 1u]) * DOWNMIX_GAIN
+                : object->pcm[frame];
+            float gain = 1.0f;
+            if (state->prev_output_id != 0u && (uint64_t)state->fade_pos + frame < fade) {
+                gain = (float)(((double)state->fade_pos + frame) / (double)fade);
+            }
+            for (channel = 0u; channel < layout->count; channel++) {
+                out[(size_t)frame * layout->count + channel] += sample
+                    * (gain * current[channel] + (1.0f - gain) * previous[channel]);
+            }
+        }
+        if (state->prev_output_id != 0u) {
+            if ((uint64_t)state->fade_pos + frames >= fade) end_fade(cluster, state);
+            else state->fade_pos += frames;
+        }
+    }
+    cluster->clock += frames;
+    cluster->stats.clock = cluster->clock;
+    return SU_OK;
+}
+
 uint32_t su_audio_cluster_outputs(const SuAudioCluster *cluster, SuAudioClusterOutput *out, uint32_t capacity,
                                   uint32_t *count) {
     uint32_t n = 0u;

@@ -663,6 +663,131 @@ static void steady_state_and_cost(void) {
     free(out);
 }
 
+static void speaker_cluster_fades(void) {
+    SuAudioClusterDesc desc = desc_default();
+    SuAudioSpeakerLayout layout;
+    SuAudioCluster *cluster;
+    SuAudioCluster *chunked;
+    SuAudioClusterObject objects[3];
+    SuAudioClusterAssoc assoc;
+    float pcm[8] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    float result[8];
+    float split[8];
+    uint32_t index;
+    desc.crossfade_frames = 4u;
+    cluster = make(&desc);
+    chunked = make(&desc);
+    memset(&layout, 0, sizeof layout);
+    layout.count = 2u;
+    layout.bed_right = 1u;
+    layout.directions[0].x = -1.0f;
+    layout.directions[1].x = 1.0f;
+    objects[0] = object(1u, -PI_D * 0.5, 1.0f);
+    objects[1] = object(2u, -PI_D * 0.5, 1.0f);
+    objects[2] = object(3u, PI_D * 0.5, 1.0f);
+    for (index = 0u; index < 3u; index++) objects[index].pcm = pcm;
+    CHECK(su_audio_cluster_update(cluster, objects, 3u) == SU_OK);
+    CHECK(su_audio_cluster_update(chunked, objects, 3u) == SU_OK);
+    objects[1].direction = objects[2].direction;
+    CHECK(su_audio_cluster_update(cluster, objects, 3u) == SU_OK);
+    CHECK(su_audio_cluster_update(chunked, objects, 3u) == SU_OK);
+    assoc = find_assoc(cluster, 2u);
+    CHECK(assoc.previous_output_id != 0u);
+    CHECK(su_audio_cluster_render_speakers(cluster, objects, 3u, 4u, &layout, result) == SU_OK);
+    CHECK(su_audio_cluster_render_speakers(chunked, objects, 3u, 1u, &layout, split) == SU_OK);
+    for (index = 0u; index < 3u; index++) objects[index].pcm++;
+    CHECK(su_audio_cluster_render_speakers(chunked, objects, 3u, 3u, &layout, split + 2u) == SU_OK);
+    CHECK(memcmp(result, split, sizeof result) == 0);
+    CHECK(result[0] == 2.0f && result[1] == 1.0f);
+    CHECK(result[6] == 1.25f && result[7] == 1.75f);
+    CHECK(find_assoc(cluster, 2u).previous_output_id == 0u);
+    su_audio_cluster_destroy(cluster);
+    su_audio_cluster_destroy(chunked);
+    desc.crossfade_frames = 0u;
+    desc.width_rad = 2.0f;
+    cluster = make(&desc);
+    objects[0].direction = layout.directions[0];
+    objects[1].direction.x = 0.0f;
+    objects[1].direction.y = 1.0f;
+    objects[1].direction.z = 0.0f;
+    layout.directions[1] = objects[1].direction;
+    CHECK(su_audio_cluster_update(cluster, objects, 2u) == SU_OK);
+    CHECK(find_assoc(cluster, 1u).output_id == find_assoc(cluster, 2u).output_id);
+    CHECK(su_audio_cluster_render_speakers(cluster, objects, 2u, 1u, &layout, result) == SU_OK);
+    CHECK(fabsf(result[0] - 1.41421356f) < 1e-6f && result[0] == result[1]);
+    su_audio_cluster_destroy(cluster);
+}
+
+static void speaker_renderer(void) {
+    SuAudioSpeakerLayout layout;
+    SuAudioClusterDesc desc = desc_default();
+    SuAudioCluster *cluster = make(&desc);
+    SuAudioCluster *chunked = make(&desc);
+    SuAudioClusterObject objects[2];
+    SuAudioClusterOutput outputs[4];
+    SuAudioClusterStats before;
+    SuAudioClusterStats after;
+    float pcm[8] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    float result[32];
+    float split[32];
+    uint32_t count = 0u;
+    uint32_t frame;
+    unsigned allocated = allocations;
+    memset(&layout, 0, sizeof layout);
+    layout.count = 4u;
+    layout.directions[0].x = -1.0f;
+    layout.directions[1].x = 1.0f;
+    layout.directions[2].y = 1.0f;
+    layout.directions[3].z = 1.0f;
+    layout.bed_right = 1u;
+    CHECK(su_audio_speaker_layout_validate(&layout) == SU_OK);
+    objects[0] = object(1u, 0.0, 1.0f);
+    objects[0].direction.x = 0.0f;
+    objects[0].direction.y = 1.0f;
+    objects[0].direction.z = 0.0f;
+    objects[0].pcm = pcm;
+    CHECK(su_audio_cluster_update(cluster, objects, 1u) == SU_OK);
+    CHECK(su_audio_cluster_outputs(cluster, outputs, 4u, &count) == SU_OK);
+    CHECK(count == 1u && outputs[0].direction.y == 1.0f);
+    CHECK(su_audio_cluster_render_speakers(cluster, objects, 1u, 4u, &layout, result) == SU_OK);
+    for (frame = 0u; frame < 4u; frame++) {
+        CHECK(result[frame * 4u] == 0.0f && result[frame * 4u + 1u] == 0.0f);
+        CHECK(result[frame * 4u + 2u] == 1.0f && result[frame * 4u + 3u] == 0.0f);
+    }
+    objects[1] = object(2u, 0.0, 1.0f);
+    objects[1].flags = SU_AUDIO_CLUSTER_BED;
+    objects[1].channels = 2u;
+    objects[1].pcm = pcm;
+    CHECK(su_audio_cluster_update(cluster, objects, 2u) == SU_OK);
+    CHECK(su_audio_cluster_render_speakers(cluster, objects, 2u, 4u, &layout, result) == SU_OK);
+    CHECK(result[0] == 1.0f && result[1] == 1.0f && result[2] == 1.0f && result[3] == 0.0f);
+    objects[0].direction.y = 0.0f;
+    objects[0].direction.z = 1.0f;
+    CHECK(su_audio_cluster_update(cluster, objects, 2u) == SU_OK);
+    CHECK(su_audio_cluster_update(chunked, objects, 2u) == SU_OK);
+    CHECK(su_audio_cluster_render_speakers(cluster, objects, 2u, 4u, &layout, result) == SU_OK);
+    CHECK(su_audio_cluster_render_speakers(chunked, objects, 2u, 1u, &layout, split) == SU_OK);
+    objects[0].pcm++;
+    objects[1].pcm += 2;
+    CHECK(su_audio_cluster_render_speakers(chunked, objects, 2u, 3u, &layout, split + 4u) == SU_OK);
+    CHECK(memcmp(result, split, 16u * sizeof(float)) == 0);
+    su_audio_cluster_stats(cluster, &before);
+    layout.directions[2].y = NAN;
+    result[0] = 123.0f;
+    CHECK(su_audio_cluster_render_speakers(cluster, objects, 2u, 1u, &layout, result) == SU_E_INVALID_ARGUMENT);
+    CHECK(result[0] == 123.0f);
+    su_audio_cluster_stats(cluster, &after);
+    CHECK(before.clock == after.clock);
+    layout.directions[2].y = 0.0f;
+    CHECK(su_audio_speaker_layout_validate(&layout) == SU_E_INVALID_ARGUMENT);
+    layout.directions[2].y = 1.0f;
+    layout.bed_right = 0u;
+    CHECK(su_audio_speaker_layout_validate(&layout) == SU_E_INVALID_ARGUMENT);
+    CHECK(allocations == allocated);
+    su_audio_cluster_destroy(cluster);
+    su_audio_cluster_destroy(chunked);
+}
+
 int main(void) {
     uint32_t i;
     for (i = 0u; i < FRAMES; i++) {
@@ -673,6 +798,8 @@ int main(void) {
         stereo_left[i * 2u + 1u] = 0.0f;
     }
     validation();
+    speaker_renderer();
+    speaker_cluster_fades();
     close_merge_and_centroid();
     hero_and_exclusions();
     downmix_and_beds();
