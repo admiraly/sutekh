@@ -1,0 +1,30 @@
+{
+  "format": "0.1",
+  "task_ids": ["issue-124"],
+  "owner": "issue-124-implementation",
+  "authorization": "Owner requested streamed music implementation and PR, 2026-10-21",
+  "state": "final_validation",
+  "base_revision": "7aa2324",
+  "worktree": "engines/sutekh-worktrees/i124",
+  "branch": "feat/issue-124-streamed-music",
+  "heartbeat": "2026-10-21",
+  "write_scope": [
+    "include/sutekh/audio_parameter.h",
+    "src/audio/su_audio_music.c",
+    "src/audio/su_audio_parameter_int.h",
+    "src/audio/su_audio_event.c (music layout fingerprint only)",
+    "tests/audio/test_audio_system.c (streamed music coverage only)",
+    "tests/audio/test_audio_music_stream.c",
+    "cmake/SutekhPresentation.cmake (new test registration only)",
+    "docs/EVENT_AUDIO_STREAMED_MUSIC.md",
+    "docs/EVENT_AUDIO_PARAMETERS.md (music capability link only)",
+    "docs/EVENT_AUDIO_INTEGRATION.md (music capability link only)",
+    "docs/EVENT_AUDIO_MIGRATION.md (music stream migration row only)",
+    "planning/leases/issue-124-streamed-music.json",
+    "planning/handoffs/2026-10-21-issue-124-streamed-music.md",
+    "planning/evidence/issue-124-streamed-music.json",
+    "PACK_VALIDATION.json"
+  ],
+  "excluded": ["issues-118-122", "issue-125", "shared-toolchain-junctions", "other-worktrees"],
+  "pending": ["final full suite", "pack and license validation", "commit, push and open PR"]
+}

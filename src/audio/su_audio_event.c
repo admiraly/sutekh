@@ -1495,6 +1495,7 @@ static uint64_t layout_fingerprint(const SuAudioEvents *events) {
     hash = fnv_u64(hash, ((uint64_t)params << 32) | switches);
     hash = fnv_u64(hash, bus_bindings);
     hash = fnv_u64(hash, events->music != NULL);
+    hash = fnv_u64(hash, su_audio_music_config_hash(events->music));
     hash = fnv_u64(hash, events->cluster != NULL ? su_audio_cluster_capacity(events->cluster) : 0u);
     hash = fnv_u64(hash, events->cluster_inputs);
     hash = fnv_u64(hash, events->bed_count);

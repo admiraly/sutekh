@@ -10,6 +10,8 @@ typedef struct SuAudioBusGain {
     float gain_db;
 } SuAudioBusGain;
 
+uint64_t su_audio_music_config_hash(const SuAudioMusic *music);
+
 void su_audio_params_counts(const SuAudioParams *params, uint32_t *param_count, uint32_t *switch_count,
                             uint32_t *bus_binding_count);
 /* Voice controls only (gain, pitch, low-pass) of a voice on bus_id; bus-gain bindings are skipped, and so are

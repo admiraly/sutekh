@@ -124,7 +124,8 @@ runtime and are then driven only by it:
   automatic input yet (`su_audio_bus_set_loudness` is per block).
 - `music` / `music_bus_id`: a music player on the runtime clock renders one
   quantum per quantum into its bus (0: the root; without buses it is added to
-  the voices).
+  the voices). Segments may use [seekable streamed sources](EVENT_AUDIO_STREAMED_MUSIC.md)
+  instead of resident PCM, including in offline renders, replay and checkpoints.
 - `limiter_knee`: the master output passes the legacy soft limiter
   (`knee + (1 - knee) tanh((|x| - knee) / (1 - knee))`, never beyond full
   scale) when the knee is in [0.1, 1); 0 keeps the hard clamp.

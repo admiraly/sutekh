@@ -80,7 +80,9 @@ the cursor increment, so the cursor stays continuous through smoothed ramps.
 
 ## Interactive music
 
-`SuAudioMusic` plays prepared resident segments. A segment pins up to 16 stems
+`SuAudioMusic` plays prepared resident or seekable streamed segments; see
+[streamed music](EVENT_AUDIO_STREAMED_MUSIC.md) for long tracks and playlists.
+A resident segment pins up to 16 stems
 (mono or stereo, sample rate equal to the music clock; resampling is out of
 scope), an integer tempo map (`SuAudioTempoPoint {beat, bpm_milli}`, first
 point at beat 0, 1..1000 BPM), beats per bar, up to 256 cue frames, a length and

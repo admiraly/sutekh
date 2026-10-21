@@ -20,7 +20,7 @@ The two can coexist in one process; they share nothing but the clip format.
 | `su_audio_master_limiter(knee)` | `desc.limiter_knee` (same law) at the end of the bus chain |
 | `su_audio_voice_set_pitch/gain` driven by game state | Parameters (`desc.params`) with `PITCH`/`GAIN_DB` bindings, set with `su_audio_system_param_set` (scoped global, per emitter or per instance, smoothed); a binding's `bus_id` limits it to one bus's voices |
 | `SuAudioVoiceDesc.doppler` | `desc.doppler` for every spatial voice |
-| Streams (`SuAudioVoiceDesc.stream`) | Stay legacy; mix them in through a host bus input (`desc.inputs`) |
+| Long music streams (`SuAudioVoiceDesc.stream`) | Use `SuAudioMusicSegmentDesc.stream_stems` with seekable file or encoded-memory sources for transitions, journal replay and checkpoints; see [streamed music](EVENT_AUDIO_STREAMED_MUSIC.md). Other host-generated audio can still use `desc.inputs` (not journaled) |
 
 ## Replacing a game-side voice budget
 
