@@ -3,6 +3,7 @@
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #include <stdio.h>
+#include <string.h>
 
 #include "sutekh/audio.h"
 #include "su_audio_int.h"
@@ -34,4 +35,11 @@ uint32_t su_audio_device_open_pull(uint32_t sample_rate, SuAudioPullFn pull, voi
 uint64_t su_audio_device_frames(const SuAudioDevice *d) {
     (void)d;
     return 0;
+}
+
+void su_audio_device_stats(const SuAudioDevice *device, SuAudioDeviceStats *out) {
+    (void)device;
+    if (out != NULL) {
+        memset(out, 0, sizeof *out);
+    }
 }

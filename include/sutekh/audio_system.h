@@ -116,6 +116,8 @@ typedef struct SuAudioSystemStats {
     uint32_t journal_capacity;
     uint64_t journal_dropped;              /* commands not journaled because the journal was full */
     uint64_t runtime_bytes;                /* components and system storage, excluding allocator overhead */
+    uint32_t ring_target;
+    SuAudioDeviceStats device;
 } SuAudioSystemStats;
 
 uint32_t su_audio_system_create(const SuAudioSystemDesc *desc, SuAudioSystem **out, char message[256]);
@@ -133,6 +135,7 @@ SuAudioCluster *su_audio_system_cluster(SuAudioSystem *system);
 SuAudioTelemetry *su_audio_system_telemetry(SuAudioSystem *system);
 uint64_t su_audio_system_clock(const SuAudioSystem *system);
 void su_audio_system_stats(const SuAudioSystem *system, SuAudioSystemStats *out);
+uint32_t su_audio_system_ring_adaptive(SuAudioSystem *system, int enabled);
 
 /* Journaled presentation commands (same semantics and status codes as the component calls). */
 uint32_t su_audio_system_post(SuAudioSystem *system, const SuAudioTrigger *trigger, SuAudioInstance *out,
