@@ -29,7 +29,9 @@
 #define SU_E_INTERNAL               UINT32_C(19) /* engine invariant violated; never a client error */
 #define SU_E_MISSING_STORE          UINT32_C(20) /* declared-writable field never stored */
 #define SU_E_STALE_HANDLE           UINT32_C(21) /* entity handle generation mismatch, retired or dead slot (M2) */
-#define SU_STATUS_COUNT             UINT32_C(22) /* one past the highest defined code */
+#define SU_E_AUDIO_COOLDOWN          UINT32_C(22)
+#define SU_E_AUDIO_GROUP_BUSY        UINT32_C(23)
+#define SU_STATUS_COUNT             UINT32_C(24) /* one past the highest defined code */
 
 /* Returns the stable symbolic name, or "SU_E_UNKNOWN" for undefined values. */
 static inline const char *su_status_name(uint32_t status) {
@@ -41,7 +43,8 @@ static inline const char *su_status_name(uint32_t status) {
         "SU_E_RESOURCE_LIMIT", "SU_E_UNSUPPORTED_METHOD",
         "SU_E_UNSUPPORTED_MIGRATION", "SU_E_CANDIDATE_FAILED",
         "SU_E_WORKER_FAILED", "SU_E_CAPABILITY_DENIED", "SU_E_IO",
-        "SU_E_INVALID_ARGUMENT", "SU_E_INTERNAL", "SU_E_MISSING_STORE", "SU_E_STALE_HANDLE"};
+        "SU_E_INVALID_ARGUMENT", "SU_E_INTERNAL", "SU_E_MISSING_STORE", "SU_E_STALE_HANDLE",
+        "SU_E_AUDIO_COOLDOWN", "SU_E_AUDIO_GROUP_BUSY"};
     return status < SU_STATUS_COUNT ? names[status] : "SU_E_UNKNOWN";
 }
 

@@ -4,12 +4,17 @@
 #include "sutekh/audio_parameter.h"
 #include "su_audio_parameter_int.h"
 #include "su_audio_state.h"
+#include "su_audio_int.h"
+#include "ir/su_sha256.h"
 
 typedef struct MusicSegment {
     uint32_t segment_id;
     uint32_t stem_count;
     SuAudioAssetRef stems[SU_AUDIO_MUSIC_MAX_STEMS];
     const SuAudioClip *clips[SU_AUDIO_MUSIC_MAX_STEMS];
+    SuAudioStream *streams[SU_AUDIO_MUSIC_MAX_STEMS][2];
+    uint8_t source_hash[SU_AUDIO_MUSIC_MAX_STEMS][32];
+    uint8_t config_hash[32];
     SuAudioTempoPoint tempo[SU_AUDIO_MUSIC_MAX_TEMPO];
     uint64_t tempo_frame[SU_AUDIO_MUSIC_MAX_TEMPO];
     uint32_t tempo_count;
@@ -183,7 +188,12 @@ uint32_t su_audio_music_create(const SuAudioMusicDesc *desc, SuAudioAssets *asse
 static void release_segment(SuAudioMusic *music, MusicSegment *seg, uint32_t count) {
     uint32_t i;
     for (i = 0u; i < count; i++) {
-        (void)su_audio_asset_release(music->assets, seg->stems[i]);
+        if (seg->streams[i][0] != NULL) {
+            (void)su_audio_stream_close(seg->streams[i][0]);
+            (void)su_audio_stream_close(seg->streams[i][1]);
+        } else {
+            (void)su_audio_asset_release(music->assets, seg->stems[i]);
+        }
     }
 }
 
@@ -210,11 +220,97 @@ void su_audio_music_destroy(SuAudioMusic *music) {
     free(music);
 }
 
+static uint32_t open_music_source(const SuAudioMusicStreamSource *source, MusicSegment *seg, uint32_t stem,
+                                  uint32_t rate) {
+    SuSha256 hash;
+    uint32_t lane;
+    uint32_t status = SU_OK;
+    uint32_t ring = source->ring_frames == 0u ? 8192u : source->ring_frames;
+    if ((source->path == NULL) == (source->bytes == NULL)
+        || (source->bytes != NULL && (source->byte_count == 0u || source->byte_count > 0x7fffffffu))) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    su_sha256_init(&hash);
+    if (source->path != NULL) {
+        uint8_t buffer[8192] = {0};
+        size_t count = 0u;
+        FILE *file = fopen(source->path, "rb");
+        if (file == NULL) {
+            return SU_E_IO;
+        }
+        while ((count = fread(buffer, 1u, sizeof buffer, file)) != 0u) {
+            su_sha256_update(&hash, buffer, count);
+        }
+        status = ferror(file) ? SU_E_IO : SU_OK;
+        (void)fclose(file);
+        if (status != SU_OK) {
+            return status;
+        }
+    } else {
+        su_sha256_update(&hash, source->bytes, source->byte_count);
+    }
+    su_sha256_final(&hash, seg->source_hash[stem]);
+    for (lane = 0u; lane < 2u; lane++) {
+        SuAudioStream *stream = NULL;
+        status = source->path != NULL
+            ? su_audio_stream_open_file(source->path, ring, &stream, NULL)
+            : su_audio_stream_open_memory(source->bytes, source->byte_count, ring, &stream, NULL);
+        if (status == SU_OK && su_stream_rate(stream) != rate) {
+            (void)su_audio_stream_close(stream);
+            status = SU_E_SCHEMA_MISMATCH;
+        }
+        if (status != SU_OK) {
+            if (lane != 0u) {
+                (void)su_audio_stream_close(seg->streams[stem][0]);
+                seg->streams[stem][0] = NULL;
+            }
+            return status;
+        }
+        seg->streams[stem][lane] = stream;
+    }
+    return SU_OK;
+}
+
+static void segment_fingerprint(const MusicSegment *seg, uint8_t digest[32]) {
+    SuSha256 hash;
+    uint32_t index;
+    su_sha256_init(&hash);
+    su_sha256_update(&hash, &seg->segment_id, sizeof seg->segment_id);
+    su_sha256_update(&hash, &seg->stem_count, sizeof seg->stem_count);
+    su_sha256_update(&hash, seg->stems, sizeof seg->stems);
+    su_sha256_update(&hash, seg->source_hash, sizeof seg->source_hash);
+    su_sha256_update(&hash, &seg->length, sizeof seg->length);
+    su_sha256_update(&hash, &seg->loop, sizeof seg->loop);
+    su_sha256_update(&hash, &seg->beats_per_bar, sizeof seg->beats_per_bar);
+    su_sha256_update(&hash, &seg->tempo_count, sizeof seg->tempo_count);
+    for (index = 0u; index < seg->tempo_count; index++) {
+        su_sha256_update(&hash, &seg->tempo[index].beat, sizeof seg->tempo[index].beat);
+        su_sha256_update(&hash, &seg->tempo[index].bpm_milli, sizeof seg->tempo[index].bpm_milli);
+    }
+    su_sha256_update(&hash, &seg->cue_count, sizeof seg->cue_count);
+    su_sha256_update(&hash, seg->cues, sizeof seg->cues);
+    su_sha256_final(&hash, digest);
+}
+
+uint64_t su_audio_music_config_hash(const SuAudioMusic *music) {
+    uint64_t hash = UINT64_C(0xcbf29ce484222325);
+    uint32_t segment;
+    uint32_t byte;
+    for (segment = 0u; music != NULL && segment < music->segment_count; segment++) {
+        for (byte = 0u; byte < 32u; byte++) {
+            hash ^= music->segments[segment].config_hash[byte];
+            hash *= UINT64_C(0x100000001b3);
+        }
+    }
+    return hash;
+}
+
 uint32_t su_audio_music_segment_add(SuAudioMusic *music, const SuAudioMusicSegmentDesc *desc) {
     MusicSegment *seg;
     uint32_t i;
     if (music == NULL || desc == NULL || desc->struct_size != sizeof *desc || desc->segment_id == 0u
-        || desc->stem_count == 0u || desc->stem_count > SU_AUDIO_MUSIC_MAX_STEMS || desc->stems == NULL
+        || desc->stem_count == 0u || desc->stem_count > SU_AUDIO_MUSIC_MAX_STEMS
+        || ((desc->stems == NULL) == (desc->stream_stems == NULL))
         || desc->tempo_count == 0u || desc->tempo_count > SU_AUDIO_MUSIC_MAX_TEMPO || desc->tempo == NULL
         || desc->beats_per_bar == 0u || desc->cue_count > SU_AUDIO_MUSIC_MAX_CUES
         || (desc->cue_count != 0u && desc->cue_frames == NULL) || desc->length_frames == 0u
@@ -258,7 +354,16 @@ uint32_t su_audio_music_segment_add(SuAudioMusic *music, const SuAudioMusicSegme
     seg->cue_count = desc->cue_count;
     for (i = 0u; i < desc->stem_count; i++) {
         const SuAudioClip *clip = NULL;
-        uint32_t status = su_audio_asset_acquire(music->assets, desc->stems[i], &clip);
+        uint32_t status;
+        if (desc->stream_stems != NULL) {
+            status = open_music_source(&desc->stream_stems[i], seg, i, music->desc.sample_rate);
+            if (status != SU_OK) {
+                release_segment(music, seg, i);
+                return status;
+            }
+            continue;
+        }
+        status = su_audio_asset_acquire(music->assets, desc->stems[i], &clip);
         if (status == SU_OK && (clip->channels < 1u || clip->channels > 2u
                                 || clip->sample_rate != music->desc.sample_rate)) {
             (void)su_audio_asset_release(music->assets, desc->stems[i]);
@@ -272,6 +377,7 @@ uint32_t su_audio_music_segment_add(SuAudioMusic *music, const SuAudioMusicSegme
         seg->clips[i] = clip;
     }
     seg->stem_count = desc->stem_count;
+    segment_fingerprint(seg, seg->config_hash);
     music->segment_count++;
     return SU_OK;
 }
@@ -470,7 +576,7 @@ static void apply_pending(SuAudioMusic *music) {
     pending->stinger = -1;
 }
 
-static void mix_player(const SuAudioMusic *music, MusicPlayer *player, uint64_t t, float *frame) {
+static void mix_player(const SuAudioMusic *music, MusicPlayer *player, uint32_t lane, uint64_t t, float *frame) {
     const MusicSegment *seg;
     uint64_t local;
     double gain = 1.0;
@@ -504,7 +610,13 @@ static void mix_player(const SuAudioMusic *music, MusicPlayer *player, uint64_t 
     }
     for (s = 0u; s < seg->stem_count; s++) {
         const SuAudioClip *clip = seg->clips[s];
-        if (local < clip->frames) {
+        if (seg->streams[s][lane] != NULL) {
+            float left = 0.0f;
+            float right = 0.0f;
+            su_stream_frame(seg->streams[s][lane], local, &left, &right);
+            frame[0] += (float)(left * gain);
+            frame[1] += (float)(right * gain);
+        } else if (local < clip->frames) {
             const float *x = clip->samples + (size_t)local * clip->channels;
             frame[0] += (float)(x[0] * gain);
             frame[1] += (float)(x[clip->channels - 1u] * gain);
@@ -526,8 +638,8 @@ uint32_t su_audio_music_render(SuAudioMusic *music, float *out_stereo, uint32_t 
         if (music->pending.active && music->pending.at == t) {
             apply_pending(music);
         }
-        mix_player(music, &music->outgoing, t, frame);
-        mix_player(music, &music->current, t, frame);
+        mix_player(music, &music->outgoing, 1u, t, frame);
+        mix_player(music, &music->current, 0u, t, frame);
         for (s = 0u; s < SU_AUDIO_MUSIC_STINGERS; s++) {
             MusicStinger *st = &music->stingers[s];
             if (st->state == 1u && t >= st->start && !(music->pending.active && music->pending.stinger == (int)s)) {
@@ -593,6 +705,15 @@ uint32_t su_audio_music_state_io(SuAudioMusic *music, SuAudioStateIo *io) {
     SU_STATE(io, segments);
     if (!io->failed && segments != music->segment_count) {
         return SU_E_SCHEMA_MISMATCH;
+    }
+    for (s = 0u; s < segments; s++) {
+        const MusicSegment *seg = &music->segments[s];
+        uint8_t actual[32] = {0};
+        memcpy(actual, seg->config_hash, sizeof actual);
+        SU_STATE(io, actual);
+        if (!io->failed && memcmp(actual, seg->config_hash, sizeof actual) != 0) {
+            return SU_E_SCHEMA_MISMATCH;
+        }
     }
     SU_STATE(io, music->clock);
     SU_STATE(io, music->current);
