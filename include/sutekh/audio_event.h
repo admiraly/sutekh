@@ -85,11 +85,19 @@ uint32_t su_audio_events_session(SuAudioEvents *events, uint64_t session_generat
  * voice by the pool's controlled render path. Later hook versions append fields; struct_size selects them. */
 #define SU_AUDIO_EVENTS_HOOK_VERSION 1u
 
-/* First matching rule wins: node_id (0 = any) and bus_id (0 = any) of the graph leaf. */
+/* First matching rule wins: node_id, bus_id and event_id (0 = any).
+ * Admission is atomic for the whole post. min_retrigger_frames shares one timeline per rule, measured from
+ * the last successful post's sample_time; 0 disables it. group_id != 0 refuses new posts while any live leaf
+ * in that group exists (including pending, virtual and releasing leaves). Leaves within one post may share
+ * a group. Refusals return SU_E_AUDIO_COOLDOWN or SU_E_AUDIO_GROUP_BUSY, leave the output handle zero and do
+ * not consume a commit sequence or change admission history. All new fields default to disabled at zero. */
 typedef struct SuAudioVoicePolicyRule {
     uint32_t node_id;
     uint32_t bus_id;
     SuAudioVoicePolicy policy;
+    uint32_t event_id;
+    uint32_t min_retrigger_frames;
+    uint32_t group_id;
 } SuAudioVoicePolicyRule;
 
 /* Host bus input: PCM the owner supplies into a bus once per 128-frame quantum, from inside the runtime's render
@@ -153,7 +161,8 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
 
 /* ---- Direct checkpoints of the integrated runtime ----
  * One blob holds the event runtime (instances, leaves, queued stops, commit cursor, stats, the partially
- * consumed quantum), the voice pool (logical and physical voices, cursors, filters, ramps, steal tails), the
+ * consumed quantum and per-rule admission history), the voice pool (logical and physical voices, cursors,
+ * filters, ramps, steal tails), the
  * bus tree (faders, ramps, duck envelopes, delayed sidechains, meters), parameters, music, clustering and the
  * scene's emitters and listener. Assets are written as (id, generation) and re-pinned on load; no pointers are
  * written. Loading writes that state into a runtime attached to identically configured components (a layout
@@ -162,7 +171,7 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
  * build that saved. Save with out == NULL reports the size. Requires an attached runtime
  * (SU_E_UNSUPPORTED_METHOD otherwise). Load validates the header, fingerprint, checksum and that every pinned
  * asset generation is still resident before changing anything (SU_E_SCHEMA_MISMATCH otherwise). */
-#define SU_AUDIO_EVENTS_CHECKPOINT_VERSION 1u
+#define SU_AUDIO_EVENTS_CHECKPOINT_VERSION 2u
 #define SU_AUDIO_EVENTS_CHECKPOINT_HEADER 64u
 
 typedef struct SuAudioEventsCheckpointInfo {
