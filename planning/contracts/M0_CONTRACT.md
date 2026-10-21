@@ -3,6 +3,7 @@
 Headers: `include/sutekh/{status,ir,abi}.h`. Consumers implement against these; any change needs a new generation and revalidation of dependents (owner: contract owner / integrator).
 
 ## 0. Revision log
+- Audio admission appends statuses `SU_E_AUDIO_COOLDOWN` (22) and `SU_E_AUDIO_GROUP_BUSY` (23). Existing values and ABI layouts remain unchanged; the audio policy contract is in `docs/EVENT_AUDIO_VOICE_POLICY.md`.
 - r3.1 (rulings from M0-02/M0-03): negative/fractional/>2^32-1 integers are `SU_E_TYPE` (not PARSE). Capsule field-level shape errors are stage 4; capsule `limits.max_instructions` overrun is `SU_E_RESOURCE_LIMIT` at stage 5. Entity IDs are u32; field id 0 is allowed; allocation failure maps to `SU_E_RESOURCE_LIMIT`; access 0 is rejected; field names are capped at 255 bytes.
 - r3: closes r2-review blockers (error ordering stages, header cross-references, LIVE_IR section 5 note, `SU_LIMIT_ROWS` is a default).
 - r1: initial draft (43dba6d). r2: resolves blocking findings 1-9 of `planning/handoffs/2026-10-11-m0-00-review.md`; adds `SU_E_MISSING_STORE` (20). Headers are the layout authority; this document is the semantic authority.

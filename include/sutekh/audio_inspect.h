@@ -27,7 +27,9 @@ enum {
     SU_AUDIO_TRACE_REASON_STALE_HANDLE = 4,   /* instance/emitter handle no longer valid */
     SU_AUDIO_TRACE_REASON_GRAPH = 5,          /* unknown event, expansion or asset failure */
     SU_AUDIO_TRACE_REASON_INVALID = 6,
-    SU_AUDIO_TRACE_REASON_COUNT = 7
+    SU_AUDIO_TRACE_REASON_COOLDOWN = 7,
+    SU_AUDIO_TRACE_REASON_GROUP_BUSY = 8,
+    SU_AUDIO_TRACE_REASON_COUNT = 9
 };
 
 /* Telemetry entry kinds reuse SU_AUDIO_TRACE_* command kinds. */
