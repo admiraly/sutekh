@@ -1679,6 +1679,7 @@ static uint32_t scan_assets(SuAudioEvents *events, const uint8_t *body, size_t b
         }
         for (index = 0u; index < events->switch_count; index++) {
             SuAudioGraphSwitch initial;
+            memset(&initial, 0, sizeof initial);
             SU_STATE(&io, initial);
         }
         for (index = 0; index < instance.count; index++) {
