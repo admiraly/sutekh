@@ -11,6 +11,32 @@
 
 static unsigned checks;
 static unsigned failures;
+static FILE *evidence;
+
+static void record_bytes(const void *data, size_t size) {
+    if (evidence != NULL && fwrite(data, 1u, size, evidence) != size) {
+        failures++;
+    }
+}
+
+static uint32_t recorded_render(SuAudioEvents *events, float *out, uint32_t frames) {
+    uint32_t status = su_audio_events_render(events, out, frames);
+    if (status == SU_OK) {
+        record_bytes(out, (size_t)frames * 2u * sizeof *out);
+    }
+    return status;
+}
+
+static uint32_t recorded_save(SuAudioEvents *events, void *out, size_t capacity, size_t *written) {
+    uint32_t status = su_audio_events_checkpoint_save(events, out, capacity, written);
+    if (status == SU_OK && out != NULL) {
+        record_bytes(out, *written);
+    }
+    return status;
+}
+
+#define su_audio_events_render recorded_render
+#define su_audio_events_checkpoint_save recorded_save
 
 #define CHECK(condition) do { \
     checks++; \
@@ -86,6 +112,8 @@ typedef struct RigOptions {
     uint32_t virtual_mode;
     float lowpass_far;
     uint64_t start;
+    uint32_t emitter_capacity;
+    float doppler;
 } RigOptions;
 
 static RigOptions default_options(int integrated) {
@@ -110,6 +138,9 @@ static void rig_create(Rig *rig, const RigOptions *options) {
     SuAudioCurveId curve_id = 0u;
     SuAudioEmitterSnapshot emitter;
     SuAudioCameraListener listener;
+    if (options->emitter_capacity != 0u) {
+        scene_desc.max_emitters = options->emitter_capacity;
+    }
     memset(rig, 0, sizeof *rig);
     CHECK(su_audio_assets_create(8u, 1u << 20, &rig->assets) == SU_OK);
     clip.channels = 1u;
@@ -182,6 +213,7 @@ static void rig_create(Rig *rig, const RigOptions *options) {
         hook.struct_size = sizeof hook;
         hook.version = SU_AUDIO_EVENTS_HOOK_VERSION;
         hook.voices = rig->pool;
+        hook.doppler = options->doppler;
         hook.default_policy.virtual_mode = options->virtual_mode;
         hook.default_policy.release_frames = options->release;
         CHECK(su_audio_events_attach(rig->events, &hook) == SU_OK);
@@ -1055,6 +1087,7 @@ static void build_script(void) {
     }
     script_add(15000u, 3u, 0u, 0u, 0.0f);    /* listener turns */
     script_add(25000u, 4u, 1u, 0u, 0.0f);    /* emitter 2 approaches */
+    script_add(10000u, 6u, 1u, 11000u, -17.0f);
     script_add(30000u, 5u, 0u, 40000u, 500.0f);
     script_add(31000u, 1u, 9u, 33000u, 0.5f); /* pitch glide on every voice */
     script_add(36000u, 1u, 1u, 36500u, -9.0f);
@@ -1108,9 +1141,14 @@ static void script_apply(FullRig *rig, const ScriptItem *item) {
         CHECK(su_audio_emitter_update(rig->scene, rig->emitters[item->a], meters(4.0, -3.0), velocity) == SU_OK);
         break;
     }
-    default:
+    case 5u:
         CHECK(su_audio_instance_stop(m->events, rig->handles[item->a], item->b, (uint32_t)item->value) == SU_OK);
         break;
+    default: {
+        SuAudioParamScope instance_scope = {SU_AUDIO_SCOPE_INSTANCE, rig->handles[0]};
+        CHECK(su_audio_param_set_at(m->params, instance_scope, item->a, item->value, item->b) == SU_OK);
+        break;
+    }
     }
 }
 
@@ -1329,10 +1367,57 @@ static void test_checkpoints(void) {
     full_destroy(&reference);
 }
 
-int main(void) {
+static void test_shared_spatial_controls(void) {
+    uint32_t mode;
+    for (mode = 0u; mode < 8u; mode++) {
+        Rig rig;
+        RigOptions options = default_options(1);
+        SuAudioEmitterSnapshot emitter;
+        SuAudioEmitter collision = 0u;
+        uint32_t index;
+        options.physical = mode < 4u ? 2u : 16u;
+        options.virtual_mode = mode % 4u;
+        options.lowpass_far = 1500.0f;
+        options.emitter_capacity = 264u;
+        options.doppler = 1.0f;
+        rig_create(&rig, &options);
+        CHECK(su_audio_emitter_get(rig.scene, rig.near_emitter, &emitter) == SU_OK);
+        for (index = 0u; index < 255u; index++) {
+            CHECK(su_audio_emitter_create(rig.scene, &emitter, &collision) == SU_OK);
+        }
+        CHECK((uint32_t)collision % 256u == (uint32_t)rig.near_emitter % 256u);
+        for (index = 0u; index < 12u; index++) {
+            (void)post(&rig, index < 6u ? 2u : index % 2u ? 1u : 3u, 0u,
+                index < 4u ? rig.near_emitter : index < 8u ? collision : 0u);
+        }
+        for (index = 0u; index < 24u; index++) {
+            static uint8_t checkpoint[131072];
+            size_t written = 0u;
+            SuVec3f velocity = {4.0f, 0.0f, -3.0f};
+            SuAudioCameraListener listener;
+            CHECK(su_audio_emitter_update(rig.scene, rig.near_emitter,
+                meters((double)index * 2.0 - 20.0, -4.0), velocity) == SU_OK);
+            CHECK(su_audio_scene_listener_get(rig.scene, &listener) == SU_OK);
+            listener.pos = meters((double)index * 0.5, 0.0);
+            CHECK(su_audio_scene_listener_set(rig.scene, &listener) == SU_OK);
+            render_chunks(&rig, out_a, 128u, 61u);
+            CHECK(su_audio_events_checkpoint_save(rig.events, checkpoint, sizeof checkpoint, &written) == SU_OK);
+        }
+        rig_destroy(&rig);
+    }
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1) {
+        evidence = fopen(argv[1], "wb");
+        if (evidence == NULL) {
+            return 1;
+        }
+    }
     synthesize();
     test_authored_loudness();
     test_object_output();
+    test_shared_spatial_controls();
     test_cluster_feed();
     test_checkpoints();
     test_switch_blend();
@@ -1344,6 +1429,9 @@ int main(void) {
     test_lowpass();
     test_steal_resume();
     test_stop_timing();
+    if (evidence != NULL && fclose(evidence) != 0) {
+        failures++;
+    }
     printf("audio_runtime: %u checks, %u failures\n", checks, failures);
     return failures == 0u ? 0 : 1;
 }
