@@ -21,6 +21,7 @@
 
 #include "sutekh/audio.h"
 #include "su_audio_int.h"
+#include "su_audio_output.h"
 
 /* GUIDs written out here so no extra import library is needed. */
 static const GUID SU_CLSID_MMDeviceEnumerator = {0xBCDE0395, 0xE52F, 0x467C, {0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}};
@@ -39,9 +40,14 @@ struct SuAudioDevice {
     HANDLE wake;            /* the WASAPI buffer event */
     atomic_int stop;
     _Atomic uint64_t frames;
+    _Atomic uint64_t callbacks, callback_total_us, callback_max_us, callback_over_budget;
+    _Atomic uint64_t callback_us[SU_AUDIO_DEVICE_HISTOGRAM_BINS];
+    _Atomic uint64_t interval_us[SU_AUDIO_DEVICE_HISTOGRAM_BINS];
+    _Atomic uint64_t interval_max_us, empty_buffers, wait_timeouts, backend_errors;
     uint32_t init_status;
     char message[256];
     SuAudioDeviceInfo info;
+    SuAudioGap recovery;
     float *scratch;
 };
 
@@ -62,7 +68,12 @@ static DWORD WINAPI device_main(LPVOID arg) {
     UINT32 frames = 0;
     REFERENCE_TIME latency = 0;
     HRESULT hr;
+    LARGE_INTEGER frequency;
+    LARGE_INTEGER previous;
     int com = SUCCEEDED(CoInitializeEx(NULL, COINIT_MULTITHREADED));
+    frequency.QuadPart = 1;
+    previous.QuadPart = 0;
+    (void)QueryPerformanceFrequency(&frequency);
     hr = CoCreateInstance(&SU_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &SU_IID_IMMDeviceEnumerator, (void **)&en);
     if (FAILED(hr)) {
         msgf(d, "MMDeviceEnumerator unavailable (0x%08lx)", (unsigned long)hr);
@@ -132,25 +143,72 @@ static DWORD WINAPI device_main(LPVOID arg) {
     while (!atomic_load(&d->stop)) {
         UINT32 padding = 0;
         BYTE *buf = NULL;
+        LARGE_INTEGER begin;
+        LARGE_INTEGER end;
+        uint64_t elapsed = 0u;
+        begin.QuadPart = 0;
+        end.QuadPart = 0;
         DWORD w = WaitForSingleObject(d->wake, 200);
-        if (w != WAIT_OBJECT_0 && w != WAIT_TIMEOUT) {
+        if (atomic_load(&d->stop)) {
             break;
         }
+        if (w != WAIT_OBJECT_0 && w != WAIT_TIMEOUT) {
+            atomic_fetch_add(&d->backend_errors, 1u);
+            break;
+        }
+        (void)QueryPerformanceCounter(&begin);
+        if (w == WAIT_TIMEOUT) {
+            atomic_fetch_add(&d->wait_timeouts, 1u);
+        }
+        if (previous.QuadPart != 0) {
+            uint64_t interval = (uint64_t)((begin.QuadPart - previous.QuadPart) * 1000000 / frequency.QuadPart);
+            atomic_fetch_add(&d->interval_us[su_audio_time_bin(interval)], 1u);
+            if (interval > atomic_load(&d->interval_max_us)) {
+                atomic_store(&d->interval_max_us, interval);
+            }
+        }
+        previous = begin;
         if (FAILED(IAudioClient_GetCurrentPadding(client, &padding)) || padding > frames) {
+            atomic_fetch_add(&d->backend_errors, 1u);
             break; /* device lost: stop rendering (close still works) */
         }
         if (frames - padding == 0u) {
             continue;
         }
         if (FAILED(IAudioRenderClient_GetBuffer(render, frames - padding, &buf))) {
+            atomic_fetch_add(&d->backend_errors, 1u);
             break;
+        }
+        if (padding == 0u) {
+            atomic_fetch_add(&d->empty_buffers, 1u);
+            if (atomic_load(&d->frames) != 0u) {
+                memset(&d->recovery, 0, sizeof d->recovery);
+                d->recovery.gap = 1;
+            }
         }
         if (d->pull != NULL) {
             d->pull(d->pull_user, (float *)(void *)buf, frames - padding);
         } else {
             su_audio_mixer_render(d->mixer, (float *)(void *)buf, frames - padding);
         }
-        (void)IAudioRenderClient_ReleaseBuffer(render, frames - padding, 0);
+        if (d->recovery.gap || d->recovery.recovering != 0u) {
+            su_audio_gap_apply(&d->recovery, (float *)(void *)buf, frames - padding, frames - padding);
+        }
+        if (FAILED(IAudioRenderClient_ReleaseBuffer(render, frames - padding, 0))) {
+            atomic_fetch_add(&d->backend_errors, 1u);
+            break;
+        }
+        (void)QueryPerformanceCounter(&end);
+        elapsed = (uint64_t)((end.QuadPart - begin.QuadPart) * 1000000 / frequency.QuadPart);
+        atomic_fetch_add(&d->callback_us[su_audio_time_bin(elapsed)], 1u);
+        atomic_fetch_add(&d->callback_total_us, elapsed);
+        atomic_fetch_add(&d->callbacks, 1u);
+        if (elapsed > atomic_load(&d->callback_max_us)) {
+            atomic_store(&d->callback_max_us, elapsed);
+        }
+        if (elapsed * d->info.sample_rate > (uint64_t)(frames - padding) * 1000000u) {
+            atomic_fetch_add(&d->callback_over_budget, 1u);
+        }
         atomic_fetch_add(&d->frames, frames - padding);
     }
     (void)IAudioClient_Stop(client);
@@ -196,6 +254,21 @@ static uint32_t device_start(SuAudioMixer *m, SuAudioPullFn pull, void *user, ui
     d->pull_user = user;
     atomic_init(&d->stop, 0);
     atomic_init(&d->frames, 0u);
+    atomic_init(&d->callbacks, 0u);
+    atomic_init(&d->callback_total_us, 0u);
+    atomic_init(&d->callback_max_us, 0u);
+    atomic_init(&d->callback_over_budget, 0u);
+    atomic_init(&d->interval_max_us, 0u);
+    atomic_init(&d->empty_buffers, 0u);
+    atomic_init(&d->wait_timeouts, 0u);
+    atomic_init(&d->backend_errors, 0u);
+    {
+        uint32_t bin;
+        for (bin = 0u; bin < SU_AUDIO_DEVICE_HISTOGRAM_BINS; bin++) {
+            atomic_init(&d->callback_us[bin], 0u);
+            atomic_init(&d->interval_us[bin], 0u);
+        }
+    }
     d->info.sample_rate = rate;
     d->ready = CreateEventW(NULL, FALSE, FALSE, NULL);
     d->wake = CreateEventW(NULL, FALSE, FALSE, NULL);
@@ -221,6 +294,33 @@ static uint32_t device_start(SuAudioMixer *m, SuAudioPullFn pull, void *user, ui
     }
     *out = d;
     return SU_OK;
+}
+
+void su_audio_device_stats(const SuAudioDevice *device, SuAudioDeviceStats *out) {
+    uint32_t bin;
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, sizeof *out);
+    if (device == NULL) {
+        return;
+    }
+    out->callbacks = atomic_load(&device->callbacks);
+    out->callback_total_us = atomic_load(&device->callback_total_us);
+    out->callback_max_us = atomic_load(&device->callback_max_us);
+    out->callback_over_budget = atomic_load(&device->callback_over_budget);
+    out->interval_max_us = atomic_load(&device->interval_max_us);
+    out->empty_buffers = atomic_load(&device->empty_buffers);
+    out->wait_timeouts = atomic_load(&device->wait_timeouts);
+    out->backend_errors = atomic_load(&device->backend_errors);
+    out->stream_latency_ms = device->info.latency_ms;
+    out->sample_rate = device->info.sample_rate;
+    out->buffer_frames = device->info.buffer_frames;
+    memcpy(out->name, device->info.name, sizeof out->name);
+    for (bin = 0u; bin < SU_AUDIO_DEVICE_HISTOGRAM_BINS; bin++) {
+        out->callback_us[bin] = atomic_load(&device->callback_us[bin]);
+        out->interval_us[bin] = atomic_load(&device->interval_us[bin]);
+    }
 }
 
 uint32_t su_audio_device_open(SuAudioMixer *m, SuAudioDevice **out, SuAudioDeviceInfo *info, char message[256]) {

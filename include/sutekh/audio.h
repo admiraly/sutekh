@@ -242,6 +242,27 @@ void su_audio_device_close(SuAudioDevice *d);
 /* Frames the device thread has rendered so far. */
 uint64_t su_audio_device_frames(const SuAudioDevice *d);
 
+#define SU_AUDIO_DEVICE_HISTOGRAM_BINS 24u
+
+typedef struct SuAudioDeviceStats {
+    uint64_t callbacks;
+    uint64_t callback_total_us;
+    uint64_t callback_max_us;
+    uint64_t callback_over_budget;
+    uint64_t callback_us[SU_AUDIO_DEVICE_HISTOGRAM_BINS];
+    uint64_t interval_us[SU_AUDIO_DEVICE_HISTOGRAM_BINS];
+    uint64_t interval_max_us;
+    uint64_t empty_buffers;
+    uint64_t wait_timeouts;
+    uint64_t backend_errors;
+    double stream_latency_ms;
+    uint32_t sample_rate;
+    uint32_t buffer_frames;
+    char name[128];
+} SuAudioDeviceStats;
+
+void su_audio_device_stats(const SuAudioDevice *device, SuAudioDeviceStats *out);
+
 /* ---- host events ---- */
 
 /* Passes each committed host event once, in sequence order, even when rollback re-emits it with the same sequence
