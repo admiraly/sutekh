@@ -4,12 +4,15 @@
 
 #include "sutekh/audio_event.h"
 #include "su_audio_event_int.h"
+#include "su_audio_graph_int.h"
 #include "su_audio_event_view.h"
 #include "su_audio_voice_int.h"
 #include "su_audio_bus_int.h"
 #include "su_audio_parameter_int.h"
 #include "su_audio_cluster_int.h"
 #include "su_audio_state.h"
+
+enum { EVENT_CHECKPOINT_LAYOUT = 2 };
 
 typedef struct EventLeaf {
     SuAudioGraphLeaf data;
@@ -33,6 +36,8 @@ typedef struct EventInstance {
     uint32_t scope;
     uint32_t event_id;     /* the posted event: SU_AUDIO_LIMIT_EVENT scopes of its voices */
     uint64_t order;
+    uint64_t start;
+    uint64_t sequence;
     SuAudioEmitter emitter;
     EventLeaf *leaves;
 } EventInstance;
@@ -314,9 +319,10 @@ uint32_t su_audio_event_post(SuAudioEvents *events, const SuAudioTrigger *trigge
         status = su_audio_param_expand_state(events->params, target, trigger->sample_time, trigger->sample_time,
             events->param_values, events->param_count, events->switch_values, events->switch_count, &state);
         if (status == SU_OK) {
-            status = su_audio_graph_expand_ex(events->graph, trigger->event_id, events->desc.project_seed,
-                trigger->emitter, trigger->commit_seq, &state, events->scratch, events->desc.max_leaves_per_instance,
-                &count, diagnostic);
+            status = su_audio_graph_expand_live(events->graph, trigger->event_id, events->desc.project_seed,
+                trigger->emitter, trigger->commit_seq, &state, events->params, target,
+                trigger->sample_time, trigger->sample_time, events->scratch,
+                events->desc.max_leaves_per_instance, &count, diagnostic);
         }
     } else {
         status = su_audio_graph_expand(events->graph, trigger->event_id, events->desc.project_seed,
@@ -375,6 +381,12 @@ uint32_t su_audio_event_post(SuAudioEvents *events, const SuAudioTrigger *trigge
     instance->event_id = trigger->event_id;
     instance->emitter = trigger->emitter;
     instance->order = ++events->order;
+    instance->start = trigger->sample_time;
+    instance->sequence = trigger->commit_seq;
+    if (events->params != NULL) {
+        memcpy(events->switch_values + ((size_t)slot + 1u) * events->switch_count,
+            events->switch_values, (size_t)events->switch_count * sizeof *events->switch_values);
+    }
     events->stats.instances++;
     events->stats.logical_voices += (uint32_t)count;
     events->stats.admitted++;
@@ -968,6 +980,34 @@ static uint32_t feed_cluster(SuAudioEvents *events) {
         events->cluster_mix);
 }
 
+static uint32_t live_branches(SuAudioEvents *events) {
+    uint32_t slot;
+    if (events->params == NULL) return SU_OK;
+    for (slot = 0u; slot < events->desc.max_instances; slot++) {
+        EventInstance *instance = &events->instances[slot];
+        SuAudioGraphExpandState initial;
+        SuAudioParamTarget target;
+        size_t count = 0u;
+        uint32_t status, index;
+        uint64_t now = events->stats.render_clock;
+        if (instance->state != 1u) continue;
+        memset(&initial, 0, sizeof initial);
+        initial.switches = events->switch_values + ((size_t)slot + 1u) * events->switch_count;
+        initial.switch_count = events->switch_count;
+        target.emitter = instance->emitter;
+        target.instance = instance_handle(slot, instance->generation);
+        if (now < instance->start) now = instance->start;
+        status = su_audio_graph_expand_live(events->graph, instance->event_id, events->desc.project_seed,
+            instance->emitter, instance->sequence, &initial, events->params, target, instance->start, now,
+            events->scratch, events->desc.max_leaves_per_instance, &count, NULL);
+        if (status != SU_OK) return status;
+        if (count != instance->count) return SU_E_SCHEMA_MISMATCH;
+        for (index = 0u; index < instance->count; index++)
+            instance->leaves[index].data.gain = events->scratch[index].gain;
+    }
+    return SU_OK;
+}
+
 static uint32_t render_quantum_pooled(SuAudioEvents *events) {
     uint64_t now = events->stats.render_clock;
     uint64_t end;
@@ -981,6 +1021,8 @@ static uint32_t render_quantum_pooled(SuAudioEvents *events) {
     if (events->params != NULL && su_audio_params_advance(events->params, now) != SU_OK) {
         events->stats.render_failures++;
     }
+    status = live_branches(events);
+    if (status != SU_OK) return status;
     pooled_start(events, now, end);
     pooled_stops(events, end);
     pooled_controls(events);
@@ -1291,7 +1333,7 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     routes = calloc(route_count, sizeof *routes);
     route_ids = calloc(route_count, sizeof *route_ids);
     param_values = calloc(param_count + 1u, sizeof *param_values);
-    switch_values = calloc(switch_count + 1u, sizeof *switch_values);
+    switch_values = calloc(((size_t)events->desc.max_instances + 1u) * switch_count + 1u, sizeof *switch_values);
     bus_gains = calloc(bus_bindings + 1u, sizeof *bus_gains);
     events->due = calloc(events->desc.max_instances, sizeof *events->due);
     if (hook->policy_count != 0u) {
@@ -1381,7 +1423,8 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     }
     events->stats.runtime_bytes += (uint64_t)route_count * (SU_AUDIO_EVENT_QUANTUM * 2u * sizeof *route_mem
         + sizeof *routes + sizeof *route_ids) + (uint64_t)(param_count + 1u) * sizeof *param_values
-        + (uint64_t)(switch_count + 1u) * sizeof *switch_values + (uint64_t)(bus_bindings + 1u) * sizeof *bus_gains
+        + (((uint64_t)events->desc.max_instances + 1u) * switch_count + 1u) * sizeof *switch_values
+        + (uint64_t)(bus_bindings + 1u) * sizeof *bus_gains
         + (uint64_t)hook->policy_count * sizeof *policies
         + (uint64_t)events->desc.max_instances * sizeof *events->due;
     return SU_OK;
@@ -1583,6 +1626,8 @@ static uint64_t layout_fingerprint(const SuAudioEvents *events) {
     uint32_t knee_bits;
     su_audio_voice_pool_desc(events->pool, &pool_desc);
     hash = fnv_u64(hash, sizeof(EventLeaf));
+    hash = fnv_u64(hash, sizeof(EventInstance));
+    hash = fnv_u64(hash, EVENT_CHECKPOINT_LAYOUT);
     hash = fnv_u64(hash, events->desc.sample_rate);
     hash = fnv_u64(hash, events->desc.max_instances);
     hash = fnv_u64(hash, events->desc.max_leaves_per_instance);
@@ -1647,6 +1692,8 @@ static void instance_io(SuAudioStateIo *io, EventInstance *instance) {
     SU_STATE(io, instance->event_id);
     SU_STATE(io, instance->order);
     SU_STATE(io, instance->emitter);
+    SU_STATE(io, instance->start);
+    SU_STATE(io, instance->sequence);
 }
 
 static void leaf_io(SuAudioStateIo *io, EventLeaf *leaf) {
@@ -1699,6 +1746,9 @@ static uint32_t events_io(SuAudioEvents *events, SuAudioStateIo *io) {
                 instance->count = 0u;
             }
             continue;
+        }
+        for (index = 0u; index < events->switch_count; index++) {
+            SU_STATE(io, events->switch_values[((size_t)slot + 1u) * events->switch_count + index]);
         }
         for (index = 0; index < instance->count; index++) {
             EventLeaf *leaf = &instance->leaves[index];
@@ -1755,6 +1805,11 @@ static uint32_t scan_assets(SuAudioEvents *events, const uint8_t *body, size_t b
         }
         if (instance.state == 0u) {
             continue;
+        }
+        for (index = 0u; index < events->switch_count; index++) {
+            SuAudioGraphSwitch initial;
+            memset(&initial, 0, sizeof initial);
+            SU_STATE(&io, initial);
         }
         for (index = 0; index < instance.count; index++) {
             const SuAudioClip *clip = NULL;

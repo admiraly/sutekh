@@ -353,6 +353,7 @@ distribution, which remains unmeasured.
   height renderer consumes it, and the stereo output does not depend on it.
 - Checkpoints are valid within the build that wrote them. Legacy (unattached)
   runtimes keep the A09 replay checkpoints only.
-- The control methods are not registered with the agent control plane.
+- Headless agent sessions do not expose audio methods unless their host sets
+  `SuAgentConfig.audio_system` (see [AGENT_RPC.md](AGENT_RPC.md)).
 - On an underrun the device plays silence and the system counts it; no
   device-callback latency distribution has been measured.

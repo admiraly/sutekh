@@ -32,6 +32,7 @@
 #include "ir/su_sha256.h"
 #include "su_platform.h"
 #include "sutekh/abi.h"
+#include "sutekh/audio_system.h"
 #include "sutekh/ir.h"
 #include "sutekh/status.h"
 #include "world/entities/su_cmdq.h"
@@ -2509,6 +2510,14 @@ static uint32_t h_engine_info(SuAgent *a, const SuJsonValue *params, SuBuf *res,
             su_buf_str(res, ",");
         }
         su_buf_quoted(res, k_capabilities[i], strlen(k_capabilities[i]));
+    }
+    if (a->cfg.audio_system != NULL) {
+        const char *method;
+        uint32_t index;
+        for (index = 0u; (method = su_audio_system_method(index)) != NULL; index++) {
+            su_buf_str(res, ",");
+            su_buf_quoted(res, method, strlen(method));
+        }
     }
     su_buf_str(res, "]}");
     return res->failed ? SU_E_RESOURCE_LIMIT : SU_OK;
@@ -6108,8 +6117,62 @@ static uint32_t h_test_stats(SuAgent *a, SuBuf *res, AgentCall *c) {
 }
 #endif
 
+static uint32_t h_audio(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c) {
+    static const char *const allowed[] = {"frames"};
+    SuBuf params;
+    uint64_t frames;
+    uint32_t status;
+    char *output;
+    size_t written = 0u;
+    int offline = strcmp(req->method, "audio.render.offline") == 0;
+    status = check_keys(req->params, allowed, offline ? 1u : 0u, c);
+    if (status != SU_OK) {
+        return status;
+    }
+    su_buf_init(&params);
+    if (offline) {
+        if (!su_json_get_uint(su_json_member(req->params, "frames"), &frames)) {
+            return call_fail(c, SU_E_INVALID_ARGUMENT, "frames must be a non-negative integer");
+        }
+        su_buf_str(&params, "{\"frames\":");
+        su_buf_u64(&params, frames);
+        su_buf_str(&params, "}");
+    }
+    if (params.failed) {
+        su_buf_free(&params);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    output = malloc((size_t)SU_LIMIT_PROTOCOL_MESSAGE + 1u);
+    if (output == NULL) {
+        su_buf_free(&params);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    su_audio_system_lock(a->cfg.audio_system);
+    status = su_audio_system_control(a->cfg.audio_system, req->method, (const char *)params.data,
+                                     params.len, output, (size_t)SU_LIMIT_PROTOCOL_MESSAGE + 1u, &written);
+    su_audio_system_unlock(a->cfg.audio_system);
+    if (status == SU_OK) {
+        su_buf_put(res, output, written);
+        if (res->failed) {
+            status = SU_E_RESOURCE_LIMIT;
+        }
+    }
+    free(output);
+    su_buf_free(&params);
+    return status;
+}
+
 static uint32_t route(SuAgent *a, const SuRequest *req, SuBuf *res, AgentCall *c) {
     const SuJsonValue *p = req->params;
+    if (a->cfg.audio_system != NULL) {
+        const char *method;
+        uint32_t index;
+        for (index = 0u; (method = su_audio_system_method(index)) != NULL; index++) {
+            if (strcmp(req->method, method) == 0) {
+                return h_audio(a, req, res, c);
+            }
+        }
+    }
     if (strcmp(req->method, "engine.info") == 0) {
         return h_engine_info(a, p, res, c);
     }
