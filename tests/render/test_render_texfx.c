@@ -106,6 +106,7 @@ typedef struct Scene {
     const SuRenderObject *objects;
     uint32_t object_count;
     float time_seconds;
+    uint32_t output_alpha;
 } Scene;
 
 static void scene_init(Scene *s) {
@@ -148,6 +149,7 @@ static int render(const Scene *s, uint8_t *out) {
     f.objects = s->objects;
     f.object_count = s->object_count;
     f.time_seconds = s->time_seconds;
+    f.output_alpha = s->output_alpha;
     for (k = 0; k < 3; k++) {
         uint32_t st = su_render_frame_ex(g_r, &f);
         CHECK(st == SU_OK);
@@ -1837,7 +1839,7 @@ static void release_fx_model(FxModel model) {
     CHECK(su_render_release(g_r, model.mesh) == SU_OK);
 }
 
-static void test_layered_fx(void) {
+static void test_layered_fx(uint32_t output_alpha) {
     static const uint8_t colors[3][4] = {{128, 192, 255, 128}, {128, 255, 64, 128}, {255, 128, 128, 128}};
     float tint[4] = {2.0f, 1.0f, 0.5f, 0.8f};
     SuFxVertex vertices[6];
@@ -1867,7 +1869,8 @@ static void test_layered_fx(void) {
     batch.layers.textures[1] = textures[1];
     batch.layers.textures[2] = textures[2];
     batch.flags = SU_FX_BATCH_SORT;
-    scene.clear[2] = 0.1f;
+    scene.output_alpha = output_alpha;
+    scene.clear[2] = output_alpha ? 0.0f : 0.1f;
     for (blend = 0; blend <= SU_FX_BLEND_PREMUL; blend++) {
         batch.blend = blend;
         scene.fx_tex = vertices;
@@ -1877,6 +1880,8 @@ static void test_layered_fx(void) {
         scene.objects = NULL;
         scene.object_count = 0;
         CHECK(render(&scene, g_ref));
+        CHECK(near_i(px(g_ref, 128, 128)[3], output_alpha ?
+            (blend == SU_FX_BLEND_ADD ? 0 : (int)floor(product[3] * tint[3] * 255.0 + 0.5)) : 255, 1));
         for (channel = 0; channel < 3u; channel++) {
             double alpha = product[3] * tint[3];
             double source = product[channel] * tint[channel] * (blend == SU_FX_BLEND_ADD ? alpha : tint[3]);
@@ -1895,6 +1900,7 @@ static void test_layered_fx(void) {
         scene.objects = &object;
         scene.object_count = 1;
         CHECK(render(&scene, g_img));
+        CHECK(near_i(px(g_img, 128, 128)[3], px(g_ref, 128, 128)[3], 1));
         for (pixel_y = 64; pixel_y < 192u; pixel_y++) {
             for (pixel_x = 64; pixel_x < 192u; pixel_x++) {
                 for (channel = 0; channel < 3u; channel++) {
@@ -2405,7 +2411,8 @@ int main(int argc, char **argv) {
         test_env_ldr_and_downsample();
         test_env_gpu();
         test_skips_and_unchanged();
-        test_layered_fx();
+        test_layered_fx(SU_RENDER_OUTPUT_ALPHA_OPAQUE);
+        test_layered_fx(SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED);
         test_layer_scroll_atlas();
         test_fx_mesh_options();
         test_mixed_fx_sort();

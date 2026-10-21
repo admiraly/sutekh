@@ -96,6 +96,16 @@ static void pixels_test(void) {
     CHECK(pixels[(SIZE * (SIZE / 2u) + SIZE / 2u) * 4u + 1u] == 0u);
     draw();
     CHECK(digest() == baseline);
+    frame.output_alpha = SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED;
+    draw();
+    CHECK(abs(red() - reference) <= 1);
+    {
+        uint32_t pixel;
+        uint32_t errors = 0;
+        for (pixel = 0; pixel < SIZE * SIZE; pixel++) errors += pixels[pixel * 4u + 3u] != 0u;
+        CHECK(errors == 0u);
+    }
+    frame.output_alpha = SU_RENDER_OUTPUT_ALPHA_OPAQUE;
     for (steps = 2; steps <= 12; steps++) {
         flames[0].steps = (float)steps;
         draw();

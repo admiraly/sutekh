@@ -1243,6 +1243,9 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
     memset(&cba, 0, sizeof cba);
     cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
                          VK_COLOR_COMPONENT_A_BIT;
+    if (s->overlay || s->vin == VIN_HUD) {
+        cba.colorWriteMask &= ~VK_COLOR_COMPONENT_A_BIT;
+    }
     if (s->blend == BLEND_ALPHA) {
         cba.blendEnable = VK_TRUE;
         cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
@@ -3079,6 +3082,7 @@ typedef struct FrameIn {
     float clear[4];
     float exposure;
     uint32_t tonemap;
+    uint32_t output_alpha;
     SuRenderPost post;
     const SuRenderInstance *inst;
     uint32_t inst_count;
@@ -3732,14 +3736,14 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     {
         PostPush pp;
         pp.p[0] = in->exposure;
-        pp.p[1] = (float)in->tonemap;
+        pp.p[1] = (float)in->tonemap + (in->output_alpha ? 2.0f : 0.0f);
         pp.p[2] = 1.0f / (float)r->width;
         pp.p[3] = 1.0f / (float)r->height;
         if (r->stats.bloom_levels_active != 0u) {
             BloomPush bp;
             memset(&bp, 0, sizeof bp);
             bp.a[0] = in->exposure;
-            bp.a[1] = (float)in->tonemap;
+            bp.a[1] = pp.p[1];
             bp.a[2] = (in->post.flags & SU_POST_BLOOM) != 0u && in->post.bloom_intensity > 0.0f
                           ? in->post.bloom_intensity / (float)r->stats.bloom_levels_active
                           : 0.0f;
@@ -3937,6 +3941,7 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
         (f->fx_tex == NULL && f->fx_tex_vertex_count > 0u) || (f->fx_batches == NULL && f->fx_batch_count > 0u) ||
         (f->haze == NULL && f->haze_count > 0u) || f->haze_count > SU_HAZE_MAX_VOLUMES ||
         !isfinite(f->distortion_cube_intensity) || f->distortion_cube_intensity < 0.0f ||
+        f->output_alpha > SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED ||
         !isfinite(f->time_seconds) || !(f->camera.fov_y > 0.0f && f->camera.fov_y < 3.1f) || !(f->camera.near_z > 0.0f)) {
         return SU_E_INVALID_ARGUMENT;
     }
@@ -3996,6 +4001,11 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
     in.sky = !l->no_sky;
     in.post = f->post;
     memcpy(in.clear, l->clear_color, sizeof in.clear);
+    in.output_alpha = f->output_alpha;
+    if (in.output_alpha == SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED) {
+        in.sky = 0;
+        memset(in.clear, 0, sizeof in.clear);
+    }
     /* debug items: relative to debug_origin, shifted by (origin - camera) in float */
     {
         SuVec3f off = su_wpos_delta(f->debug_origin, f->camera.pos);

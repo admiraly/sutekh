@@ -59,6 +59,7 @@ static void check_image(SuRenderer *renderer, SuRenderFrameDesc *frame, float cl
                           -(((float)y + 0.5f) / (float)HEIGHT * 2.0f - 1.0f), -1.0f};
             float length;
             float rgb[3];
+            float coverage = clip > 0.0f ? 1.0f : 0.0f;
             uint32_t index, channel;
             ray.x *= tanf(frame->camera.fov_y * 0.5f);
             ray.y *= tanf(frame->camera.fov_y * 0.5f);
@@ -67,11 +68,12 @@ static void check_image(SuRenderer *renderer, SuRenderFrameDesc *frame, float cl
             ray.y /= length;
             ray.z /= length;
             ray = su_quatf_rotate(frame->camera.rot, ray);
-            for (channel = 0; channel < 3u; channel++) rgb[channel] = clip > 0.0f ? 0.0f : frame->light.clear_color[channel];
+            for (channel = 0; channel < 3u; channel++) rgb[channel] = clip > 0.0f || frame->output_alpha ? 0.0f : frame->light.clear_color[channel];
             for (index = 0; index < frame->haze_count; index++) {
                 const SuHazeVolume *volume = &frame->haze[index];
                 float optical = su_haze_optical_depth(volume, frame->camera.pos, ray, clip > 0.0f ? clip / -ray.z : 1e6f);
                 float alpha = 1.0f - expf(-optical);
+                if (volume->blend == SU_HAZE_OVER) coverage = alpha + coverage * (1.0f - alpha);
                 float sun[3] = {1.0f, 0.4f, 0.2f};
                 for (channel = 0; channel < 3u; channel++) {
                     rgb[channel] = volume->color[channel] * (1.0f + volume->sun * sun[channel]) * alpha +
@@ -86,6 +88,8 @@ static void check_image(SuRenderer *renderer, SuRenderFrameDesc *frame, float cl
                     bad++;
                 }
             }
+            if (frame->output_alpha && abs((int)pixels[((size_t)y * WIDTH + x) * 4u + 3u] -
+                (int)floorf(coverage * 255.0f + 0.5f)) > 2) bad++;
         }
     }
     CHECK(bad == 0u);
@@ -286,6 +290,12 @@ int main(int argc, char **argv) {
     memcpy(reference, pixels, sizeof pixels);
     frame.haze = volumes;
     frame.haze_count = 1;
+    volumes[0] = haze();
+    frame.output_alpha = SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED;
+    check_image(renderer, &frame, 0.0f);
+    volumes[0].blend = SU_HAZE_OVER;
+    check_image(renderer, &frame, 0.0f);
+    frame.output_alpha = SU_RENDER_OUTPUT_ALPHA_OPAQUE;
     volumes[0] = haze();
     volumes[0].density = 0.0f;
     check_image(renderer, &frame, 0.0f);

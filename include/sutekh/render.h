@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 10u
+#define SU_RENDER_API_VERSION 11u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -875,6 +875,14 @@ typedef struct SuRenderPointLight {
     float radius;
 } SuRenderPointLight;
 
+#define SU_RENDER_OUTPUT_ALPHA_OPAQUE 0u
+#define SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED 1u
+
+/* output_alpha is opt-in: OPAQUE keeps the existing output; PREMULTIPLIED suppresses the sky/clear background
+ * and retains geometry/translucency coverage in readback alpha. Additive light and bloom affect RGB only;
+ * overlays and HUD preserve coverage. RGB is exposed and tonemapped over black, then sRGB-encoded; alpha is
+ * linear. Decode RGB before compositing: result = rgb + background * (1 - alpha). Do not multiply RGB by alpha
+ * again (RGB may be nonzero at alpha zero). See docs/RENDERING_AND_ASSETS.md for nonlinear-post limitations. */
 typedef struct SuRenderFrameDesc {
     uint32_t struct_size;            /* sizeof(SuRenderFrameDesc) */
     SuRenderCamera camera;
@@ -919,6 +927,7 @@ typedef struct SuRenderFrameDesc {
     uint32_t particle_emitter_count;
     SuRenderHandle distortion_cube;
     float distortion_cube_intensity;
+    uint32_t output_alpha;
 } SuRenderFrameDesc;
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object
