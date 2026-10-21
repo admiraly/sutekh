@@ -19,6 +19,8 @@
 
 #include <stdint.h>
 
+struct SuAudioSystem;
+
 typedef struct SuAgentConfig {
     /* Required. Every client path must resolve under this directory. */
     const char *project_root;
@@ -53,6 +55,7 @@ typedef struct SuAgentConfig {
     /* 1 disables the checkpoint that is otherwise taken after every accepted install. Tests only:
      * it leaves installs in the replay log. */
     int no_install_checkpoint;
+    struct SuAudioSystem *audio_system;
 } SuAgentConfig;
 
 /* Returns 0 on EOF, -1 on configuration or I/O failure before serving. */
