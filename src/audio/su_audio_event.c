@@ -1687,7 +1687,7 @@ static uint32_t scan_assets(SuAudioEvents *events, const uint8_t *body, size_t b
     SU_STATE(&io, copy.trigger_seq);
     for (index = 0; index < events->policy_count; index++) {
         uint64_t last_start;
-        uint32_t has_start;
+        uint32_t has_start = 0u;
         SU_STATE(&io, last_start);
         SU_STATE(&io, has_start);
         if (io.failed || has_start > 1u) {
