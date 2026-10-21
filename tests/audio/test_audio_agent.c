@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L /* fileno under -std=c17 */
+
 #include "platform/su_posix.h"
 
 #include <stdio.h>
