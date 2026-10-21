@@ -1,0 +1,7 @@
+Test project C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/i121/build-i121-msvc
+    Start 132: audio_system
+1/1 Test #132: audio_system .....................   Passed    1.21 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   1.22 sec

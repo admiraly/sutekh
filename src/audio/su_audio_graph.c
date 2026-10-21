@@ -1,4 +1,6 @@
 #include "sutekh/audio_graph.h"
+#include "su_audio_graph_int.h"
+#include "su_audio_parameter_int.h"
 #include "../ir/su_json.h"
 
 #include <float.h>
@@ -403,6 +405,9 @@ typedef struct Expand {
     size_t count;
     SuAudioGraphDiagnostic *diagnostic;
     int write;
+    const SuAudioParams *params;
+    SuAudioParamTarget target;
+    uint64_t start, now;
 } Expand;
 static SuAudioGraphHistory *history_for(const Expand *expand, uint32_t node_id) {
     size_t index;
@@ -413,10 +418,15 @@ static SuAudioGraphHistory *history_for(const Expand *expand, uint32_t node_id) 
 static uint32_t expand_node(Expand *expand, uint32_t index, uint64_t delay, float gain) {
     const GraphNode *node = &expand->graph->nodes[index];
     uint32_t begin = 0, end = node->count, child_index, code;
+    uint32_t child_begin, child_end;
     float blend = 0.0f;
+    uint32_t old_branch = UINT32_MAX, new_branch = UINT32_MAX;
+    SuAudioSwitchMix switch_mix = {0u, 0u, 0.0f, 1.0f};
     if (node->type == NODE_SOUND) {
         float final_gain = gain * node->leaf.gain;
         if (!isfinite(final_gain)) return fail(expand->diagnostic, SU_E_RESOURCE_LIMIT, node->id, 0, "gain", "expanded gain overflow");
+        if (expand->count >= expand->graph->limits.max_expansion)
+            return fail(expand->diagnostic, SU_E_RESOURCE_LIMIT, node->id, 0, "max_expansion", "live leaf expansion exceeded");
         if (expand->write) {
             expand->leaves[expand->count] = node->leaf;
             expand->leaves[expand->count].delay_frames = delay;
@@ -453,12 +463,34 @@ static uint32_t expand_node(Expand *expand, uint32_t index, uint64_t delay, floa
             break;
         }
         end = begin + 1;
+        if (expand->params) {
+            old_branch = new_branch = begin;
+            if (expand->state) for (snapshot = 0; snapshot < expand->state->switch_count; snapshot++) {
+                const SuAudioGraphSwitch *initial = &expand->state->switches[snapshot];
+                if (initial->switch_id != node->control) continue;
+                code = su_audio_switch_mix_latched(expand->params, expand->target, node->control,
+                    initial->value, expand->start, expand->now, &switch_mix);
+                if (code) return code;
+                old_branch = new_branch = node->count - 1;
+                for (child_index = 0; child_index + 1 < node->count; child_index++) {
+                    uint32_t value = expand->graph->edges[node->first + child_index].value;
+                    if (value == switch_mix.old_value) old_branch = child_index;
+                    if (value == switch_mix.new_value) new_branch = child_index;
+                }
+                break;
+            }
+        }
     } else if (node->type == NODE_BLEND) {
         float value = 0.0f;
         size_t snapshot;
         int found = 0;
         if (expand->state) for (snapshot = 0; snapshot < expand->state->parameter_count; snapshot++)
             if (expand->state->parameters[snapshot].parameter_id == node->control) { value = expand->state->parameters[snapshot].value; found = 1; break; }
+        if (expand->params) {
+            code = su_audio_param_get(expand->params, expand->target, node->control, expand->now, &value);
+            if (code) return code;
+            found = 1;
+        }
         if (!found) return fail(expand->diagnostic, SU_E_SCHEMA_MISMATCH, node->id, 0, "parameter", "missing blend parameter snapshot");
         begin = 0;
         while (begin + 1 < node->count && value >= expand->graph->edges[node->first + begin + 1].point) begin++;
@@ -470,10 +502,24 @@ static uint32_t expand_node(Expand *expand, uint32_t index, uint64_t delay, floa
             end++;
         }
     }
-    for (child_index = begin; child_index < end; child_index++) {
+    child_begin = begin;
+    child_end = end;
+    if (expand->params && (node->type == NODE_SWITCH || node->type == NODE_BLEND)) {
+        child_begin = 0u;
+        child_end = node->count;
+    }
+    for (child_index = child_begin; child_index < child_end; child_index++) {
         const GraphEdge *edge = &expand->graph->edges[node->first + child_index];
         float child_gain = gain;
-        if (node->type == NODE_BLEND && end - begin == 2) child_gain *= child_index == begin ? 1.0f - blend : blend;
+        if (expand->params && node->type == NODE_SWITCH) {
+            float weight = (child_index == old_branch ? switch_mix.old_gain : 0.0f)
+                + (child_index == new_branch ? switch_mix.new_gain : 0.0f);
+            child_gain *= weight;
+        }
+        if (node->type == NODE_BLEND) {
+            if (child_index < begin || child_index >= end) child_gain = 0.0f;
+            else if (end - begin == 2) child_gain *= child_index == begin ? 1.0f - blend : blend;
+        }
         code = expand_node(expand, edge->node, delay + edge->offset, child_gain);
         if (code) return code;
     }
@@ -512,9 +558,10 @@ static uint32_t validate_state(const SuAudioGraph *graph, const SuAudioGraphExpa
     }
     return SU_OK;
 }
-uint32_t su_audio_graph_expand_ex(const SuAudioGraph *graph, uint32_t event_id,
+static uint32_t expand_graph(const SuAudioGraph *graph, uint32_t event_id,
     uint64_t seed, uint64_t emitter, uint64_t commit_seq, const SuAudioGraphExpandState *state,
-    SuAudioGraphLeaf *leaves, size_t capacity, size_t *count, SuAudioGraphDiagnostic *diagnostic) {
+    SuAudioGraphLeaf *leaves, size_t capacity, size_t *count, SuAudioGraphDiagnostic *diagnostic,
+    const SuAudioParams *params, SuAudioParamTarget target, uint64_t start, uint64_t now) {
     uint32_t low = 0, high, code;
     Expand expand;
     size_t index;
@@ -531,7 +578,8 @@ uint32_t su_audio_graph_expand_ex(const SuAudioGraph *graph, uint32_t event_id,
     }
     if (low == graph->event_count || graph->events[low].id != event_id)
         return fail(diagnostic, SU_E_SCHEMA_MISMATCH, 0, 0, "event_id", "undefined event ID");
-    expand = (Expand){graph, state, seed, emitter, commit_seq, leaves, 0, diagnostic, 0};
+    expand = (Expand){graph, state, seed, emitter, commit_seq, leaves, 0, diagnostic, 0,
+        params, target, start, now};
     code = expand_node(&expand, graph->events[low].root, 0, 1.0f);
     if (code) return code;
     if (expand.count > capacity) return fail(diagnostic, SU_E_RESOURCE_LIMIT, graph->nodes[graph->events[low].root].id, 0, "capacity", "leaf output capacity exceeded");
@@ -547,4 +595,20 @@ uint32_t su_audio_graph_expand(const SuAudioGraph *graph, uint32_t event_id,
     uint64_t seed, uint64_t emitter, uint64_t commit_seq, SuAudioGraphLeaf *leaves,
     size_t capacity, size_t *count, SuAudioGraphDiagnostic *diagnostic) {
     return su_audio_graph_expand_ex(graph, event_id, seed, emitter, commit_seq, NULL, leaves, capacity, count, diagnostic);
+}
+
+uint32_t su_audio_graph_expand_ex(const SuAudioGraph *graph, uint32_t event_id,
+    uint64_t seed, uint64_t emitter, uint64_t commit_seq, const SuAudioGraphExpandState *state,
+    SuAudioGraphLeaf *leaves, size_t capacity, size_t *count, SuAudioGraphDiagnostic *diagnostic) {
+    SuAudioParamTarget target = {0u, 0u};
+    return expand_graph(graph, event_id, seed, emitter, commit_seq, state, leaves, capacity, count,
+        diagnostic, NULL, target, 0u, 0u);
+}
+
+uint32_t su_audio_graph_expand_live(const SuAudioGraph *graph, uint32_t event_id,
+    uint64_t seed, uint64_t emitter, uint64_t sequence, const SuAudioGraphExpandState *initial,
+    const SuAudioParams *params, SuAudioParamTarget target, uint64_t start, uint64_t now,
+    SuAudioGraphLeaf *leaves, size_t capacity, size_t *count, SuAudioGraphDiagnostic *diagnostic) {
+    return expand_graph(graph, event_id, seed, emitter, sequence, initial, leaves, capacity, count,
+        diagnostic, params, target, start, now);
 }

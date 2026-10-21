@@ -4,12 +4,15 @@
 
 #include "sutekh/audio_event.h"
 #include "su_audio_event_int.h"
+#include "su_audio_graph_int.h"
 #include "su_audio_event_view.h"
 #include "su_audio_voice_int.h"
 #include "su_audio_bus_int.h"
 #include "su_audio_parameter_int.h"
 #include "su_audio_cluster_int.h"
 #include "su_audio_state.h"
+
+enum { EVENT_CHECKPOINT_LAYOUT = 2 };
 
 typedef struct EventLeaf {
     SuAudioGraphLeaf data;
@@ -33,6 +36,8 @@ typedef struct EventInstance {
     uint32_t scope;
     uint32_t event_id;     /* the posted event: SU_AUDIO_LIMIT_EVENT scopes of its voices */
     uint64_t order;
+    uint64_t start;
+    uint64_t sequence;
     SuAudioEmitter emitter;
     EventLeaf *leaves;
 } EventInstance;
@@ -367,9 +372,10 @@ uint32_t su_audio_event_post(SuAudioEvents *events, const SuAudioTrigger *trigge
         status = su_audio_param_expand_state(events->params, target, trigger->sample_time, trigger->sample_time,
             events->param_values, events->param_count, events->switch_values, events->switch_count, &state);
         if (status == SU_OK) {
-            status = su_audio_graph_expand_ex(events->graph, trigger->event_id, events->desc.project_seed,
-                trigger->emitter, trigger->commit_seq, &state, events->scratch, events->desc.max_leaves_per_instance,
-                &count, diagnostic);
+            status = su_audio_graph_expand_live(events->graph, trigger->event_id, events->desc.project_seed,
+                trigger->emitter, trigger->commit_seq, &state, events->params, target,
+                trigger->sample_time, trigger->sample_time, events->scratch,
+                events->desc.max_leaves_per_instance, &count, diagnostic);
         }
     } else {
         status = su_audio_graph_expand(events->graph, trigger->event_id, events->desc.project_seed,
@@ -440,6 +446,12 @@ uint32_t su_audio_event_post(SuAudioEvents *events, const SuAudioTrigger *trigge
     instance->event_id = trigger->event_id;
     instance->emitter = trigger->emitter;
     instance->order = ++events->order;
+    instance->start = trigger->sample_time;
+    instance->sequence = trigger->commit_seq;
+    if (events->params != NULL) {
+        memcpy(events->switch_values + ((size_t)slot + 1u) * events->switch_count,
+            events->switch_values, (size_t)events->switch_count * sizeof *events->switch_values);
+    }
     events->stats.instances++;
     events->stats.logical_voices += (uint32_t)count;
     events->stats.admitted++;
@@ -653,9 +665,22 @@ static SuVec3f rotate_inverse(SuQuatf q, SuVec3f v) {
     return su_quatf_rotate(c, v);
 }
 
+typedef struct SpatialControls {
+    SuAudioEmitter emitter;
+    float authored_gain;
+    float authored_pitch;
+    float gain;
+    float pitch;
+    float lowpass_hz;
+    SuAudioVoiceControls controls;
+    SuVec3f direction;
+    float distance;
+} SpatialControls;
+
 /* Spatial and authored controls of one leaf at the current quantum (the legacy mixer's spatial law). */
 static uint32_t leaf_controls(SuAudioEvents *events, const EventInstance *instance, EventLeaf *leaf,
-                              const SuAudioCameraListener *listener, SuAudioVoiceControls *out, float *audibility) {
+                              const SuAudioCameraListener *listener, SpatialControls *cache,
+                              SuAudioVoiceControls *out, float *audibility) {
     float gain = leaf->data.gain;
     float pitch = (leaf->data.pitch > 0.0f ? leaf->data.pitch : 1.0f)
         * ((float)leaf->clip->sample_rate / (float)events->desc.sample_rate);
@@ -663,41 +688,65 @@ static uint32_t leaf_controls(SuAudioEvents *events, const EventInstance *instan
     out->struct_size = sizeof *out;
     leaf->lowpass_hz = 0.0f;
     if (instance->emitter != 0u && events->scene != NULL) {
-        SuAudioVoiceDesc desc = leaf->voice_desc;
-        SuVec3f rel;
-        SuVec3f local;
-        float distance;
-        float attenuation;
-        float left;
-        float right;
-        uint32_t status;
-        desc.gain = leaf->data.gain;
-        desc.min_distance = 0.0f;
-        desc.max_distance = 0.0f;
-        desc.rolloff = 0.0f;
-        status = su_audio_scene_resolve(events->scene, instance->emitter, &desc, &leaf->lowpass_hz);
-        if (status != SU_OK) {
-            return status;
+        SpatialControls *entry = cache != NULL ? &cache[(uint32_t)instance->emitter % 256u] : NULL;
+        if (entry != NULL && entry->emitter == instance->emitter
+            && memcmp(&entry->authored_gain, &gain, sizeof gain) == 0
+            && memcmp(&entry->authored_pitch, &pitch, sizeof pitch) == 0) {
+            gain = entry->gain;
+            pitch = entry->pitch;
+            leaf->lowpass_hz = entry->lowpass_hz;
+            *out = entry->controls;
+            leaf->ctl_dir = entry->direction;
+            leaf->ctl_distance = entry->distance;
+        } else {
+            SuAudioVoiceDesc desc = leaf->voice_desc;
+            SuVec3f rel;
+            SuVec3f local;
+            float distance;
+            float attenuation;
+            float left;
+            float right;
+            uint32_t status;
+            desc.gain = leaf->data.gain;
+            desc.min_distance = 0.0f;
+            desc.max_distance = 0.0f;
+            desc.rolloff = 0.0f;
+            status = su_audio_scene_resolve(events->scene, instance->emitter, &desc, &leaf->lowpass_hz);
+            if (status != SU_OK) {
+                return status;
+            }
+            rel = su_wpos_delta(desc.pos, listener->pos);
+            local = rotate_inverse(listener->rot, rel);
+            distance = sqrtf(rel.x * rel.x + rel.y * rel.y + rel.z * rel.z);
+            attenuation = su_audio_attenuation(distance, desc.min_distance, desc.max_distance, desc.rolloff);
+            su_audio_pan(local, &left, &right);
+            /* cos/sin of the pan angle round to tiny negatives at the hard sides (cosf(pi/2) < 0); the pool rejects
+             * negative gains, which used to leave such a voice uncontrolled at unit gain */
+            left = left > 0.0f ? left : 0.0f;
+            right = right > 0.0f ? right : 0.0f;
+            if (events->doppler > 0.0f) {
+                SuVec3f origin = {0.0f, 0.0f, 0.0f};
+                pitch *= su_audio_doppler(origin, listener->vel, rel, desc.vel, events->speed_of_sound, events->doppler);
+            }
+            gain = desc.gain * attenuation;
+            out->gain_left = left * gain;
+            out->gain_right = right * gain;
+            out->mono_mix = 1u;
+            leaf->ctl_dir = local;
+            leaf->ctl_distance = distance;
+            if (entry != NULL) {
+                entry->emitter = instance->emitter;
+                entry->authored_gain = leaf->data.gain;
+                entry->authored_pitch = (leaf->data.pitch > 0.0f ? leaf->data.pitch : 1.0f)
+                    * ((float)leaf->clip->sample_rate / (float)events->desc.sample_rate);
+                entry->gain = gain;
+                entry->pitch = pitch;
+                entry->lowpass_hz = leaf->lowpass_hz;
+                entry->controls = *out;
+                entry->direction = local;
+                entry->distance = distance;
+            }
         }
-        rel = su_wpos_delta(desc.pos, listener->pos);
-        local = rotate_inverse(listener->rot, rel);
-        distance = sqrtf(rel.x * rel.x + rel.y * rel.y + rel.z * rel.z);
-        attenuation = su_audio_attenuation(distance, desc.min_distance, desc.max_distance, desc.rolloff);
-        su_audio_pan(local, &left, &right);
-        /* cos/sin of the pan angle round to tiny negatives at the hard sides (cosf(pi/2) < 0); the pool rejects
-         * negative gains, which used to leave such a voice uncontrolled at unit gain */
-        left = left > 0.0f ? left : 0.0f;
-        right = right > 0.0f ? right : 0.0f;
-        if (events->doppler > 0.0f) {
-            SuVec3f origin = {0.0f, 0.0f, 0.0f};
-            pitch *= su_audio_doppler(origin, listener->vel, rel, desc.vel, events->speed_of_sound, events->doppler);
-        }
-        gain = desc.gain * attenuation;
-        out->gain_left = left * gain;
-        out->gain_right = right * gain;
-        out->mono_mix = 1u;
-        leaf->ctl_dir = local;
-        leaf->ctl_distance = distance;
     } else {
         out->gain_left = gain;
         out->gain_right = gain;
@@ -844,6 +893,15 @@ static void pooled_stops(SuAudioEvents *events, uint64_t end) {
 
 static void pooled_controls(SuAudioEvents *events) {
     SuAudioCameraListener listener;
+    SpatialControls *cache = NULL;
+#ifndef SU_AUDIO_EVENT_UNCACHED_CONTROLS
+    SpatialControls spatial_cache[256];
+    uint32_t cache_index;
+    for (cache_index = 0u; cache_index < 256u; cache_index++) {
+        spatial_cache[cache_index].emitter = 0u;
+    }
+    cache = spatial_cache;
+#endif
     uint32_t slot;
     memset(&listener, 0, sizeof listener);
     listener.rot.w = 1.0f;
@@ -863,7 +921,7 @@ static void pooled_controls(SuAudioEvents *events) {
             if (leaf->state != 1u) {
                 continue;
             }
-            if (leaf_controls(events, instance, leaf, &listener, &controls, &audibility) != SU_OK) {
+            if (leaf_controls(events, instance, leaf, &listener, cache, &controls, &audibility) != SU_OK) {
                 /* the emitter is gone: end the voice like the legacy runtime */
                 (void)su_audio_voice_stop_at(events->pool, leaf->logical, events->stats.render_clock, 0u);
                 continue;
@@ -961,6 +1019,34 @@ static uint32_t feed_cluster(SuAudioEvents *events) {
         events->cluster_mix);
 }
 
+static uint32_t live_branches(SuAudioEvents *events) {
+    uint32_t slot;
+    if (events->params == NULL) return SU_OK;
+    for (slot = 0u; slot < events->desc.max_instances; slot++) {
+        EventInstance *instance = &events->instances[slot];
+        SuAudioGraphExpandState initial;
+        SuAudioParamTarget target;
+        size_t count = 0u;
+        uint32_t status, index;
+        uint64_t now = events->stats.render_clock;
+        if (instance->state != 1u) continue;
+        memset(&initial, 0, sizeof initial);
+        initial.switches = events->switch_values + ((size_t)slot + 1u) * events->switch_count;
+        initial.switch_count = events->switch_count;
+        target.emitter = instance->emitter;
+        target.instance = instance_handle(slot, instance->generation);
+        if (now < instance->start) now = instance->start;
+        status = su_audio_graph_expand_live(events->graph, instance->event_id, events->desc.project_seed,
+            instance->emitter, instance->sequence, &initial, events->params, target, instance->start, now,
+            events->scratch, events->desc.max_leaves_per_instance, &count, NULL);
+        if (status != SU_OK) return status;
+        if (count != instance->count) return SU_E_SCHEMA_MISMATCH;
+        for (index = 0u; index < instance->count; index++)
+            instance->leaves[index].data.gain = events->scratch[index].gain;
+    }
+    return SU_OK;
+}
+
 static uint32_t render_quantum_pooled(SuAudioEvents *events) {
     uint64_t now = events->stats.render_clock;
     uint64_t end;
@@ -974,6 +1060,8 @@ static uint32_t render_quantum_pooled(SuAudioEvents *events) {
     if (events->params != NULL && su_audio_params_advance(events->params, now) != SU_OK) {
         events->stats.render_failures++;
     }
+    status = live_branches(events);
+    if (status != SU_OK) return status;
     pooled_start(events, now, end);
     pooled_stops(events, end);
     pooled_controls(events);
@@ -1261,7 +1349,7 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     routes = calloc(route_count, sizeof *routes);
     route_ids = calloc(route_count, sizeof *route_ids);
     param_values = calloc(param_count + 1u, sizeof *param_values);
-    switch_values = calloc(switch_count + 1u, sizeof *switch_values);
+    switch_values = calloc(((size_t)events->desc.max_instances + 1u) * switch_count + 1u, sizeof *switch_values);
     bus_gains = calloc(bus_bindings + 1u, sizeof *bus_gains);
     events->due = calloc(events->desc.max_instances, sizeof *events->due);
     if (hook->policy_count != 0u) {
@@ -1339,7 +1427,8 @@ uint32_t su_audio_events_attach(SuAudioEvents *events, const SuAudioEventsHook *
     events->pool = hook->voices;
     events->stats.runtime_bytes += (uint64_t)route_count * (SU_AUDIO_EVENT_QUANTUM * 2u * sizeof *route_mem
         + sizeof *routes + sizeof *route_ids) + (uint64_t)(param_count + 1u) * sizeof *param_values
-        + (uint64_t)(switch_count + 1u) * sizeof *switch_values + (uint64_t)(bus_bindings + 1u) * sizeof *bus_gains
+        + (((uint64_t)events->desc.max_instances + 1u) * switch_count + 1u) * sizeof *switch_values
+        + (uint64_t)(bus_bindings + 1u) * sizeof *bus_gains
         + (uint64_t)hook->policy_count * sizeof *policies
         + (uint64_t)events->desc.max_instances * sizeof *events->due;
     return SU_OK;
@@ -1541,6 +1630,8 @@ static uint64_t layout_fingerprint(const SuAudioEvents *events) {
     uint32_t knee_bits;
     su_audio_voice_pool_desc(events->pool, &pool_desc);
     hash = fnv_u64(hash, sizeof(EventLeaf));
+    hash = fnv_u64(hash, sizeof(EventInstance));
+    hash = fnv_u64(hash, EVENT_CHECKPOINT_LAYOUT);
     hash = fnv_u64(hash, events->desc.sample_rate);
     hash = fnv_u64(hash, events->desc.max_instances);
     hash = fnv_u64(hash, events->desc.max_leaves_per_instance);
@@ -1592,6 +1683,8 @@ static void instance_io(SuAudioStateIo *io, EventInstance *instance) {
     SU_STATE(io, instance->event_id);
     SU_STATE(io, instance->order);
     SU_STATE(io, instance->emitter);
+    SU_STATE(io, instance->start);
+    SU_STATE(io, instance->sequence);
 }
 
 static void leaf_io(SuAudioStateIo *io, EventLeaf *leaf) {
@@ -1648,6 +1741,9 @@ static uint32_t events_io(SuAudioEvents *events, SuAudioStateIo *io) {
                 instance->count = 0u;
             }
             continue;
+        }
+        for (index = 0u; index < events->switch_count; index++) {
+            SU_STATE(io, events->switch_values[((size_t)slot + 1u) * events->switch_count + index]);
         }
         for (index = 0; index < instance->count; index++) {
             EventLeaf *leaf = &instance->leaves[index];
@@ -1713,6 +1809,11 @@ static uint32_t scan_assets(SuAudioEvents *events, const uint8_t *body, size_t b
         }
         if (instance.state == 0u) {
             continue;
+        }
+        for (index = 0u; index < events->switch_count; index++) {
+            SuAudioGraphSwitch initial;
+            memset(&initial, 0, sizeof initial);
+            SU_STATE(&io, initial);
         }
         for (index = 0; index < instance.count; index++) {
             const SuAudioClip *clip = NULL;

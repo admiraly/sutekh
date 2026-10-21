@@ -50,6 +50,24 @@ children inherit camera/emitter movement without simulation reads. Destroyed
 emitters cancel pending children and stop live ones at the next unrendered
 quantum. Already-cached output is unaffected.
 
+The integrated path uses a 256-entry, direct-mapped spatial-control cache local
+to each quantum. Entries match the full emitter handle (including generation)
+and the exact authored gain and sample-rate-adjusted pitch bits. Matching leaves
+reuse scene resolution, curve evaluation, attenuation, pan and Doppler results.
+Collisions simply recompute. Per-instance and per-bus parameter bindings still
+run independently for every leaf, and every voice still updates controls and
+audibility before ranking every quantum. No virtual cursor, filter, ranking or
+wake policy changes. The cache uses bounded stack scratch, allocates nothing,
+and is neither persistent nor serialized, so checkpoint format is unchanged.
+
+`audio_controls_identical` compares every rendered PCM buffer and saved
+checkpoint from the runtime test suite against a separately compiled uncached
+reference. This includes shared emitters, cache collisions, mixed authored
+gain/pitch, moving listeners/emitters, Doppler, filtering, all virtual modes,
+parameter bindings, steals and partial-quantum checkpoint restoration.
+For repeatable Release comparisons, build `bench_audio_system_reference` and
+alternate it with `bench_audio_system` using the same arguments.
+
 ## Stop and release
 
 `su_audio_instance_stop`, `su_audio_emitter_stop` and `su_audio_scope_stop` enqueue
