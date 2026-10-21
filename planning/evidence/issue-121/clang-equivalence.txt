@@ -1,0 +1,25 @@
+UpdateCTestConfiguration  from :C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/i121/build-i121/DartConfiguration.tcl
+Test project C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/i121/build-i121
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 124
+    Start 124: audio_controls_identical
+
+124: Test command: C:\Users\dev\AppData\Local\Programs\Python\Python313\python.exe "-I" "C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/i121/tests/audio/compare_controls.py" "C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/i121/build-i121/test_audio_runtime.exe" "C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/i121/build-i121/test_audio_runtime_reference.exe"
+124: Working Directory: C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/i121/build-i121
+124: Test timeout computed to be: 10000000
+124: audio_runtime: 11350 checks, 0 failures
+124: audio_runtime: 11350 checks, 0 failures
+124: bit-identical PCM/checkpoints: 14168168 bytes, sha256 4475447c001efa06372e176fc0eb7de3052c9d38a8c4947af3aa6cf53fcf0fe2
+1/1 Test #124: audio_controls_identical .........   Passed    0.93 sec
+
+The following tests passed:
+	audio_controls_identical
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.93 sec
