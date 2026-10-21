@@ -1,4 +1,5 @@
 #include "sutekh/audio_graph.h"
+#include "../../src/audio/su_audio_graph_int.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -284,6 +285,64 @@ static void test_exact_ids_and_pins(void) {
     CHECK(su_audio_asset_unload(assets, (SuAudioAssetRef){2,2}) == SU_OK);
 }
 
+static void test_live_expansion(void) {
+    SuAudioGraph *graph = prepare(SOUNDS "," SWITCH "," BLEND ","
+        "{\"id\":40,\"type\":\"parallel\",\"children\":[20,30]}", "{\"id\":1,\"root\":40}");
+    SuAudioParamDef parameter = {0};
+    SuAudioSwitchDef sw = {0};
+    SuAudioParamsDesc desc = {0};
+    SuAudioParams *params = NULL;
+    SuAudioParamScope global = {SU_AUDIO_SCOPE_GLOBAL, 0u};
+    SuAudioParamTarget target = {0u, 0u};
+    SuAudioGraphSwitch initial_switch = {7u, 5u};
+    SuAudioGraphExpandState initial = {0};
+    SuAudioGraphLeaf leaves[4], untouched[4];
+    SuAudioGraphDiagnostic diagnostic;
+    size_t count = 0u;
+    uint32_t now;
+    parameter.id = 8u;
+    parameter.max_value = 10.0f;
+    sw.id = 7u;
+    sw.default_value = 5u;
+    sw.policy = SU_AUDIO_SWITCH_FADE;
+    sw.fade_frames = 512u;
+    desc.struct_size = sizeof desc;
+    desc.sample_rate = 48000u;
+    desc.params = &parameter;
+    desc.param_count = 1u;
+    desc.switches = &sw;
+    desc.switch_count = 1u;
+    CHECK(su_audio_params_create(&desc, &params) == SU_OK);
+    CHECK(su_audio_switch_set_at(params, global, 7u, 99u, 128u) == SU_OK);
+    CHECK(su_audio_param_set_at(params, global, 8u, 10.0f, 256u) == SU_OK);
+    initial.switches = &initial_switch;
+    initial.switch_count = 1u;
+#ifdef A03_TEST_ALLOCATORS
+    expansion_allocations = 0u;
+    expanding = 1;
+#endif
+    for (now = 0u; now < 1024u; now += 128u) {
+        float new_gain = now < 128u ? 0.0f : now < 640u ? (float)(now - 128u) / 512.0f : 1.0f;
+        CHECK(su_audio_graph_expand_live(graph, 1u, 3u, 0u, 9u, &initial, params, target, 0u, now,
+            leaves, 4u, &count, NULL) == SU_OK);
+        CHECK(count == 4u);
+        CHECK(leaves[0].gain == 1.0f - new_gain && leaves[1].gain == new_gain);
+        CHECK(leaves[2].gain == (now < 256u ? 1.0f : 0.0f));
+        CHECK(leaves[3].gain == (now < 256u ? 0.0f : 1.0f));
+    }
+    memcpy(untouched, leaves, sizeof leaves);
+    CHECK(su_audio_graph_expand_live(graph, 1u, 3u, 0u, 9u, &initial, params, target, 0u, 1024u,
+        leaves, 3u, &count, &diagnostic) == SU_E_RESOURCE_LIMIT);
+    CHECK(count == 0u && strcmp(diagnostic.bound, "capacity") == 0);
+    CHECK(memcmp(leaves, untouched, sizeof leaves) == 0);
+#ifdef A03_TEST_ALLOCATORS
+    expanding = 0;
+    CHECK(expansion_allocations == 0u);
+#endif
+    su_audio_params_destroy(params);
+    su_audio_graph_release(graph);
+}
+
 int main(void) {
     float pcm[] = {0.0f,0.25f,-0.25f,0.0f};
     SuAudioClip clip = {pcm,4,1,48000};
@@ -291,7 +350,9 @@ int main(void) {
     CHECK(su_audio_assets_create(4,4096,&assets) == SU_OK);
     CHECK(su_audio_asset_prepare(assets,1,&clip,&ref) == SU_OK && ref.generation == 1);
     CHECK(su_audio_asset_prepare(assets,2,&clip,&ref) == SU_OK && ref.generation == 2);
-    test_parser(); test_bounds(); test_expansion(); test_dag_boundaries(); test_exact_ids_and_pins();
+    test_parser(); test_bounds(); test_expansion(); test_dag_boundaries();
+    test_live_expansion();
+    test_exact_ids_and_pins();
     CHECK(su_audio_assets_destroy(assets) == SU_OK);
     printf("audio_graph: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
