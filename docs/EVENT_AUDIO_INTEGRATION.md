@@ -60,6 +60,60 @@ audio system, so these methods are not registered there; a host exposes them.
 
 ## Voices and spatial filtering
 
+### Authored loudness and speaker output
+
+`SuAudioEventsHook` and `SuAudioSystemDesc` accept `loudness_rules` and
+`loudness_rule_count` (at most `SU_AUDIO_EVENTS_MAX_LOUDNESS_RULES`, 256).
+Each `SuAudioLoudnessRule` selects a graph leaf by `node_id` and `bus_id`;
+zero in either selector means any. The first matching rule supplies a finite
+`loudness_db` in the bus HDR policy's authored units, not measured PCM dBFS.
+No match means no report, not a default of 0 dB. Values at or below
+`SU_AUDIO_LOUDNESS_SILENT` do not participate.
+
+The runtime copies the rules at attachment. Every quantum, the voice pool
+reports the maximum authored loudness of physically rendered voices and
+steal-release tails into each voice's actual routed bus (unknown/zero leaf
+bus IDs fall back to the root). Virtual voices and future starts do not
+participate. The bus tree consumes those reports once and resets them for
+the next quantum. Rules do not enable HDR: the tree's HDR policy and each
+participating bus must still opt in. No rules, or disabled HDR, preserves
+the existing stereo PCM bit for bit. Music and host-input loudness remain
+host-authored through `su_audio_bus_set_loudness`; their PCM is not analyzed
+to invent authored loudness. Reports are direct to the routed bus, not
+automatically propagated to its ancestors.
+
+For an independent multichannel object output, set `speaker_layout`,
+`object_output` and `object_user`, and attach a cluster. The layout and its
+2-16 listener-relative speaker directions are copied at attachment; the
+callback and user data must remain valid. `object_output(user, pcm, 128,
+channels, sample_time)` receives one interleaved quantum for each newly
+rendered quantum. The PCM is borrowed until the callback returns. It runs
+synchronously on the rendering thread (including the reader thread in PULL
+mode), must not reenter the system/runtime, and should not block or allocate.
+It is a separate presentation sink, never mixed back into the stereo output
+or sent automatically to the stereo device/ring.
+
+With that sink attached, the cluster is advanced once by
+`su_audio_cluster_render_speakers` instead of its stereo reference renderer.
+The speaker panner consumes the assigned cluster centroids, dedicated-object
+directions, beds and membership crossfades, including elevation. For voice
+objects choose `SU_AUDIO_EVENTS_CLUSTER_VOICES`: these are the existing mono
+pre-pan captures, not post-bus/master PCM. Bus-only input provides post-bus
+stereo beds, not directional objects. Selecting both includes both
+representations and therefore double-counts the voice content in this
+independent sink; it is useful for diagnostics, not a replacement master mix.
+The speaker output has no separate limiter or device backend. HRTF rendering,
+speaker calibration, LFE/bass management and platform object APIs remain
+future renderer work; this is a bounded CPU reference panner.
+
+Checkpoints preserve authored voice/tail metadata and cluster crossfade state.
+The fingerprint includes the loudness rules, speaker layout and presence of
+the sink; callback addresses are not serialized. Loading into an identically
+configured runtime resumes future quanta exactly. A cached partial stereo
+quantum does not cause its already-delivered speaker callback to be repeated.
+Journal replay and offline verification also invoke a configured sink; use a
+separate sink context for each replay if the host needs independent output.
+
 `su_audio_events_attach(events, &hook)` (hook version
 `SU_AUDIO_EVENTS_HOOK_VERSION`, appended fields selected by `struct_size`)
 replaces the private mixer of an idle runtime with an A05 voice pool. The pool

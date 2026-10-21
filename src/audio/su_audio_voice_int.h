@@ -7,7 +7,9 @@
 
 /* Renders one 128-frame quantum, adding each voice into routes[route] (interleaved stereo, caller-cleared).
  * Requires an empty render cache (never mixed with su_audio_voice_pool_render). */
-uint32_t su_audio_voice_pool_quantum(SuAudioVoicePool *pool, float *const *routes, uint32_t route_count);
+uint32_t su_audio_voice_pool_quantum(SuAudioVoicePool *pool, float *const *routes, uint32_t route_count,
+                                    float *loudness);
+uint32_t su_audio_voice_set_loudness(SuAudioVoicePool *pool, SuAudioLogicalVoice voice, float loudness_db);
 /* Moves the clock of an idle pool (no voices, empty cache). */
 uint32_t su_audio_voice_pool_set_clock(SuAudioVoicePool *pool, uint64_t clock);
 uint64_t su_audio_voice_pool_clock(const SuAudioVoicePool *pool);

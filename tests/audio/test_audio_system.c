@@ -695,6 +695,54 @@ static void render_loop(Setup *s, int spatial, double *rms, uint32_t *count) {
 }
 
 /* Host bus inputs, Doppler on spatial voices and bus-filtered voice bindings. */
+static void system_object_output(void *user, const float *pcm, uint32_t frames,
+                                  uint32_t channels, uint64_t time) {
+    uint64_t *rendered = user;
+    CHECK(time == *rendered && channels == 3u && pcm != NULL);
+    *rendered += frames;
+}
+
+static void test_loudness_and_objects(void) {
+    Setup setup;
+    SuAudioSystem *system = NULL;
+    SuAudioLoudnessRule loudness = {0u, 0u, 12.0f};
+    SuAudioSpeakerLayout layout;
+    SuAudioTrigger trigger;
+    SuAudioInstance instance = 0u;
+    SuAudioBusMeter meter;
+    uint64_t rendered = 0u;
+    setup_init(&setup, SU_AUDIO_OUTPUT_OFFLINE);
+    memset(&layout, 0, sizeof layout);
+    layout.count = 3u;
+    layout.bed_right = 1u;
+    layout.directions[0].x = -1.0f;
+    layout.directions[1].x = 1.0f;
+    layout.directions[2].y = 1.0f;
+    setup.desc.loudness_rules = &loudness;
+    setup.desc.loudness_rule_count = 1u;
+    setup.desc.speaker_layout = &layout;
+    setup.desc.object_output = system_object_output;
+    setup.desc.object_user = &rendered;
+    setup.tree.hdr.enabled = 1u;
+    setup.tree.hdr.window_db = 30.0f;
+    setup.buses[1].hdr = 1u;
+    setup.buses[2].hdr = 1u;
+    setup.buses[3].hdr = 1u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    memset(&trigger, 0, sizeof trigger);
+    trigger.struct_size = sizeof trigger;
+    trigger.event_id = 2u;
+    trigger.commit_seq = 1u;
+    trigger.session_generation = 1u;
+    CHECK(su_audio_system_post(system, &trigger, &instance, NULL) == SU_OK);
+    CHECK(su_audio_system_render(system, offline_pcm, 1000u) == SU_OK);
+    CHECK(rendered == 1024u);
+    CHECK(su_audio_bus_meter_read(su_audio_system_buses(system), 30u, &meter, 0) == SU_OK);
+    CHECK(meter.hdr_db == 12.0f);
+    su_audio_system_destroy(system);
+    setup_free(&setup);
+}
+
 static void test_host_extensions(void) {
     Setup s;
     SuAudioSystem *system = NULL;
@@ -892,6 +940,7 @@ int main(void) {
     test_control_methods();
     test_device_output();
     test_host_extensions();
+    test_loudness_and_objects();
     test_pull_render();
     test_sum_groups();
 #endif

@@ -1,0 +1,34 @@
+{
+  "task": "issue-122-loudness-objects",
+  "issue": 122,
+  "branch": "feat/issue-122-loudness-objects",
+  "date": "2026-10-21",
+  "state": "implemented-locally-validated",
+  "scope": [
+    "include/sutekh/audio_cluster.h",
+    "include/sutekh/audio_event.h",
+    "include/sutekh/audio_system.h",
+    "src/audio/su_audio_cluster.c",
+    "src/audio/su_audio_event.c",
+    "src/audio/su_audio_system.c",
+    "src/audio/su_audio_voice_int.h",
+    "src/audio/su_audio_voice_policy.c",
+    "tests/audio/test_audio_cluster.c",
+    "tests/audio/test_audio_runtime.c",
+    "tests/audio/test_audio_system.c",
+    "docs/EVENT_AUDIO_BUS.md",
+    "docs/EVENT_AUDIO_CLUSTERING.md",
+    "docs/EVENT_AUDIO_INTEGRATION.md",
+    "planning/leases/issue-122-loudness-objects.json",
+    "planning/evidence/event-audio/issue-122.json",
+    "planning/handoffs/2026-10-21-issue-122.md",
+    "PACK_VALIDATION.json"
+  ],
+  "blockers": [],
+  "next": ["PR correctness checks", "integrator review of the minimal renderer boundary"],
+  "unimplemented_renderer_extensions": [
+    "multichannel device and platform object adapters",
+    "HRTF or VBAP rendering",
+    "speaker calibration and LFE/bass management"
+  ]
+}

@@ -92,6 +92,17 @@ typedef struct SuAudioVoicePolicyRule {
     SuAudioVoicePolicy policy;
 } SuAudioVoicePolicyRule;
 
+#define SU_AUDIO_EVENTS_MAX_LOUDNESS_RULES 256u
+
+typedef struct SuAudioLoudnessRule {
+    uint32_t node_id;
+    uint32_t bus_id;
+    float loudness_db;
+} SuAudioLoudnessRule;
+
+typedef void (*SuAudioObjectOutputFn)(void *user, const float *pcm, uint32_t frames,
+                                     uint32_t channels, uint64_t sample_time);
+
 /* Host bus input: PCM the owner supplies into a bus once per 128-frame quantum, from inside the runtime's render
  * (so on the owner's thread), for sources the runtime does not play itself (for example a long track decoded by a
  * legacy SuAudioStream). render receives interleaved stereo cleared to zero, the frame count and the sample time
@@ -126,6 +137,11 @@ typedef struct SuAudioEventsHook {
     float speed_of_sound;                  /* metres/second for the Doppler law; 0 = 343 */
     const SuAudioBusInput *inputs;         /* copied; at most SU_AUDIO_EVENTS_MAX_INPUTS */
     uint32_t input_count;
+    const SuAudioLoudnessRule *loudness_rules;
+    uint32_t loudness_rule_count;
+    const SuAudioSpeakerLayout *speaker_layout;
+    SuAudioObjectOutputFn object_output;
+    void *object_user;
 } SuAudioEventsHook;
 
 /* Clustering inputs: rendered voices as objects (ID = logical voice handle, steal tails with bit 63 set;
