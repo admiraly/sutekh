@@ -9,6 +9,7 @@
 #include "ir/su_sha256.h"
 #include "platform/su_platform.h"
 #include "platform/su_thread.h"
+#include "audio/su_audio_output.h"
 #include <stdatomic.h>
 
 #ifdef SU_AUDIO_SYSTEM_ALLOC_TEST
@@ -339,15 +340,106 @@ static void run_ring(SuAudioSystem *system, Session *session, float *out, uint64
 }
 
 /* The real-time ring stream and the offline journal replay are the same PCM. */
+static void test_output_policy(void) {
+    SuAudioGap gap = {0};
+    float pcm[256u * 2u];
+    uint32_t index;
+    Setup setup;
+    SuAudioSystem *system = NULL;
+    SuAudioSystemStats stats = {0};
+    CHECK(su_audio_time_bin(0u) == 0u);
+    CHECK(su_audio_time_bin(1u) == 0u);
+    CHECK(su_audio_time_bin(2u) == 1u);
+    CHECK(su_audio_time_bin(3u) == 1u);
+    CHECK(su_audio_time_bin(UINT64_MAX) == SU_AUDIO_DEVICE_HISTOGRAM_BINS - 1u);
+    for (index = 0u; index < 512u; index++) {
+        pcm[index] = index % 2u == 0u ? 1.0f : -0.5f;
+    }
+    su_audio_gap_apply(&gap, pcm, 128u, 128u);
+    CHECK(pcm[0] == 1.0f && pcm[255] == -0.5f);
+    su_audio_gap_apply(&gap, pcm, 0u, 16u);
+    CHECK(pcm[0] == 63.0f / 64.0f && pcm[1] == -0.5f * pcm[0]);
+    su_audio_gap_apply(&gap, pcm, 0u, 128u);
+    CHECK(pcm[94] == 0.0f && pcm[255] == 0.0f);
+    for (index = 0u; index < 128u; index++) {
+        pcm[index] = 1.0f;
+    }
+    su_audio_gap_apply(&gap, pcm, 16u, 16u);
+    CHECK(pcm[0] == 1.0f / 64.0f && pcm[30] == 16.0f / 64.0f);
+    su_audio_gap_apply(&gap, pcm, 48u, 48u);
+    CHECK(pcm[94] == 1.0f);
+    for (index = 0u; index < 512u; index++) {
+        pcm[index] = 1.0f;
+    }
+    su_audio_gap_apply(&gap, pcm, 128u, 256u);
+    CHECK(pcm[126] == 1.0f && pcm[254] == 0.0f && pcm[256] == 0.0f);
+    su_audio_gap_apply(&gap, pcm, 0u, 0u);
+    memset(&gap, 0, sizeof gap);
+    pcm[0] = 1.0f;
+    pcm[1] = -1.0f;
+    su_audio_gap_apply(&gap, pcm, 1u, 1u);
+    su_audio_gap_apply(&gap, pcm, 0u, 1u);
+    pcm[0] = 1.0f;
+    pcm[1] = -1.0f;
+    su_audio_gap_apply(&gap, pcm, 1u, 1u);
+    CHECK(pcm[0] > 0.98f && pcm[1] < -0.98f);
+    memset(&gap, 0, sizeof gap);
+    pcm[0] = 1.0f;
+    pcm[1] = -1.0f;
+    su_audio_gap_apply(&gap, pcm, 1u, 2u);
+    CHECK(pcm[0] == 1.0f && pcm[2] == 63.0f / 64.0f);
+    setup_init(&setup, SU_AUDIO_OUTPUT_RING);
+    setup.desc.ring_frames = 1024u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(su_audio_system_ring_adaptive(system, 1) == SU_OK);
+    CHECK(su_audio_system_update(system) == SU_OK);
+    su_audio_system_stats(system, &stats);
+    CHECK(stats.ring_target == 256u && stats.ring_fill == 256u);
+    CHECK(su_audio_system_ring_read(system, pcm, 512u / 2u) == 256u);
+    CHECK(su_audio_system_ring_read(system, pcm, 1u) == 0u);
+    CHECK(su_audio_system_update(system) == SU_OK);
+    su_audio_system_stats(system, &stats);
+    CHECK(stats.ring_target == 512u && stats.ring_capacity == 1024u);
+    for (index = 0u; index < RATE * 5u / 128u + 1u; index++) {
+        CHECK(su_audio_system_ring_read(system, pcm, 128u) == 128u);
+        CHECK(su_audio_system_update(system) == SU_OK);
+    }
+    su_audio_system_stats(system, &stats);
+    CHECK(stats.ring_target == 384u);
+    for (index = 0u; index < 8u; index++) {
+        float large[2050u];
+        CHECK(su_audio_system_ring_read(system, large, 1025u) < 1025u);
+        CHECK(su_audio_system_update(system) == SU_OK);
+    }
+    su_audio_system_stats(system, &stats);
+    CHECK(stats.ring_target == 1024u);
+    CHECK(su_audio_system_ring_adaptive(system, 0) == SU_OK);
+    su_audio_system_destroy(system);
+    setup.desc.render = SU_AUDIO_RENDER_PULL;
+    setup.desc.ring_frames = 256u;
+    CHECK(su_audio_system_create(&setup.desc, &system, NULL) == SU_OK);
+    CHECK(su_audio_system_ring_adaptive(system, 1) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_audio_system_ring_read(system, pcm, 256u) == 256u);
+    {
+        float large[2048u];
+        CHECK(su_audio_system_ring_read(system, large, 1024u) == 1024u);
+    }
+    su_audio_system_stats(system, &stats);
+    CHECK(stats.underrun_frames == 0u && stats.consumed_frames == 1280u);
+    CHECK(stats.device.callbacks == 0u);
+    su_audio_system_destroy(system);
+    setup_free(&setup);
+}
+
 static void test_paths_identical(void) {
     Setup s;
     SuAudioSystem *ring = NULL;
     SuAudioSystem *replayed = NULL;
     Session b;
-    SuAudioSystemStats stats;
+    SuAudioSystemStats stats = {0};
     const SuAudioSystemCommand *journal = NULL;
     uint32_t count = 0u;
-    char message[256];
+    char message[256] = {0};
     setup_init(&s, SU_AUDIO_OUTPUT_RING);
     CHECK(su_audio_system_create(&s.desc, &ring, message) == SU_OK);
     memset(&b, 0, sizeof b);
@@ -442,6 +534,7 @@ static void test_control_methods(void) {
     CHECK(written == strlen(text) && strstr(text, "\"schema\":\"su_audio_system_inspect_v1\"") != NULL);
     CHECK(strstr(text, "\"buses\":[") != NULL || strstr(text, "\"buses\":{") != NULL);
     CHECK(strstr(text, "su_audio_cluster_v1") != NULL);
+    CHECK(strstr(text, "\"callback_us\":[") != NULL && strstr(text, "\"interval_us\":[") != NULL);
     CHECK(su_audio_system_control(system, "audio.trace.stats", NULL, 0u, text, sizeof text, &written) == SU_OK);
     CHECK(strstr(text, "\"recorded\":") != NULL && strstr(text, "\"ok\":") != NULL);
     CHECK(su_audio_system_control(system, "audio.trace.read", NULL, 0u, text, sizeof text, &written) == SU_OK);
@@ -558,9 +651,10 @@ static void test_pull_render(void) {
     Setup s;
     SuAudioSystem *system = NULL;
     SuAudioSystem *replayed = NULL;
-    SuAudioSystemStats stats;
+    SuAudioSystemStats stats = {0};
     const SuAudioSystemCommand *journal = NULL;
     uint32_t count = 0u;
+    uint32_t initial_count = 0u;
     PullReader reader;
     SuThread thread;
     Session a;
@@ -578,6 +672,7 @@ static void test_pull_render(void) {
     reader.frames = frames;
     su_audio_system_lock(system);
     game_frame(system, &a, frame++);
+    CHECK(su_audio_system_journal(system, &journal, &initial_count) == SU_OK && initial_count > 0u);
     su_audio_system_unlock(system);
     CHECK(su_audio_system_update(system) == SU_OK); /* a no-op in PULL mode */
     CHECK(su_thread_create(&thread, pull_reader_main, &reader) == 0);
@@ -593,7 +688,7 @@ static void test_pull_render(void) {
     CHECK(su_thread_join(thread) == 0);
     su_audio_system_stats(system, &stats);
     CHECK(reader.short_reads == 0u && stats.underrun_frames == 0u);
-    CHECK(su_audio_system_journal(system, &journal, &count) == SU_OK && count > 10u);
+    CHECK(su_audio_system_journal(system, &journal, &count) == SU_OK && count >= initial_count);
     s.desc.output = SU_AUDIO_OUTPUT_OFFLINE;
     CHECK(su_audio_system_create(&s.desc, &replayed, NULL) == SU_OK);
     CHECK(su_audio_system_replay(replayed, journal, count, frames, offline_pcm) == SU_OK);
@@ -607,8 +702,8 @@ static void test_pull_render(void) {
 static void test_device_output(void) {
     Setup s;
     SuAudioSystem *system = NULL;
-    char message[256];
-    uint32_t status;
+    char message[256] = {0};
+    uint32_t status = SU_OK;
     setup_init(&s, SU_AUDIO_OUTPUT_DEVICE);
     message[0] = '\0';
     status = su_audio_system_create(&s.desc, &system, message);
@@ -621,6 +716,74 @@ static void test_device_output(void) {
         CHECK(message[0] != '\0' && system == NULL);
     }
     setup_free(&s);
+}
+
+static int device_profile(int argc, char **argv) {
+    Setup setup;
+    SuAudioSystem *system = NULL;
+    Session session = {0};
+    SuAudioSystemStats stats = {0};
+    char message[256] = {0};
+    uint64_t begin = 0u;
+    uint64_t now = 0u;
+    uint64_t next_stall = 0u;
+    uint64_t duration = 0u;
+    uint32_t status = SU_OK;
+    uint32_t frame = 0u;
+    uint32_t seconds = 0u;
+    uint32_t stalls = 0u;
+    size_t written = 0u;
+    if (argc != 5 || (strcmp(argv[3], "owner") != 0 && strcmp(argv[3], "pull") != 0)
+        || (strcmp(argv[4], "fixed") != 0 && strcmp(argv[4], "adaptive") != 0)) {
+        fprintf(stderr, "usage: test_audio_system --device-profile seconds owner|pull fixed|adaptive\n");
+        return 1;
+    }
+    seconds = (uint32_t)strtoul(argv[2], NULL, 10);
+    if (seconds < 1u || seconds > 86400u || (strcmp(argv[3], "pull") == 0 && strcmp(argv[4], "adaptive") == 0)) {
+        return 1;
+    }
+    duration = (uint64_t)seconds * 1000000000u;
+    setup_init(&setup, SU_AUDIO_OUTPUT_DEVICE);
+    setup.desc.render = strcmp(argv[3], "pull") == 0 ? SU_AUDIO_RENDER_PULL : SU_AUDIO_RENDER_OWNER;
+    setup.desc.ring_frames = 4096u;
+    status = su_audio_system_create(&setup.desc, &system, message);
+    if (status != SU_OK) {
+        fprintf(stderr, "device profile unavailable: %s\n", message);
+        setup_free(&setup);
+        return status == SU_E_UNSUPPORTED_METHOD ? 77 : 1;
+    }
+    if (strcmp(argv[4], "adaptive") == 0) {
+        CHECK(su_audio_system_ring_adaptive(system, 1) == SU_OK);
+    }
+    CHECK(su_platform_monotonic_ns(&begin) != 0);
+    next_stall = begin + 5000000000u;
+    do {
+        su_audio_system_lock(system);
+        game_frame(system, &session, frame == 0u ? 0u : (frame - 1u) % 150u + 1u); /* bounded voice use */
+        frame++;
+        CHECK(su_audio_system_update(system) == SU_OK);
+        su_audio_system_unlock(system);
+        CHECK(su_platform_monotonic_ns(&now) != 0);
+        if (now >= next_stall) {
+            su_platform_sleep_ms(200u);
+            next_stall += 5000000000u;
+            stalls++;
+        } else {
+            su_platform_sleep_ms(5u);
+        }
+    } while (now - begin < duration);
+    su_audio_system_lock(system);
+    su_audio_system_stats(system, &stats);
+    CHECK(su_audio_system_control(system, "audio.inspect", NULL, 0u, text, sizeof text, &written) == SU_OK);
+    printf("{\"profile\":\"device_latency_v1\",\"seconds\":%u,\"render\":\"%s\",\"ring\":\"%s\","
+        "\"sample_rate\":%u,\"buffer_frames\":%u,\"owner_stalls_200ms\":%u,\"inspect\":%s}\n",
+        seconds, argv[3], argv[4], stats.device.sample_rate, stats.device.buffer_frames, stalls, text);
+    fprintf(stderr, "device profile endpoint: %s\n", stats.device.name);
+    su_audio_system_unlock(system);
+    CHECK(stats.device.callbacks > 0u && stats.device.backend_errors == 0u);
+    su_audio_system_destroy(system);
+    setup_free(&setup);
+    return failures == 0u ? 0 : 1;
 }
 
 typedef struct HostInput {
@@ -709,7 +872,7 @@ static void test_host_extensions(void) {
     uint32_t count = 0u;
     uint32_t index;
     size_t written = 0u;
-    char message[256];
+    char message[256] = {0};
 
     /* bus input: constant 0.25 into bus 20; called once per quantum in order, mixed through the tree */
     setup_init(&s, SU_AUDIO_OUTPUT_OFFLINE);
@@ -852,7 +1015,7 @@ static void test_steady_state(void) {
     Setup s;
     SuAudioSystem *system = NULL;
     Session a;
-    SuAudioSystemStats stats;
+    SuAudioSystemStats stats = {0};
     uint64_t position;
     size_t before;
     size_t written = 0u;
@@ -882,11 +1045,17 @@ static void test_steady_state(void) {
 }
 #endif
 
-int main(void) {
+int main(int argc, char **argv) {
     synthesize();
+    (void)argc;
+    (void)argv;
 #ifdef SU_AUDIO_SYSTEM_ALLOC_TEST
     test_steady_state();
 #else
+    if (argc > 1 && strcmp(argv[1], "--device-profile") == 0) {
+        return device_profile(argc, argv);
+    }
+    test_output_policy();
     test_paths_identical();
     test_checkpoint_verify();
     test_control_methods();

@@ -97,3 +97,10 @@ sample-identical to the event-stage mix.
 Measured on Windows 11 x64, Core i5-12400F, Clang 23.1.3 Debug: about 0.5 us
 per snapshot with 4 instances, 5 voices, 3 emitters and 3 buses; 2.2 KB JSON.
 One local observation, not a budget.
+
+## Device output diagnostics
+
+The integrated `audio.inspect` method also exposes callback service/interval
+histograms, backend starvation/error counters, stream latency and the adaptive
+ring target. See [device timing and recovery](AUDIO_DEVICE_LATENCY.md) for bin
+units, RING/PULL behavior, underrun fades and the opt-in long-run profile.

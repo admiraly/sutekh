@@ -8,6 +8,7 @@
 #include "sutekh/audio_system.h"
 #include "ir/su_sha256.h"
 #include "su_audio_int.h"
+#include "su_audio_output.h"
 #include "platform/su_thread.h"
 
 #define QUANTUM SU_AUDIO_EVENT_QUANTUM
@@ -34,6 +35,11 @@ struct SuAudioSystem {
     int journal_complete;          /* the journal starts at the system's first frame */
     float *ring;
     uint32_t ring_frames;
+    uint32_t ring_target;
+    int adaptive;
+    uint64_t adaptive_underruns;
+    uint64_t adaptive_read;
+    SuAudioGap gap;
     _Atomic uint64_t write_pos;
     _Atomic uint64_t read_pos;
     _Atomic uint64_t underruns;
@@ -67,7 +73,9 @@ static void *system_calloc(SuAudioSystem *system, size_t count, size_t size) {
 }
 
 static void device_pull(void *user, float *out, uint32_t frames) {
-    (void)su_audio_system_ring_read((SuAudioSystem *)user, out, frames);
+    SuAudioSystem *system = user;
+    uint32_t valid = su_audio_system_ring_read(system, out, frames);
+    su_audio_gap_apply(&system->gap, out, valid, frames);
 }
 
 void su_audio_system_destroy(SuAudioSystem *system) {
@@ -226,6 +234,7 @@ uint32_t su_audio_system_create(const SuAudioSystemDesc *desc, SuAudioSystem **o
     }
     if (desc->output != SU_AUDIO_OUTPUT_OFFLINE) {
         system->ring_frames = desc->ring_frames;
+        system->ring_target = desc->ring_frames;
         system->ring = system_calloc(system, (size_t)desc->ring_frames * 2u, sizeof *system->ring);
         if (system->ring == NULL) {
             status = SU_E_RESOURCE_LIMIT;
@@ -312,6 +321,8 @@ void su_audio_system_stats(const SuAudioSystem *system, SuAudioSystemStats *out)
     out->consumed_frames = read;
     out->ring_fill = (uint32_t)(write - read);
     out->ring_capacity = system->ring_frames;
+    out->ring_target = system->ring_target;
+    su_audio_device_stats(system->device, &out->device);
     out->underrun_frames = atomic_load_explicit(&((SuAudioSystem *)system)->underruns, memory_order_relaxed);
     out->device_frames = su_audio_device_frames(system->device);
     out->journal_count = system->journal_count;
@@ -600,6 +611,17 @@ static void pull_render(SuAudioSystem *system, uint32_t frames) {
     su_mutex_unlock(&system->lock);
 }
 
+uint32_t su_audio_system_ring_adaptive(SuAudioSystem *system, int enabled) {
+    if (system == NULL || system->ring == NULL || pull_mode(system)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    system->adaptive = enabled != 0;
+    system->ring_target = enabled ? 256u : system->ring_frames;
+    system->adaptive_underruns = atomic_load(&system->underruns);
+    system->adaptive_read = atomic_load(&system->read_pos);
+    return SU_OK;
+}
+
 uint32_t su_audio_system_update(SuAudioSystem *system) {
     uint64_t write;
     if (system == NULL || system->ring == NULL) {
@@ -608,11 +630,26 @@ uint32_t su_audio_system_update(SuAudioSystem *system) {
     if (pull_mode(system)) {
         return SU_OK;
     }
+    if (system->adaptive) {
+        uint64_t underruns = atomic_load(&system->underruns);
+        uint64_t read = atomic_load(&system->read_pos);
+        if (underruns != system->adaptive_underruns) {
+            uint32_t target = system->ring_target * 2u;
+            system->ring_target = target < system->ring_frames ? target : system->ring_frames;
+            system->adaptive_underruns = underruns;
+            system->adaptive_read = read;
+        } else if (read - system->adaptive_read >= (uint64_t)system->desc.events.sample_rate * 5u) {
+            if (system->ring_target > 256u) {
+                system->ring_target -= QUANTUM;
+            }
+            system->adaptive_read = read;
+        }
+    }
     write = atomic_load_explicit(&system->write_pos, memory_order_relaxed);
     for (;;) {
         uint64_t read = atomic_load_explicit(&system->read_pos, memory_order_acquire);
         uint32_t status;
-        if (write - read + QUANTUM > system->ring_frames) {
+        if (write - read + QUANTUM > system->ring_target) {
             break;
         }
         status = su_audio_events_render(system->events,
@@ -626,7 +663,7 @@ uint32_t su_audio_system_update(SuAudioSystem *system) {
     return SU_OK;
 }
 
-uint32_t su_audio_system_ring_read(SuAudioSystem *system, float *out, uint32_t frames) {
+static uint32_t ring_read_chunk(SuAudioSystem *system, float *out, uint32_t frames) {
     uint64_t read;
     uint64_t write;
     uint32_t available;
@@ -657,6 +694,32 @@ uint32_t su_audio_system_ring_read(SuAudioSystem *system, float *out, uint32_t f
         atomic_fetch_add_explicit(&system->underruns, frames - done, memory_order_relaxed);
     }
     atomic_store_explicit(&system->read_pos, read + done, memory_order_release);
+    return done;
+}
+
+uint32_t su_audio_system_ring_read(SuAudioSystem *system, float *out, uint32_t frames) {
+    uint32_t done = 0u;
+    if (system == NULL || system->ring == NULL || (out == NULL && frames != 0u)) {
+        return 0u;
+    }
+    if (!pull_mode(system)) {
+        return ring_read_chunk(system, out, frames);
+    }
+    while (done < frames) {
+        uint32_t take = frames - done;
+        uint32_t valid = 0u;
+        if (take > system->ring_frames) {
+            take = system->ring_frames;
+        }
+        valid = ring_read_chunk(system, out + (size_t)done * 2u, take);
+        done += valid;
+        if (valid != take) {
+            memset(out + (size_t)(done + take - valid) * 2u, 0,
+                (size_t)(frames - done - take + valid) * 2u * sizeof *out);
+            atomic_fetch_add(&system->underruns, frames - done - take + valid);
+            break;
+        }
+    }
     return done;
 }
 
@@ -945,11 +1008,30 @@ static uint32_t method_inspect(SuAudioSystem *system, Text *text) {
     su_audio_system_stats(system, &stats);
     text_add(text, "{\"schema\":\"su_audio_system_inspect_v1\",\"clock\":%llu,\"rendered_frames\":%llu,"
         "\"consumed_frames\":%llu,\"ring_fill\":%u,\"ring_capacity\":%u,\"underrun_frames\":%llu,"
-        "\"journal\":%u,\"journal_dropped\":%llu,\"runtime_bytes\":%llu,\"events\":",
+        "\"journal\":%u,\"journal_dropped\":%llu,\"runtime_bytes\":%llu,",
         (unsigned long long)stats.clock, (unsigned long long)stats.rendered_frames,
         (unsigned long long)stats.consumed_frames, stats.ring_fill, stats.ring_capacity,
         (unsigned long long)stats.underrun_frames, stats.journal_count, (unsigned long long)stats.journal_dropped,
         (unsigned long long)stats.runtime_bytes);
+    text_add(text, "\"ring_target\":%u,\"device\":{\"callbacks\":%llu,\"callback_total_us\":%llu,"
+        "\"callback_max_us\":%llu,\"callback_over_budget\":%llu,\"interval_max_us\":%llu,"
+        "\"empty_buffers\":%llu,\"wait_timeouts\":%llu,\"backend_errors\":%llu,\"stream_latency_ms\":%.3f,"
+        "\"callback_us\":[", stats.ring_target, (unsigned long long)stats.device.callbacks,
+        (unsigned long long)stats.device.callback_total_us, (unsigned long long)stats.device.callback_max_us,
+        (unsigned long long)stats.device.callback_over_budget, (unsigned long long)stats.device.interval_max_us,
+        (unsigned long long)stats.device.empty_buffers, (unsigned long long)stats.device.wait_timeouts,
+        (unsigned long long)stats.device.backend_errors, stats.device.stream_latency_ms);
+    {
+        uint32_t bin;
+        for (bin = 0u; bin < SU_AUDIO_DEVICE_HISTOGRAM_BINS; bin++) {
+            text_add(text, "%s%llu", bin != 0u ? "," : "", (unsigned long long)stats.device.callback_us[bin]);
+        }
+        text_add(text, "],\"interval_us\":[");
+        for (bin = 0u; bin < SU_AUDIO_DEVICE_HISTOGRAM_BINS; bin++) {
+            text_add(text, "%s%llu", bin != 0u ? "," : "", (unsigned long long)stats.device.interval_us[bin]);
+        }
+    }
+    text_add(text, "]},\"events\":");
     if (!text->overflow) {
         json_status = su_audio_inspect_json(&snapshot, text->out + text->pos, text->capacity - text->pos, &written);
         text_json(text, json_status, written);
