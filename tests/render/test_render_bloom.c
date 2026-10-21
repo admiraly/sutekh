@@ -81,12 +81,16 @@ typedef struct Scene {
     uint32_t obj_count;
     const SuHudVertex *hud;
     uint32_t hud_count;
+    uint32_t output_alpha;
+    uint32_t sky;
+    uint32_t tonemap;
 } Scene;
 
 static void scene_init(Scene *s) {
     memset(s, 0, sizeof *s);
     s->clear[3] = 1.0f;
     s->exposure = 1.0f;
+    s->tonemap = SU_TONEMAP_CLAMP;
 }
 
 /* Draws a few frames (uploads need one) and reads the last one back into out. */
@@ -99,8 +103,9 @@ static int render(const Scene *s, uint8_t *out) {
     f.camera.fov_y = FOV;
     f.camera.near_z = 0.05f;
     f.light.sun_dir = v3(0, 0, -1);
-    f.light.tonemap = SU_TONEMAP_CLAMP;
-    f.light.no_sky = 1;
+    f.light.tonemap = s->tonemap;
+    f.light.no_sky = !s->sky;
+    f.output_alpha = s->output_alpha;
     f.light.exposure = s->exposure;
     memcpy(f.light.clear_color, s->clear, sizeof s->clear);
     f.fx = s->fx;
@@ -182,7 +187,7 @@ static void box(SuAssetVertex *v, uint32_t *idx, float h) {
 }
 
 /* A black cube of half-size 0.5 whose material emits a grey of emissive * strength. */
-static SuRenderHandle make_cube(float emissive, float strength) {
+static SuRenderHandle make_surface(float emissive, float strength, uint32_t mode, float alpha, uint32_t overlay) {
     SuAssetVertex v[24];
     uint32_t idx[36];
     SuAssetSubmesh sm;
@@ -199,6 +204,10 @@ static SuRenderHandle make_cube(float emissive, float strength) {
     md.factors.metallic = 0.0f;
     md.factors.emissive[0] = md.factors.emissive[1] = md.factors.emissive[2] = emissive;
     md.factors.emissive_strength = strength;
+    md.factors.alpha_mode = mode;
+    md.factors.alpha_cutoff = 0.5f;
+    md.factors.base_color[3] = alpha;
+    md.overlay = overlay;
     CHECK(su_render_material_create(g_r, &md, &mat) == SU_OK);
     memset(&sm, 0, sizeof sm);
     sm.index_count = 36;
@@ -223,6 +232,10 @@ static SuRenderHandle make_cube(float emissive, float strength) {
     return model;
 }
 
+static SuRenderHandle make_cube(float emissive, float strength) {
+    return make_surface(emissive, strength, SU_ASSET_ALPHA_OPAQUE, 1.0f, 0u);
+}
+
 static SuRenderObject cube_obj(SuRenderHandle model, float emissive_mul) {
     SuRenderObject o;
     memset(&o, 0, sizeof o);
@@ -238,6 +251,185 @@ static SuRenderObject cube_obj(SuRenderHandle model, float emissive_mul) {
 static const char *type_name(uint32_t t) {
     static const char *const names[] = {"other", "integrated", "discrete", "virtual", "cpu"};
     return names[t <= SU_RENDER_DEVICE_CPU ? t : 0];
+}
+
+static double linear_byte(uint8_t value) {
+    double encoded = (double)value / 255.0;
+    return encoded <= 0.04045 ? encoded / 12.92 : pow((encoded + 0.055) / 1.055, 2.4);
+}
+
+static void check_composite(Scene *scene) {
+    static const float backgrounds[2][3] = {{0.04f, 0.08f, 0.12f}, {0.16f, 0.11f, 0.06f}};
+    uint32_t background;
+    scene->output_alpha = SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED;
+    CHECK(render(scene, g_ref));
+    for (background = 0; background < 2u; background++) {
+        uint32_t pixel;
+        uint32_t errors = 0;
+        memcpy(scene->clear, backgrounds[background], sizeof backgrounds[background]);
+        scene->output_alpha = SU_RENDER_OUTPUT_ALPHA_OPAQUE;
+        CHECK(render(scene, g_img));
+        for (pixel = 0; pixel < W * H; pixel++) {
+            uint32_t channel;
+            for (channel = 0; channel < 3u; channel++) {
+                double result = linear_byte(g_ref[pixel * 4u + channel]) +
+                    backgrounds[background][channel] * (1.0 - (double)g_ref[pixel * 4u + 3u] / 255.0);
+                errors += !near_i(srgb8(result), g_img[pixel * 4u + channel], 2);
+            }
+            errors += g_img[pixel * 4u + 3u] != 255u;
+        }
+        CHECK(errors == 0u);
+    }
+    scene->output_alpha = SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED;
+}
+
+static int compare_double(const void *left, const void *right) {
+    double first = *(const double *)left;
+    double second = *(const double *)right;
+    return (first > second) - (first < second);
+}
+
+static void test_output_alpha(void) {
+    Scene scene;
+    SuRenderObject objects[2];
+    SuRenderHandle opaque = make_cube(0.2f, 1.0f);
+    SuRenderHandle masked_out = make_surface(0.2f, 1.0f, SU_ASSET_ALPHA_MASK, 0.25f, 0u);
+    SuRenderHandle masked_in = make_surface(0.2f, 1.0f, SU_ASSET_ALPHA_MASK, 0.75f, 0u);
+    SuRenderHandle blended = make_surface(0.2f, 1.0f, SU_ASSET_ALPHA_BLEND, 0.5f, 0u);
+    SuRenderHandle overlay = make_surface(0.2f, 1.0f, SU_ASSET_ALPHA_BLEND, 0.5f, 1u);
+    SuFxVertex vertices[6];
+    SuFxBuffer effects = fxbuf(vertices, 6);
+    SuRenderCamera camera;
+    SuRenderStats stats;
+    uint32_t pixel;
+    uint32_t errors;
+    uint32_t mode;
+    uint32_t sample;
+    double cpu[2][20];
+    double gpu[2][20];
+    float color[4] = {0.1f, 0.15f, 0.2f, 1.0f};
+    memset(&camera, 0, sizeof camera);
+    camera.rot.w = 1.0f;
+    camera.fov_y = FOV;
+    camera.near_z = 0.05f;
+    su_fx_billboard(&effects, v3(0, 0, -5), 0.3f, 0.0f, color, su_render_camera_view(&camera));
+    scene_init(&scene);
+    scene.output_alpha = SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED;
+    scene.sky = 1u;
+    scene.clear[0] = scene.clear[1] = scene.clear[2] = 0.6f;
+    CHECK(render(&scene, g_img));
+    errors = 0;
+    for (pixel = 0; pixel < W * H * 4u; pixel++) errors += g_img[pixel] != 0u;
+    CHECK(errors == 0u);
+    scene.sky = 0u;
+    {
+        SuHud hud;
+        SuHudVertex hud_vertices[6];
+        su_hud_begin(&hud, hud_vertices, 6u, W, H);
+        su_hud_rect(&hud, 0, 0, 32, 32, 0x80ffffffu);
+        scene.hud = hud_vertices;
+        scene.hud_count = hud.count;
+        CHECK(render(&scene, g_img));
+        CHECK(px(g_img, 16u, 16u)[0] > 0);
+        CHECK(px(g_img, 16u, 16u)[3] == 0);
+        scene.hud_count = 0u;
+        scene.hud = NULL;
+    }
+    objects[0] = cube_obj(opaque, 1.0f);
+    scene.objs = objects;
+    scene.obj_count = 1u;
+    check_composite(&scene);
+    CHECK(px(g_ref, W / 2u, H / 2u)[3] == 255);
+    CHECK(px(g_ref, 0, 0)[3] == 0);
+    objects[0].model = masked_out;
+    check_composite(&scene);
+    CHECK(px(g_ref, W / 2u, H / 2u)[3] == 0);
+    objects[0].model = masked_in;
+    check_composite(&scene);
+    CHECK(px(g_ref, W / 2u, H / 2u)[3] == 255);
+    objects[0].model = blended;
+    check_composite(&scene);
+    CHECK(near_i(px(g_ref, W / 2u, H / 2u)[3], 128, 1));
+    objects[1] = cube_obj(blended, 1.0f);
+    objects[1].pos = su_wpos(0, 0, -6);
+    scene.obj_count = 2u;
+    check_composite(&scene);
+    CHECK(near_i(px(g_ref, W / 2u, H / 2u)[3], 191, 1));
+    scene.obj_count = 1u;
+    objects[0] = cube_obj(opaque, 1.0f);
+    objects[0].tint[3] = 0.5f;
+    check_composite(&scene);
+    CHECK(near_i(px(g_ref, W / 2u, H / 2u)[3], 128, 1));
+    objects[0] = cube_obj(overlay, 1.0f);
+    CHECK(render(&scene, g_img));
+    CHECK(px(g_img, W / 2u, H / 2u)[3] == 0);
+    CHECK(px(g_img, W / 2u, H / 2u)[1] > 0);
+    objects[1] = cube_obj(opaque, 1.0f);
+    objects[1].tint[3] = 0.5f;
+    scene.obj_count = 2u;
+    CHECK(render(&scene, g_img));
+    CHECK(near_i(px(g_img, W / 2u, H / 2u)[3], 128, 1));
+    scene.obj_count = 0u;
+    scene.fx = vertices;
+    scene.fx_count = effects.count;
+    check_composite(&scene);
+    CHECK(px(g_ref, W / 2u, H / 2u)[1] > 0);
+    errors = 0;
+    for (pixel = 0; pixel < W * H; pixel++) errors += g_ref[pixel * 4u + 3u] != 0u;
+    CHECK(errors == 0u);
+    scene.post = bloom_post(0.01f, 0.0f, 1.0f, 1.0f);
+    CHECK(render(&scene, g_img));
+    CHECK(px(g_img, W / 2u + 24u, H / 2u)[1] > 0);
+    errors = 0;
+    for (pixel = 0; pixel < W * H; pixel++) errors += g_img[pixel * 4u + 3u] != 0u;
+    CHECK(errors == 0u);
+    objects[0] = cube_obj(blended, 1.0f);
+    scene.obj_count = 1u;
+    scene.fx_count = 0u;
+    CHECK(render(&scene, g_img));
+    CHECK(near_i(px(g_img, W / 2u, H / 2u)[3], 128, 1));
+    memset(&scene.post, 0, sizeof scene.post);
+    CHECK(render(&scene, g_ref));
+    errors = 0;
+    for (pixel = 0; pixel < W * H; pixel++) errors += g_img[pixel * 4u + 3u] != g_ref[pixel * 4u + 3u];
+    CHECK(errors == 0u);
+    scene.tonemap = SU_TONEMAP_ACES;
+    CHECK(render(&scene, g_img));
+    CHECK(near_i(px(g_img, W / 2u, H / 2u)[3], 128, 1));
+    CHECK(px(g_img, W / 2u, H / 2u)[1] != px(g_ref, W / 2u, H / 2u)[1]);
+    scene.post = bloom_post(0.01f, 0.0f, 1.0f, 1.0f);
+    scene.post.flags |= SU_POST_AUTO_EXPOSURE;
+    CHECK(render(&scene, g_img));
+    CHECK(near_i(px(g_img, W / 2u, H / 2u)[3], 128, 1));
+    {
+        SuRenderFrameDesc invalid;
+        memset(&invalid, 0, sizeof invalid);
+        invalid.struct_size = sizeof invalid;
+        invalid.camera = camera;
+        invalid.output_alpha = 2u;
+        CHECK(su_render_frame_ex(g_r, &invalid) == SU_E_INVALID_ARGUMENT);
+    }
+    scene_init(&scene);
+    scene.objs = objects;
+    scene.obj_count = 1u;
+    scene.post = bloom_post(0.01f, 0.0f, 1.0f, 1.0f);
+    for (sample = 0; sample < 22u; sample++) {
+        for (mode = 0; mode < 2u; mode++) {
+            scene.output_alpha = mode;
+            CHECK(render(&scene, g_img));
+            CHECK(su_render_stats(g_r, &stats) == SU_OK);
+            if (sample >= 2u) {
+                cpu[mode][sample - 2u] = stats.cpu_ms;
+                gpu[mode][sample - 2u] = stats.gpu_ms;
+            }
+        }
+    }
+    for (mode = 0; mode < 2u; mode++) {
+        qsort(cpu[mode], 20u, sizeof(double), compare_double);
+        qsort(gpu[mode], 20u, sizeof(double), compare_double);
+        printf("output_alpha=%u 256x256 bloom, 20 samples after warm-up: CPU median %.4f p95 %.4f ms; GPU median %.4f p95 %.4f ms\n",
+               mode, cpu[mode][10], cpu[mode][18], gpu[mode][10], gpu[mode][18]);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -302,6 +494,8 @@ int main(int argc, char **argv) {
                g_fail);
         return g_fail ? 1 : 0;
     }
+
+    test_output_alpha();
 
     /* ---------- billboard: bloom falloff ---------- */
     {

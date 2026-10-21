@@ -1,0 +1,23 @@
+{
+  "issue": 127,
+  "branch": "feat/issue-127-premul-alpha",
+  "base_revision": "7aa23242a98fc29ebcd364b3a806129c69f7d1c1",
+  "state": "locally_verified",
+  "api_version": 11,
+  "local_build": "passed_clang_full_and_msvc_renderer_targets",
+  "local_tests": {
+    "full_suite_total": 138,
+    "failures": 0,
+    "platform_skips": 2,
+    "cpu_vulkan": "passed_full_suite_with_validation",
+    "hardware_vulkan": "passed_four_focused_tests_with_validation",
+    "msvc_cpu_vulkan": "passed_four_focused_tests_with_validation"
+  },
+  "validation_errors": 0,
+  "validation_warnings": 0,
+  "shader_compiler": "glslang 16.6.0",
+  "ci": "not_waited_for",
+  "integration": "pending",
+  "blockers": [],
+  "next": "Publish closing PR; review and integrate after CI."
+}

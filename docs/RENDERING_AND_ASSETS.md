@@ -24,6 +24,41 @@ The scene (sky, opaque, masked and blended meshes, debug items, additive effects
 
 `SuRenderFrameDesc.post` (`SuRenderPost`) is zero for "off", so frames that do not set it render exactly as before. With `SU_POST_BLOOM`: a half-resolution mip chain, 13-tap downsample (Jimenez 2014) whose first level applies the threshold with a soft knee and Karis weights, tent upsample with a `radius` scale, added to the scene before exposure. Threshold is scene-linear (before exposure). The chain is energy preserving per level and divided by the level count at the output, so `bloom_intensity` 1 adds back about the energy that passed the threshold; intensity 0 gives byte-identical output to no bloom. Emissive meshes (material `emissive` x `emissive_strength` x per-object `emissive`), additive billboards and ribbon trails all write values above 1 and bleed through it. `SU_POST_AUTO_EXPOSURE` sets exposure from the log-average luminance of the frame (read from the same chain, no readback), `key / average`, clamped to `[exposure_min, exposure_max]`, times `light.exposure`; it keeps no state between frames, so it is deterministic but not temporally smoothed. `su_fx_glare` is an optional CPU helper that adds a core, halo and two streaks for very bright points. None of this reads or writes simulation state. Cost and test evidence: `planning/handoffs/2026-10-18-hdr-bloom.md`.
 
+### Premultiplied-alpha compositing output
+
+Render API version 11 appends `SuRenderFrameDesc.output_alpha`; recompile native consumers.
+`SU_RENDER_OUTPUT_ALPHA_OPAQUE` (zero, including zero-initialized frames) preserves the previous output.
+Set `SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED` to render over transparent black, ignoring both procedural/cube
+backgrounds and `light.clear_color`. Environment lighting, exposure, and the selected tonemap still apply.
+Unknown modes reject the frame with `SU_E_INVALID_ARGUMENT`.
+
+RGBA8 readback contains sRGB-encoded RGB and linear coverage alpha. Opaque and surviving masked fragments
+write coverage one; discarded masks leave it untouched. Blended surfaces, premultiplied textured effects,
+and over-blended haze accumulate coverage with `a_src + a_dst * (1 - a_src)`. Translucent instance tints
+participate in the same rule. Decal/overlay materials and the HUD change RGB without changing coverage.
+Additive quads, meshes, flames, additive haze, emissive light and bloom do not add coverage; bloom's
+log-luminance alpha is never substituted for the scene coverage. Glow can therefore have nonzero RGB at
+zero alpha. This is an emission-bearing premultiplied representation, not straight-alpha image data.
+
+Decode readback RGB from sRGB, then composite in linear output-light space:
+`result = foreground_rgb + background_rgb * (1 - coverage)`. Do not multiply foreground RGB by alpha
+again, and do not discard RGB at zero alpha. Encode the result for the destination afterward. An image
+tool that assumes straight alpha or erases transparent RGB will lose glow. This mode also works for
+the window output attachment, but does not enable operating-system window transparency.
+
+RGB is exposed and tonemapped over black exactly as in the ordinary post pipeline, without dividing by
+coverage or multiplying by it again. Nonlinear ACES/clipping, bloom thresholding, and scene-dependent auto
+exposure do not commute with background composition: output-space compositing cannot generally equal a
+scene-linear render with the background included before those operations. Direct-background equivalence
+is tested with clamp tonemapping, unit exposure, no clipping and bloom disabled; bloom/ACES/auto-exposure
+tests separately verify RGB output and unchanged coverage. Use fixed exposure for predictable footage
+matching. No new render targets, passes, or readbacks are needed; optional RGBA16F readback is not added.
+
+The synthetic coverage/compositing tests run in `render_bloom`, with textured quad/mesh coverage in
+`render_texfx`, flame coverage in `render_flame`, and additive/over haze coverage in `render_haze`.
+`render_bloom` reports alternating legacy/premultiplied CPU and GPU median/p95 samples at 256x256 with
+bloom enabled; GPU values of -1 mean timestamps are unavailable. These are observations, not CI budgets.
+
 ### Dynamic point lights
 
 Render API version 8 adds `SuRenderPointLight` and the appended
