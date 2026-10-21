@@ -1,0 +1,27 @@
+Test project C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/i121/build-i121-msvc
+    Start 119: audio_spatial
+1/7 Test #119: audio_spatial ....................   Passed    0.01 sec
+    Start 123: audio_runtime
+2/7 Test #123: audio_runtime ....................   Passed    0.25 sec
+    Start 124: audio_controls_identical
+3/7 Test #124: audio_controls_identical .........   Passed    0.64 sec
+    Start 125: audio_event
+4/7 Test #125: audio_event ......................   Passed    0.02 sec
+    Start 126: audio_parameter
+5/7 Test #126: audio_parameter ..................   Passed    0.05 sec
+    Start 128: audio_voice_policy
+6/7 Test #128: audio_voice_policy ...............   Passed    0.12 sec
+    Start 132: audio_system
+7/7 Test #132: audio_system .....................***Failed    1.51 sec
+line 596: su_audio_system_journal(system, &journal, &count) == SU_OK && count > 10u
+audio_system: PULL render, 19 owner frames with a 150 ms stall, 0 underruns, replay identical
+audio_system: sum groups add gain, pitch and low-pass terms
+audio_system: 4368 checks, 1 failures
+
+
+86% tests passed, 1 tests failed out of 7
+
+Total Test time (real) =   2.62 sec
+
+The following tests FAILED:
+	132 - audio_system (Failed)
