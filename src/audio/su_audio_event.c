@@ -587,9 +587,22 @@ static SuVec3f rotate_inverse(SuQuatf q, SuVec3f v) {
     return su_quatf_rotate(c, v);
 }
 
+typedef struct SpatialControls {
+    SuAudioEmitter emitter;
+    float authored_gain;
+    float authored_pitch;
+    float gain;
+    float pitch;
+    float lowpass_hz;
+    SuAudioVoiceControls controls;
+    SuVec3f direction;
+    float distance;
+} SpatialControls;
+
 /* Spatial and authored controls of one leaf at the current quantum (the legacy mixer's spatial law). */
 static uint32_t leaf_controls(SuAudioEvents *events, const EventInstance *instance, EventLeaf *leaf,
-                              const SuAudioCameraListener *listener, SuAudioVoiceControls *out, float *audibility) {
+                              const SuAudioCameraListener *listener, SpatialControls *cache,
+                              SuAudioVoiceControls *out, float *audibility) {
     float gain = leaf->data.gain;
     float pitch = (leaf->data.pitch > 0.0f ? leaf->data.pitch : 1.0f)
         * ((float)leaf->clip->sample_rate / (float)events->desc.sample_rate);
@@ -597,41 +610,65 @@ static uint32_t leaf_controls(SuAudioEvents *events, const EventInstance *instan
     out->struct_size = sizeof *out;
     leaf->lowpass_hz = 0.0f;
     if (instance->emitter != 0u && events->scene != NULL) {
-        SuAudioVoiceDesc desc = leaf->voice_desc;
-        SuVec3f rel;
-        SuVec3f local;
-        float distance;
-        float attenuation;
-        float left;
-        float right;
-        uint32_t status;
-        desc.gain = leaf->data.gain;
-        desc.min_distance = 0.0f;
-        desc.max_distance = 0.0f;
-        desc.rolloff = 0.0f;
-        status = su_audio_scene_resolve(events->scene, instance->emitter, &desc, &leaf->lowpass_hz);
-        if (status != SU_OK) {
-            return status;
+        SpatialControls *entry = cache != NULL ? &cache[(uint32_t)instance->emitter % 256u] : NULL;
+        if (entry != NULL && entry->emitter == instance->emitter
+            && memcmp(&entry->authored_gain, &gain, sizeof gain) == 0
+            && memcmp(&entry->authored_pitch, &pitch, sizeof pitch) == 0) {
+            gain = entry->gain;
+            pitch = entry->pitch;
+            leaf->lowpass_hz = entry->lowpass_hz;
+            *out = entry->controls;
+            leaf->ctl_dir = entry->direction;
+            leaf->ctl_distance = entry->distance;
+        } else {
+            SuAudioVoiceDesc desc = leaf->voice_desc;
+            SuVec3f rel;
+            SuVec3f local;
+            float distance;
+            float attenuation;
+            float left;
+            float right;
+            uint32_t status;
+            desc.gain = leaf->data.gain;
+            desc.min_distance = 0.0f;
+            desc.max_distance = 0.0f;
+            desc.rolloff = 0.0f;
+            status = su_audio_scene_resolve(events->scene, instance->emitter, &desc, &leaf->lowpass_hz);
+            if (status != SU_OK) {
+                return status;
+            }
+            rel = su_wpos_delta(desc.pos, listener->pos);
+            local = rotate_inverse(listener->rot, rel);
+            distance = sqrtf(rel.x * rel.x + rel.y * rel.y + rel.z * rel.z);
+            attenuation = su_audio_attenuation(distance, desc.min_distance, desc.max_distance, desc.rolloff);
+            su_audio_pan(local, &left, &right);
+            /* cos/sin of the pan angle round to tiny negatives at the hard sides (cosf(pi/2) < 0); the pool rejects
+             * negative gains, which used to leave such a voice uncontrolled at unit gain */
+            left = left > 0.0f ? left : 0.0f;
+            right = right > 0.0f ? right : 0.0f;
+            if (events->doppler > 0.0f) {
+                SuVec3f origin = {0.0f, 0.0f, 0.0f};
+                pitch *= su_audio_doppler(origin, listener->vel, rel, desc.vel, events->speed_of_sound, events->doppler);
+            }
+            gain = desc.gain * attenuation;
+            out->gain_left = left * gain;
+            out->gain_right = right * gain;
+            out->mono_mix = 1u;
+            leaf->ctl_dir = local;
+            leaf->ctl_distance = distance;
+            if (entry != NULL) {
+                entry->emitter = instance->emitter;
+                entry->authored_gain = leaf->data.gain;
+                entry->authored_pitch = (leaf->data.pitch > 0.0f ? leaf->data.pitch : 1.0f)
+                    * ((float)leaf->clip->sample_rate / (float)events->desc.sample_rate);
+                entry->gain = gain;
+                entry->pitch = pitch;
+                entry->lowpass_hz = leaf->lowpass_hz;
+                entry->controls = *out;
+                entry->direction = local;
+                entry->distance = distance;
+            }
         }
-        rel = su_wpos_delta(desc.pos, listener->pos);
-        local = rotate_inverse(listener->rot, rel);
-        distance = sqrtf(rel.x * rel.x + rel.y * rel.y + rel.z * rel.z);
-        attenuation = su_audio_attenuation(distance, desc.min_distance, desc.max_distance, desc.rolloff);
-        su_audio_pan(local, &left, &right);
-        /* cos/sin of the pan angle round to tiny negatives at the hard sides (cosf(pi/2) < 0); the pool rejects
-         * negative gains, which used to leave such a voice uncontrolled at unit gain */
-        left = left > 0.0f ? left : 0.0f;
-        right = right > 0.0f ? right : 0.0f;
-        if (events->doppler > 0.0f) {
-            SuVec3f origin = {0.0f, 0.0f, 0.0f};
-            pitch *= su_audio_doppler(origin, listener->vel, rel, desc.vel, events->speed_of_sound, events->doppler);
-        }
-        gain = desc.gain * attenuation;
-        out->gain_left = left * gain;
-        out->gain_right = right * gain;
-        out->mono_mix = 1u;
-        leaf->ctl_dir = local;
-        leaf->ctl_distance = distance;
     } else {
         out->gain_left = gain;
         out->gain_right = gain;
@@ -778,6 +815,15 @@ static void pooled_stops(SuAudioEvents *events, uint64_t end) {
 
 static void pooled_controls(SuAudioEvents *events) {
     SuAudioCameraListener listener;
+    SpatialControls *cache = NULL;
+#ifndef SU_AUDIO_EVENT_UNCACHED_CONTROLS
+    SpatialControls spatial_cache[256];
+    uint32_t cache_index;
+    for (cache_index = 0u; cache_index < 256u; cache_index++) {
+        spatial_cache[cache_index].emitter = 0u;
+    }
+    cache = spatial_cache;
+#endif
     uint32_t slot;
     memset(&listener, 0, sizeof listener);
     listener.rot.w = 1.0f;
@@ -797,7 +843,7 @@ static void pooled_controls(SuAudioEvents *events) {
             if (leaf->state != 1u) {
                 continue;
             }
-            if (leaf_controls(events, instance, leaf, &listener, &controls, &audibility) != SU_OK) {
+            if (leaf_controls(events, instance, leaf, &listener, cache, &controls, &audibility) != SU_OK) {
                 /* the emitter is gone: end the voice like the legacy runtime */
                 (void)su_audio_voice_stop_at(events->pool, leaf->logical, events->stats.render_clock, 0u);
                 continue;

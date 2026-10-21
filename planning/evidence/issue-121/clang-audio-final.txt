@@ -1,0 +1,49 @@
+Test project C:/Users/dev/Documents/trinity/engines/sutekh-worktrees/i121/build-i121
+      Start 112: audio_mixer
+ 1/22 Test #112: audio_mixer ......................   Passed    0.03 sec
+      Start 113: audio_lowpass
+ 2/22 Test #113: audio_lowpass ....................   Passed    0.06 sec
+      Start 114: audio_stream
+ 3/22 Test #114: audio_stream .....................   Passed    3.56 sec
+      Start 115: audio_device
+ 4/22 Test #115: audio_device .....................   Passed    0.57 sec
+      Start 116: audio_adpcm
+ 5/22 Test #116: audio_adpcm ......................   Passed    0.04 sec
+      Start 117: audio_asset
+ 6/22 Test #117: audio_asset ......................   Passed    1.24 sec
+      Start 118: audio_callback
+ 7/22 Test #118: audio_callback ...................   Passed    1.64 sec
+      Start 119: audio_spatial
+ 8/22 Test #119: audio_spatial ....................   Passed    0.01 sec
+      Start 120: audio_cluster
+ 9/22 Test #120: audio_cluster ....................   Passed    0.08 sec
+      Start 121: audio_graph
+10/22 Test #121: audio_graph ......................   Passed    0.01 sec
+      Start 122: audio_graph_alloc
+11/22 Test #122: audio_graph_alloc ................   Passed    0.01 sec
+      Start 123: audio_runtime
+12/22 Test #123: audio_runtime ....................   Passed    0.26 sec
+      Start 124: audio_controls_identical
+13/22 Test #124: audio_controls_identical .........   Passed    0.65 sec
+      Start 125: audio_event
+14/22 Test #125: audio_event ......................   Passed    0.01 sec
+      Start 126: audio_parameter
+15/22 Test #126: audio_parameter ..................   Passed    0.04 sec
+      Start 127: audio_bus
+16/22 Test #127: audio_bus ........................   Passed    0.03 sec
+      Start 128: audio_voice_policy
+17/22 Test #128: audio_voice_policy ...............   Passed    0.09 sec
+      Start 129: audio_offline
+18/22 Test #129: audio_offline ....................   Passed    0.78 sec
+      Start 130: audio_inspect
+19/22 Test #130: audio_inspect ....................   Passed    0.06 sec
+      Start 131: audio_acceptance
+20/22 Test #131: audio_acceptance .................   Passed    0.09 sec
+      Start 132: audio_system
+21/22 Test #132: audio_system .....................   Passed    1.22 sec
+      Start 133: audio_system_alloc
+22/22 Test #133: audio_system_alloc ...............   Passed    0.14 sec
+
+100% tests passed, 0 tests failed out of 22
+
+Total Test time (real) =  10.66 sec

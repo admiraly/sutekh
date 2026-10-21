@@ -1,0 +1,19 @@
+{
+  "issue": 121,
+  "owner": "issue-121-implementation",
+  "branch": "perf/issue-121-virtual-voice-cost",
+  "base_revision": "7aa23242a98fc29ebcd364b3a806129c69f7d1c1",
+  "state": "locally_validated_pending_review",
+  "write_scope": [
+    "src/audio/su_audio_event.c",
+    "tests/audio/test_audio_runtime.c",
+    "tests/audio/compare_controls.py",
+    "cmake/SutekhPresentation.cmake",
+    "docs/EVENT_AUDIO_RUNTIME.md",
+    "planning/leases/issue-121.json",
+    "planning/handoffs/2026-10-21-issue-121.md",
+    "planning/evidence/issue-121/",
+    "PACK_VALIDATION.json"
+  ],
+  "pending": ["remote CI and PR review; do not wait or merge"]
+}
