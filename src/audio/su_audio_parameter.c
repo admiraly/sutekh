@@ -513,6 +513,18 @@ uint32_t su_audio_switch_mix(const SuAudioParams *params, SuAudioParamTarget tar
     return SU_OK;
 }
 
+uint32_t su_audio_switch_mix_latched(const SuAudioParams *params, SuAudioParamTarget target,
+    SuAudioSwitchId id, uint32_t initial, uint64_t start, uint64_t now, SuAudioSwitchMix *out) {
+    uint32_t def_index;
+    if (!find_switch(params, id, &def_index)) return SU_E_INVALID_ARGUMENT;
+    if (params->switches[def_index].policy != SU_AUDIO_SWITCH_FIRST_ONLY)
+        return su_audio_switch_mix(params, target, id, start, now, out);
+    memset(out, 0, sizeof *out);
+    out->old_value = out->new_value = initial;
+    out->new_gain = 1.0f;
+    return SU_OK;
+}
+
 static float binding_eval(const ParamBinding *binding, float value) {
     uint32_t i;
     const SuAudioBindingPoint *p = binding->points;

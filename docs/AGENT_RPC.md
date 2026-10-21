@@ -47,6 +47,41 @@ IDs in these snippets are illustrative, not current engine state. Response `ok:f
 
 ## 3. Later methods
 
+### Host-owned audio registration
+
+A presentation host can set `SuAgentConfig.audio_system` before calling
+`su_agent_serve`. This borrows one `SuAudioSystem` for the session: the host
+must keep it and its assets/graph alive until serving returns. Leave the field
+NULL for a headless session. The agent does not create, destroy, checkpoint,
+or recover this presentation object with simulation workers.
+
+Only registered sessions advertise and route the names returned by
+`su_audio_system_method`: `audio.inspect`, `audio.trace.read`,
+`audio.trace.stats`, and `audio.render.offline`. Unregistered sessions return
+`SU_E_UNSUPPORTED_METHOD`, including for otherwise valid audio requests.
+The first three methods accept `{}`; offline rendering requires
+`{"frames":N}` with a positive integer up to 28,800,000. Unexpected parameters,
+duplicate keys and invalid envelopes use the same strict validation as world
+and capsule calls. Results are the audio system's JSON objects inside the
+normal protocol response; audio errors retain their status codes.
+`audio.trace.read` drains queued telemetry entries, just like a direct control
+call; repeated reads return an empty list until new events arrive. Offline
+rendering replays the journal into a fresh system, returns measurements and a
+PCM hash, and does not write files or advance live playback.
+
+Authorization is identical to world/capsule methods: possession of the
+host-provided private local fd session grants access. There is no network
+listener, request token, or per-method role in this transport. A host must
+authenticate clients before granting these fds, and must not register audio
+in a session whose client is not allowed to inspect traces or run bounded
+offline renders. Registration is the trusted host's decision, never a client
+RPC. Do not expose these development methods in a shipping player.
+
+The host serializes serving with its owner-thread audio operations. The agent
+brackets audio calls with `su_audio_system_lock/unlock` so pull-mode device
+rendering cannot race control access; owner-mode calls still require host
+serialization. Call `su_agent_serve` without holding that non-recursive lock.
+
 `schema.plan_migration`, `schema.commit_migration`, `replay.compare`, `benchmark.run`, `dependency.query`, `artifact.inspect`, `native.specialize`, and `task.lease` are added only in their milestone. Unsupported methods return `SU_E_UNSUPPORTED_METHOD`; never return placeholder success.
 
 A human-facing CLI can wrap these operations. A future MCP-style adapter is an optional wrapper, not the core protocol and not a bootstrap requirement.

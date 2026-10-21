@@ -53,6 +53,45 @@ time)`:
 blend nodes select authored alternatives from scoped values (FIRST_ONLY
 switches use the instance start).
 
+### Live event branches
+
+When parameters are attached to the integrated event runtime, posting an event
+expands every switch case, its explicit default, and every blend point. Random
+nodes still choose one deterministic child; sequences retain their authored
+offsets and parallel nodes retain their authored order. The complete expansion,
+including inaudible alternatives, must fit the graph's `max_expansion`, the
+runtime's `max_leaves_per_instance`, and its available logical voices. A refusal
+does not admit a partial instance. Preparation and the public
+`su_audio_graph_expand[_ex]` snapshot APIs retain their existing selected-branch
+bounds and behavior; the additional live bound is enforced at event admission.
+
+Each quantum reevaluates the same bounded expansion without allocating. Switch
+gains come from `su_audio_switch_mix`: CONTINUE selects the current case, FADE
+weights the old and new cases, and unmatched values select the explicit default.
+If both values resolve to that default, their weights add on the same branch.
+FIRST_ONLY uses an instance-owned initial value, so parameter-history pruning
+cannot change a latched choice. Blend gains use the current scoped parameter,
+clamp at the endpoints, and weight only the adjacent points. Nested branch
+weights multiply in root-to-leaf order before the authored sound gain.
+
+Branch targets are sampled at the quantum start (or the instance start for a
+pending instance); the voice pool retains its existing control interpolation and
+virtualization policy. Inaudible alternatives are logical voices, not extra
+physical voices. With ADVANCE virtualization their cursors advance with the
+instance timeline, allowing a newly audible branch to resume in place rather
+than retriggering its clip. No branch changes means unchanged PCM arithmetic
+and authored ordering. Runtimes without attached parameters remain snapshot
+consumers.
+
+Direct checkpoints include the instance start, deterministic expansion sequence,
+initial switch values, current leaf gains, and the existing voice-pool state and
+cached partial quantum. The internal layout fingerprint distinguishes these
+checkpoints from older builds; the public same-build checkpoint version is
+unchanged. `audio_runtime` covers live switch policies, smoothed scoped blends,
+nested alternatives, bounds, and byte-exact checkpoint and PCM continuation at
+partial-quantum positions. `audio_graph_alloc` checks allocation-free live
+expansion and atomic capacity refusal.
+
 ## Control bindings
 
 `SuAudioParamBinding` maps a parameter through a clamped piecewise-linear curve
