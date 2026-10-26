@@ -36,7 +36,8 @@ def dump(src, bld):
         props = sorted((p["name"], json.dumps(p["value"], sort_keys=True)) for p in t.get("properties", []))
         lines.append("test %s props=%s" % (t["name"], norm(json.dumps(props), src, bld)))
     # The generated test file has every command with resolved paths, built or not.
-    for l in open(os.path.join(bld, "CTestTestfile.cmake"), encoding="utf-8"):
+    ctestfile = os.path.join(bld, "CTestTestfile.cmake")  # absent when testing is not enabled
+    for l in (open(ctestfile, encoding="utf-8") if os.path.isfile(ctestfile) else []):
         if l.startswith(("add_test", "set_tests_properties")):
             l = re.sub(r' _BACKTRACE_TRIPLES "[^"]*"', "", l.rstrip("\n"))  # source line numbers
             lines.append("ctestfile " + norm(l, src, bld))

@@ -54,6 +54,16 @@ ctestfile add_test([=[host_entry]=] "<BLD>/test_host_entry" "<BLD>/host_entry_sc
 ctestfile add_test([=[host_ops]=] "<BLD>/test_host_ops" "<BLD>/host_ops_racer_n8.json")
 ctestfile add_test([=[host_ops_dll]=] "<BLD>/test_host_ops_dll" "<BLD>/host_ops_racer_n8.json")
 ctestfile add_test([=[host_ops_fixture]=] "<BLD>/racer_microcosm" "--root" "<SRC>" "--n" "8" "--ticks" "1" "--warmup" "0" "--dump-fixture" "<BLD>/host_ops_racer_n8.json")
+ctestfile add_test([=[host_registered]=] "<BLD>/test_host_registered")
+ctestfile add_test([=[host_registered_dll]=] "<BLD>/test_host_registered_dll")
+ctestfile add_test([=[host_registered_record]=] "<BLD>/test_host_registered" "record" "<BLD>/host_registered")
+ctestfile add_test([=[host_registered_verify_constants]=] "<BLD>/test_host_registered_dll" "verify" "<BLD>/host_registered" "constants")
+ctestfile add_test([=[host_registered_verify_flags]=] "<BLD>/test_host_registered_dll" "verify" "<BLD>/host_registered" "flags")
+ctestfile add_test([=[host_registered_verify_name]=] "<BLD>/test_host_registered" "verify" "<BLD>/host_registered" "name")
+ctestfile add_test([=[host_registered_verify_none]=] "<BLD>/test_host_registered_dll" "verify" "<BLD>/host_registered" "none")
+ctestfile add_test([=[host_registered_verify_same]=] "<BLD>/test_host_registered_dll" "verify" "<BLD>/host_registered" "same")
+ctestfile add_test([=[host_registered_verify_scratch]=] "<BLD>/test_host_registered" "verify" "<BLD>/host_registered" "scratch")
+ctestfile add_test([=[host_registered_verify_version]=] "<BLD>/test_host_registered" "verify" "<BLD>/host_registered" "version")
 ctestfile add_test([=[host_replay]=] "<BLD>/test_replay")
 ctestfile add_test([=[host_replay_record]=] "<BLD>/test_replay" "record" "<BLD>/host_replay.bin")
 ctestfile add_test([=[host_replay_verify_dll]=] "<BLD>/test_replay_dll" "verify" "<BLD>/host_replay.bin")
@@ -201,6 +211,16 @@ ctestfile set_tests_properties([=[host_entry]=] PROPERTIES  WORKING_DIRECTORY "<
 ctestfile set_tests_properties([=[host_ops]=] PROPERTIES  FIXTURES_REQUIRED "host_ops_fixture" TIMEOUT "300" WORKING_DIRECTORY "<SRC>")
 ctestfile set_tests_properties([=[host_ops_dll]=] PROPERTIES  FIXTURES_REQUIRED "host_ops_fixture" TIMEOUT "300" WORKING_DIRECTORY "<SRC>")
 ctestfile set_tests_properties([=[host_ops_fixture]=] PROPERTIES  FIXTURES_SETUP "host_ops_fixture")
+ctestfile set_tests_properties([=[host_registered]=] PROPERTIES )
+ctestfile set_tests_properties([=[host_registered_dll]=] PROPERTIES )
+ctestfile set_tests_properties([=[host_registered_record]=] PROPERTIES  FIXTURES_SETUP "host_registered_files")
+ctestfile set_tests_properties([=[host_registered_verify_constants]=] PROPERTIES  FIXTURES_REQUIRED "host_registered_files")
+ctestfile set_tests_properties([=[host_registered_verify_flags]=] PROPERTIES  FIXTURES_REQUIRED "host_registered_files")
+ctestfile set_tests_properties([=[host_registered_verify_name]=] PROPERTIES  FIXTURES_REQUIRED "host_registered_files")
+ctestfile set_tests_properties([=[host_registered_verify_none]=] PROPERTIES  FIXTURES_REQUIRED "host_registered_files")
+ctestfile set_tests_properties([=[host_registered_verify_same]=] PROPERTIES  FIXTURES_REQUIRED "host_registered_files")
+ctestfile set_tests_properties([=[host_registered_verify_scratch]=] PROPERTIES  FIXTURES_REQUIRED "host_registered_files")
+ctestfile set_tests_properties([=[host_registered_verify_version]=] PROPERTIES  FIXTURES_REQUIRED "host_registered_files")
 ctestfile set_tests_properties([=[host_replay]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
 ctestfile set_tests_properties([=[host_replay_record]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
 ctestfile set_tests_properties([=[host_replay_verify_dll]=] PROPERTIES  DEPENDS "host_replay_record" WORKING_DIRECTORY "<SRC>")
@@ -386,6 +406,8 @@ target test_host_dll EXECUTABLE <BLD>/test_host_dll
 target test_host_entry EXECUTABLE <BLD>/test_host_entry
 target test_host_ops EXECUTABLE <BLD>/test_host_ops
 target test_host_ops_dll EXECUTABLE <BLD>/test_host_ops_dll
+target test_host_registered EXECUTABLE <BLD>/test_host_registered
+target test_host_registered_dll EXECUTABLE <BLD>/test_host_registered_dll
 target test_host_restore EXECUTABLE <BLD>/test_host_restore
 target test_host_rollback EXECUTABLE <BLD>/test_host_rollback
 target test_host_rollback_dll EXECUTABLE <BLD>/test_host_rollback_dll
@@ -501,6 +523,16 @@ test host_entry props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
 test host_ops props=[["DEPENDS", "[\"host_ops_fixture\"]"], ["FIXTURES_REQUIRED", "[\"host_ops_fixture\"]"], ["TIMEOUT", "300.0"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
 test host_ops_dll props=[["DEPENDS", "[\"host_ops_fixture\"]"], ["FIXTURES_REQUIRED", "[\"host_ops_fixture\"]"], ["TIMEOUT", "300.0"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
 test host_ops_fixture props=[["FIXTURES_SETUP", "[\"host_ops_fixture\"]"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_registered props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_registered_dll props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_registered_record props=[["FIXTURES_SETUP", "[\"host_registered_files\"]"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_registered_verify_constants props=[["DEPENDS", "[\"host_registered_record\"]"], ["FIXTURES_REQUIRED", "[\"host_registered_files\"]"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_registered_verify_flags props=[["DEPENDS", "[\"host_registered_record\"]"], ["FIXTURES_REQUIRED", "[\"host_registered_files\"]"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_registered_verify_name props=[["DEPENDS", "[\"host_registered_record\"]"], ["FIXTURES_REQUIRED", "[\"host_registered_files\"]"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_registered_verify_none props=[["DEPENDS", "[\"host_registered_record\"]"], ["FIXTURES_REQUIRED", "[\"host_registered_files\"]"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_registered_verify_same props=[["DEPENDS", "[\"host_registered_record\"]"], ["FIXTURES_REQUIRED", "[\"host_registered_files\"]"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_registered_verify_scratch props=[["DEPENDS", "[\"host_registered_record\"]"], ["FIXTURES_REQUIRED", "[\"host_registered_files\"]"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_registered_verify_version props=[["DEPENDS", "[\"host_registered_record\"]"], ["FIXTURES_REQUIRED", "[\"host_registered_files\"]"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
 test host_replay props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
 test host_replay_record props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
 test host_replay_verify_dll props=[["DEPENDS", "[\"host_replay_record\"]"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
