@@ -77,7 +77,7 @@ typedef struct SuLirModule {
     uint32_t ir_version_minor;   /* 1 for "0.1", 2 for "0.2" (IR 0.2, M2-00c2), 3 for "0.3" (fixed_q32_v1), 4 for "0.4" */
     uint32_t max_struct_per_row; /* capsule limits.max_struct_per_row (0.2; 0 when absent) */
     uint32_t max_events_per_row; /* capsule limits.max_events_per_row (0.2; 0 when absent) */
-    uint32_t uses_entity_ops;    /* 1 when any 0.2 op (slot/gen/tick/despawn_self/emit_event) appears */
+    uint32_t uses_entity_ops;    /* 1 when any 0.2 op (slot/gen/tick/despawn_self/emit_event) or handle_live appears */
     uint32_t has_system_rev;     /* capsule "system_rev" present (recorded and shown in the manifest; not in the hashes) */
     uint32_t system_rev;         /* the declared revision (>= 1) when has_system_rev */
     uint32_t has_capabilities;   /* capsule "capabilities" present: the grants are enforced (else M0-M2 behaviour) */
@@ -97,6 +97,7 @@ typedef struct SuLirModule {
     uint32_t row_filter_mask;
     uint32_t row_filter_value;
     uint32_t uses_gather;        /* 1 when any gather_* or find_eq_u32 appears (needs the whole-table view) */
+    uint32_t uses_handle_live;   /* 1 when handle_live appears (needs the whole entity table, 2026-10-26) */
 } SuLirModule;
 
 void su_diag_init(SuDiag *d);

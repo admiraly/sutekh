@@ -303,6 +303,7 @@ typedef struct ChunkJob {
     const SuColumnBinding *base_in;   /* nin entries, whole-table views */
     const SuColumnBinding *base_out;  /* nout entries, whole-table views */
     int uses_gather;                  /* IR 0.4: the module reads other rows (whole-table view per chunk) */
+    int uses_handle_live;             /* IR 0.4 handle_live: whole entity table per chunk (no entity view here) */
     SuExecContext **ctx;              /* one per worker */
     SuColumnBinding *scr_in;          /* workers * nin */
     SuColumnBinding *scr_out;         /* workers * nout */
@@ -361,6 +362,15 @@ static void chunk_task(uint32_t chunk, uint32_t worker, void *argp) {
         whole.bindings = j->base_in;
         whole.row_count = j->rows;
         st = su_vm_context_set_table_view(j->ctx[worker], &whole);
+        if (st != SU_OK) {
+            j->status[chunk] = st;
+            return;
+        }
+    }
+    if (j->uses_handle_live) {
+        /* No entity view on this path (every slot alive at generation 1, as su_vm_run_system without a view), but
+         * over the whole table, not this chunk. */
+        uint32_t st = su_vm_context_set_entity_table(j->ctx[worker], NULL, NULL, j->rows);
         if (st != SU_OK) {
             j->status[chunk] = st;
             return;
@@ -545,6 +555,7 @@ uint32_t su_jobs_run_system_chunked(SuWorld *w, const SuLirModule *mod, uint32_t
     job.layout_generation = layout_generation;
     job.nin = nin;
     job.uses_gather = mod->uses_gather != 0u;
+    job.uses_handle_live = mod->uses_handle_live != 0u;
     job.nout = nout;
     job.base_in = base_in;
     job.base_out = base_out;

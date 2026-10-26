@@ -128,7 +128,10 @@
  *   gather_u32/_i32/_i64/_q32 (dst = reg, a = field index, b = slot reg): the field of the row at slot b in the
  *     system's entry state; 0 when b is not a row of the table (b >= row count). A v3 is three gather_q32.
  *   find_eq_u32 (dst = reg, a = field index, b = key reg, c = span constant 1..4096): lowest slot s < span with
- *     field[s] == key in the entry state, else 0xFFFFFFFF. */
+ *     field[s] == key in the entry state, else 0xFFFFFFFF.
+ *   handle_live (dst = bool reg, a = slot reg, b = generation reg; 2026-10-26): true when slot a is a slot of the
+ *     entity table, alive, and its generation equals b, in the system's entry state (the tick-start entity table);
+ *     false otherwise, and always false for generation 0. Reads no field. */
 #define SU_IR_VERSION_STRING_0_4        "0.4"
 #define SU_ARTIFACT_FORMAT_VERSION_0_4  UINT32_C(4)
 #define SU_OP_AND_U32       UINT32_C(48)
@@ -148,6 +151,7 @@
 #define SU_OP_GATHER_I64    UINT32_C(242)
 #define SU_OP_GATHER_Q32    UINT32_C(243)
 #define SU_OP_FIND_EQ_U32   UINT32_C(245)
+#define SU_OP_HANDLE_LIVE   UINT32_C(246)
 #define SU_FIND_SPAN_MAX    4096u
 #define SU_FIND_NONE        UINT32_C(0xFFFFFFFF)
 

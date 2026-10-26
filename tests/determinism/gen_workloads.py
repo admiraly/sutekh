@@ -441,6 +441,31 @@ def gen_gather04():
 
 
 # ---------------------------------------------------------------------------------------------------------------
+# IR 0.4 handle_live (handle04, VM only): stored target handles (slot, generation) checked against the entity table
+# while the host despawns and respawns into the freed slots (generation growth, slot reuse)
+# ---------------------------------------------------------------------------------------------------------------
+
+HANDLE = {"t_slot": (1, "u32"), "t_gen": (2, "u32"), "live_n": (3, "u32"), "live_hist": (4, "u32"),
+          "self_n": (5, "u32")}
+
+
+def gen_handle04():
+    p = Prog()
+    one, zero = p.u(1), p.u(0)
+    hl = p.op("handle_live", slot=p.op("load_u32", field="t_slot"), gen=p.op("load_u32", field="t_gen"))
+    bit = p.op("select_u32", cond=hl, on_true=one, on_false=zero)
+    p.op("store_u32", field="live_n", src=p.op("add_u32", a=p.op("load_u32", field="live_n"), b=bit))
+    p.op("store_u32", field="live_hist",
+         src=p.op("add_u32", a=p.op("mul_u32", a=p.op("load_u32", field="live_hist"), b=p.u(2)), b=bit))
+    # A row's own handle is always live while the row runs (dead rows are skipped).
+    me = p.op("handle_live", slot=p.op("slot_u32"), gen=p.op("gen_u32"))
+    p.op("store_u32", field="self_n", src=p.op("add_u32", a=p.op("load_u32", field="self_n"),
+                                               b=p.op("select_u32", cond=me, on_true=one, on_false=zero)))
+    return auto_capsule("det.handle04", "handle04.lir.json", "det.handle", HANDLE, p.ins, "0.4"), \
+        lir_v("det.handle04", "det.handle", p.ins, "0.4")
+
+
+# ---------------------------------------------------------------------------------------------------------------
 # RTS IR systems without the native operators
 # ---------------------------------------------------------------------------------------------------------------
 
@@ -472,7 +497,7 @@ def outputs():
         "tests/determinism/churn.capsule.json": ch_c, "tests/determinism/churn.lir.json": ch_l,
     }
     for name, (c, l) in (("s3move", gen_s3move(False)), ("s3move_c", gen_s3move(True)), ("bits04", gen_bits04()),
-                         ("gather04", gen_gather04())):
+                         ("gather04", gen_gather04()), ("handle04", gen_handle04())):
         out["tests/determinism/%s.capsule.json" % name] = c
         out["tests/determinism/%s.lir.json" % name] = l
     for s in RTS_SYSTEMS:

@@ -1,0 +1,121 @@
+{
+ "ir_version": "0.4",
+ "system_id": "det.handle04",
+ "numeric_profile": "fixed_q32_v1",
+ "query": "det.handle",
+ "instructions": [
+  {
+   "op": "const_u32",
+   "dst": "r1",
+   "value": 1
+  },
+  {
+   "op": "const_u32",
+   "dst": "r2",
+   "value": 0
+  },
+  {
+   "op": "load_u32",
+   "dst": "r3",
+   "field": "t_slot"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r4",
+   "field": "t_gen"
+  },
+  {
+   "op": "handle_live",
+   "dst": "r5",
+   "slot": "r3",
+   "gen": "r4"
+  },
+  {
+   "op": "select_u32",
+   "dst": "r6",
+   "cond": "r5",
+   "on_true": "r1",
+   "on_false": "r2"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r7",
+   "field": "live_n"
+  },
+  {
+   "op": "add_u32",
+   "dst": "r8",
+   "a": "r7",
+   "b": "r6"
+  },
+  {
+   "op": "store_u32",
+   "field": "live_n",
+   "src": "r8"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r9",
+   "field": "live_hist"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r10",
+   "value": 2
+  },
+  {
+   "op": "mul_u32",
+   "dst": "r11",
+   "a": "r9",
+   "b": "r10"
+  },
+  {
+   "op": "add_u32",
+   "dst": "r12",
+   "a": "r11",
+   "b": "r6"
+  },
+  {
+   "op": "store_u32",
+   "field": "live_hist",
+   "src": "r12"
+  },
+  {
+   "op": "slot_u32",
+   "dst": "r13"
+  },
+  {
+   "op": "gen_u32",
+   "dst": "r14"
+  },
+  {
+   "op": "handle_live",
+   "dst": "r15",
+   "slot": "r13",
+   "gen": "r14"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r16",
+   "field": "self_n"
+  },
+  {
+   "op": "select_u32",
+   "dst": "r17",
+   "cond": "r15",
+   "on_true": "r1",
+   "on_false": "r2"
+  },
+  {
+   "op": "add_u32",
+   "dst": "r18",
+   "a": "r16",
+   "b": "r17"
+  },
+  {
+   "op": "store_u32",
+   "field": "self_n",
+   "src": "r18"
+  }
+ ]
+}

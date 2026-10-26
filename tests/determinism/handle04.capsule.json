@@ -1,0 +1,63 @@
+{
+ "capsule_format": "0.1",
+ "ir_version": "0.4",
+ "system_id": "det.handle04",
+ "source": "handle04.lir.json",
+ "schema": {
+  "id": "det.handle",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "fields": [
+  {
+   "id": 1,
+   "name": "t_slot",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 2,
+   "name": "t_gen",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 3,
+   "name": "live_n",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 4,
+   "name": "live_hist",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 5,
+   "name": "self_n",
+   "type": "u32",
+   "read": true,
+   "write": true
+  }
+ ],
+ "schedule": {
+  "phase": "simulate",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 65536,
+  "allocation": "forbidden"
+ },
+ "tests": [
+  "tests/determinism/det_matrix.c"
+ ]
+}

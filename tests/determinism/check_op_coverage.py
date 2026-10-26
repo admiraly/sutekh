@@ -26,6 +26,7 @@ MATRIX_LIR = [
     "tests/determinism/sixdof.lir.json", "tests/determinism/churn.lir.json",
     "tests/determinism/s3move.lir.json", "tests/determinism/s3move_c.lir.json",
     "tests/determinism/bits04.lir.json", "tests/determinism/gather04.lir.json",
+    "tests/determinism/handle04.lir.json",
 ]
 
 SINKS = ("store_", "emit_event", "despawn_self")

@@ -23,7 +23,8 @@
 #define K_STORE 2u  /* stores field lanes */
 #define K_ROW 3u    /* slot_u32, gen_u32, tick_u32: per-row or per-invocation values */
 #define K_EMIT 4u   /* emit_event, despawn_self */
-#define K_GATHER 5u /* IR 0.4 gather_*, find_eq_u32: read other rows of the entry state (never hoisted) */
+#define K_GATHER 5u /* IR 0.4 gather_*, find_eq_u32, handle_live: read other rows or the entity table of the entry
+                     * state (never hoisted) */
 
 typedef struct Shape {
     uint32_t nread;
@@ -97,6 +98,14 @@ static int shape_of(uint32_t op, Shape *s) {
     o = su_op03_by_code(op);
     if (o == NULL) {
         return 0;
+    }
+    if (op == SU_OP_HANDLE_LIVE) {
+        /* Reads the entity table of the invocation: never hoisted, like a gather. */
+        rd(s, SU_S_A, SU_TYPE_U32);
+        rd(s, SU_S_B, SU_TYPE_U32);
+        s->wtype = SU_TYPE_BOOL;
+        s->kind = K_GATHER;
+        return 1;
     }
     s->wtype = o->dst_type;
     for (k = 0; k < o->n; k++) {
@@ -292,6 +301,10 @@ static uint32_t exec1(const SuVmPlanInsn *p, int64_t *R, SuVmPlanRun *run, size_
                                               : su_i64_from_bits(bits);
         return SU_OK;
     }
+    case SU_OP_HANDLE_LIVE:
+        R[p->d] = (int64_t)su_handle_live(run->ents_alive, run->ents_gen, run->ents_slots, (uint32_t)R[p->a],
+                                          (uint32_t)R[p->b]);
+        return SU_OK;
     case SU_OP_FIND_EQ_U32: {
         const uint32_t *col = run->gather_cols[p->a];
         uint32_t key = (uint32_t)R[p->b];

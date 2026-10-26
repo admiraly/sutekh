@@ -820,6 +820,7 @@ typedef struct Body {
     uint32_t ir_minor;   /* 1..4 */
     uint32_t uses_ops;   /* any 0.2 op seen */
     uint32_t uses_gather; /* any 0.4 cross-row read (gather_*, find_eq_u32) seen */
+    uint32_t uses_handle_live; /* handle_live seen */
 } Body;
 
 /* One IR 0.3 instruction (table-driven, su_ops03.h). Check order within the instruction matches 0.1: keys and
@@ -1008,6 +1009,11 @@ static uint32_t check_insn03(SuDiag *d, const SuJsonValue *ins, const char *base
     if (op->code == SU_OP_GATHER_U32 || op->code == SU_OP_GATHER_I32 || op->code == SU_OP_GATHER_I64 ||
         op->code == SU_OP_GATHER_Q32 || op->code == SU_OP_FIND_EQ_U32) {
         b->uses_gather = 1u;
+    }
+    if (op->code == SU_OP_HANDLE_LIVE) {
+        /* An entity operation: the schedule runs it through the entity runtime, which supplies the table. */
+        b->uses_handle_live = 1u;
+        b->uses_ops = 1u;
     }
     out->op = op->code;
     out->dst = slot_val[SU_S_DST];
@@ -1588,6 +1594,7 @@ uint32_t su_lir_verify(const uint8_t *capsule, size_t capsule_len,
     m.max_events_per_row = ci.max_events_per_row;
     m.uses_entity_ops = b.uses_ops;
     m.uses_gather = b.uses_gather;
+    m.uses_handle_live = b.uses_handle_live;
     if (ii.row_filter != NULL) {
         m.has_row_filter = 1u;
         m.row_filter_field = filter_idx;
