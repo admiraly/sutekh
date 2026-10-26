@@ -233,6 +233,9 @@ uint32_t space3d_query_instance_set_meshes(Space3dCtx *ctx, struct S3MeshSet *se
 /* Test seam (issue 163): nonzero makes the v2 descriptors skip the sweep and always build the grid. Results are the
  * same unless the grid's budget cuts (that is the contract this seam lets tests check). Process-wide; tests only. */
 void space3d_test_force_grid(int on);
+/* Test seam (issue 163): ANDs every v2 grid cell key with mask (UINT64_MAX: off), so distinct cells share keys. Results
+ * must not change (exact cell check); only time does. Process-wide; tests only. */
+void space3d_test_hash_mask(uint64_t mask);
 /* Canonical constants text (its SHA-256 is the descriptor's constants_hash). */
 const char *space3d_constants_text(void);
 const char *space3d_prox_constants_text(void);

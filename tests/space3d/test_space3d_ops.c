@@ -1945,6 +1945,68 @@ static void test_compound(void) {
     D = FAM(&g_space3d_query_desc);
 }
 
+/* Grid cell keys forced to collide (issue 163, v2grid only): an empty queried cell whose key equals an occupied cell's
+ * (mask 0: every key is 0) must stay empty, and mixed runs are checked entry by entry, so results equal the brute force.
+ * Without the per-run check, two co-located movers (one non-mixed run) were visited from every queried cell. */
+static void test_collisions(void) {
+    static uint32_t a[32 * MAXR], b[32 * MAXR];
+    uint32_t n = write_lanes(), seed, compared = 0;
+    int pass;
+    for (pass = 0; pass < 2; pass++) {
+        Scene s;
+        SuWorld *w1 = NULL, *w2 = NULL;
+        scene_init(&s, 3);
+        mover(0, V(0, 0, 0), V(ONE / 4, 0, 0), ONE / 2, 0);
+        mover(1, V(ONE / 8, 0, 0), V(0, 0, 0), ONE / 2, 0);
+        if (pass == 1) {
+            sphere(2, V(Q(40), 0, 0), Q(2)); /* another cell: the single run is mixed */
+        }
+        space3d_test_hash_mask(0);
+        CHECK(run_scene(&s, &w1) == SU_OK);
+        space3d_test_hash_mask(UINT64_MAX);
+        space3d_query_ctx()->brute_force = 1;
+        CHECK(run_scene(&s, &w2) == SU_OK);
+        space3d_query_ctx()->brute_force = 0;
+        if (w1 != NULL && w2 != NULL) {
+            snapshot_out(w1, 3, a);
+            snapshot_out(w2, 3, b);
+            CHECK(memcmp(a, b, sizeof(uint32_t) * n * 3u) == 0);
+            CHECK(rd32(w1, SPACE3D_F_HIT_COUNT, 0) == 1u && cslot(w1, 0, 0) == 1u);
+        }
+        su_world_destroy(w1);
+        su_world_destroy(w2);
+    }
+    for (seed = 1; seed <= 8; seed++) {
+        Scene s;
+        SuWorld *w1 = NULL, *w2 = NULL;
+        uint32_t rows = 64u + (seed * 97u) % 400u, r;
+        int flagged = 0;
+        g_rng = seed * UINT64_C(104729);
+        random_scene(&s, rows, 20 + (int64_t)(seed % 3u) * 30);
+        space3d_test_hash_mask(3); /* four keys in all: runs are mixed and empty cells collide */
+        CHECK(run_scene(&s, &w1) == SU_OK);
+        space3d_test_hash_mask(UINT64_MAX);
+        space3d_query_ctx()->brute_force = 1;
+        CHECK(run_scene(&s, &w2) == SU_OK);
+        space3d_query_ctx()->brute_force = 0;
+        if (w1 != NULL && w2 != NULL) {
+            for (r = 0; r < rows; r++) {
+                flagged |= (rd32(w1, SPACE3D_F_HIT_FLAGS, r) & (SPACE3D_FLAG_CAND_TRUNCATED | SPACE3D_FLAG_SWEEP_BUDGET)) != 0u;
+            }
+            if (!flagged) {
+                snapshot_out(w1, rows, a);
+                snapshot_out(w2, rows, b);
+                CHECK(memcmp(a, b, sizeof(uint32_t) * n * rows) == 0);
+                compared++;
+            }
+        }
+        su_world_destroy(w1);
+        su_world_destroy(w2);
+    }
+    printf("space3d grid key collisions: %u random scenes equal to brute force\n", compared);
+    CHECK(compared >= 5u);
+}
+
 /* Usage: test_space3d_ops [v2 | v2grid]. No argument: the v1 descriptors (ctest space3d_ops); v2: their
  * descriptors and every scene test on space3d_ops_v2 (space3d_ops_v2); v2grid: the same with the grid forced
  * (space3d_ops_v2_grid). Separate processes, so each stays within the sanitizer lane's test timeout. */
@@ -1971,6 +2033,9 @@ int main(int argc, char **argv) {
     test_shape();
     test_mesh();
     test_compound();
+    if (strcmp(mode, "v2grid") == 0) {
+        test_collisions();
+    }
     space3d_test_force_grid(0);
     printf("test_space3d_ops%s%s: %d checks, %d failures\n", mode[0] ? " " : "", mode, g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

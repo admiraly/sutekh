@@ -427,7 +427,12 @@ memory: it bounds time. Work per tick in v2: O(n log n) sorts and binary searche
 per row, or the grid's lookups (at most 27 per level per row) plus at most max(2^22, 1024 x capacity) entry visits;
 at most 32 narrow-phase tests per mover. Measured (i7-14700K, one core, GCC 16.2 -O3, `test_space3d_dense --bench`,
 2026-10-26; observations, not budgets): about 6 ns per grid entry visited and 10 to 15 ns per entry when nearly
-every visit is an overlapping pair; a full 2^22 budget about 40 ms.
+every visit is an overlapping pair; a full 2^22 budget about 40 ms. Dense scenes of `space3d_dense` (ms per tick,
+median, v1 / v2): converge 31.6 / 82.3 (v1 drops half the contacts; v1 with its budget lifted takes about 84),
+pile-up 19.5 / 43.4, sparse 4.4 / 5.2. Worst case at full capacity: the budget is about 66.5 million entries
+for a 65,536-row world, and an independent review measured about 60,000 co-located movers reaching it at about
+543 ms per tick (v1: 12 ms, because it stops after 2^22 pairs and flags every mover). The budget bounds work, so a
+world this crowded is slow rather than wrong; it cannot be lowered in this version.
 
 ## 5. Evidence
 

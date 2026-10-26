@@ -103,6 +103,17 @@ branch is main's code plus flag counting into the stats.
 CI round 1 (`d60b1de`): both ASan+UBSan lanes timed out in `space3d_ops` (900 s; the three passes in one process).
 Split into three ctests; locally under ASan+UBSan each takes about 164 s.
 
+Review round 1 (PASS-WITH-NITS at `a83e296`), addressed in the final commit: the grid now checks the queried cell
+against a non-mixed run's first entry, so an empty cell whose 64-bit key collides with an occupied cell is empty
+(before, its run was visited unchecked, against the constants' `exact_cell_check`); test `test_collisions`
+(`space3d_ops_v2_grid`) forces collisions with the `space3d_test_hash_mask` seam and fails without the check. Section 4
+of docs/SPACE3D.md states the dense-scene costs and the full-capacity worst case (about 543 ms per tick measured by
+the reviewer). Performance and a knob to lower the budget are tracked in a separate issue.
+
+**Sanitizer headroom.** On the CI lane with ASan+UBSan and the native tier, `space3d_ops`, `space3d_ops_v2` and
+`space3d_ops_v2_grid` each leave only about 19% headroom against the 900 s test timeout. Any growth of those tests
+needs a split or a TIMEOUT property.
+
 ## Unrun or not covered
 
 - The v1 world-wide flag-4 path is not in the determinism matrix (it is covered by `space3d_dense` on each build).

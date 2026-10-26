@@ -1077,9 +1077,26 @@ static uint64_t s3_mix(uint64_t z) {
     return z ^ (z >> 31);
 }
 
+static uint64_t g_hash_mask = UINT64_MAX; /* test seam (space3d_test_hash_mask): forces key collisions */
+
+void space3d_test_hash_mask(uint64_t mask) {
+    g_hash_mask = mask;
+}
+
 static uint64_t s3_cell_hash(uint32_t l, uint64_t x, uint64_t y, uint64_t z) {
     return s3_mix((uint64_t)l * UINT64_C(0x9E3779B97F4A7C15) + x * UINT64_C(0xC2B2AE3D27D4EB4F) +
-                  y * UINT64_C(0x165667B19E3779F9) + z * UINT64_C(0xD6E8FEB86659FD93));
+                  y * UINT64_C(0x165667B19E3779F9) + z * UINT64_C(0xD6E8FEB86659FD93)) &
+           g_hash_mask;
+}
+
+/* A run whose entries all share one cell (not mixed) belongs to the queried cell (l, cell) only when its first entry
+ * does: a queried cell whose key collides with another cell's run is empty (neither counted nor visited). A mixed
+ * run is counted and visited, each entry checked (s3_visit). */
+static int s3_run_is(const Space3dScratch *s, uint32_t h, uint32_t l, const uint64_t cell[3]) {
+    uint32_t b = s->htab[h].beg;
+    const uint64_t *ob = s->ebox + 6u * (size_t)b;
+    return (s->hcut[h] & 2u) != 0u || ((s->eflag[b] & 0x3Fu) == l && (ob[0] >> l) == cell[0] &&
+                                       (ob[1] >> l) == cell[1] && (ob[2] >> l) == cell[2]);
 }
 
 /* Level of row r, or S3_GRID_NONE when its bounds are empty on some axis (lo > hi: such a row has no entry). */
@@ -1328,7 +1345,7 @@ static void s3_query(S3Grid *g, uint32_t q, uint32_t *count, uint32_t cut) {
                 }
             }
             h = s3_bucket(s, s3_cell_hash(l, cell[0], cell[1], cell[2]));
-            if (h == UINT32_MAX) {
+            if (h == UINT32_MAX || !s3_run_is(s, h, l, cell)) {
                 continue;
             }
             if (count != NULL) {

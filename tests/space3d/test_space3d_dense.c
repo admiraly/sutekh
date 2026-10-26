@@ -8,8 +8,9 @@
  *     most 2.51 m off its surface), so the target must be among its contacts unless the mover is flagged.
  *     space3d.query (v1) runs out of its 2^22 sweep pairs, flags every mover and loses contacts; space3d.query2 (v2)
  *     must lose none and flag none of the small movers.
- *   - pileup: the same plus 4,000 movers fired from one shared point. Under v2 the pair budget cuts only the piled
- *     movers (flag 4) and every small mover on a shell still finds its target.
+ *   - pileup: 3,000 movers fired from one shared point next to 1,000 converging on the targets. Under v2 the pair
+ *     budget cuts only the piled movers (flag 4) and every converging mover still finds its target (or is displaced
+ *     by two earlier contacts, as for the brute force).
  *   - counter semantics (last run and totals against the per-row flags), no allocation in the tick (glibc builds,
  *     not under AddressSanitizer), determinism (pinned su_host_digest per scene and family: equal on every compiler,
  *     build type and tier, since the operator is compiled C).
