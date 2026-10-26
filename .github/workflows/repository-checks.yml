@@ -272,7 +272,7 @@ jobs:
             $cxx = "clang++"
           }
           & ${{ matrix.cc }} --version
-          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=$cxx -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=${{ matrix.native }} -DSUTEKH_RENDER=OFF
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=${{ matrix.cc }} "-DCMAKE_CXX_COMPILER=$cxx" -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=${{ matrix.native }} -DSUTEKH_RENDER=OFF
           if ($LASTEXITCODE -ne 0) { exit 1 }
           cmake --build build -j 2 --target det_matrix det_matrix_dll test_det_regress racer_microcosm sutekh
           if ($LASTEXITCODE -ne 0) { exit 1 }
