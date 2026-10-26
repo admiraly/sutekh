@@ -2,7 +2,7 @@
   "issue": 138,
   "branch": "feat/issue-138-linux-window",
   "base_revision": "07d06de",
-  "state": "locally_verified_fix_round",
+  "state": "locally_verified_review_round_2",
   "pr": 146,
   "review": "pass_with_nits_first_round; fix round items 1-9 and bootstrap check addressed",
   "render_api_version": 12,

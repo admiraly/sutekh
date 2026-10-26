@@ -65,7 +65,7 @@ failure without a display, and no windowing dependency for headless builds.
 **Decision.** SDL 3 behind a narrow adapter (`include/sutekh/window.h`, `src/platform/window_sdl3.c`):
 
 - *Run-time loading, as for Vulkan.* `su_window` opens `libSDL3.so.0` (3.2.0 or later; `SUTEKH_SDL3_LIBRARY`
-  overrides the name) with `dlopen` and resolves 23 entry points; nothing links against SDL. Every pointer type is
+  overrides the name) with `dlopen` and resolves 25 entry points; nothing links against SDL. Every pointer type is
   checked at compile time against the header declaration (`_Generic` in a static assertion, unevaluated). Without
   the library, or without a Wayland or X11 display, `su_window_create` returns `SU_E_UNSUPPORTED_METHOD` with a
   reason; offscreen rendering is unaffected. Only the `wayland` and `x11` video drivers are allowed (never a console
@@ -89,7 +89,7 @@ failure without a display, and no windowing dependency for headless builds.
   `SUTEKH_WINDOW=AUTO|ON|OFF`; on Windows the library is not built.
 
 **Footprint (measured on the integration machine, Release GCC 16.2).** One translation unit; `libsu_window.a`
-23.5 KB (9.7 KB text). No link-time dependency; headless and `SUTEKH_WINDOW=OFF` builds do not compile it, and a
+25.7 KB (10.7 KB text). No link-time dependency; headless and `SUTEKH_WINDOW=OFF` builds do not compile it, and a
 process that never creates a window never loads SDL. At run time: the system's `libSDL3.so.0` (Fedora 44 SDL 3.4.16:
 3.4 MB), or one a game ships and names with `SUTEKH_SDL3_LIBRARY` (whether a given Steam Linux Runtime provides
 SDL 3 was not checked here). Update policy: bump the pinned headers only to

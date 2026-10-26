@@ -33,11 +33,16 @@ with `su_window_render_desc`; any other windowing layer can pass the same handle
 Size and pausing are the host's report, as on Win32: a Wayland surface does not report its extent, so the
 swapchain takes the size from `SuRenderDesc.width/height` and `su_render_resize` (pixels, clamped to the surface
 limits). `su_render_resize(r, 0, 0)` pauses presentation: frame calls return `SU_E_RESOURCE_LIMIT` without
-acquiring an image until a non-zero size arrives, or until the surface reports a non-zero extent different from
-the one at the pause (a Win32 window restored from a minimize resumes without a resize call; an iconified X11
-window keeps its extent and stays paused). Image acquisition waits at most 100 ms; a timeout skips the frame
-(`SU_E_RESOURCE_LIMIT`), so a compositor that stops releasing images without reporting the window as suspended
-cannot stall the host loop and its simulation ticks. `su_window_poll` reports a minimized, hidden or occluded window
+acquiring an image until a non-zero size arrives. Only a pause the surface itself explains (it reported 0 x 0: a
+minimized Win32 window) also ends by itself when a real extent returns; a host pause at a real or unknown extent
+(occlusion, an iconified X11 window, Wayland, a failed query) waits for the host. Image acquisition waits at most
+`SuRenderDesc.acquire_timeout_us` (default 50 ms); a timeout skips the frame (`SU_E_RESOURCE_LIMIT`, the wait in
+`wait_ms`), so a compositor that stops releasing images without reporting the window as suspended cannot stall the
+host loop for longer than that per frame. The trade-off: the bound must stay below the host's clock clamp
+(`space_demo`: 8 ticks at 120 Hz = 66.7 ms, beyond which the fixed-step clock drops ticks) and above the longest
+normal FIFO wait (about one refresh period: 16.7 ms at 60 Hz, 33.3 ms at 30 Hz), or visible frames are skipped; 50 ms
+fits refresh rates of 30 Hz and above. `vkQueuePresentKHR` is not bounded: a driver may throttle inside it (for
+example Mesa's Wayland FIFO on a compositor without `wp_fifo_manager_v1`), which shows as `present_ms`. `su_window_poll` reports a minimized, hidden or occluded window
 (including a Wayland window the compositor suspends) as 0 x 0, so the same `resized` forwarding pauses and resumes
 it, and no frame acquires an image of a surface the compositor no longer shows. Wayland has no
 client request to unminimize a window.

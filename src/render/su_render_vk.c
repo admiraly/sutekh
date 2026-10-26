@@ -2915,6 +2915,9 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
     r->max_hud = DESC_FIELD(desc, max_hud_vertices, DEFAULT_HUD_VERTICES);
     r->max_fx_tex = DESC_FIELD(desc, max_fx_tex_vertices, DEFAULT_FX_TEX_VERTICES);
     r->max_fx_batches = DESC_FIELD(desc, max_fx_batches, DEFAULT_FX_BATCHES);
+    r->acquire_timeout_ns = (uint64_t)(desc->struct_size == sizeof *desc && desc->acquire_timeout_us != 0u
+                                           ? desc->acquire_timeout_us
+                                           : SU_RVK_DEFAULT_ACQUIRE_TIMEOUT_US) * 1000u;
     r->fxb_cap = r->max_fx_batches + r->max_fx_tex / 6u + 1u;
     r->fxb = malloc((size_t)r->fxb_cap * sizeof *r->fxb);
     r->fxs = malloc((size_t)r->max_fx_batches * sizeof *r->fxs);
@@ -3129,15 +3132,14 @@ void su_render_resize(SuRenderer *r, uint32_t width, uint32_t height) {
          * reporting its extent while iconified, and a hidden Wayland surface may never release images) */
         r->paused = width == 0u || height == 0u;
         r->needs_rebuild = 1;
-        r->paused_w = r->paused_h = 0u;
+        r->paused_auto = 0;
         if (r->paused && r->surface != VK_NULL_HANDLE) {
-            /* the extent at the pause: a different non-zero extent later resumes by itself (a restored Win32
-             * window), the same one (an iconified X11 window keeps it) does not */
+            /* Only a pause the surface itself explains (it reports 0 x 0: a minimized Win32 window) ends by itself
+             * when a real extent returns. A host pause at a real or unknown extent (occlusion, an iconified X11
+             * window, which keeps its extent; Wayland, which reports none; a failed query) waits for the host. */
             VkSurfaceCapabilitiesKHR caps;
-            if (r->f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(r->pd, r->surface, &caps) == VK_SUCCESS) {
-                r->paused_w = caps.currentExtent.width;
-                r->paused_h = caps.currentExtent.height;
-            }
+            r->paused_auto = r->f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(r->pd, r->surface, &caps) == VK_SUCCESS &&
+                             caps.currentExtent.width == 0u && caps.currentExtent.height == 0u;
         }
     }
 }
@@ -3315,12 +3317,12 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
                                (unsigned)in->shadow_size);
         }
     }
-    if (!r->offscreen && r->paused) {
+    if (!r->offscreen && r->paused && r->paused_auto) {
         VkSurfaceCapabilitiesKHR caps;
         if (r->f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(r->pd, r->surface, &caps) == VK_SUCCESS &&
-            caps.currentExtent.width != UINT32_MAX && caps.currentExtent.width != 0u && caps.currentExtent.height != 0u &&
-            (caps.currentExtent.width != r->paused_w || caps.currentExtent.height != r->paused_h)) {
-            r->paused = 0; /* the surface reports a new real extent: resume without waiting for su_render_resize */
+            caps.currentExtent.width != UINT32_MAX && caps.currentExtent.width != 0u && caps.currentExtent.height != 0u) {
+            r->paused = 0; /* the surface reports a real extent again: resume without waiting for su_render_resize */
+            r->paused_auto = 0;
             r->want_width = caps.currentExtent.width;
             r->want_height = caps.currentExtent.height;
             r->needs_rebuild = 1;
@@ -3346,13 +3348,15 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     collect_gpu_time(r, fr);
     if (!su_rvk_particles_prepare(r, fr, in->scene)) return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "particle buffers");
     if (!r->offscreen) {
-        /* Finite: a compositor that stops releasing images (a hidden window without a "suspended" report) must not
-         * block the host loop and its simulation ticks; such a frame is skipped like a minimized one. */
-        vr = r->f.vkAcquireNextImageKHR(r->dev, r->swapchain, SU_RVK_ACQUIRE_TIMEOUT_NS, fr->acquired, VK_NULL_HANDLE,
+        /* Bounded (SuRenderDesc.acquire_timeout_us): a compositor that stops releasing images (a hidden window
+         * without a "suspended" report) must not block the host loop; such a frame is skipped like a minimized one,
+         * and the time it waited is reported as wait_ms. */
+        vr = r->f.vkAcquireNextImageKHR(r->dev, r->swapchain, r->acquire_timeout_ns, fr->acquired, VK_NULL_HANDLE,
                                         &image);
         if (vr == VK_TIMEOUT || vr == VK_NOT_READY) {
-            return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "no swapchain image within %u ms; frame skipped",
-                               (unsigned)(SU_RVK_ACQUIRE_TIMEOUT_NS / 1000000u));
+            r->stats.wait_ms = su_rvk_now_ms() - tw;
+            return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "no swapchain image within %.1f ms; frame skipped",
+                               (double)r->acquire_timeout_ns / 1e6);
         }
         if (vr == VK_ERROR_OUT_OF_DATE_KHR) {
             r->needs_rebuild = 1;

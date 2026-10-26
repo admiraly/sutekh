@@ -500,6 +500,14 @@ typedef struct SuRenderDesc {
     void *window_display;          /* WAYLAND: struct wl_display *; XLIB: Display * */
     void *window_surface;          /* WAYLAND: struct wl_surface *; XLIB: unused (NULL) */
     uint64_t window_id;            /* XLIB: the Window (an X11 XID); WAYLAND: unused (0) */
+    uint32_t acquire_timeout_us;   /* window targets: longest wait for a swapchain image, in microseconds; 0 = 50000.
+                                    * A frame whose image does not arrive in time is skipped (SU_E_RESOURCE_LIMIT;
+                                    * the wait is reported as wait_ms), so a compositor that stops releasing images
+                                    * cannot stall the host loop for longer than this per frame. Keep it below the
+                                    * host's clock clamp (space_demo: 8 ticks at 120 Hz = 66.7 ms; the fixed-step
+                                    * clock drops ticks beyond it) and above the longest normal FIFO wait (about one
+                                    * refresh: 16.7 ms at 60 Hz, 33.3 ms at 30 Hz), or frames are skipped while the
+                                    * window is visible. The 50 ms default fits a refresh of 30 Hz or more. */
 } SuRenderDesc;
 #define SU_RENDER_DESC_V1_SIZE ((uint32_t)offsetof(SuRenderDesc, pipeline_cache_path))
 /* sizeof the API 11 descriptor: window_system starts in its tail padding, rounded to its pointer alignment. */
@@ -525,11 +533,11 @@ SU_RENDER_API void su_render_destroy(SuRenderer *r);
 SU_RENDER_API uint32_t su_render_device(const SuRenderer *r, SuRenderDeviceInfo *out);
 /* Window resized (also detected from the swapchain), in pixels. A zero width or height pauses presentation: frame
  * calls then return SU_E_RESOURCE_LIMIT without acquiring a swapchain image (the window is minimized, hidden or
- * occluded). The pause ends with a non-zero su_render_resize, or by itself when the surface reports a non-zero
- * extent different from the one it reported when the pause began (a Win32 window restored from a minimize, which
- * reports 0 x 0 while minimized; an iconified X11 window keeps its extent, so it stays paused until the host
- * reports a size; Wayland surfaces report no extent). API 12: the pause is explicit; before, a zero size only
- * waited for the surface extent to become non-zero. */
+ * occluded). The pause ends with a non-zero su_render_resize. It also ends by itself when the surface reported
+ * 0 x 0 at the pause and later reports a non-zero extent (a Win32 window minimized and restored, as before API 12).
+ * A pause at a real or unknown extent (a host pause for occlusion, an iconified X11 window, which keeps its extent;
+ * a Wayland surface, which reports none; a failed capabilities query) waits for the host's non-zero size. API 12:
+ * the pause is explicit; before, a zero size only waited for the surface extent to become non-zero. */
 SU_RENDER_API void su_render_resize(SuRenderer *r, uint32_t width, uint32_t height);
 
 /* ---- GPU resources: asynchronous upload, generational handles, deferred retirement ----
@@ -1031,8 +1039,9 @@ typedef struct SuRenderStats {
  * view and projection (a standard 0..1 depth projection such as su_mat4f_perspective; the renderer converts it to
  * its reversed-Z depth), no sky, clamp tonemapping. Returns SU_OK, or SU_E_RESOURCE_LIMIT when nothing was drawn
  * (the window is minimized or paused, the swapchain is out of date, or no swapchain image became available within
- * 100 ms: API 12 never waits for an image without a bound, so a compositor that stops releasing images cannot
- * stall the host loop), or another status with the reason in su_render_last_error. su_render_frame_ex likewise. */
+ * SuRenderDesc.acquire_timeout_us), or another status with the reason in su_render_last_error. su_render_frame_ex
+ * likewise. API 12 bounds the wait for an image; vkQueuePresentKHR is not bounded (a driver may throttle inside it,
+ * for example Mesa's Wayland FIFO on a compositor without wp_fifo_manager_v1), so present_ms can still grow. */
 SU_RENDER_API uint32_t su_render_frame(SuRenderer *r, const SuRenderView *view, const SuRenderInstance *instances,
                                        uint32_t instance_count, const SuRenderLineVertex *lines, uint32_t line_vertex_count);
 SU_RENDER_API uint32_t su_render_stats(const SuRenderer *r, SuRenderStats *out);

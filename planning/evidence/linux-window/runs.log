@@ -1,45 +1,49 @@
-# Linux window evidence (issue 138), fix round, 2026-10-26T03:20Z
+# Linux window evidence (issue 138), review round 2, 2026-10-26T03:37Z
 # host: Linux 7.2.9-200.nobara.fc44.x86_64; "Nobara Linux 44 (KDE Plasma Desktop Edition)"; KDE Plasma Wayland session (WAYLAND_DISPLAY=wayland-0, DISPLAY=:0 via XWayland)
 # CPU: Intel(R) Core(TM) i7-14700K; GPU: Intel Arc A770 (DG2), Mesa 26.2.4 (mesa-vulkan-drivers-freeworld); Vulkan loader 1.4.341.0; SDL 3.4.16
-# compiler: gcc (GCC) 16.2.1 20260819 (Red Hat 16.2.1-2); cmake 4.3.0; Khronos validation layer not installed (validation not available)
+# compiler: gcc (GCC) 16.2.1 20260819 (Red Hat 16.2.1-2); cmake 4.3.0; Khronos validation layer not installed locally (validation not available)
 # source: base commit 07d06de05192773bc90f3b519d2a81fbaa7f83c1; git trees of the measured sources (staged index, before the evidence files):
-#   src ca24bc19de75f7b27107030aca559956c5f4ded5
-#   include 02f27d4bf7a442dd729966f2dcb552c6a7f00e59
+#   src fb2918742664f1076cfe78aa9f9b986f81652d8b
+#   include 5227bb66a29e66d3589c82d62460a5a840489290
 #   examples c18c7321802ec94afc9ddf0229fe25127feadd8c
-#   tests 25d16486ae31a0a236cfcb4fbd593c659841c405
+#   tests daa1a602a9deb83705ebb02f9dbfb5834cb79935
 #   cmake aa368cb718a57f44273ad405f194f0e1f885e5ea
 #   tools de3b6fc147c2a33e81183c998d323b86d32e28f8
 # artifacts (sha256): Debug /tmp/wt-138-build, Release /tmp/wt-138-build-rel
-#   1f7941a4fa17c1d57020da4d6db8b1c357de1ad8774ee3d31e4bef0cc4a2d8e8 /tmp/wt-138-build/space_demo
-#   f5f00ad803dd34cab3a167302666b87bc35eb8bf37e498e4bd718cdeb83549de /tmp/wt-138-build/test_window_swapchain
-#   823d03a5cf5e07c0992122dc95e0f85874ca39ae801b1c75ca12e03b0ccadde7 /tmp/wt-138-build/test_window_events
+#   8bb69f8317144a592eb12638571aa0c76aa4c1a375c164c1160ab93378e50b8b /tmp/wt-138-build/space_demo
+#   0d7b67a47f6542540e1ee6c5d215100ab4e6bb945e4f84b0cd8c73faabc91b5e /tmp/wt-138-build/test_window_swapchain
+#   824311b637d78f97dff04bf4e54674f69baa543d72be8df812fb9017e5c104a2 /tmp/wt-138-build/test_window_events
 #   5b04022f13b3376788dfb7e371b6342f60ee2b987b4bb03c8c4093b261f83f5c /tmp/wt-138-build/test_input_events
-#   31d3c3c2001b8bdbfe5bace77de6b06757e86e29772ad6d13d3085b7d815e113 /tmp/wt-138-build-rel/space_demo
-#   e2cc6d4d78d055377a85eb9e18ad7971c70654c6099ab26052462518a293e2d4 /tmp/wt-138-build-rel/test_window_swapchain
-#   e55e5642d2998175aed79fb111d299b5f7178def11f62301280ec87aa2a607b6 /tmp/wt-138-build-rel/test_window_events
+#   2e3ee39fa0082ae7fe043c74252877d7c1385a3ae83c4dcd4a6c2da52a5753c9 /tmp/wt-138-build-rel/space_demo
+#   143eca1512543eaaf79edc91754019de95a28f5fdc05702212d35fef82a4c45c /tmp/wt-138-build-rel/test_window_swapchain
+#   dd5c0ce7266b5d54f1f89f1a8634342d1eb1f954cdb8480f13decd8d21c6f468 /tmp/wt-138-build-rel/test_window_events
 #   567948ff2616d68fac78ac7ccdeef8ff545ff5d1d5ad338c5f4d50023f819de5 /tmp/wt-138-build-rel/test_input_events
 
 $ test_window_swapchain   # Debug, session display (Wayland)
 window: SDL 3.4.16, driver wayland, window system 1, pixel density 1.00
-presented 120 frames in 650.6 ms (184.4 fps), 640x360, present mode 2, cpu 0.072 ms, wait 4.227 ms, present 0.013 ms, gpu 0.127 ms
+presented 120 frames in 647.1 ms (185.4 fps), 640x360, present mode 2, cpu 0.386 ms, wait 5.581 ms, present 0.049 ms, gpu 0.162 ms
 resize request 800x500 (window coordinates): swapchain 640x360 -> 800x500, recreations 1
-acquire: timeout 100000000 ns passed; a timed-out acquire skipped 3 frames, then presenting resumed
-pause: extent auto-resume not applicable (Wayland surfaces report no extent)
+acquire: timeout 50000 us passed (default); a timed-out acquire skipped 3 frames, then presenting resumed
+pause (real extent at the pause), then a real surface extent: stays paused
+pause (query failed at the pause), then a real surface extent: stays paused
+pause (0 x 0 at the pause), then a real surface extent: resumed
 minimize: reported (drawable 0x0), frames refused while minimized
 restore: not attempted (Wayland cannot unminimize a window from the client)
-evidence: driver wayland, device Intel(R) Arc(tm) A770 Graphics (DG2), present mode 2, frames 136 (ok 131, paused 6, failed 0), swapchain recreations 2, final 800x500, validation not available (0 errors, 0 warnings)
-test_window_swapchain: 179 checks, 0 failures
+evidence: driver wayland, device Intel(R) Arc(tm) A770 Graphics (DG2), present mode 2, frames 146 (ok 131, paused 6, failed 0), swapchain recreations 6, final 800x500, validation not available (0 errors, 0 warnings)
+test_window_swapchain: 189 checks, 0 failures
 
 $ SDL_VIDEO_DRIVER=x11 test_window_swapchain --x11   # XWayland
 window: SDL 3.4.16, driver x11, window system 2, pixel density 1.00
-presented 120 frames in 648.8 ms (185.0 fps), 640x360, present mode 2, cpu 0.098 ms, wait 5.660 ms, present 0.008 ms, gpu 0.145 ms
+presented 120 frames in 650.3 ms (184.5 fps), 640x360, present mode 2, cpu 0.102 ms, wait 5.357 ms, present 0.008 ms, gpu 0.146 ms
 resize request 800x500 (window coordinates): swapchain 640x360 -> 800x500, recreations 1
-acquire: timeout 100000000 ns passed; a timed-out acquire skipped 3 frames, then presenting resumed
-pause: resumed by a new surface extent 640x400 without su_render_resize: yes
+acquire: timeout 50000 us passed (default); a timed-out acquire skipped 3 frames, then presenting resumed
+pause (real extent at the pause), then a real surface extent: stays paused
+pause (query failed at the pause), then a real surface extent: stays paused
+pause (0 x 0 at the pause), then a real surface extent: resumed
 minimize: reported (drawable 0x0), frames refused while minimized
 restore: presenting again
-evidence: driver x11, device Intel(R) Arc(tm) A770 Graphics (DG2), present mode 2, frames 150 (ok 144, paused 6, failed 0), swapchain recreations 6, final 640x400, validation not available (0 errors, 0 warnings)
-test_window_swapchain: 202 checks, 0 failures
+evidence: driver x11, device Intel(R) Arc(tm) A770 Graphics (DG2), present mode 2, frames 159 (ok 144, paused 6, failed 0), swapchain recreations 10, final 800x500, validation not available (0 errors, 0 warnings)
+test_window_swapchain: 205 checks, 0 failures
 
 $ xvfb-run -a -s "-screen 0 1280x800x24" env -u WAYLAND_DISPLAY SDL_VIDEO_DRIVER=x11 test_window_swapchain --x11
 MESA: info: vulkan: No DRI3 support detected - required for presentation
@@ -47,14 +51,16 @@ Note: you can probably enable DRI3 in your Xorg config
 MESA: info: vulkan: No DRI3 support detected - required for presentation
 Note: you can probably enable DRI3 in your Xorg config
 window: SDL 3.4.16, driver x11, window system 2, pixel density 1.00
-presented 120 frames in 122.3 ms (981.4 fps), 640x360, present mode 2, cpu 0.009 ms, wait 0.009 ms, present 0.768 ms, gpu 0.762 ms
+presented 120 frames in 267.7 ms (448.3 fps), 640x360, present mode 2, cpu 0.013 ms, wait 0.073 ms, present 1.720 ms, gpu 1.210 ms
 resize request 800x500 (window coordinates): swapchain 640x360 -> 800x500, recreations 1
-acquire: timeout 100000000 ns passed; a timed-out acquire skipped 3 frames, then presenting resumed
-pause: resumed by a new surface extent 640x400 without su_render_resize: yes
+acquire: timeout 50000 us passed (default); a timed-out acquire skipped 3 frames, then presenting resumed
+pause (real extent at the pause), then a real surface extent: stays paused
+pause (query failed at the pause), then a real surface extent: stays paused
+pause (0 x 0 at the pause), then a real surface extent: resumed
 minimize: not reported by the x11 window system within 1.5 s
 restore: presenting again
-evidence: driver x11, device llvmpipe (LLVM 22.1.8, 256 bits), present mode 2, frames 1489 (ok 1483, paused 0, failed 0), swapchain recreations 4, final 640x400, validation not available (0 errors, 0 warnings)
-test_window_swapchain: 1527 checks, 0 failures
+evidence: driver x11, device llvmpipe (LLVM 22.1.8, 256 bits), present mode 2, frames 1008 (ok 993, paused 0, failed 0), swapchain recreations 9, final 800x500, validation not available (0 errors, 0 warnings)
+test_window_swapchain: 1040 checks, 0 failures
 
 $ test_window_swapchain --no-display
 error: XDG_RUNTIME_DIR is invalid or not set in the environment.
@@ -64,41 +70,41 @@ offscreen without a display: pixel 89 89 108
 test_window_swapchain --no-display: 12 checks, 0 failures
 
 $ Release: test_window_swapchain (Wayland) and --x11 (XWayland)
-test_window_swapchain: 179 checks, 0 failures
-test_window_swapchain: 202 checks, 0 failures
+test_window_swapchain: 189 checks, 0 failures
+test_window_swapchain: 205 checks, 0 failures
 
 $ space_demo --seconds 6 --no-mouse-grab   # Wayland, device input, no human input
-window: SDL 3.4.16, wayland, 1280x720 pixels (density 1.00), gamepads on
-renderer: Intel(R) Arc(tm) A770 Graphics (DG2), window target 1280x720, present mode 2, pipelines 1.4 ms (cache 0)
-content: procedural pack 394984 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
-audio: no output (no audio output backend on this platform yet (WASAPI is Windows only)); mixing offline
-182.2 fps | 119.4 ticks/s | render cpu 0.634 ms wait 4.760 present 0.016 gpu 0.826 ms | step 0.043 ms | gates 0 | chase camera
-180.0 fps | 120.0 ticks/s | render cpu 0.613 ms wait 4.732 present 0.017 gpu 0.701 ms | step 0.052 ms | gates 0 | chase camera
-179.0 fps | 120.3 ticks/s | render cpu 0.577 ms wait 4.787 present 0.018 gpu 0.822 ms | step 0.050 ms | gates 0 | chase camera
-177.2 fps | 119.5 ticks/s | render cpu 5.052 ms wait 0.131 present 0.131 gpu 0.836 ms | step 0.049 ms | gates 0 | chase camera
-177.6 fps | 120.7 ticks/s | render cpu 0.792 ms wait 3.843 present 0.023 gpu 0.799 ms | step 0.054 ms | gates 0 | chase camera
-frames 1077, ticks 720, dropped ticks 0, gate events 0, mean step 0.053 ms
-digest c3a2d0a46aa1c96f484290ce066f2a24bb06ad01c584d3c1397ad796b8c37fa8 fast 3ef1ee7edecc8c26
-render: frames 1077, last cpu 0.808 ms (scene 0.396), last gpu 0.818 ms, draws 29, objects 3014 (culled 2052, nodes drawn 979, LOD0 53, LOD1 926), draw instances 979, fx vertices 1008, hud vertices 954, uploaded 422288 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 2
-frames drawn 1077, paused 0, failed 0
-timings over 1047 frames after warm-up (observations): gpu median 0.807 ms p95 0.845 ms; render cpu median 0.570 ms p95 1.146 ms
-audio: gate sounds 0 for 0 gate events, re-emitted events let through 0, 288258 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
-exit 0
-
-$ space_demo --script --frames 400 --exercise-window --rollback-check   # Wayland
 window: SDL 3.4.16, wayland, 1280x720 pixels (density 1.00), gamepads on
 renderer: Intel(R) Arc(tm) A770 Graphics (DG2), window target 1280x720, present mode 2, pipelines 1.5 ms (cache 0)
 content: procedural pack 394984 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
 audio: no output (no audio output backend on this platform yet (WASAPI is Windows only)); mixing offline
+181.2 fps | 119.5 ticks/s | render cpu 0.689 ms wait 4.359 present 0.022 gpu 0.758 ms | step 0.059 ms | gates 0 | chase camera
+179.9 fps | 119.9 ticks/s | render cpu 0.563 ms wait 4.342 present 0.015 gpu 0.834 ms | step 0.053 ms | gates 0 | chase camera
+180.0 fps | 120.0 ticks/s | render cpu 0.591 ms wait 4.441 present 0.014 gpu 0.749 ms | step 0.049 ms | gates 0 | chase camera
+179.8 fps | 120.2 ticks/s | render cpu 0.392 ms wait 3.743 present 0.011 gpu 0.851 ms | step 0.048 ms | gates 0 | chase camera
+180.0 fps | 120.0 ticks/s | render cpu 0.662 ms wait 4.896 present 0.019 gpu 0.691 ms | step 0.047 ms | gates 0 | chase camera
+frames 1081, ticks 720, dropped ticks 0, gate events 0, mean step 0.046 ms
+digest c3a2d0a46aa1c96f484290ce066f2a24bb06ad01c584d3c1397ad796b8c37fa8 fast 3ef1ee7edecc8c26
+render: frames 1081, last cpu 0.553 ms (scene 0.363), last gpu 0.691 ms, draws 29, objects 3014 (culled 2052, nodes drawn 979, LOD0 53, LOD1 926), draw instances 979, fx vertices 990, hud vertices 954, uploaded 422288 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 2
+frames drawn 1081, paused 0, failed 0
+timings over 1051 frames after warm-up (observations): gpu median 0.800 ms p95 0.846 ms; render cpu median 0.580 ms p95 1.094 ms
+audio: gate sounds 0 for 0 gate events, re-emitted events let through 0, 288028 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
+exit 0
+
+$ space_demo --script --frames 400 --exercise-window --rollback-check   # Wayland
+window: SDL 3.4.16, wayland, 1280x720 pixels (density 1.00), gamepads on
+renderer: Intel(R) Arc(tm) A770 Graphics (DG2), window target 1280x720, present mode 2, pipelines 1.4 ms (cache 0)
+content: procedural pack 394984 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
+audio: no output (no audio output backend on this platform yet (WASAPI is Windows only)); mixing offline
 exercise: minimize/restore skipped on Wayland (no client-side unminimize)
 tick 187: ship 0 crossed the gate
-frames 400, ticks 266, dropped ticks 0, gate events 1, mean step 0.049 ms
-digest 88a9e04c5e5730fe83eaf459323861ccf7c873f89b05418f5755230bc16e3e8e fast 714d520984a87730
-render: frames 400, last cpu 0.565 ms (scene 0.322), last gpu 0.850 ms, draws 27, objects 3014 (culled 2313, nodes drawn 712, LOD0 73, LOD1 639), draw instances 712, fx vertices 1524, hud vertices 960, uploaded 422288 bytes, swapchain recreations 2, validation off (0 errors, 0 warnings), present mode 2
+frames 400, ticks 264, dropped ticks 0, gate events 1, mean step 0.035 ms
+digest c97d40a98bc064bd01bc13f16d0d61b7e68a4f31778b4da01de73a2be58cef5f fast 006c0ffff7233a84
+render: frames 400, last cpu 0.399 ms (scene 0.246), last gpu 0.720 ms, draws 27, objects 3014 (culled 2305, nodes drawn 720, LOD0 73, LOD1 647), draw instances 720, fx vertices 1494, hud vertices 960, uploaded 422288 bytes, swapchain recreations 2, validation off (0 errors, 0 warnings), present mode 2
 frames drawn 400, paused 0, failed 0
-timings over 370 frames after warm-up (observations): gpu median 0.844 ms p95 0.932 ms; render cpu median 0.572 ms p95 1.097 ms
-rollback drills: 33 (restore in place, re-push 8 records, step 8 ticks), 0 differed, 1 re-emitted events compared, mean 0.238 ms each
-audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 106582 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
+timings over 370 frames after warm-up (observations): gpu median 0.838 ms p95 0.941 ms; render cpu median 0.400 ms p95 0.547 ms
+rollback drills: 33 (restore in place, re-push 8 records, step 8 ticks), 0 differed, 1 re-emitted events compared, mean 0.174 ms each
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 105991 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
 exit 0
 
 $ SDL_VIDEO_DRIVER=x11 space_demo --script --frames 400 --exercise-window --rollback-check   # XWayland
@@ -107,25 +113,25 @@ renderer: Intel(R) Arc(tm) A770 Graphics (DG2), window target 1280x720, present 
 content: procedural pack 394984 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
 audio: no output (no audio output backend on this platform yet (WASAPI is Windows only)); mixing offline
 tick 187: ship 0 crossed the gate
-frames 400, ticks 246, dropped ticks 0, gate events 1, mean step 0.056 ms
+frames 400, ticks 246, dropped ticks 0, gate events 1, mean step 0.040 ms
 digest 9f308b0ecb80a1e021f9f38853768ab76be334bb74a24bc082618f523c1b6abc fast d2b511dd76dba12d
-render: frames 371, last cpu 0.555 ms (scene 0.341), last gpu 0.819 ms, draws 29, objects 3014 (culled 2251, nodes drawn 776, LOD0 73, LOD1 703), draw instances 776, fx vertices 1626, hud vertices 960, uploaded 422288 bytes, swapchain recreations 3, validation off (0 errors, 0 warnings), present mode 2
+render: frames 371, last cpu 0.416 ms (scene 0.238), last gpu 0.854 ms, draws 29, objects 3014 (culled 2248, nodes drawn 779, LOD0 73, LOD1 706), draw instances 779, fx vertices 1620, hud vertices 960, uploaded 422288 bytes, swapchain recreations 3, validation off (0 errors, 0 warnings), present mode 2
 frames drawn 371, paused 29, failed 0
-timings over 370 frames after warm-up (observations): gpu median 0.830 ms p95 0.922 ms; render cpu median 0.573 ms p95 1.169 ms
-rollback drills: 30 (restore in place, re-push 8 records, step 8 ticks), 0 differed, 1 re-emitted events compared, mean 0.252 ms each
-audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 98769 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
+timings over 370 frames after warm-up (observations): gpu median 0.840 ms p95 0.940 ms; render cpu median 0.546 ms p95 0.657 ms
+rollback drills: 30 (restore in place, re-push 8 records, step 8 ticks), 0 differed, 1 re-emitted events compared, mean 0.239 ms each
+audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 98501 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
 exit 0
 
 $ space_demo --offscreen space_demo.ppm --frames 240 --rollback-check --expect-digest fa02b76e...defd   # the Windows-pinned digest
-renderer: Intel(R) Arc(tm) A770 Graphics (DG2), offscreen target 1280x720, present mode 4294967295, pipelines 1.4 ms (cache 0)
+renderer: Intel(R) Arc(tm) A770 Graphics (DG2), offscreen target 1280x720, present mode 4294967295, pipelines 1.9 ms (cache 0)
 content: procedural pack 394984 bytes, 10 meshes, 7 materials, 4 models (uploading in the background)
 tick 187: ship 0 crossed the gate
 frames 240, ticks 479, dropped ticks 0, gate events 1, mean step 0.022 ms
 digest fa02b76e1269693a5f4daa5c7139818c0fff106bd5f57c656556e1336aa1defd fast d774a0751dd23248
-render: frames 240, last cpu 0.362 ms (scene 0.285), last gpu 0.432 ms, draws 29, objects 3014 (culled 1520, nodes drawn 1515, LOD0 56, LOD1 1459), draw instances 1515, fx vertices 1578, hud vertices 954, uploaded 422288 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 4294967295
+render: frames 240, last cpu 0.366 ms (scene 0.276), last gpu 0.438 ms, draws 29, objects 3014 (culled 1520, nodes drawn 1515, LOD0 56, LOD1 1459), draw instances 1515, fx vertices 1578, hud vertices 954, uploaded 422288 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 4294967295
 frames drawn 240, paused 0, failed 0
-timings over 210 frames after warm-up (observations): gpu median 0.449 ms p95 0.757 ms; render cpu median 0.364 ms p95 0.418 ms
-rollback drills: 59 (restore in place, re-push 8 records, step 8 ticks), 0 differed, 1 re-emitted events compared, mean 0.167 ms each
+timings over 210 frames after warm-up (observations): gpu median 0.447 ms p95 0.707 ms; render cpu median 0.367 ms p95 0.424 ms
+rollback drills: 59 (restore in place, re-push 8 records, step 8 ticks), 0 differed, 1 re-emitted events compared, mean 0.169 ms each
 audio: gate sounds 1 for 1 gate events, re-emitted events let through 0, 192000 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
 shadow world (no renderer): 0 tick digests differed
 wrote /tmp/wt-138-build/space_demo.ppm
@@ -134,21 +140,24 @@ exit 0
 $ space_demo --offscreen x.ppm --frames 60 --expect-digest 0000...   # must fail (demo_offscreen_wrong_digest)
 digest differs from --expect-digest 0000000000000000000000000000000000000000000000000000000000000000
 digest 947fad3925611683f5b0efc43b7bcf80459fd4161ddb01412cfa2b3d960d3519 fast 895799d339ce2484
-render: frames 60, last cpu 0.361 ms (scene 0.284), last gpu 0.429 ms, draws 29, objects 3014 (culled 1520, nodes drawn 1515, LOD0 56, LOD1 1459), draw instances 1515, fx vertices 1140, hud vertices 954, uploaded 422288 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 4294967295
+render: frames 60, last cpu 0.373 ms (scene 0.286), last gpu 0.458 ms, draws 29, objects 3014 (culled 1520, nodes drawn 1515, LOD0 56, LOD1 1459), draw instances 1515, fx vertices 1140, hud vertices 954, uploaded 422288 bytes, swapchain recreations 0, validation off (0 errors, 0 warnings), present mode 4294967295
 shadow world (no renderer): 0 tick digests differed
 exit 1
+
+$ SDL_VIDEO_DRIVER=bogus space_demo --frames 2   # requested driver named
+presentation unavailable (SU_E_UNSUPPORTED_METHOD): the video driver requested by SDL_VIDEO_DRIVER (bogus) could not be started: bogus not available (WAYLAND_DISPLAY wayland-0, DISPLAY :0); running the simulation headless
 
 $ env -u WAYLAND_DISPLAY -u DISPLAY -u XDG_RUNTIME_DIR space_demo --frames 10   # no display: exit 3
 error: XDG_RUNTIME_DIR is invalid or not set in the environment.
 presentation unavailable (SU_E_UNSUPPORTED_METHOD): no Wayland or X11 display could be opened: wayland,x11 not available (WAYLAND_DISPLAY unset, DISPLAY unset); running the simulation headless
-frames 10, ticks 1, dropped ticks 0, gate events 0, mean step 0.101 ms
+frames 10, ticks 1, dropped ticks 0, gate events 0, mean step 0.175 ms
 digest 803769d3e945c647a8f5b182ffad2c04af95c6729a8516ccb9ecd14ffb8947d8 fast 7f499f8ba8d8f99c
-audio: gate sounds 0 for 0 gate events, re-emitted events let through 0, 479 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
+audio: gate sounds 0 for 0 gate events, re-emitted events let through 0, 468 frames mixed (offline), voices stolen 0, refused 0, commands dropped 0
 exit 3
 
-# ctest summaries (this round)
-# r2-ctest-debug.log: 100% tests passed, 0 tests failed out of 147; skipped: 121 - audio_device (Skipped)
-# r2-ctest-rel.log: 100% tests passed, 0 tests failed out of 147; skipped: 121 - audio_device (Skipped)
+# ctest summaries (round 2)
+# r3-ctest-debug.log: 100% tests passed, 0 tests failed out of 147; skipped: 121 - audio_device (Skipped)
+# r3-ctest-rel.log: 100% tests passed, 0 tests failed out of 147; skipped: 121 - audio_device (Skipped)
 
 # first round: CI image reproduction (podman gcc:16.2, Debian 13.7, SDL 3.2.10, llvmpipe) on the first-round head
 Test project /tmp/b

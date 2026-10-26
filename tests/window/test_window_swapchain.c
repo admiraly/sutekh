@@ -2,7 +2,8 @@
  *
  * Default: open a window, create the renderer on it (VK_KHR_wayland_surface or VK_KHR_xlib_surface, whichever SDL
  * picked), present frames, request a resize and require the swapchain to follow it, pause presentation with a
- * zero size and resume it, request a minimize (and on X11 a restore; Wayland has no unminimize request), and
+ * zero size and resume it, check the bounded image acquisition (stubbed timeout) and which pauses end by themselves
+ * (stubbed surface capabilities), request a minimize (and on X11 a restore; Wayland has no unminimize request), and
  * print the evidence: video driver, device, present mode, frames, recreations, size, timings.
  * --x11: also require the X11 driver (the Xvfb registration).
  * --no-display: with WAYLAND_DISPLAY, DISPLAY, XDG_RUNTIME_DIR and SDL_VIDEO_DRIVER removed, su_window_create must
@@ -104,6 +105,27 @@ static VKAPI_ATTR VkResult VKAPI_CALL acquire_timeout(VkDevice d, VkSwapchainKHR
     g_seen_timeout = timeout;
     g_acquire_calls++;
     return VK_TIMEOUT;
+}
+
+/* Capabilities seam: the real query, a failure, a 0 x 0 extent, or a fixed 640 x 400 extent. */
+enum { CAPS_REAL, CAPS_FAIL, CAPS_ZERO, CAPS_FIXED };
+static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR g_real_caps;
+static int g_caps_mode;
+
+static VKAPI_ATTR VkResult VKAPI_CALL caps_stub(VkPhysicalDevice pd, VkSurfaceKHR surface,
+                                                VkSurfaceCapabilitiesKHR *caps) {
+    VkResult vr;
+    if (g_caps_mode == CAPS_FAIL) {
+        return VK_ERROR_SURFACE_LOST_KHR;
+    }
+    vr = g_real_caps(pd, surface, caps);
+    if (vr == VK_SUCCESS && g_caps_mode == CAPS_ZERO) {
+        caps->currentExtent.width = caps->currentExtent.height = 0u;
+    } else if (vr == VK_SUCCESS && g_caps_mode == CAPS_FIXED) {
+        caps->currentExtent.width = 640u;
+        caps->currentExtent.height = 400u;
+    }
+    return vr;
 }
 
 typedef struct Run {
@@ -355,7 +377,7 @@ int main(int argc, char **argv) {
         g_real_acquire = run.r->f.vkAcquireNextImageKHR;
         run.r->f.vkAcquireNextImageKHR = acquire_spy;
         CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_OK);
-        CHECK(g_acquire_calls == 1u && g_seen_timeout == SU_RVK_ACQUIRE_TIMEOUT_NS && g_seen_timeout != UINT64_MAX);
+        CHECK(g_acquire_calls == 1u && g_seen_timeout == (uint64_t)SU_RVK_DEFAULT_ACQUIRE_TIMEOUT_US * 1000u);
         CHECK(su_render_stats(run.r, &rs) == SU_OK);
         before = rs.frame;
         run.r->f.vkAcquireNextImageKHR = acquire_timeout;
@@ -363,41 +385,46 @@ int main(int argc, char **argv) {
             CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_E_RESOURCE_LIMIT);
         }
         CHECK(strstr(su_render_last_error(run.r), "frame skipped") != NULL);
-        CHECK(su_render_stats(run.r, &rs) == SU_OK && rs.frame == before);
+        CHECK(su_render_stats(run.r, &rs) == SU_OK && rs.frame == before && rs.wait_ms >= 0.0);
         run.r->f.vkAcquireNextImageKHR = g_real_acquire;
         for (i = 0; i < 3u; i++) {
             CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_OK);
         }
         CHECK(su_render_stats(run.r, &rs) == SU_OK && rs.frame == before + 3u);
-        printf("acquire: timeout %llu ns passed; a timed-out acquire skipped 3 frames, then presenting resumed\n",
-               (unsigned long long)SU_RVK_ACQUIRE_TIMEOUT_NS);
+        printf("acquire: timeout %llu us passed (default); a timed-out acquire skipped 3 frames, then presenting "
+               "resumed\n", (unsigned long long)SU_RVK_DEFAULT_ACQUIRE_TIMEOUT_US);
     }
 
-    /* X11 reports the surface extent: a pause ends by itself when the extent changes (as a Win32 window restored
-     * from a minimize does), without a su_render_resize call; the same extent keeps it paused (frames above) */
-    if (info.window_system == SU_RENDER_WINDOW_XLIB) {
-        uint32_t want_w = rs.width == 640u ? 720u : 640u;
-        int resumed = 0;
-        su_render_resize(run.r, 0, 0);
-        CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_E_RESOURCE_LIMIT);
-        CHECK(su_window_set_size(run.w, want_w, 400) == SU_OK);
-        t0 = now_ms();
-        while (now_ms() - t0 < 3000.0) {
-            CHECK(su_window_poll(run.w, &run.ev) == SU_OK); /* deliberately not forwarded to su_render_resize */
-            if (su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_OK) {
-                resumed = 1;
-                break;
+    /* Pause reasons, with the renderer's surface-capabilities query stubbed (any window system): only a pause the
+     * surface itself explained (0 x 0 at the pause) ends when a real extent returns; a host pause at a real
+     * extent, or one whose query failed (unknown), waits for su_render_resize. */
+    {
+        static const char *const names[3] = {"real extent at the pause", "query failed at the pause",
+                                             "0 x 0 at the pause"};
+        int mode;
+        g_real_caps = run.r->f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR;
+        run.r->f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR = caps_stub;
+        for (mode = 0; mode < 3; mode++) {
+            int resumed = 0;
+            g_caps_mode = mode == 0 ? CAPS_FIXED : (mode == 1 ? CAPS_FAIL : CAPS_ZERO);
+            su_render_resize(run.r, 0, 0);
+            g_caps_mode = CAPS_FIXED; /* from now on the surface reports a real extent of 640 x 400 */
+            for (i = 0; i < 4u; i++) {
+                resumed |= su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_OK;
             }
-            sleep_ms(5);
+            printf("pause (%s), then a real surface extent: %s\n", names[mode], resumed ? "resumed" : "stays paused");
+            CHECK(resumed == (mode == 2));
+            if (mode == 2) {
+                CHECK(su_render_stats(run.r, &rs) == SU_OK && rs.width == 640u && rs.height == 400u);
+            }
+            g_caps_mode = CAPS_REAL;
+            su_render_resize(run.r, run.ev.width, run.ev.height); /* the host's size always resumes */
+            CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_OK);
         }
-        CHECK(resumed);
-        CHECK(su_render_stats(run.r, &rs) == SU_OK);
-        printf("pause: resumed by a new surface extent %ux%u without su_render_resize: %s\n", rs.width, rs.height,
-               resumed ? "yes" : "no");
-        CHECK(rs.width == want_w && rs.height == 400u);
-        su_render_resize(run.r, run.ev.width, run.ev.height);
-    } else {
-        printf("pause: extent auto-resume not applicable (Wayland surfaces report no extent)\n");
+        run.r->f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR = g_real_caps;
+        for (i = 0; i < 3u; i++) {
+            CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_OK);
+        }
     }
 
     /* minimize and restore (last: Wayland has no request to unminimize, so there the window stays minimized until

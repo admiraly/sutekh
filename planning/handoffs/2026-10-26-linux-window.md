@@ -80,7 +80,7 @@ structured failure, refused bad descriptors, offscreen still renders, also with 
 
 ## Fix round (review of PR 146)
 
-1. Finite acquire: `vkAcquireNextImageKHR` waits at most 100 ms (`SU_RVK_ACQUIRE_TIMEOUT_NS`); `VK_TIMEOUT` and
+1. Finite acquire: `vkAcquireNextImageKHR` waited at most 100 ms in this round (reduced in round 2, below); `VK_TIMEOUT` and
    `VK_NOT_READY` skip the frame with `SU_E_RESOURCE_LIMIT` ("frame skipped"), as a paused frame. Tested by
    replacing the renderer's acquire entry point in `test_window_swapchain` (spy: the timeout passed is 100 ms;
    stub: three timed-out frames are skipped without submitting, then presenting resumes). No stats field was added
@@ -95,10 +95,8 @@ structured failure, refused bad descriptors, offscreen still renders, also with 
    offscreen digest.
 4. `su_window` stops only the subsystems it started (`SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)`), never
    `SDL_Quit`.
-5. A pause from `su_render_resize(r, 0, 0)` also ends by itself when the surface reports a non-zero extent different
-   from the one at the pause (a restored Win32 window); the same extent (an iconified X11 window) stays paused.
-   Documented in `render.h` (API 12 notes) and `docs/RENDERING_AND_ASSETS.md`. Tested on X11 (XWayland, Xvfb):
-   paused, window resized without `su_render_resize`, frames resume at the new extent.
+5. A pause from `su_render_resize(r, 0, 0)` could also end by itself on a surface extent change (narrowed in round 2,
+   below, to pauses the surface itself explained).
 6. Source and artifact hashes: `planning/evidence/linux-window/runs.log` header (git trees of `src`, `include`,
    `examples`, `tests`, `cmake`, `tools` and sha256 of the Debug and Release `space_demo`, `test_window_swapchain`,
    `test_window_events`, `test_input_events` that produced the runs).
@@ -110,6 +108,28 @@ structured failure, refused bad descriptors, offscreen still renders, also with 
    says no driver was available, else as "SDL could not start its video subsystem: ...".
 10. `bootstrap_sdl3_headers.py` verification fails on local modifications or untracked files in the checkout
     (`git status --porcelain`); checked by modifying and adding a header.
+
+## Round 2 (second review of PR 146)
+
+1. Acquire bound: now `SuRenderDesc.acquire_timeout_us` (appended to the API 12 descriptor, which is not released
+   yet; 0 = 50 ms). Not the suggested 16 ms: a normal FIFO acquire can wait about one refresh period (16.7 ms at
+   60 Hz, 33.3 ms at 30 Hz), so 16 ms would skip visible frames at 60 Hz and below. 50 ms is below `space_demo`'s
+   clock clamp (8 ticks at 120 Hz = 66.7 ms, beyond which ticks are dropped) and above the normal wait at 30 Hz or
+   more; the trade-off is documented at the field and in `docs/RENDERING_AND_ASSETS.md`. A skipped acquire's wait is
+   reported in `wait_ms` (no stats layout change). Test: the spy sees 50 ms by default.
+2. Pause reason: only a pause the surface itself explained (its capabilities report 0 x 0 when
+   `su_render_resize(0, 0)` is called, a minimized Win32 window) ends by itself when a real extent returns; a host
+   pause at a real extent (occlusion, an iconified X11 window, interactive resize), at an unknown one (Wayland), or
+   with a failed capabilities query waits for the host's non-zero size. The round-1 X11 test (which expected a host
+   pause to end on an extent change) is replaced by a capabilities stub in `test_window_swapchain` covering the
+   three cases on any window system: real extent, query failure (both stay paused), 0 x 0 (resumes at the new
+   extent).
+3. `vkQueuePresentKHR` is documented as unbounded (render.h, `docs/RENDERING_AND_ASSETS.md`, limitations below).
+4. The two contradictions in this file (pointer motion units, NumLock) are corrected.
+5. `su_window` restores `SDL_HINT_VIDEO_DRIVER` and `SDL_HINT_APP_NAME` to their previous values (or resets them)
+   when the window is destroyed or creation fails; with `SDL_VIDEO_DRIVER` set, an init failure names the requested
+   driver ("the video driver requested by SDL_VIDEO_DRIVER (bogus) could not be started: ..."). The hint
+   restoration has no automated test (it would need SDL calls from the test).
 
 ## Local validation
 
@@ -133,6 +153,7 @@ cmake --build /tmp/wt-138-build-rel -j 6 && ctest --test-dir /tmp/wt-138-build-r
 | Baseline, origin/main `07d06de`, Debug | 137 tests, 0 failures, 1 skip (`audio_device`) |
 | Debug GCC 16.2 `-Wall -Wextra -pedantic -Werror` (fix round) | no warnings; 147 tests, 0 failures, 1 skip (`audio_device`, as before) |
 | Release GCC 16.2 `-Werror` (fix round) | no warnings; 147 tests, 0 failures, 1 skip (`audio_device`) |
+| Round 2, Debug and Release `-Werror` | no warnings; 147 tests, 0 failures, 1 skip (`audio_device`) each; window tests on Wayland, XWayland and Xvfb pass; Clang ASan + UBSan reruns of `test_window_events`, `test_window_swapchain` (`--no-display`, Wayland, XWayland) and the demo clean |
 | First round, Debug and Release | 145 tests, 0 failures, 1 skip each |
 | Headless: `-DSUTEKH_RENDER=OFF -DSUTEKH_WINDOW=OFF` | builds; 127 tests, 0 failures, 1 skip; no `su_window`, no demo |
 | `-DSUTEKH_RENDER=ON -DSUTEKH_WINDOW=OFF` | demo builds without a window backend; windowed request exits 3 with the reason |
@@ -183,14 +204,18 @@ Review items deliberately not changed in the fix round (recorded here as known l
   KDE reports it as suspended (SDL: occluded), which pauses presentation; other compositors may report nothing.
   `space_demo --exercise-window` skips minimize/restore on Wayland.
 - One window per process (SDL video is process-global).
-- With relative mouse mode off, Linux motion is pointer motion in pixels and `SU_INPUT_FLAG_MOUSE_ABSOLUTE` is set
-  (Raw Input reports device counts); records match Windows only with relative mode on.
+- With relative mouse mode off, Linux motion is pointer motion in window coordinates (SDL logical units: pixels
+  only at pixel density 1) and `SU_INPUT_FLAG_MOUSE_ABSOLUTE` is set (Raw Input reports device counts); records
+  match Windows only with relative mode on.
+- `vkQueuePresentKHR` is not bounded: only the image acquisition is. A driver may throttle inside present (for
+  example Mesa's Wayland FIFO on a compositor without `wp_fifo_manager_v1`); that time shows as `present_ms` and can
+  still delay the host loop.
 - Pads beyond four are ignored; buttons XInput lacks (guide, paddles, touchpad) are not reported.
 - If `WAYLAND_DISPLAY` and `DISPLAY` are unset but `$XDG_RUNTIME_DIR/wayland-0` exists, libwayland still
   connects to it (standard behaviour); "no display" means no reachable compositor or X server.
 - Linux audio output is still the no-device backend (the demo mixes offline).
-- Observation, not changed here: the header names `SU_KEY_NUMLOCK` 0x45, and Linux maps NumLock to 0x45; Raw
-  Input is commonly documented to report NumLock with the E0 flag (0x145). Not checked on Windows.
+- NumLock: both platforms now give `SU_KEY_NUMLOCK` 0x45 (fix round, item 2: the Win32 backend maps an E0-flagged
+  0x145 to 0x45; `test_input_win32` passed in both Windows CI jobs, per the round-2 review).
 
 ## Next
 

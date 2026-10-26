@@ -27,6 +27,8 @@
 #define SDL_FNS(X)                                                                                           \
     X(int, SDL_GetVersion, (void))                                                                           \
     X(bool, SDL_SetHint, (const char *name, const char *value))                                              \
+    X(const char *, SDL_GetHint, (const char *name))                                                         \
+    X(bool, SDL_ResetHint, (const char *name))                                                               \
     X(bool, SDL_Init, (SDL_InitFlags flags))                                                                 \
     X(bool, SDL_InitSubSystem, (SDL_InitFlags flags))                                                        \
     X(void, SDL_QuitSubSystem, (SDL_InitFlags flags))                                                        \
@@ -69,6 +71,38 @@ typedef struct SdlFns {
  * unloading code they could still run is not safe. */
 static SdlFns g_sdl;
 static int g_window_live;
+
+/* Hints su_window sets, with the values they had before (restored when the window goes, so other SDL use in the
+ * process sees its own settings again). */
+typedef struct SavedHint {
+    const char *name;
+    char *value; /* NULL: the hint was unset */
+} SavedHint;
+static SavedHint g_hints[2];
+
+static void set_hint(uint32_t i, const char *name, const char *value) {
+    const char *prev = g_sdl.SDL_GetHint(name);
+    g_hints[i].name = name;
+    g_hints[i].value = prev != NULL ? strdup(prev) : NULL;
+    (void)g_sdl.SDL_SetHint(name, value);
+}
+
+static void restore_hints(void) {
+    uint32_t i;
+    for (i = 0; i < sizeof g_hints / sizeof g_hints[0]; i++) {
+        if (g_hints[i].name == NULL) {
+            continue;
+        }
+        if (g_hints[i].value != NULL) {
+            (void)g_sdl.SDL_SetHint(g_hints[i].name, g_hints[i].value);
+        } else {
+            (void)g_sdl.SDL_ResetHint(g_hints[i].name);
+        }
+        free(g_hints[i].value);
+        g_hints[i].name = NULL;
+        g_hints[i].value = NULL;
+    }
+}
 
 static int load_sdl(char *msg) {
     const char *name = getenv("SUTEKH_SDL3_LIBRARY");
@@ -335,6 +369,7 @@ static uint32_t fail(SuWindow *w, char *msg, const char *fmt, const char *detail
             g_sdl.SDL_DestroyWindow(w->win);
         }
         g_sdl.SDL_QuitSubSystem(OUR_SUBSYSTEMS(w));
+        restore_hints();
     }
     free(w);
     return SU_E_UNSUPPORTED_METHOD;
@@ -363,8 +398,8 @@ uint32_t su_window_create(const SuWindowDesc *d, SuWindow **out, char message[25
         return SU_E_UNSUPPORTED_METHOD;
     }
     /* Wayland, else X11 (XWayland included); never a console or dummy driver. SDL_VIDEO_DRIVER still wins. */
-    (void)g_sdl.SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland,x11");
-    (void)g_sdl.SDL_SetHint(SDL_HINT_APP_NAME, d->title != NULL ? d->title : "Sutekh");
+    set_hint(0, SDL_HINT_VIDEO_DRIVER, "wayland,x11");
+    set_hint(1, SDL_HINT_APP_NAME, d->title != NULL ? d->title : "Sutekh");
     if (!g_sdl.SDL_Init(SDL_INIT_VIDEO)) {
         const char *wl = getenv("WAYLAND_DISPLAY");
         const char *x = getenv("DISPLAY");
@@ -372,17 +407,23 @@ uint32_t su_window_create(const SuWindowDesc *d, SuWindow **out, char message[25
         char detail[200];
         snprintf(detail, sizeof detail, "%s (WAYLAND_DISPLAY %s, DISPLAY %s)", err != NULL ? err : "",
                  wl != NULL ? wl : "unset", x != NULL ? x : "unset");
-        /* SDL reports "<drivers> not available" when no driver could connect; anything else is another failure */
-        if (err != NULL && strstr(err, "not available") != NULL) {
+        const char *req = getenv("SDL_VIDEO_DRIVER");
+        if (req != NULL && req[0] != '\0') {
+            snprintf(msg, 256, "the video driver requested by SDL_VIDEO_DRIVER (%.40s) could not be started: %.130s", req,
+                     detail);
+        } else if (err != NULL && strstr(err, "not available") != NULL) {
+            /* SDL reports "<drivers> not available" when no driver could connect; anything else is another failure */
             snprintf(msg, 256, "no Wayland or X11 display could be opened: %s", detail);
         } else {
             snprintf(msg, 256, "SDL could not start its video subsystem: %s", detail);
         }
+        restore_hints();
         return SU_E_UNSUPPORTED_METHOD; /* SDL_Init failed: nothing to shut down */
     }
     w = calloc(1, sizeof *w);
     if (w == NULL) {
         g_sdl.SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        restore_hints();
         snprintf(msg, 256, "allocation failed");
         return SU_E_RESOURCE_LIMIT;
     }
@@ -451,6 +492,7 @@ void su_window_destroy(SuWindow *w) {
     }
     g_sdl.SDL_DestroyWindow(w->win);
     g_sdl.SDL_QuitSubSystem(OUR_SUBSYSTEMS(w));
+    restore_hints();
     free(w);
     g_window_live = 0;
 }
