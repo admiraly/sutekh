@@ -19,7 +19,10 @@
 #include "sutekh/host.h"
 #include "world/entities/su_ents.h"
 
-/* Allocates everything for the declared maximum (SU_E_RESOURCE_LIMIT when that fails). */
+/* Exact bytes su_hstate_create allocates for these maxima (host.h: SuHostWorldDesc.state_budget_bytes); 0 when either
+ * is 0 (no state). Allocates nothing. */
+uint64_t su_hstate_reservation(uint32_t max_entries, uint32_t max_bytes);
+/* Allocates everything for the declared maximum, su_hstate_reservation bytes (SU_E_RESOURCE_LIMIT when that fails). */
 uint32_t su_hstate_create(uint32_t max_entries, uint32_t max_bytes, uint32_t flags, SuHostState **out);
 void su_hstate_destroy(SuHostState *s);
 

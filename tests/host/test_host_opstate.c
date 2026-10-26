@@ -25,7 +25,10 @@
  *   8. SU_HOST_STATE_DROP_DEAD: dead entities' entries erased at publish, stale handles refused; without the flag
  *      the operator decides;
  *   9. no allocation in the tick or in a repeated in-place restore (static Linux build, -Wl,--wrap);
- *  10. misuse: changes outside run or through a view, put from the state's own memory.
+ *  10. misuse: changes outside run or through a view, put from the state's own memory;
+ *  11. the world's operator-state budget (issue 153): the exact reservation, one operator that fits and one that
+ *      does not, several that fit only under a raised budget, the default (0 and older descriptor sizes), nothing
+ *      allocated for a refused world, identity independent of the budget.
  * Cross-process: record <dir>, then verify <dir> same|entries|bytes|flags|nostate (same registration: restores and
  * replays to the recorded digests; another declaration: SU_E_SCHEMA_MISMATCH). */
 #include <stdarg.h>
@@ -57,6 +60,7 @@ static void check(int cond, const char *fmt, ...) {
 #ifdef SU_TEST_WRAP_ALLOC
 static volatile int g_count_alloc;
 static unsigned long g_allocs;
+static size_t g_alloc_max; /* largest single request while counting */
 void *__real_malloc(size_t n);
 void *__real_calloc(size_t n, size_t m);
 void *__real_realloc(void *p, size_t n);
@@ -66,18 +70,21 @@ void *__wrap_realloc(void *p, size_t n);
 void *__wrap_malloc(size_t n) {
     if (g_count_alloc) {
         g_allocs++;
+        g_alloc_max = n > g_alloc_max ? n : g_alloc_max;
     }
     return __real_malloc(n);
 }
 void *__wrap_calloc(size_t n, size_t m) {
     if (g_count_alloc) {
         g_allocs++;
+        g_alloc_max = m != 0u && n <= SIZE_MAX / m && n * m > g_alloc_max ? n * m : g_alloc_max;
     }
     return __real_calloc(n, m);
 }
 void *__wrap_realloc(void *p, size_t n) {
     if (g_count_alloc) {
         g_allocs++;
+        g_alloc_max = n > g_alloc_max ? n : g_alloc_max;
     }
     return __real_realloc(p, n);
 }
@@ -444,27 +451,32 @@ typedef struct Game {
     SuHostWorldDesc desc;
 } Game;
 
+/* The host record of d's operator; after: a JSON string list ("" for none). */
+static void record_json(Buf *b, const SuHostOperatorDesc *d, const char *after) {
+    uint32_t i;
+    put(b, "{\"capsule_format\":\"0.1\",\"system_id\":\"%s\",\"system_rev\":1,\"capabilities\":[],", d->system_id);
+    put(b, "\"schema\":{\"id\":\"game.hull\",\"version\":1,\"layout_generation\":1},");
+    put(b, "\"numeric_profile\":\"u32_mod_v1\",");
+    put(b, "\"schedule\":{\"phase\":\"query\",\"after\":[%s],\"before\":[],\"parallel\":\"serial\"},", after);
+    put(b, "\"host\":{\"operator\":\"%s\",\"operator_version\":%u,\"constants_hash\":\"", d->operator_name,
+        (unsigned)d->operator_version);
+    for (i = 0; i < 32u; i++) {
+        put(b, "%02x", (unsigned)d->constants_hash[i]);
+    }
+    put(b, "\",\"fields\":[");
+    for (i = 0; i < d->field_count; i++) {
+        const SuHostOperatorField *f = &d->fields[i];
+        put(b, "%s{\"id\":%u,\"name\":\"%s\",\"type\":\"u32\",\"access\":\"%s\"}", i > 0u ? "," : "",
+            (unsigned)f->id, f->name, f->access == SU_ACCESS_READ ? "read" : "write");
+    }
+    put(b, "]}}");
+}
+
 static void game_build(Game *g, const SuHostOperatorDesc *d) {
     static const char *const cols[] = {"hit", "amt", "bricks", "bytes", "sum", "err"};
     uint32_t i, k;
     memset(g, 0, sizeof *g);
-    put(&g->record, "{\"capsule_format\":\"0.1\",\"system_id\":\"%s\",\"system_rev\":1,\"capabilities\":[],",
-        d->system_id);
-    put(&g->record, "\"schema\":{\"id\":\"game.hull\",\"version\":1,\"layout_generation\":1},");
-    put(&g->record, "\"numeric_profile\":\"u32_mod_v1\",");
-    put(&g->record, "\"schedule\":{\"phase\":\"query\",\"after\":[],\"before\":[],\"parallel\":\"serial\"},");
-    put(&g->record, "\"host\":{\"operator\":\"%s\",\"operator_version\":%u,\"constants_hash\":\"", d->operator_name,
-        (unsigned)d->operator_version);
-    for (i = 0; i < 32u; i++) {
-        put(&g->record, "%02x", (unsigned)d->constants_hash[i]);
-    }
-    put(&g->record, "\",\"fields\":[");
-    for (i = 0; i < d->field_count; i++) {
-        const SuHostOperatorField *f = &d->fields[i];
-        put(&g->record, "%s{\"id\":%u,\"name\":\"%s\",\"type\":\"u32\",\"access\":\"%s\"}", i > 0u ? "," : "",
-            (unsigned)f->id, f->name, f->access == SU_ACCESS_READ ? "read" : "write");
-    }
-    put(&g->record, "]}}");
+    record_json(&g->record, d, "");
     put(&g->clear_cap, "{\"capsule_format\":\"0.1\",\"system_id\":\"game.clear\",\"source\":\"inline.lir.json\","
                        "\"schema\":{\"id\":\"game.hull\",\"version\":1,\"layout_generation\":1},"
                        "\"numeric_profile\":\"u32_mod_v1\",\"fields\":["
@@ -1767,6 +1779,246 @@ static int run_verify(const char *dir, const char *what) {
     return 0;
 }
 
+/* ---------- 11. operator-state budget (issue 153) ---------- */
+
+static uint32_t noop_run(const SuHostOperatorRun *run, void *user) {
+    (void)run;
+    (void)user;
+    return SU_OK;
+}
+
+static const SuHostOperatorField k_read_sum[1] = {{F_SUM, SU_TYPE_U32, SU_ACCESS_READ, 0, "sum"}};
+
+/* A read-only stateful operator scheduled after game.hull (so several of them never conflict). */
+static void reader_desc(SuHostOperatorDesc *d, const char *system_id, const char *operator_name, uint32_t entries,
+                        uint32_t bytes) {
+    uint32_t i;
+    SU_HOST_OPERATOR_DESC_INIT(d);
+    d->system_id = system_id;
+    d->schema_id = "game.hull";
+    d->operator_name = operator_name;
+    d->operator_version = 1u;
+    d->field_count = 1u;
+    d->fields = k_read_sum;
+    for (i = 0; i < 32u; i++) {
+        d->constants_hash[i] = (uint8_t)(i * 7u + 1u);
+    }
+    d->run = noop_run;
+    d->state_max_entries = entries;
+    d->state_max_bytes = bytes;
+}
+
+/* The base game (game.hull, game.clear) plus one record per reader, in this order. */
+typedef struct BudgetWorld {
+    Buf rec[4];
+    SuHostCapsule caps[6];
+    SuHostWorldDesc desc;
+} BudgetWorld;
+
+static void budget_world(BudgetWorld *b, const Game *g, const SuHostOperatorDesc *readers, uint32_t n) {
+    uint32_t i;
+    memset(b, 0, sizeof *b);
+    b->caps[0] = g->caps[0];
+    b->caps[1] = g->caps[1];
+    for (i = 0; i < n && i < 4u; i++) {
+        record_json(&b->rec[i], &readers[i], "\"game.hull\"");
+        b->caps[2u + i].capsule_json = (const uint8_t *)b->rec[i].p;
+        b->caps[2u + i].capsule_len = b->rec[i].n;
+    }
+    b->desc = g->desc;
+    b->desc.capsules = b->caps;
+    b->desc.capsule_count = 2u + n;
+}
+
+static void budget_free(BudgetWorld *b) {
+    uint32_t i;
+    for (i = 0; i < 4u; i++) {
+        free(b->rec[i].p);
+    }
+}
+
+/* Creates the world with this budget; returns the status, destroys the world (identity into id when non-NULL). */
+static uint32_t budget_try(const SuHostWorldDesc *base, uint32_t struct_size, uint64_t budget, SuHostError *err,
+                           uint8_t id[32]) {
+    SuHostWorldDesc d = *base;
+    SuHostWorld *w = (SuHostWorld *)(uintptr_t)1u;
+    uint32_t st;
+    d.struct_size = struct_size;
+    d.state_budget_bytes = budget;
+    st = su_host_world_create(&d, &w, err);
+    check((st == SU_OK) == (w != NULL), "world create: *out is set exactly on success");
+    if (w != NULL && id != NULL) {
+        su_host_world_identity(w, id);
+    }
+    su_host_world_destroy(w);
+    return st;
+}
+
+/* The reservation the engine reports for the first stateful operator (budget 1: every stateful world is refused). */
+static uint64_t reported_reservation(const SuHostWorldDesc *d) {
+    SuHostError err;
+    const char *p;
+    if (budget_try(d, (uint32_t)sizeof *d, 1u, &err, NULL) != SU_E_RESOURCE_LIMIT) {
+        return 0u;
+    }
+    p = strstr(err.message, " (");
+    return p != NULL ? strtoull(p + 2, NULL, 10) : 0u;
+}
+
+static void test_budget(const Game *g) {
+    enum { RE = 64u, RB = 1000u };
+    SuHostOperatorDesc rd[4];
+    SuHostError err;
+    BudgetWorld one, big, several, huge;
+    uint8_t id0[32], id1[32];
+    uint64_t r_hull, r_reader, r_big;
+    char want[256];
+    uint32_t st;
+
+    reader_desc(&rd[0], "budget.r1", "budget_r1_v1", RE, RB);
+    reader_desc(&rd[1], "budget.r2", "budget_r2_v1", RE, RB);
+    reader_desc(&rd[2], "budget.r3", "budget_r3_v1", RE, RB);
+    reader_desc(&rd[3], "budget.big", "budget_big_v1", RE, 64u * RB);
+    check(su_host_register_operator(&rd[0], &err) == SU_OK && su_host_register_operator(&rd[1], &err) == SU_OK &&
+              su_host_register_operator(&rd[2], &err) == SU_OK && su_host_register_operator(&rd[3], &err) == SU_OK,
+          "register the budget readers: %s", err.message);
+
+    /* The exact reservation: 4 x bytes + 52 x entries + a header under 256 bytes, the same for every operator. */
+    r_hull = reported_reservation(&g->desc);
+    check(r_hull > 4u * MAX_BYTES + 52u * MAX_ENTRIES && r_hull < 4u * MAX_BYTES + 52u * MAX_ENTRIES + 256u,
+          "game.hull reserves 4 x %u + 52 x %u bytes plus a header (%llu)", MAX_BYTES, MAX_ENTRIES,
+          (unsigned long long)r_hull);
+    check(budget_try(&g->desc, (uint32_t)sizeof g->desc, r_hull, &err, NULL) == SU_OK,
+          "a budget of exactly the reservation admits the world: %s", err.message);
+    st = budget_try(&g->desc, (uint32_t)sizeof g->desc, r_hull - 1u, &err, NULL);
+    snprintf(want, sizeof want,
+             "capsule 0: the operator state of game.hull (%llu bytes) brings the world to %llu bytes, over its "
+             "operator-state budget of %llu bytes",
+             (unsigned long long)r_hull, (unsigned long long)r_hull, (unsigned long long)(r_hull - 1u));
+    check(st == SU_E_RESOURCE_LIMIT && err.index == 0u && strcmp(err.message, want) == 0,
+          "one byte less is refused, naming the operator, the total and the budget: %s (%s)", su_host_status_name(st),
+          err.message);
+
+    /* One operator fits, a larger one does not, under the same budget (the base game is game.hull alone). */
+    budget_world(&one, g, &rd[0], 1u);
+    budget_world(&big, g, &rd[3], 1u);
+    {
+        /* budget.r1's reservation: the second stateful operator crosses a budget of r_hull and is reported. */
+        st = budget_try(&one.desc, (uint32_t)sizeof one.desc, r_hull, &err, NULL);
+        check(st == SU_E_RESOURCE_LIMIT && err.index == 2u && strstr(err.message, "of budget.r1 (") != NULL,
+              "the second stateful operator crosses the budget: %s", err.message);
+        r_reader = strtoull(strstr(err.message, " (") + 2, NULL, 10);
+        check(r_reader > 4u * RB + 52u * RE && r_reader < 4u * RB + 52u * RE + 256u &&
+                  r_reader - (4u * RB + 52u * RE) == r_hull - (4u * MAX_BYTES + 52u * MAX_ENTRIES),
+              "budget.r1 reserves 4 x %u + 52 x %u bytes plus the same header (%llu)", RB, RE,
+              (unsigned long long)r_reader);
+    }
+    check(budget_try(&one.desc, (uint32_t)sizeof one.desc, r_hull + r_reader, &err, NULL) == SU_OK,
+          "game.hull and budget.r1 fit in %llu bytes: %s", (unsigned long long)(r_hull + r_reader), err.message);
+    st = budget_try(&big.desc, (uint32_t)sizeof big.desc, r_hull + r_reader, &err, NULL);
+    r_big = r_reader + 4u * 63u * RB;
+    snprintf(want, sizeof want,
+             "capsule 2: the operator state of budget.big (%llu bytes) brings the world to %llu bytes, over its "
+             "operator-state budget of %llu bytes",
+             (unsigned long long)r_big, (unsigned long long)(r_hull + r_big),
+             (unsigned long long)(r_hull + r_reader));
+    check(st == SU_E_RESOURCE_LIMIT && err.index == 2u && strcmp(err.message, want) == 0,
+          "budget.big does not fit in the same budget: %s", err.message);
+
+    /* Several operators fit only under a raised budget; the one that crosses is named. */
+    budget_world(&several, g, rd, 3u);
+    st = budget_try(&several.desc, (uint32_t)sizeof several.desc, r_hull + 3u * r_reader - 1u, &err, NULL);
+    snprintf(want, sizeof want,
+             "capsule 4: the operator state of budget.r3 (%llu bytes) brings the world to %llu bytes, over its "
+             "operator-state budget of %llu bytes",
+             (unsigned long long)r_reader, (unsigned long long)(r_hull + 3u * r_reader),
+             (unsigned long long)(r_hull + 3u * r_reader - 1u));
+    check(st == SU_E_RESOURCE_LIMIT && err.index == 4u && strcmp(err.message, want) == 0,
+          "four stateful operators exceed a budget one byte short: %s", err.message);
+    st = budget_try(&several.desc, (uint32_t)sizeof several.desc, r_hull + r_reader + 1u, &err, NULL);
+    check(st == SU_E_RESOURCE_LIMIT && err.index == 3u && strstr(err.message, "of budget.r2 (") != NULL,
+          "a smaller budget is crossed earlier, by budget.r2: %s", err.message);
+    check(budget_try(&several.desc, (uint32_t)sizeof several.desc, r_hull + 3u * r_reader, &err, id0) == SU_OK,
+          "four stateful operators fit under the raised budget: %s", err.message);
+    {
+        SuHostWorld *w = NULL;
+        SuHostWorldDesc d = several.desc;
+        d.state_budget_bytes = r_hull + 3u * r_reader;
+        check(su_host_world_create(&d, &w, &err) == SU_OK && w != NULL, "several: world: %s", err.message);
+        if (w != NULL) {
+            step(w, 3u);
+            check(su_host_tick(w) == 3u, "several: the admitted world steps");
+            su_host_world_destroy(w);
+        }
+    }
+
+    /* Identity: the budget decides admission only. */
+    check(budget_try(&several.desc, (uint32_t)sizeof several.desc, UINT64_MAX, &err, id1) == SU_OK &&
+              memcmp(id0, id1, 32u) == 0,
+          "the identity does not depend on the budget");
+    {
+        uint8_t a[32], b[32], c[32];
+        check(budget_try(&g->desc, (uint32_t)sizeof g->desc, 0u, &err, a) == SU_OK &&
+                  budget_try(&g->desc, (uint32_t)sizeof g->desc, r_hull, &err, b) == SU_OK &&
+                  budget_try(&g->desc, (uint32_t)SU_HOST_WORLD_DESC_V1_SIZE, 0u, &err, c) == SU_OK &&
+                  memcmp(a, b, 32u) == 0 && memcmp(a, c, 32u) == 0,
+              "game.hull: one identity for budgets 0, exact and the v1 descriptor");
+    }
+
+    /* The default: 0 and the older descriptor sizes mean SU_HOST_STATE_BUDGET_DEFAULT (not unlimited). An operator
+     * reserving just over 1 GiB is refused by each (and allocates nothing, so this costs no memory). */
+    {
+        SuHostOperatorDesc hd;
+        uint64_t r_huge;
+        uint32_t sizes[3];
+        uint32_t k;
+        /* 4 x bytes + 52 x entries + header > 2^30 with bytes = 2^28 - 8 (the header makes up the rest). */
+        reader_desc(&hd, "budget.huge", "budget_huge_v1", 1u, (uint32_t)(SU_HOST_STATE_BUDGET_DEFAULT / 4u) - 8u);
+        check(su_host_register_operator(&hd, &err) == SU_OK, "register budget.huge: %s", err.message);
+        budget_world(&huge, g, &hd, 1u);
+        r_huge = r_reader - (4u * RB + 52u * RE) + 4u * (uint64_t)hd.state_max_bytes + 52u;
+        check(r_huge > SU_HOST_STATE_BUDGET_DEFAULT && r_huge < SU_HOST_STATE_BUDGET_DEFAULT + 256u,
+              "budget.huge reserves just over 1 GiB (%llu)", (unsigned long long)r_huge);
+        sizes[0] = (uint32_t)sizeof huge.desc;
+        sizes[1] = (uint32_t)SU_HOST_WORLD_DESC_V2_SIZE;
+        sizes[2] = (uint32_t)SU_HOST_WORLD_DESC_V1_SIZE;
+        for (k = 0; k < 3u; k++) {
+            /* With a nonzero budget in the struct: sizes 1 and 2 do not cover it, so it must be ignored. */
+            st = budget_try(&huge.desc, sizes[k], k == 0u ? 0u : UINT64_MAX, &err, NULL);
+            snprintf(want, sizeof want, "over its operator-state budget of %llu bytes",
+                     (unsigned long long)SU_HOST_STATE_BUDGET_DEFAULT);
+            check(st == SU_E_RESOURCE_LIMIT && err.index == 2u && strstr(err.message, want) != NULL &&
+                      strstr(err.message, "budget.huge") != NULL,
+                  "struct_size %u: the default budget applies: %s", (unsigned)sizes[k], err.message);
+        }
+        check(budget_try(&huge.desc, (uint32_t)SU_HOST_WORLD_DESC_V2_SIZE + 4u, 0u, &err, NULL) ==
+                  SU_E_INVALID_ARGUMENT,
+              "a size ending inside the budget field is refused");
+#ifdef SU_TEST_WRAP_ALLOC
+        /* A refused world allocates nothing of its operator state: no request of even half an arena
+         * (2 x state_max_bytes), while an admitted world requests its arenas. */
+        g_allocs = 0;
+        g_alloc_max = 0;
+        g_count_alloc = 1;
+        st = budget_try(&huge.desc, (uint32_t)sizeof huge.desc, 0u, &err, NULL);
+        g_count_alloc = 0;
+        check(st == SU_E_RESOURCE_LIMIT && g_alloc_max < (size_t)hd.state_max_bytes,
+              "a refused world requests no state memory (largest request %lu bytes in %lu allocations)",
+              (unsigned long)g_alloc_max, g_allocs);
+        g_alloc_max = 0;
+        g_count_alloc = 1;
+        st = budget_try(&big.desc, (uint32_t)sizeof big.desc, 0u, &err, NULL);
+        g_count_alloc = 0;
+        check(st == SU_OK && g_alloc_max >= 2u * 64u * RB, "an admitted world allocates its arenas (largest %lu)",
+              (unsigned long)g_alloc_max);
+#endif
+    }
+    budget_free(&one);
+    budget_free(&big);
+    budget_free(&several);
+    budget_free(&huge);
+}
+
 int main(int argc, char **argv) {
     Game g, dd, plain;
     SuHostOperatorDesc d;
@@ -1794,6 +2046,7 @@ int main(int argc, char **argv) {
         test_drop_dead(&dd, &g);
         test_alloc(&g, &dd);
         test_misuse(&g);
+        test_budget(&g);
         game_free(&g);
         game_free(&dd);
         game_free(&plain);

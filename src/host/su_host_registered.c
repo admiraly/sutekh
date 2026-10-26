@@ -480,6 +480,14 @@ const HostOperator *su_host_registered_find(const char *system_id) {
     return found;
 }
 
+uint64_t su_host_operator_state_reservation(const HostOperator *op) {
+    /* Registered descriptors are immutable once registered, so no lock is needed (as in reg_create). */
+    if (op == NULL || op->reg == NULL) {
+        return 0u;
+    }
+    return su_hstate_reservation(op->reg->pub.state_max_entries, op->reg->pub.state_max_bytes);
+}
+
 uint32_t su_host_registered_count(void) {
     uint32_t n;
     su_mutex_lock(&g_lock);
