@@ -6,6 +6,7 @@
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #include "sutekh/host.h"
 #include "host/su_host_internal.h"
+#include "host/su_host_state.h"
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -38,6 +39,11 @@
 #define HOST_DEFAULT_EVENT_LOG 1024u
 #define HOST_SNAP_MAGIC "SUHSNAP"   /* 7 bytes + 0x00 */
 #define HOST_SNAP_VERSION 1u
+#define HOST_SNAP_VERSION_OPSTATE 2u   /* a world with operator state (issue 139): + operator state section */
+#define HOST_OPSTATE_MAGIC "SUOPSTAT"  /* 8 bytes + 0x00 */
+#define HOST_OPSTATE_MAGIC_BYTES 9u
+#define HOST_OPSTATE_VERSION 1u
+#define HOST_OPSTATE_HEADER (HOST_OPSTATE_MAGIC_BYTES + 4u + 4u)
 #define HOST_SNAP_HEADER (8u + 4u + 32u + 8u + 8u)
 #define HOST_INPUT_MAGIC "SUINPUT"  /* 7 bytes + 0x00 */
 #define HOST_INPUT_VERSION 1u
@@ -116,22 +122,37 @@ typedef struct CapsuleFacts {
     uint32_t before_count;
 } CapsuleFacts;
 
-static uint32_t string_items(const SuJsonValue *arr, const char **out, uint32_t cap) {
-    uint32_t n = 0;
+/* schedule.after / schedule.before (issue 144): absent is empty; otherwise an array of at most SU_SCHED_MAX_SYSTEMS
+ * strings. Anything else is refused (SU_E_TYPE, or SU_E_RESOURCE_LIMIT for too many items) with the reason in why,
+ * instead of being dropped. */
+static uint32_t edge_items(const SuJsonValue *arr, const char *key, const char **out, uint32_t *n, char *why,
+                           size_t why_cap) {
     size_t k;
-    if (arr == NULL || arr->type != SU_JSON_ARRAY) {
-        return 0;
+    *n = 0;
+    if (arr == NULL) {
+        return SU_OK;
     }
-    for (k = 0; k < arr->u.array.count && n < cap; k++) {
+    if (arr->type != SU_JSON_ARRAY) {
+        snprintf(why, why_cap, "schedule.%s is not an array", key);
+        return SU_E_TYPE;
+    }
+    if (arr->u.array.count > SU_SCHED_MAX_SYSTEMS) {
+        snprintf(why, why_cap, "schedule.%s lists %llu items; at most %u", key, (unsigned long long)arr->u.array.count,
+                 (unsigned)SU_SCHED_MAX_SYSTEMS);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (k = 0; k < arr->u.array.count; k++) {
         const SuJsonValue *e = arr->u.array.items[k];
-        if (e->type == SU_JSON_STRING) {
-            out[n++] = e->u.string.data;
+        if (e->type != SU_JSON_STRING) {
+            snprintf(why, why_cap, "schedule.%s item %u is not a string", key, (unsigned)k);
+            return SU_E_TYPE;
         }
+        out[(*n)++] = e->u.string.data;
     }
-    return n;
+    return SU_OK;
 }
 
-static uint32_t capsule_facts(const SuHostCapsule *c, CapsuleFacts *f) {
+static uint32_t capsule_facts(const SuHostCapsule *c, CapsuleFacts *f, char *why, size_t why_cap) {
     SuJsonLimits lim;
     SuJsonError jerr;
     const SuJsonValue *schema;
@@ -140,6 +161,7 @@ static uint32_t capsule_facts(const SuHostCapsule *c, CapsuleFacts *f) {
 
     memset(f, 0, sizeof *f);
     f->phase = "";
+    snprintf(why, why_cap, "schema version, layout generation or schedule block");
     lim.max_bytes = c->capsule_len;
     lim.max_depth = HOST_JSON_DEPTH;
     st = su_json_parse(c->capsule_json, c->capsule_len, &lim, &f->doc, &jerr);
@@ -161,9 +183,11 @@ static uint32_t capsule_facts(const SuHostCapsule *c, CapsuleFacts *f) {
     if (member(sch, "phase") != NULL && member(sch, "phase")->type == SU_JSON_STRING) {
         f->phase = member(sch, "phase")->u.string.data;
     }
-    f->after_count = string_items(member(sch, "after"), f->after, SU_SCHED_MAX_SYSTEMS);
-    f->before_count = string_items(member(sch, "before"), f->before, SU_SCHED_MAX_SYSTEMS);
-    return SU_OK;
+    st = edge_items(member(sch, "after"), "after", f->after, &f->after_count, why, why_cap);
+    if (st == SU_OK) {
+        st = edge_items(member(sch, "before"), "before", f->before, &f->before_count, why, why_cap);
+    }
+    return st;
 }
 
 /* Effect analysis over the whole schedule, as world.create runs it (worker.c check_system_effects_ovr):
@@ -246,7 +270,9 @@ static SuWorldFieldDesc *schedule_fields(const SuSchedule *s) {
     for (i = 0; i < s->field_count; i++) {
         d[i].id = s->fields[i].id;
         d[i].type = s->fields[i].type;
-        d[i].access = s->fields[i].access;
+        /* A declared lane no system binds (access 0) is a read-only column of the world: no staging, written only
+         * by the host between ticks. World access is not in the schema digest or the canonical state. */
+        d[i].access = s->fields[i].access != 0u ? s->fields[i].access : SU_ACCESS_READ;
         d[i].name = s->fields[i].name;
     }
     return d;
@@ -396,6 +422,202 @@ static void compute_identity(SuHostWorld *hw) {
     put_u64(b, hw->log_max);
     su_sha256_update(&c, b, 8u);
     su_sha256_final(&c, hw->identity);
+    if (hw->sched.declared) {
+        /* Declared schema (issue 144): fold it in, so worlds with and without one never share an identity. */
+        const SuSchedule *s = &hw->sched;
+        uint8_t prev[32];
+        memcpy(prev, hw->identity, 32u);
+        su_sha256_init(&c);
+        su_sha256_update(&c, (const uint8_t *)"SUHSCHEMA", 10u); /* includes the terminating 0x00 */
+        su_sha256_update(&c, prev, 32u);
+        put_u32(b, (uint32_t)strlen(s->schema_id));
+        su_sha256_update(&c, b, 4u);
+        su_sha256_update(&c, (const uint8_t *)s->schema_id, strlen(s->schema_id));
+        put_u32(b, s->schema_version);
+        su_sha256_update(&c, b, 4u);
+        put_u32(b, s->layout_generation);
+        su_sha256_update(&c, b, 4u);
+        put_u32(b, s->declared_count);
+        su_sha256_update(&c, b, 4u);
+        for (i = 0; i < s->declared_count; i++) {
+            const SuSchedField *f = &s->declared_fields[i];
+            put_u32(b, f->id);
+            su_sha256_update(&c, b, 4u);
+            put_u32(b, f->value_type);
+            su_sha256_update(&c, b, 4u);
+            put_u32(b, (uint32_t)strlen(f->name));
+            su_sha256_update(&c, b, 4u);
+            su_sha256_update(&c, (const uint8_t *)f->name, strlen(f->name));
+        }
+        su_sha256_final(&c, hw->identity);
+    }
+}
+
+/* Declared world schema (issue 144): expands SuHostSchema fields into storage lanes (i64/q32: "x.lo" at J, "x.hi" at
+ * J + 1) and declares them on the schedule. */
+/* Versioned descriptor copy (the SuHostOperatorDesc convention): struct_size >= v1, only struct_size bytes read,
+ * bytes beyond the library's struct must be zero. Returns the offending byte offset + 1, or 0 when the tail is zero. */
+static size_t nonzero_tail(const void *p, size_t lib_size, size_t struct_size) {
+    size_t k;
+    for (k = lib_size; k < struct_size; k++) {
+        if (((const unsigned char *)p)[k] != 0u) {
+            return k + 1u;
+        }
+    }
+    return 0u;
+}
+
+/* The capsule rule for field names (su_lir.c): [A-Za-z_][A-Za-z0-9_]*. */
+static int field_name_ok(const char *s) {
+    size_t i;
+    if (s == NULL || s[0] == '\0') {
+        return 0;
+    }
+    for (i = 0; s[i] != '\0'; i++) {
+        char c = s[i];
+        int alpha = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+        int digit = c >= '0' && c <= '9';
+        if (i == 0 ? !alpha : !(alpha || digit)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int lane_like(const char *s) {
+    size_t n = s != NULL ? strlen(s) : 0u;
+    return n > 3u && (strcmp(s + n - 3u, ".lo") == 0 || strcmp(s + n - 3u, ".hi") == 0);
+}
+
+static uint32_t declare_schema(SuHostWorld *hw, const SuHostSchema *caller, SuHostError *err) {
+    SuHostSchema local;
+    const SuHostSchema *sc = &local;
+    SuSchedField *lanes;
+    uint32_t n = 0, i, j;
+    uint32_t st;
+    size_t bad;
+    if (caller->struct_size < SU_HOST_SCHEMA_V1_SIZE) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "schema: struct_size %u is below %u",
+                       (unsigned)caller->struct_size, (unsigned)SU_HOST_SCHEMA_V1_SIZE);
+    }
+    bad = nonzero_tail(caller, sizeof local, caller->struct_size);
+    if (bad != 0u) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                       "schema: byte %u is a field this library does not know and is not zero", (unsigned)(bad - 1u));
+    }
+    memset(&local, 0, sizeof local);
+    memcpy(&local, caller, caller->struct_size < sizeof local ? caller->struct_size : sizeof local);
+    if (sc->fields == NULL || sc->schema_id == NULL || sc->field_count == 0u ||
+        sc->field_count > SU_HOST_SCHEMA_MAX_LANES) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                       "schema: fields, schema_id or field_count (1..%u) is invalid",
+                       (unsigned)SU_HOST_SCHEMA_MAX_LANES);
+    }
+    if (strlen(sc->schema_id) == 0u || strlen(sc->schema_id) > SU_WORLD_NAME_MAX) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "schema: schema_id must be 1..%u bytes",
+                       (unsigned)SU_WORLD_NAME_MAX);
+    }
+    if (sc->schema_version == 0u || sc->layout_generation == 0u) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                       "schema: schema_version and layout_generation must be >= 1 (got %u and %u)",
+                       (unsigned)sc->schema_version, (unsigned)sc->layout_generation);
+    }
+    lanes = calloc((size_t)sc->field_count * 2u, sizeof *lanes);
+    if (lanes == NULL) {
+        return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "allocation failed");
+    }
+    for (i = 0; i < sc->field_count; i++) {
+        const SuHostSchemaField *f = &sc->fields[i];
+        uint32_t t = f->type;
+        int wide = t == SU_TYPE_I64 || t == SU_TYPE_Q32;
+        size_t len = f->name != NULL ? strlen(f->name) : 0u;
+        if (t != SU_TYPE_U32 && t != SU_TYPE_I32 && !wide) {
+            free(lanes);
+            return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                           "schema field %u: type %u is not u32, i32, i64 or q32", (unsigned)i, (unsigned)t);
+        }
+        if (len == 0u || len > SU_WORLD_NAME_MAX - (wide ? 3u : 0u)) {
+            free(lanes);
+            return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX, "schema field %u: the name must be 1..%u bytes",
+                           (unsigned)i, (unsigned)(SU_WORLD_NAME_MAX - (wide ? 3u : 0u)));
+        }
+        if (!field_name_ok(f->name)) {
+            free(lanes);
+            return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                           lane_like(f->name)
+                               ? "schema field %u: \"%s\" is a lane name; declare the i64/q32 field itself"
+                               : "schema field %u: name \"%s\" must match [A-Za-z_][A-Za-z0-9_]*",
+                           (unsigned)i, f->name);
+        }
+        if (f->id == 0u) {
+            free(lanes);
+            return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX, "schema field %u (%s): field IDs are >= 1",
+                           (unsigned)i, f->name);
+        }
+        if (wide && f->id == UINT32_MAX) {
+            free(lanes);
+            return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                           "schema field %u (%s): a 64-bit field needs id + 1 for its high lane", (unsigned)i, f->name);
+        }
+        for (j = 0; j < (wide ? 2u : 1u); j++) {
+            SuSchedField *l = &lanes[n++];
+            l->id = f->id + j;
+            l->type = SU_TYPE_U32;
+            l->value_type = t;
+            l->access = 0u;
+            snprintf(l->name, sizeof l->name, "%s%s", f->name, !wide ? "" : j == 0u ? ".lo" : ".hi");
+        }
+    }
+    if (n > SU_HOST_SCHEMA_MAX_LANES) {
+        free(lanes);
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "schema: %u lanes; the limit is %u",
+                       (unsigned)n, (unsigned)SU_HOST_SCHEMA_MAX_LANES);
+    }
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < i; j++) {
+            if (lanes[j].id == lanes[i].id || strcmp(lanes[j].name, lanes[i].name) == 0) {
+                uint32_t dup_id = lanes[j].id == lanes[i].id;
+                char a[SU_WORLD_NAME_MAX + 1u], b[SU_WORLD_NAME_MAX + 1u];
+                uint32_t fi = 0, k, at = 0;
+                snprintf(a, sizeof a, "%s", lanes[j].name);
+                snprintf(b, sizeof b, "%s", lanes[i].name);
+                /* Field index of lane i, for err->index. */
+                for (k = 0; k < sc->field_count; k++) {
+                    uint32_t w = (sc->fields[k].type == SU_TYPE_I64 || sc->fields[k].type == SU_TYPE_Q32) ? 2u : 1u;
+                    if (i < at + w) {
+                        fi = k;
+                        break;
+                    }
+                    at += w;
+                }
+                free(lanes);
+                return set_err(err, SU_E_INVALID_ARGUMENT, fi, UINT64_MAX,
+                               dup_id ? "schema field %u: lane \"%s\" has the id of lane \"%s\""
+                                      : "schema field %u: lane name \"%s\" is also the name of lane \"%s\"",
+                               (unsigned)fi, b, a);
+            }
+        }
+    }
+    st = su_sched_declare_schema(&hw->sched, sc->schema_id, sc->schema_version, sc->layout_generation, lanes, n);
+    free(lanes);
+    if (st != SU_OK) {
+        return set_err(err, st, UINT32_MAX, UINT64_MAX, "schema could not be declared");
+    }
+    return SU_OK;
+}
+
+/* A capsule's schema facts against the declared schema: a specific message instead of the generic join failure. */
+static uint32_t check_declared_facts(const SuHostWorld *hw, const char *query, uint32_t sv, uint32_t gen, uint32_t i,
+                                     SuHostError *err) {
+    const SuSchedule *s = &hw->sched;
+    if (!s->declared || (strcmp(query, s->schema_id) == 0 && sv == s->schema_version && gen == s->layout_generation)) {
+        return SU_OK;
+    }
+    return set_err(err, SU_E_SCHEMA_MISMATCH, i, UINT64_MAX,
+                   "capsule %u: schema %s version %u generation %u is not the declared world schema %s version %u "
+                   "generation %u",
+                   (unsigned)i, query, (unsigned)sv, (unsigned)gen, s->schema_id, (unsigned)s->schema_version,
+                   (unsigned)s->layout_generation);
 }
 
 /* Capsule index i is a host operator record (lir_json NULL): find the operator its system_id names (built in, or
@@ -427,6 +649,11 @@ static uint32_t add_host_record(SuHostWorld *hw, const SuHostCapsule *c, const C
     if (st != SU_OK) {
         return set_err(err, st, i, UINT64_MAX, "capsule %u: host record refused: %s", (unsigned)i, msg);
     }
+    st = check_declared_facts(hw, decl->query, sv, gen, i, err);
+    if (st != SU_OK) {
+        su_host_decl_free(decl);
+        return st;
+    }
     st = su_sched_add_host_bound(&hw->sched, op->desc, decl, bound ? bind : NULL, sv, gen, 0u, 1u, 0u);
     if (st != SU_OK) {
         su_host_decl_free(decl);
@@ -436,9 +663,21 @@ static uint32_t add_host_record(SuHostWorld *hw, const SuHostCapsule *c, const C
     return SU_OK;
 }
 
-uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, SuHostError *err) {
+_Static_assert(SU_HOST_MAX_CAPSULES <= SU_SCHED_MAX_SYSTEMS, "host worlds fit the schedule");
+_Static_assert(SU_HOST_MAX_CAPSULES <= 64u, "opdata_mask has one bit per schedule entry");
+_Static_assert(SU_HOST_SCHEMA_MAX_LANES == SU_LIMIT_FIELDS, "declared schemas use the field limit");
+_Static_assert(SU_HOST_WORLD_DESC_V1_SIZE == offsetof(SuHostWorldDesc, schema), "v1 descriptor ends at seed");
+_Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V1_SIZE == 80u, "first-release SuHostWorldDesc is 80 bytes");
+_Static_assert(sizeof(void *) != 8u || sizeof(SuHostWorldDesc) == 88u, "SuHostWorldDesc with the schema is 88 bytes");
+_Static_assert(SU_HOST_SCHEMA_V1_SIZE == (sizeof(void *) == 8u ? 32u : 24u), "first-release SuHostSchema size");
+_Static_assert(sizeof(SuHostSchema) == SU_HOST_SCHEMA_V1_SIZE, "SuHostSchema has no padding after the v1 fields");
+
+uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out, SuHostError *err) {
     SuHostWorld *hw = NULL;
-    CapsuleFacts facts[SU_SCHED_MAX_SYSTEMS];
+    SuHostWorldDesc dv;
+    const SuHostWorldDesc *desc = &dv;
+    CapsuleFacts *facts = NULL;
+    char fwhy[160];
     uint32_t nfacts = 0;
     uint32_t i;
     uint32_t st;
@@ -448,11 +687,34 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "out is NULL");
     }
     *out = NULL;
-    if (desc == NULL || desc->struct_size != sizeof *desc || desc->capsules == NULL || desc->capsule_count == 0u ||
-        desc->capsule_count > SU_HOST_MAX_CAPSULES || desc->reserved0 != 0u ||
+    /* Versioning (host.h): the v1 size, or the library's size or larger with a zero tail; only struct_size bytes are
+     * read, and a first-release descriptor has no schema (NULL). A size ending inside the schema pointer is refused. */
+    if (desc_in == NULL || desc_in->struct_size < SU_HOST_WORLD_DESC_V1_SIZE ||
+        (desc_in->struct_size > SU_HOST_WORLD_DESC_V1_SIZE && desc_in->struct_size < sizeof *desc_in)) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                       "descriptor: struct_size, capsules (1..%u), reserved0 or fixture is invalid",
+                       (unsigned)SU_HOST_MAX_CAPSULES);
+    }
+    {
+        size_t bad = nonzero_tail(desc_in, sizeof dv, desc_in->struct_size);
+        if (bad != 0u) {
+            return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                           "descriptor: byte %u is a field this library does not know and is not zero",
+                           (unsigned)(bad - 1u));
+        }
+    }
+    memset(&dv, 0, sizeof dv);
+    memcpy(&dv, desc_in, desc_in->struct_size < sizeof dv ? desc_in->struct_size : sizeof dv);
+    if (desc->capsules != NULL && desc->capsule_count > SU_HOST_MAX_CAPSULES) {
+        return set_err(err, SU_E_RESOURCE_LIMIT, SU_HOST_MAX_CAPSULES, UINT64_MAX,
+                       "%u capsules: a world schedules at most %u systems (capsule %u does not fit)",
+                       (unsigned)desc->capsule_count, (unsigned)SU_HOST_MAX_CAPSULES, (unsigned)SU_HOST_MAX_CAPSULES);
+    }
+    if (desc->capsules == NULL || desc->capsule_count == 0u || desc->reserved0 != 0u ||
         (desc->fixture_json == NULL && desc->fixture_len != 0u)) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
-                       "descriptor: struct_size, capsules (1..8), reserved0 or fixture is invalid");
+                       "descriptor: struct_size, capsules (1..%u), reserved0 or fixture is invalid",
+                       (unsigned)SU_HOST_MAX_CAPSULES);
     }
     if (desc->tick_rate_hz == 0u || desc->tick_rate_hz > SU_HOST_TICK_RATE_MAX) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "tick_rate_hz must be 1..%u",
@@ -463,6 +725,19 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
         return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "allocation failed");
     }
     su_sched_init(&hw->sched);
+    st = su_sched_set_max_systems(&hw->sched, SU_HOST_MAX_CAPSULES);
+    facts = calloc(desc->capsule_count, sizeof *facts);
+    if (st != SU_OK || facts == NULL) {
+        free(facts);
+        su_host_world_destroy(hw);
+        return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "allocation failed");
+    }
+    if (desc->schema != NULL) {
+        st = declare_schema(hw, desc->schema, err);
+        if (st != SU_OK) {
+            goto fail;
+        }
+    }
     hw->hz = desc->tick_rate_hz;
     hw->seed = desc->seed;
     hw->max_struct = desc->max_struct_per_tick != 0u ? desc->max_struct_per_tick : SU_CMDQ_DEFAULT_PER_TICK_CAP;
@@ -475,11 +750,10 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
         SuDiag diag;
         if (c->capsule_json != NULL && c->lir_json == NULL && c->lir_len == 0u &&
             c->capsule_len <= HOST_CAPSULE_JSON_MAX) {
-            st = capsule_facts(c, &facts[i]);
+            st = capsule_facts(c, &facts[i], fwhy, sizeof fwhy);
             nfacts = i + 1u;
             if (st != SU_OK) {
-                set_err(err, st, i, UINT64_MAX, "capsule %u: schema version, layout generation or schedule block",
-                        (unsigned)i);
+                set_err(err, st, i, UINT64_MAX, "capsule %u: %s", (unsigned)i, fwhy);
                 goto fail;
             }
             st = add_host_record(hw, c, &facts[i], i, err);
@@ -494,11 +768,10 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
                          (unsigned)i);
             goto fail;
         }
-        st = capsule_facts(c, &facts[i]);
+        st = capsule_facts(c, &facts[i], fwhy, sizeof fwhy);
         nfacts = i + 1u;
         if (st != SU_OK) {
-            set_err(err, st, i, UINT64_MAX, "capsule %u: schema version, layout generation or schedule block",
-                    (unsigned)i);
+            set_err(err, st, i, UINT64_MAX, "capsule %u: %s", (unsigned)i, fwhy);
             goto fail;
         }
         m = calloc(1, sizeof *m);
@@ -514,6 +787,12 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
                     diag.json_pointer, diag.message);
             goto fail;
         }
+        st = check_declared_facts(hw, m->query, facts[i].schema_version, facts[i].layout_generation, i, err);
+        if (st != SU_OK) {
+            su_lir_module_free(m);
+            free(m);
+            goto fail;
+        }
         st = su_sched_add(&hw->sched, m, facts[i].schema_version, facts[i].layout_generation, 0u, 1u, 0u);
         if (st != SU_OK) {
             su_lir_module_free(m);
@@ -526,9 +805,15 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
     st = su_sched_finalize(&hw->sched);
     if (st != SU_OK) {
         char why[512];
-        su_sched_explain_mismatch(&hw->sched, why, sizeof why);
-        set_err(err, st, UINT32_MAX, UINT64_MAX, "systems disagree on a field's id, name or type%s%s",
-                why[0] != '\0' ? ": " : "", why);
+        uint32_t sys = UINT32_MAX;
+        su_sched_explain_mismatch_ex(&hw->sched, why, sizeof why, &sys);
+        if (hw->sched.declared) {
+            set_err(err, st, sys, UINT64_MAX, "a system does not bind the declared world schema%s%s",
+                    why[0] != '\0' ? ": " : "", why);
+        } else {
+            set_err(err, st, UINT32_MAX, UINT64_MAX, "systems disagree on a field's id, name or type%s%s",
+                    why[0] != '\0' ? ": " : "", why);
+        }
         goto fail;
     }
     st = check_effects(&hw->sched, facts, err);
@@ -583,16 +868,25 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
             goto fail;
         }
     }
+    /* Operator state (issue 139): owned by the instances; the world keeps the pointers for snapshots and steps. */
+    for (i = 0; i < hw->sched.count; i++) {
+        if (hw->ops[i] != NULL && hw->ops[i]->state != NULL) {
+            hw->opstate[i] = hw->ops[i]->state(hw->sched.sys[i].host_inst);
+            hw->opstate_count += hw->opstate[i] != NULL ? 1u : 0u;
+        }
+    }
     compute_identity(hw);
     for (i = 0; i < nfacts; i++) {
         su_json_doc_free(&facts[i].doc);
     }
+    free(facts);
     *out = hw;
     return SU_OK;
 fail:
     for (i = 0; i < nfacts; i++) {
         su_json_doc_free(&facts[i].doc);
     }
+    free(facts);
     su_host_world_destroy(hw);
     return st;
 }
@@ -730,7 +1024,8 @@ uint32_t su_host_world_identity(const SuHostWorld *w, uint8_t out[32]) {
  * are refused. */
 uint32_t su_host_set_operator_data(SuHostWorld *w, const char *system_id, const uint8_t *data, size_t len,
                                    SuHostError *err) {
-    uint32_t i, n = 0, st = SU_OK, mask = 0;
+    uint32_t i, n = 0, st = SU_OK;
+    uint64_t mask = 0;
     void *shared = NULL;
     const HostOperator *first_op = NULL;
     char why[200];
@@ -756,7 +1051,7 @@ uint32_t su_host_set_operator_data(SuHostWorld *w, const char *system_id, const 
             }
             continue;
         }
-        if ((w->opdata_mask >> i) & 1u) {
+        if ((w->opdata_mask >> i) & 1u) { /* uint64_t: one bit per entry, SU_HOST_MAX_CAPSULES <= 64 */
             return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX, "host operator %s already has data",
                            e->system_id);
         }
@@ -767,7 +1062,7 @@ uint32_t su_host_set_operator_data(SuHostWorld *w, const char *system_id, const 
                            "operators of different families in one call; name the system");
         }
         first_op = op;
-        mask |= 1u << i;
+        mask |= UINT64_C(1) << i;
         n++;
     }
     if (n == 0u) {
@@ -872,6 +1167,14 @@ uint32_t su_host_despawn(SuHostWorld *w, uint64_t entity, SuHostError *err) {
     if (st != SU_OK) {
         return set_err(err, st == SU_E_INVALID_ARGUMENT ? st : SU_E_STALE_HANDLE, UINT32_MAX, UINT64_MAX,
                        "entity handle is stale");
+    }
+    {
+        uint32_t k;
+        for (k = 0; k < w->sched.count; k++) {
+            if (w->opstate[k] != NULL) {
+                su_hstate_note_despawn(w->opstate[k]); /* DROP_DEAD: the next published tick purges */
+            }
+        }
     }
     st = log_record(w, SU_EVENT_DESPAWNED, SU_ENTITY_SLOT(entity), SU_ENTITY_SLOT(entity), SU_ENTITY_GEN(entity));
     return st == SU_OK ? SU_OK
@@ -1215,6 +1518,34 @@ static void undo_record(SuHostWorld *w, const UndoCell *cells, uint32_t n) {
 
 /* ---------- stepping ---------- */
 
+/* 1 when a despawn may have been applied by the tick whose events are [seq0, next_seq) of the log: a
+ * SU_EVENT_DESPAWNED record among them (an IR event of that kind counts too, harmlessly), or events evicted before
+ * they could be read. Reads at most the tick's events, without allocating. */
+static int tick_despawned(const SuEventLog *log, uint64_t seq0) {
+    uint64_t next = su_evlog_next_seq(log);
+    uint64_t cur = seq0;
+    if (next == seq0) {
+        return 0;
+    }
+    if (su_evlog_oldest_seq(log) > seq0) {
+        return 1;
+    }
+    while (cur < next) {
+        SuEvent ev[32];
+        uint64_t n = 0, nc = 0, skipped = 0, dropped = 0, i;
+        if (su_evlog_read(log, cur, 32u, ev, &n, &nc, &skipped, &dropped) != SU_OK || n == 0u || skipped != 0u) {
+            return 1;
+        }
+        for (i = 0; i < n; i++) {
+            if (ev[i].kind == SU_EVENT_DESPAWNED) {
+                return 1;
+            }
+        }
+        cur = nc;
+    }
+    return 0;
+}
+
 uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostError *err) {
     uint64_t n = 0;
     uint32_t st = SU_OK;
@@ -1233,6 +1564,7 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
         uint32_t undo_n = 0;
         uint64_t one = 0;
         uint32_t failed = UINT32_MAX;
+        uint64_t seq0 = su_evlog_next_seq(su_ent_rt_log(w->sched.ent));
 
         /* A registered operator's failure reason belongs to one tick attempt. */
         {
@@ -1256,6 +1588,12 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
         }
         st = su_sched_run_ticks_opt(w->w, &w->sched, 1u, NULL, NULL, NULL, &one, &failed);
         if (st != SU_OK || one != 1u) {
+            uint32_t k;
+            for (k = 0; k < w->sched.count; k++) {
+                if (w->opstate[k] != NULL) {
+                    su_hstate_abort(w->opstate[k]); /* operator state changes of the failed tick are dropped */
+                }
+            }
             if (undo != NULL) {
                 undo_record(w, undo, undo_n);
             }
@@ -1266,7 +1604,7 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
             {
                 /* A registered operator says why its run failed (an undeclared write, its own code). */
                 const char *detail = "";
-                if (failed != UINT32_MAX && failed < SU_SCHED_MAX_SYSTEMS &&
+                if (failed != UINT32_MAX && failed < w->sched.count &&
                     w->sched.sys[failed].kind == SU_SYS_KIND_HOST) {
                     const HostOperator *op = w->ops[failed];
                     if (op != NULL && op->last_error != NULL) {
@@ -1281,6 +1619,23 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
             break;
         }
         free(undo);
+        {
+            /* The tick published: its operator state changes become committed state (with SU_HOST_STATE_DROP_DEAD,
+             * after erasing the entries of entities the committed entity table no longer holds alive). */
+            uint32_t k;
+            int died = -1; /* computed once, only for a world with operator state */
+            for (k = 0; k < w->sched.count; k++) {
+                if (w->opstate[k] != NULL) {
+                    if (died < 0) {
+                        died = tick_despawned(su_ent_rt_log(w->sched.ent), seq0);
+                    }
+                    if (died) {
+                        su_hstate_note_despawn(w->opstate[k]);
+                    }
+                    su_hstate_commit(w->opstate[k], su_world_entities_committed(w->w));
+                }
+            }
+        }
         if (r != NULL) {
             drop_record(w, find_record(w, t));
         }
@@ -1324,6 +1679,132 @@ uint32_t su_host_read(const SuHostWorld *w, uint32_t field_id, uint64_t first, u
 
 /* ---------- snapshots ---------- */
 
+/* Operator state section (issue 139): "SUOPSTAT" 0x00 | u32 version | u32 system count | per system with state, in
+ * schedule order: u32 schedule index | its encoding (su_hstate_encode). */
+static size_t opstate_size(const SuHostWorld *w) {
+    size_t n = HOST_OPSTATE_HEADER;
+    uint32_t i;
+    for (i = 0; i < w->sched.count; i++) {
+        if (w->opstate[i] != NULL) {
+            n += 4u + su_hstate_encoded_size(w->opstate[i]);
+        }
+    }
+    return n;
+}
+
+static void opstate_write(const SuHostWorld *w, uint8_t *p) {
+    uint32_t i;
+    memcpy(p, HOST_OPSTATE_MAGIC, HOST_OPSTATE_MAGIC_BYTES);
+    put_u32(p + HOST_OPSTATE_MAGIC_BYTES, HOST_OPSTATE_VERSION);
+    put_u32(p + HOST_OPSTATE_MAGIC_BYTES + 4u, w->opstate_count);
+    p += HOST_OPSTATE_HEADER;
+    for (i = 0; i < w->sched.count; i++) {
+        if (w->opstate[i] != NULL) {
+            put_u32(p, i);
+            su_hstate_encode(w->opstate[i], p + 4u);
+            p += 4u + su_hstate_encoded_size(w->opstate[i]);
+        }
+    }
+}
+
+/* Parses the section strictly into every state's working side (the committed states are untouched). On failure the
+ * loaded sides are dropped and err says why (SU_E_PARSE). */
+static uint32_t opstate_load(SuHostWorld *w, const uint8_t *p, size_t len, SuHostError *err) {
+    size_t pos = HOST_OPSTATE_HEADER;
+    uint32_t i;
+    char why[160];
+    uint32_t st = SU_OK;
+    if (len < HOST_OPSTATE_HEADER || memcmp(p, HOST_OPSTATE_MAGIC, HOST_OPSTATE_MAGIC_BYTES) != 0 ||
+        rd_u32(p + HOST_OPSTATE_MAGIC_BYTES) != HOST_OPSTATE_VERSION ||
+        rd_u32(p + HOST_OPSTATE_MAGIC_BYTES + 4u) != w->opstate_count) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX,
+                       "operator state section: magic, version or system count is wrong");
+    }
+    for (i = 0; i < w->sched.count && st == SU_OK; i++) {
+        size_t used = 0;
+        if (w->opstate[i] == NULL) {
+            continue;
+        }
+        if (len - pos < 4u || rd_u32(p + pos) != i) {
+            st = set_err(err, SU_E_PARSE, i, UINT64_MAX, "operator state section: system index %u expected",
+                         (unsigned)i);
+            break;
+        }
+        pos += 4u;
+        why[0] = '\0';
+        st = su_hstate_load(w->opstate[i], p + pos, len - pos, &used, why, sizeof why);
+        if (st != SU_OK) {
+            set_err(err, st, i, UINT64_MAX, "operator state of system %u (%s): %s", (unsigned)i,
+                    w->sched.sys[i].system_id, why);
+            break;
+        }
+        pos += used;
+    }
+    if (st == SU_OK && pos != len) {
+        st = set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "operator state section has trailing bytes");
+    }
+    if (st != SU_OK) {
+        for (i = 0; i < w->sched.count; i++) {
+            if (w->opstate[i] != NULL) {
+                su_hstate_abort(w->opstate[i]);
+            }
+        }
+    }
+    return st;
+}
+
+/* Exchanges every state's committed and loaded sides (a second call undoes the first). */
+static void opstate_swap(SuHostWorld *w) {
+    uint32_t i;
+    for (i = 0; i < w->sched.count; i++) {
+        if (w->opstate[i] != NULL) {
+            su_hstate_swap(w->opstate[i]);
+        }
+    }
+}
+
+/* Splits a snapshot for w: header checks, then the state, log and operator state parts (version 2 only;
+ * op_off and op_len 0 otherwise). Every part must be in range and the parts must cover len exactly. */
+static uint32_t snapshot_split(const SuHostWorld *w, const uint8_t *buf, size_t len, uint64_t *state_len,
+                               uint64_t *log_len, size_t *op_off, size_t *op_len, SuHostError *err) {
+    uint32_t version;
+    uint64_t rest;
+    *op_off = 0;
+    *op_len = 0;
+    if (len < HOST_SNAP_HEADER + 8u || memcmp(buf, HOST_SNAP_MAGIC, 8u) != 0 ||
+        ((version = rd_u32(buf + 8)) != HOST_SNAP_VERSION && version != HOST_SNAP_VERSION_OPSTATE)) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "not a host snapshot (magic or version)");
+    }
+    if (memcmp(buf + 12, w->identity, 32u) != 0) {
+        return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
+                       "snapshot belongs to a different world identity (schema, systems, capacity or caps)");
+    }
+    if (version != (w->opstate_count > 0u ? HOST_SNAP_VERSION_OPSTATE : HOST_SNAP_VERSION)) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX,
+                       "snapshot version %u does not match the world (version 2 exactly when it has operator state)",
+                       (unsigned)version);
+    }
+    *state_len = rd_u64(buf + 52);
+    if (*state_len > len - HOST_SNAP_HEADER - 8u) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot state length is out of range");
+    }
+    rest = len - HOST_SNAP_HEADER - 8u - *state_len;
+    *log_len = rd_u64(buf + HOST_SNAP_HEADER + *state_len);
+    if (w->opstate_count == 0u) {
+        if (*log_len != rest) {
+            return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+        }
+        return SU_OK;
+    }
+    if (rest < 8u || *log_len > rest - 8u ||
+        rd_u64(buf + HOST_SNAP_HEADER + 8u + *state_len + *log_len) != rest - 8u - *log_len) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+    }
+    *op_off = (size_t)(HOST_SNAP_HEADER + 8u + *state_len + *log_len + 8u);
+    *op_len = (size_t)(rest - 8u - *log_len);
+    return SU_OK;
+}
+
 static uint32_t snapshot_parts(const SuHostWorld *w, size_t *state_len, uint64_t *log_len, size_t *total) {
     uint32_t st;
     st = su_world_canonical_size(w->w, state_len);
@@ -1338,6 +1819,13 @@ static uint32_t snapshot_parts(const SuHostWorld *w, size_t *state_len, uint64_t
         return SU_E_RESOURCE_LIMIT;
     }
     *total = HOST_SNAP_HEADER + *state_len + 8u + (size_t)*log_len;
+    if (w->opstate_count > 0u) {
+        size_t op = opstate_size(w);
+        if (op > SIZE_MAX - 8u - *total) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        *total += 8u + op;
+    }
     return SU_OK;
 }
 
@@ -1371,7 +1859,7 @@ uint32_t su_host_snapshot_write(const SuHostWorld *w, uint8_t *buf, size_t cap, 
         return buf == NULL ? SU_E_INVALID_ARGUMENT : SU_E_RESOURCE_LIMIT;
     }
     memcpy(buf, HOST_SNAP_MAGIC, 8u);
-    put_u32(buf + 8, HOST_SNAP_VERSION);
+    put_u32(buf + 8, w->opstate_count > 0u ? HOST_SNAP_VERSION_OPSTATE : HOST_SNAP_VERSION);
     memcpy(buf + 12, w->identity, 32u);
     put_u64(buf + 44, su_world_tick(w->w));
     put_u64(buf + 52, (uint64_t)state_len);
@@ -1386,6 +1874,11 @@ uint32_t su_host_snapshot_write(const SuHostWorld *w, uint8_t *buf, size_t cap, 
     st = su_evlog_dump(su_ent_rt_log(w->sched.ent), buf + off, log_len, &log_got);
     if (st != SU_OK || log_got != log_len) {
         return st != SU_OK ? st : SU_E_INTERNAL;
+    }
+    if (w->opstate_count > 0u) {
+        off += (size_t)log_len;
+        put_u64(buf + off, (uint64_t)(total - off - 8u));
+        opstate_write(w, buf + off + 8u);
     }
     return SU_OK;
 }
@@ -1408,27 +1901,18 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
     uint64_t lm = 0;
     uint8_t *check = NULL;
     size_t check_len = 0;
+    size_t op_off = 0;
+    size_t op_len = 0;
+    int op_loaded = 0;
     uint32_t st;
 
     clear_err(err);
     if (w == NULL || buf == NULL) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "invalid arguments");
     }
-    if (len < HOST_SNAP_HEADER + 8u || memcmp(buf, HOST_SNAP_MAGIC, 8u) != 0 ||
-        rd_u32(buf + 8) != HOST_SNAP_VERSION) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "not a host snapshot (magic or version)");
-    }
-    if (memcmp(buf + 12, w->identity, 32u) != 0) {
-        return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
-                       "snapshot belongs to a different world identity (schema, systems, capacity or caps)");
-    }
-    state_len = rd_u64(buf + 52);
-    if (state_len > len - HOST_SNAP_HEADER - 8u) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot state length is out of range");
-    }
-    log_len = rd_u64(buf + HOST_SNAP_HEADER + state_len);
-    if (log_len != len - HOST_SNAP_HEADER - 8u - state_len) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+    st = snapshot_split(w, buf, len, &state_len, &log_len, &op_off, &op_len, err);
+    if (st != SU_OK) {
+        return st;
     }
     fd = schedule_fields(&w->sched);
     if (fd == NULL) {
@@ -1471,6 +1955,14 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
         set_err(err, st, UINT32_MAX, UINT64_MAX, "event log does not restore");
         goto fail;
     }
+    if (w->opstate_count > 0u) {
+        /* Operator state into the states' free sides (the committed states are untouched until the swap). */
+        st = opstate_load(w, buf + op_off, op_len, err);
+        if (st != SU_OK) {
+            goto fail;
+        }
+        op_loaded = 1;
+    }
     /* Swap in the new state, then require the bytes to be canonical: the restored state must encode back to
      * exactly the input. Otherwise the old state is put back. */
     old_w = w->w;
@@ -1479,6 +1971,9 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
     w->sched.ent = nrt;
     nw = NULL;
     nrt = NULL;
+    if (op_loaded) {
+        opstate_swap(w);
+    }
     check = malloc(len);
     if (check == NULL || su_host_snapshot_write(w, check, len, &check_len) != SU_OK || check_len != len ||
         memcmp(check, buf, len) != 0) {
@@ -1486,6 +1981,9 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
         nrt = w->sched.ent;
         w->w = old_w;
         w->sched.ent = old_rt;
+        if (op_loaded) {
+            opstate_swap(w);
+        }
         st = set_err(err, check == NULL ? SU_E_RESOURCE_LIMIT : SU_E_TYPE, UINT32_MAX, UINT64_MAX,
                      "snapshot bytes are not canonical");
         goto fail;
@@ -1500,6 +1998,17 @@ fail:
     su_ent_rt_destroy(nrt);
     su_world_destroy(nw);
     return st;
+}
+
+uint32_t su_host_operator_state(const SuHostWorld *w, uint32_t index, const SuHostState **state) {
+    if (state != NULL) {
+        *state = NULL;
+    }
+    if (w == NULL || state == NULL || index >= w->sched.count || w->opstate[index] == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *state = w->opstate[index];
+    return SU_OK;
 }
 
 uint32_t su_host_digest(const SuHostWorld *w, uint8_t out[32]) {
@@ -1670,27 +2179,17 @@ static uint32_t rollback_scratch(SuHostWorld *w) {
 uint32_t su_host_snapshot_restore_inplace(SuHostWorld *w, const uint8_t *buf, size_t len, SuHostError *err) {
     uint64_t state_len;
     uint64_t log_len;
+    size_t op_off = 0;
+    size_t op_len = 0;
     uint32_t st;
 
     clear_err(err);
     if (w == NULL || buf == NULL) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "invalid arguments");
     }
-    if (len < HOST_SNAP_HEADER + 8u || memcmp(buf, HOST_SNAP_MAGIC, 8u) != 0 ||
-        rd_u32(buf + 8) != HOST_SNAP_VERSION) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "not a host snapshot (magic or version)");
-    }
-    if (memcmp(buf + 12, w->identity, 32u) != 0) {
-        return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
-                       "snapshot belongs to a different world identity (schema, systems, capacity or caps)");
-    }
-    state_len = rd_u64(buf + 52);
-    if (state_len > len - HOST_SNAP_HEADER - 8u) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot state length is out of range");
-    }
-    log_len = rd_u64(buf + HOST_SNAP_HEADER + state_len);
-    if (log_len != len - HOST_SNAP_HEADER - 8u - state_len) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+    st = snapshot_split(w, buf, len, &state_len, &log_len, &op_off, &op_len, err);
+    if (st != SU_OK) {
+        return st;
     }
     st = rollback_scratch(w);
     if (st != SU_OK) {
@@ -1710,9 +2209,19 @@ uint32_t su_host_snapshot_restore_inplace(SuHostWorld *w, const uint8_t *buf, si
         return set_err(err, st, UINT32_MAX, UINT64_MAX,
                        st == SU_E_SCHEMA_MISMATCH ? "event log capacity disagrees" : "event log does not parse");
     }
-    /* 3. Commit: neither step can fail after the checks above. */
+    /* 2b. Operator state into the states' free sides (allocated with the world; the committed states are untouched). */
+    if (w->opstate_count > 0u) {
+        st = opstate_load(w, buf + op_off, op_len, err);
+        if (st != SU_OK) {
+            return st;
+        }
+    }
+    /* 3. Commit: none of these steps can fail after the checks above. */
     su_world_restore_canonical_commit(w->w, buf + HOST_SNAP_HEADER, w->rb_ents);
     (void)su_evlog_swap(su_ent_rt_log(w->sched.ent), w->rb_log);
+    if (w->opstate_count > 0u) {
+        opstate_swap(w);
+    }
     return SU_OK;
 }
 

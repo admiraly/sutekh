@@ -1,0 +1,142 @@
+{
+ "capsule_format": "0.1",
+ "system_id": "rts.combat",
+ "system_rev": 1,
+ "capabilities": [],
+ "ir_version": "0.1",
+ "source": "../../../capsules/rts/combat.lir.json",
+ "schema": {
+  "id": "rts",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "u32_mod_v1",
+ "fields": [
+  {
+   "id": 8,
+   "name": "reload",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 9,
+   "name": "cooldown",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 10,
+   "name": "damage",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 11,
+   "name": "flight",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 24,
+   "name": "target_slot",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 25,
+   "name": "target_gen",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 27,
+   "name": "target_valid",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 31,
+   "name": "proj_active",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 32,
+   "name": "proj_left",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 33,
+   "name": "proj_target",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 34,
+   "name": "proj_target_gen",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 35,
+   "name": "proj_damage",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 36,
+   "name": "dmg_out",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 37,
+   "name": "dmg_target",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 38,
+   "name": "dmg_target_gen",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 39,
+   "name": "incoming",
+   "type": "u32",
+   "read": false,
+   "write": true
+  }
+ ],
+ "schedule": {
+  "phase": "rts",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 0,
+  "allocation": "forbidden"
+ },
+ "tests": [
+  "tests/determinism/det_matrix.c"
+ ]
+}

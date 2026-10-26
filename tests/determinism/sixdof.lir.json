@@ -1,0 +1,741 @@
+{
+ "ir_version": "0.3",
+ "system_id": "det.sixdof",
+ "numeric_profile": "fixed_q32_v1",
+ "query": "det.sixdof",
+ "instructions": [
+  {
+   "op": "const_q32",
+   "dst": "r1",
+   "num": 1,
+   "den": 120
+  },
+  {
+   "op": "const_q32",
+   "dst": "r2",
+   "num": 0,
+   "den": 1
+  },
+  {
+   "op": "const_q32",
+   "dst": "r3",
+   "num": 8,
+   "den": 1
+  },
+  {
+   "op": "load_u32",
+   "dst": "r4",
+   "field": "kind"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r5",
+   "value": 1
+  },
+  {
+   "op": "eq_u32",
+   "dst": "r6",
+   "a": "r4",
+   "b": "r5"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r7",
+   "x": "pos_x",
+   "y": "pos_y",
+   "z": "pos_z"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r8",
+   "x": "vel_x",
+   "y": "vel_y",
+   "z": "vel_z"
+  },
+  {
+   "op": "load_q32",
+   "dst": "r9",
+   "field": "rot_w"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r10",
+   "x": "rot_x",
+   "y": "rot_y",
+   "z": "rot_z"
+  },
+  {
+   "op": "make_quat",
+   "dst": "r11",
+   "w": "r9",
+   "v": "r10"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r12",
+   "x": "angvel_x",
+   "y": "angvel_y",
+   "z": "angvel_z"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r13",
+   "x": "thrust_x",
+   "y": "thrust_y",
+   "z": "thrust_z"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r14",
+   "x": "torque_x",
+   "y": "torque_y",
+   "z": "torque_z"
+  },
+  {
+   "op": "load_q32",
+   "dst": "r15",
+   "field": "vmax"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r16",
+   "v": "r14",
+   "s": "r1"
+  },
+  {
+   "op": "v3_add",
+   "dst": "r17",
+   "a": "r12",
+   "b": "r16"
+  },
+  {
+   "op": "v3_clamp_len",
+   "dst": "r18",
+   "v": "r17",
+   "max": "r3"
+  },
+  {
+   "op": "quat_integrate",
+   "dst": "r19",
+   "q": "r11",
+   "w": "r18",
+   "dt": "r1"
+  },
+  {
+   "op": "quat_rotate",
+   "dst": "r20",
+   "q": "r19",
+   "v": "r13"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r21",
+   "v": "r20",
+   "s": "r1"
+  },
+  {
+   "op": "v3_add",
+   "dst": "r22",
+   "a": "r8",
+   "b": "r21"
+  },
+  {
+   "op": "v3_clamp_len",
+   "dst": "r23",
+   "v": "r22",
+   "max": "r15"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r24",
+   "v": "r23",
+   "s": "r1"
+  },
+  {
+   "op": "v3_add",
+   "dst": "r25",
+   "a": "r7",
+   "b": "r24"
+  },
+  {
+   "op": "select_quat",
+   "dst": "r26",
+   "cond": "r6",
+   "on_true": "r19",
+   "on_false": "r11"
+  },
+  {
+   "op": "select_v3",
+   "dst": "r27",
+   "cond": "r6",
+   "on_true": "r18",
+   "on_false": "r12"
+  },
+  {
+   "op": "select_v3",
+   "dst": "r28",
+   "cond": "r6",
+   "on_true": "r23",
+   "on_false": "r8"
+  },
+  {
+   "op": "select_v3",
+   "dst": "r29",
+   "cond": "r6",
+   "on_true": "r25",
+   "on_false": "r7"
+  },
+  {
+   "op": "store_v3",
+   "x": "pos_x",
+   "y": "pos_y",
+   "z": "pos_z",
+   "src": "r29"
+  },
+  {
+   "op": "store_v3",
+   "x": "vel_x",
+   "y": "vel_y",
+   "z": "vel_z",
+   "src": "r28"
+  },
+  {
+   "op": "store_v3",
+   "x": "angvel_x",
+   "y": "angvel_y",
+   "z": "angvel_z",
+   "src": "r27"
+  },
+  {
+   "op": "quat_get",
+   "dst": "r30",
+   "q": "r26",
+   "axis": 0
+  },
+  {
+   "op": "store_q32",
+   "field": "rot_w",
+   "src": "r30"
+  },
+  {
+   "op": "quat_get",
+   "dst": "r31",
+   "q": "r26",
+   "axis": 1
+  },
+  {
+   "op": "quat_get",
+   "dst": "r32",
+   "q": "r26",
+   "axis": 2
+  },
+  {
+   "op": "quat_get",
+   "dst": "r33",
+   "q": "r26",
+   "axis": 3
+  },
+  {
+   "op": "make_v3",
+   "dst": "r34",
+   "x": "r31",
+   "y": "r32",
+   "z": "r33"
+  },
+  {
+   "op": "store_v3",
+   "x": "rot_x",
+   "y": "rot_y",
+   "z": "rot_z",
+   "src": "r34"
+  },
+  {
+   "op": "load_q32",
+   "dst": "r35",
+   "field": "probe_a"
+  },
+  {
+   "op": "load_q32",
+   "dst": "r36",
+   "field": "probe_b"
+  },
+  {
+   "op": "load_q32",
+   "dst": "r37",
+   "field": "probe_c"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r38",
+   "field": "probe_n"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "r39",
+   "a": "r35",
+   "b": "r36"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_mul",
+   "src": "r39"
+  },
+  {
+   "op": "div_q32",
+   "dst": "r40",
+   "a": "r35",
+   "b": "r36"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_div",
+   "src": "r40"
+  },
+  {
+   "op": "sqrt_q32",
+   "dst": "r41",
+   "a": "r35"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_sqrt",
+   "src": "r41"
+  },
+  {
+   "op": "rsqrt_q32",
+   "dst": "r42",
+   "a": "r36"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_rsqrt",
+   "src": "r42"
+  },
+  {
+   "op": "make_v3",
+   "dst": "r43",
+   "x": "r35",
+   "y": "r36",
+   "z": "r37"
+  },
+  {
+   "op": "v3_len",
+   "dst": "r44",
+   "a": "r43"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_len",
+   "src": "r44"
+  },
+  {
+   "op": "v3_dot",
+   "dst": "r45",
+   "a": "r43",
+   "b": "r28"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_dot",
+   "src": "r45"
+  },
+  {
+   "op": "v3_len_sq",
+   "dst": "r46",
+   "a": "r43"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_lensq",
+   "src": "r46"
+  },
+  {
+   "op": "v3_normalize",
+   "dst": "r47",
+   "a": "r43"
+  },
+  {
+   "op": "store_v3",
+   "x": "o_nx",
+   "y": "o_ny",
+   "z": "o_nz",
+   "src": "r47"
+  },
+  {
+   "op": "v3_cross",
+   "dst": "r48",
+   "a": "r43",
+   "b": "r29"
+  },
+  {
+   "op": "store_v3",
+   "x": "o_cx",
+   "y": "o_cy",
+   "z": "o_cz",
+   "src": "r48"
+  },
+  {
+   "op": "quat_rotate",
+   "dst": "r49",
+   "q": "r26",
+   "v": "r43"
+  },
+  {
+   "op": "store_v3",
+   "x": "o_rx",
+   "y": "o_ry",
+   "z": "o_rz",
+   "src": "r49"
+  },
+  {
+   "op": "make_quat",
+   "dst": "r50",
+   "w": "r37",
+   "v": "r43"
+  },
+  {
+   "op": "quat_normalize",
+   "dst": "r51",
+   "a": "r50"
+  },
+  {
+   "op": "quat_conj",
+   "dst": "r52",
+   "a": "r26"
+  },
+  {
+   "op": "quat_mul",
+   "dst": "r53",
+   "a": "r51",
+   "b": "r52"
+  },
+  {
+   "op": "quat_get",
+   "dst": "r54",
+   "q": "r53",
+   "axis": 0
+  },
+  {
+   "op": "store_q32",
+   "field": "o_qw",
+   "src": "r54"
+  },
+  {
+   "op": "quat_get",
+   "dst": "r55",
+   "q": "r53",
+   "axis": 1
+  },
+  {
+   "op": "quat_get",
+   "dst": "r56",
+   "q": "r53",
+   "axis": 2
+  },
+  {
+   "op": "quat_get",
+   "dst": "r57",
+   "q": "r53",
+   "axis": 3
+  },
+  {
+   "op": "make_v3",
+   "dst": "r58",
+   "x": "r55",
+   "y": "r56",
+   "z": "r57"
+  },
+  {
+   "op": "store_v3",
+   "x": "o_qx",
+   "y": "o_qy",
+   "z": "o_qz",
+   "src": "r58"
+  },
+  {
+   "op": "make_v3",
+   "dst": "r59",
+   "x": "r36",
+   "y": "r37",
+   "z": "r35"
+  },
+  {
+   "op": "make_quat",
+   "dst": "r60",
+   "w": "r35",
+   "v": "r59"
+  },
+  {
+   "op": "quat_integrate",
+   "dst": "r61",
+   "q": "r60",
+   "w": "r43",
+   "dt": "r37"
+  },
+  {
+   "op": "quat_get",
+   "dst": "r62",
+   "q": "r61",
+   "axis": 0
+  },
+  {
+   "op": "quat_get",
+   "dst": "r63",
+   "q": "r61",
+   "axis": 1
+  },
+  {
+   "op": "quat_get",
+   "dst": "r64",
+   "q": "r61",
+   "axis": 3
+  },
+  {
+   "op": "make_v3",
+   "dst": "r65",
+   "x": "r62",
+   "y": "r63",
+   "z": "r64"
+  },
+  {
+   "op": "store_v3",
+   "x": "o_kx",
+   "y": "o_ky",
+   "z": "o_kz",
+   "src": "r65"
+  },
+  {
+   "op": "q32_raw",
+   "dst": "r66",
+   "a": "r35"
+  },
+  {
+   "op": "q32_raw",
+   "dst": "r67",
+   "a": "r36"
+  },
+  {
+   "op": "mul_i64",
+   "dst": "r68",
+   "a": "r66",
+   "b": "r67"
+  },
+  {
+   "op": "neg_i64",
+   "dst": "r69",
+   "a": "r66"
+  },
+  {
+   "op": "add_i64",
+   "dst": "r70",
+   "a": "r68",
+   "b": "r69"
+  },
+  {
+   "op": "store_i64",
+   "field": "o_i64",
+   "src": "r70"
+  },
+  {
+   "op": "div_i64",
+   "dst": "r71",
+   "a": "r66",
+   "b": "r67"
+  },
+  {
+   "op": "store_i64",
+   "field": "o_idiv",
+   "src": "r71"
+  },
+  {
+   "op": "i32_from_i64",
+   "dst": "r72",
+   "a": "r66"
+  },
+  {
+   "op": "i32_from_i64",
+   "dst": "r73",
+   "a": "r67"
+  },
+  {
+   "op": "mul_i32",
+   "dst": "r74",
+   "a": "r72",
+   "b": "r73"
+  },
+  {
+   "op": "div_i32",
+   "dst": "r75",
+   "a": "r72",
+   "b": "r73"
+  },
+  {
+   "op": "sub_i32",
+   "dst": "r76",
+   "a": "r74",
+   "b": "r75"
+  },
+  {
+   "op": "store_i32",
+   "field": "o_i32",
+   "src": "r76"
+  },
+  {
+   "op": "q32_to_i32_round",
+   "dst": "r77",
+   "a": "r35"
+  },
+  {
+   "op": "store_i32",
+   "field": "o_round",
+   "src": "r77"
+  },
+  {
+   "op": "q32_to_i64_floor",
+   "dst": "r78",
+   "a": "r36"
+  },
+  {
+   "op": "store_i64",
+   "field": "o_floor",
+   "src": "r78"
+  },
+  {
+   "op": "shl_q32",
+   "dst": "r79",
+   "a": "r35",
+   "n": "r38"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_shl",
+   "src": "r79"
+  },
+  {
+   "op": "shr_q32",
+   "dst": "r80",
+   "a": "r36",
+   "n": "r38"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_shr",
+   "src": "r80"
+  },
+  {
+   "op": "shl_i64",
+   "dst": "r81",
+   "a": "r67",
+   "n": "r38"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r82",
+   "value": 3
+  },
+  {
+   "op": "sub_u32",
+   "dst": "r83",
+   "a": "r38",
+   "b": "r82"
+  },
+  {
+   "op": "shr_i64",
+   "dst": "r84",
+   "a": "r81",
+   "n": "r83"
+  },
+  {
+   "op": "store_i64",
+   "field": "o_shl64",
+   "src": "r84"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r85",
+   "value": 20
+  },
+  {
+   "op": "shr_i64",
+   "dst": "r86",
+   "a": "r66",
+   "n": "r85"
+  },
+  {
+   "op": "q32_from_i64",
+   "dst": "r87",
+   "a": "r86"
+  },
+  {
+   "op": "q32_to_i32_floor",
+   "dst": "r88",
+   "a": "r37"
+  },
+  {
+   "op": "q32_from_i32",
+   "dst": "r89",
+   "a": "r88"
+  },
+  {
+   "op": "add_q32",
+   "dst": "r90",
+   "a": "r87",
+   "b": "r89"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_conv",
+   "src": "r90"
+  },
+  {
+   "op": "abs_q32",
+   "dst": "r91",
+   "a": "r36"
+  },
+  {
+   "op": "neg_q32",
+   "dst": "r92",
+   "a": "r91"
+  },
+  {
+   "op": "clamp_q32",
+   "dst": "r93",
+   "x": "r35",
+   "lo": "r92",
+   "hi": "r37"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_clamp",
+   "src": "r93"
+  },
+  {
+   "op": "max_q32",
+   "dst": "r94",
+   "a": "r35",
+   "b": "r36"
+  },
+  {
+   "op": "abs_q32",
+   "dst": "r95",
+   "a": "r37"
+  },
+  {
+   "op": "min_q32",
+   "dst": "r96",
+   "a": "r95",
+   "b": "r2"
+  },
+  {
+   "op": "sub_q32",
+   "dst": "r97",
+   "a": "r94",
+   "b": "r96"
+  },
+  {
+   "op": "store_q32",
+   "field": "o_mm",
+   "src": "r97"
+  }
+ ]
+}

@@ -1,0 +1,238 @@
+{
+ "capsule_format": "0.1",
+ "ir_version": "0.3",
+ "system_id": "det.s3move_c",
+ "source": "s3move_c.lir.json",
+ "schema": {
+  "id": "space3d",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "fields": [
+  {
+   "id": 1,
+   "name": "kind",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 10,
+   "name": "pos_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 12,
+   "name": "pos_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 14,
+   "name": "pos_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 16,
+   "name": "prev_x",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 18,
+   "name": "prev_y",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 20,
+   "name": "prev_z",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 22,
+   "name": "rot_w",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 24,
+   "name": "rot_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 26,
+   "name": "rot_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 28,
+   "name": "rot_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 40,
+   "name": "hit_count",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 44,
+   "name": "c0_toi",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 46,
+   "name": "c0_nx",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 48,
+   "name": "c0_ny",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 50,
+   "name": "c0_nz",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 54,
+   "name": "c1_toi",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 56,
+   "name": "c1_nx",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 58,
+   "name": "c1_ny",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 60,
+   "name": "c1_nz",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 80,
+   "name": "rot0_w",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 82,
+   "name": "rot0_x",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 84,
+   "name": "rot0_y",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 86,
+   "name": "rot0_z",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 100,
+   "name": "vel_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 102,
+   "name": "vel_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 104,
+   "name": "vel_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 106,
+   "name": "angvel_x",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 108,
+   "name": "angvel_y",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 110,
+   "name": "angvel_z",
+   "type": "q32",
+   "read": true,
+   "write": false
+  }
+ ],
+ "schedule": {
+  "phase": "simulate",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 65536,
+  "allocation": "forbidden"
+ },
+ "tests": [
+  "tests/determinism/det_matrix.c"
+ ]
+}

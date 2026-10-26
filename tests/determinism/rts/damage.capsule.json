@@ -1,0 +1,50 @@
+{
+ "capsule_format": "0.1",
+ "system_id": "rts.damage",
+ "system_rev": 1,
+ "capabilities": [
+  "despawn_self"
+ ],
+ "ir_version": "0.2",
+ "source": "../../../capsules/rts/damage.lir.json",
+ "schema": {
+  "id": "rts",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "u32_mod_v1",
+ "fields": [
+  {
+   "id": 3,
+   "name": "hp",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 39,
+   "name": "incoming",
+   "type": "u32",
+   "read": true,
+   "write": false
+  }
+ ],
+ "schedule": {
+  "phase": "rts",
+  "after": [],
+  "before": [
+   "rts.combat"
+  ],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 0,
+  "allocation": "forbidden",
+  "max_struct_per_row": 1,
+  "max_events_per_row": 0
+ },
+ "tests": [
+  "tests/determinism/det_matrix.c"
+ ]
+}

@@ -36,6 +36,17 @@ needs one in a worker would have to build its own worker, which is not provided.
 "registered host operators". Evidence: `host_registered`, `host_registered_dll` and the cross-process
 `host_registered_record` / `host_registered_verify_*` tests (`tests/host/test_host_registered.c`).
 
+**Operator state (2026-10-26, issue 139).** A registered operator may also own authoritative variable-size state that
+does not fit fixed columns (for example sparse per-entity overlays keyed by entity handle). It declares maximum
+entries and bytes in its descriptor (version 2 fields); the engine owns the bytes as a sorted (entity, sub) -> value
+map that `run` changes through `run->state` (`su_host_state_put`, `alloc`, `modify`, `erase`, `erase_entity`). The
+state is canonical (its bytes depend only on its content), commits or rolls back with the tick, is in snapshots
+(version 2, section `SUOPSTAT`), both digests, both restores and replay keyframes, and its declaration joins the
+world identity. Nothing is allocated after world creation; a change past a cap is refused (`SU_E_RESOURCE_LIMIT`).
+With `SU_HOST_STATE_DROP_DEAD` the entries of dead entities are erased when a tick publishes. Built-in operators have
+no state, and worlds without operator state keep version 1 snapshots byte for byte. Contract: `host.h`, "operator
+state". Evidence: `host_opstate*` tests (`tests/host/test_host_opstate.c`).
+
 Typed host lanes: `SuHostField.type` holds the lane's value type (`SU_TYPE_U32`, or `SU_TYPE_I32`/`I64`/`Q32` for a typed lane; a 64-bit field is two adjacent entries `I`, `I+1` named `<field>.lo`, `<field>.hi`). A descriptor with typed lanes has numeric profile `fixed_q32_v1` and operator family `<schema_id>_ops`. Descriptors with only u32 lanes (the RTS operators and their tests) keep `rts_ops_v<N>`, `u32_mod_v1`, and byte-identical declaration digests.
 
 ## 2. Schema `space3d` (profile `profiles/space3d`)

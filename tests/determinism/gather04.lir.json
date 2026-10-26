@@ -1,0 +1,132 @@
+{
+ "ir_version": "0.4",
+ "system_id": "det.gather04",
+ "numeric_profile": "fixed_q32_v1",
+ "query": "det.probe",
+ "instructions": [
+  {
+   "op": "slot_u32",
+   "dst": "r1"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r2",
+   "field": "slot_a"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r3",
+   "value": 1
+  },
+  {
+   "op": "add_u32",
+   "dst": "r4",
+   "a": "r1",
+   "b": "r3"
+  },
+  {
+   "op": "gather_u32",
+   "dst": "r5",
+   "field": "ua",
+   "slot": "r2"
+  },
+  {
+   "op": "store_u32",
+   "field": "g_u32",
+   "src": "r5"
+  },
+  {
+   "op": "gather_i32",
+   "dst": "r6",
+   "field": "ia",
+   "slot": "r4"
+  },
+  {
+   "op": "store_i32",
+   "field": "g_i32",
+   "src": "r6"
+  },
+  {
+   "op": "gather_i64",
+   "dst": "r7",
+   "field": "la",
+   "slot": "r2"
+  },
+  {
+   "op": "store_i64",
+   "field": "g_i64",
+   "src": "r7"
+  },
+  {
+   "op": "gather_q32",
+   "dst": "r8",
+   "field": "qa",
+   "slot": "r4"
+  },
+  {
+   "op": "store_q32",
+   "field": "g_q32",
+   "src": "r8"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r9",
+   "field": "ub"
+  },
+  {
+   "op": "find_eq_u32",
+   "dst": "r10",
+   "field": "key",
+   "key": "r9",
+   "span": 64
+  },
+  {
+   "op": "store_u32",
+   "field": "g_find",
+   "src": "r10"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r11",
+   "field": "ua"
+  },
+  {
+   "op": "find_eq_u32",
+   "dst": "r12",
+   "field": "key",
+   "key": "r11",
+   "span": 4096
+  },
+  {
+   "op": "store_u32",
+   "field": "g_far",
+   "src": "r12"
+  },
+  {
+   "op": "load_u32",
+   "dst": "r13",
+   "field": "g_mark"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r14",
+   "value": 1
+  },
+  {
+   "op": "add_u32",
+   "dst": "r15",
+   "a": "r13",
+   "b": "r14"
+  },
+  {
+   "op": "store_u32",
+   "field": "g_mark",
+   "src": "r15"
+  }
+ ],
+ "row_filter": {
+  "field": "kind",
+  "equals": 1,
+  "mask": 1
+ }
+}
