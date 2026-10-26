@@ -107,8 +107,10 @@ static void json_put_str(SuSha256 *c, const char *s) {
 
 /* Semantic identity of a host operator (A3, contract 3.1 "Host identity", r4): SHA-256 of the canonical JSON
  * (sorted keys, no whitespace) of {"schema_id","system_id","operator_version","constants_hash","fields":
- * [{"access","id","name","type"} ascending id]}. */
-static void host_semantic_digest(const SuHostOpDesc *d, uint8_t out[32]) {
+ * [{"access","id","name","type"} ascending id]}. An operator with an explicit name (a registered operator,
+ * su_host_register_operator, 2026-10-26) adds the key "operator" (sorted between "fields" and
+ * "operator_version"); operator_name NULL (every engine operator) gives exactly the digest above. */
+static void host_semantic_digest(const SuHostOpDesc *d, const char *operator_name, uint8_t out[32]) {
     SuSha256 c;
     char hex[65];
     char num[32];
@@ -133,7 +135,12 @@ static void host_semantic_digest(const SuHostOpDesc *d, uint8_t out[32]) {
         json_put_str(&c, su_type_name(d->fields[i].type)); /* "u32" for every u32 lane: RTS identities unchanged */
         put(&c, "}");
     }
-    put(&c, "],\"operator_version\":");
+    put(&c, "]");
+    if (operator_name != NULL) {
+        put(&c, ",\"operator\":");
+        json_put_str(&c, operator_name);
+    }
+    put(&c, ",\"operator_version\":");
     snprintf(num, sizeof num, "%u", (unsigned)d->operator_version);
     put(&c, num);
     put(&c, ",\"schema_id\":");
@@ -145,6 +152,10 @@ static void host_semantic_digest(const SuHostOpDesc *d, uint8_t out[32]) {
 }
 
 uint32_t su_host_decl_build(const SuHostOpDesc *d, SuLirModule *out) {
+    return su_host_decl_build_named(d, NULL, out);
+}
+
+uint32_t su_host_decl_build_named(const SuHostOpDesc *d, const char *operator_name, SuLirModule *out) {
     uint32_t i;
     if (out == NULL || su_host_desc_validate(d) != SU_OK) {
         return SU_E_INVALID_ARGUMENT;
@@ -172,7 +183,7 @@ uint32_t su_host_decl_build(const SuHostOpDesc *d, SuLirModule *out) {
             return SU_E_RESOURCE_LIMIT;
         }
     }
-    host_semantic_digest(d, out->semantic_hash);
+    host_semantic_digest(d, operator_name, out->semantic_hash);
     su_sha256_hex(out->semantic_hash, out->semantic_hash_hex);
     /* A host entry has no source: source_hash is the SHA-256 of the empty byte string (r4). */
     {
@@ -256,8 +267,10 @@ static uint32_t read_capsule_bytes(const char *path, uint8_t **buf, size_t *len)
     return SU_OK;
 }
 
-/* Checks the operator identity of the host object (operator name, version, constants hash). */
-static uint32_t check_host_identity(const SuJsonValue *host, const SuHostOpDesc *d, char *msg, size_t cap) {
+/* Checks the operator identity of the host object (operator name, version, constants hash). explicit_name is the
+ * name of a registered operator (NULL for engine operators, whose name is derived). */
+static uint32_t check_host_identity(const SuJsonValue *host, const SuHostOpDesc *d, const char *explicit_name,
+                                    char *msg, size_t cap) {
     uint64_t ver = 0;
     char hex[65];
 
@@ -266,11 +279,15 @@ static uint32_t check_host_identity(const SuJsonValue *host, const SuHostOpDesc 
         return SU_E_SCHEMA_MISMATCH;
     }
     /* Operator family: rts_ops for descriptors with only u32 lanes (M3), "<schema_id>_ops" for descriptors with
-     * typed lanes (space3d_ops for the space3d schema). */
+     * typed lanes (space3d_ops for the space3d schema); a registered operator names itself. */
     char operator_name[SU_WORLD_NAME_MAX + 32u];
-    snprintf(operator_name, sizeof operator_name, "%s_ops_v%u",
-             strcmp(host_profile(d), SU_NUMERIC_PROFILE_U32_MOD_V1) == 0 ? "rts" : d->schema_id,
-             (unsigned)d->operator_version);
+    if (explicit_name != NULL) {
+        snprintf(operator_name, sizeof operator_name, "%s", explicit_name);
+    } else {
+        snprintf(operator_name, sizeof operator_name, "%s_ops_v%u",
+                 strcmp(host_profile(d), SU_NUMERIC_PROFILE_U32_MOD_V1) == 0 ? "rts" : d->schema_id,
+                 (unsigned)d->operator_version);
+    }
     if (strcmp(jstr(jmember(host, "operator")) != NULL ? jstr(jmember(host, "operator")) : "", operator_name) != 0) {
         HOST_MSG_SET(msg, cap, "host.operator is not %s", operator_name);
         return SU_E_SCHEMA_MISMATCH;
@@ -384,10 +401,11 @@ static uint32_t check_bound_fields(const SuJsonValue *fields, const SuHostOpDesc
 }
 
 /* Checks the host object against the descriptor. Returns SU_OK or the refusal code with msg set. */
-static uint32_t check_host_object(const SuJsonValue *host, const SuHostOpDesc *d, char *msg, size_t cap) {
+static uint32_t check_host_object(const SuJsonValue *host, const SuHostOpDesc *d, const char *explicit_name,
+                                  char *msg, size_t cap) {
     const SuJsonValue *fields = jmember(host, "fields");
     uint32_t i;
-    uint32_t st = check_host_identity(host, d, msg, cap);
+    uint32_t st = check_host_identity(host, d, explicit_name, msg, cap);
     if (st != SU_OK) {
         return st;
     }
@@ -464,6 +482,14 @@ uint32_t su_host_load_bound_bytes(const uint8_t *bytes, size_t len, const char *
                                   const SuHostOpDesc *d, SuLirModule **out, uint32_t *schema_version,
                                   uint32_t *layout_generation, uint32_t bind[SU_LIMIT_FIELDS], int *bound, char *msg,
                                   size_t msg_cap) {
+    return su_host_load_bound_bytes_named(bytes, len, expect_capsule_hash, d, NULL, out, schema_version,
+                                          layout_generation, bind, bound, msg, msg_cap);
+}
+
+uint32_t su_host_load_bound_bytes_named(const uint8_t *bytes, size_t len, const char *expect_capsule_hash,
+                                        const SuHostOpDesc *d, const char *operator_name, SuLirModule **out,
+                                        uint32_t *schema_version, uint32_t *layout_generation,
+                                        uint32_t bind[SU_LIMIT_FIELDS], int *bound, char *msg, size_t msg_cap) {
     static const SuJsonLimits lim = {16u * 1024u * 1024u, 32u};
     SuJsonDoc doc;
     SuJsonError jerr;
@@ -565,7 +591,7 @@ uint32_t su_host_load_bound_bytes(const uint8_t *bytes, size_t len, const char *
         goto done;
     }
     if (nb == 0u) {
-        st = check_host_object(jmember(root, "host"), d, msg, msg_cap);
+        st = check_host_object(jmember(root, "host"), d, operator_name, msg, msg_cap);
     } else {
         const SuJsonValue *host = jmember(root, "host");
         const SuJsonValue *fields = jmember(host, "fields");
@@ -577,7 +603,7 @@ uint32_t su_host_load_bound_bytes(const uint8_t *bytes, size_t len, const char *
                                        "operator lane (%u)", (unsigned)d->field_count);
             goto done;
         }
-        st = check_host_identity(host, d, msg, msg_cap);
+        st = check_host_identity(host, d, operator_name, msg, msg_cap);
         if (st == SU_OK) {
             st = check_bound_fields(fields, d, role, ids, names, msg, msg_cap);
         }
@@ -591,7 +617,7 @@ uint32_t su_host_load_bound_bytes(const uint8_t *bytes, size_t len, const char *
         HOST_MSG_SET(msg, msg_cap, "out of memory for the host declaration");
         goto done;
     }
-    st = su_host_decl_build(d, decl);
+    st = su_host_decl_build_named(d, operator_name, decl);
     if (st != SU_OK) {
         free(decl);
         decl = NULL;

@@ -681,6 +681,9 @@ used worlds are counted); the native lane covers the commit, rollback and bindin
   its declaration record and which has no source. The supervisor records the host operator as the `system_id` and the
   source hash as the SHA-256 of the empty byte string (what the worker reports for a host entry), so checkpoints,
   restore and recovery carry host entries like IR entries. An unknown operator is `SU_E_CAPABILITY_DENIED`.
+  Operators a game registers in its own process through the in-process host API (`su_host_register_operator`,
+  `include/sutekh/host.h`, 2026-10-26) are not visible to the worker: their records are `SU_E_CAPABILITY_DENIED`
+  here as well (registration is in-process `host.h` only; `docs/SPACE3D.md` section 1).
 - **`world.spawn`** on a world whose `schema_id` is `rts` applies the spawn domains and defaults of contract 2.2 (D1):
   `kind`, `reload`, `damage`, `flight` required (when the schema has them); `kind` 1 or 2; `hp` 1..65,535 for kind 1 and
   0 for kind 2; system-owned fields only at their idle value; omitted `formation_slot`, `target_slot`, `dmg_target`,
@@ -733,6 +736,9 @@ Not yet: an `error.detail` path for spawn-rule violations (the field is named in
   its declaration record and which has no source. The supervisor records the host operator as the `system_id` and the
   source hash as the SHA-256 of the empty byte string (what the worker reports for a host entry), so checkpoints,
   restore and recovery carry host entries like IR entries. An unknown operator is `SU_E_CAPABILITY_DENIED`.
+  Operators a game registers in its own process through the in-process host API (`su_host_register_operator`,
+  `include/sutekh/host.h`, 2026-10-26) are not visible to the worker: their records are `SU_E_CAPABILITY_DENIED`
+  here as well (registration is in-process `host.h` only; `docs/SPACE3D.md` section 1).
 - **`world.spawn`** on a world whose `schema_id` is `rts` applies the spawn domains and defaults of contract 2.2 (D1):
   `kind`, `reload`, `damage`, `flight` required (when the schema has them); `kind` 1 or 2; `hp` 1..65,535 for kind 1 and
   0 for kind 2; system-owned fields only at their idle value; omitted `formation_slot`, `target_slot`, `dmg_target`,
