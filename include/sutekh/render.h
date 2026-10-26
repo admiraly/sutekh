@@ -10,7 +10,7 @@
  *     a chase camera and a free camera, interpolation, procedural meshes (box, sphere, arrow ship), and a
  *     debug-line builder (lines, vectors, planes, ellipses, boxes, axes).
  *   - The renderer: Vulkan 1.2 or later, loaded at run time (no link-time dependency on a Vulkan library), a
- *     Win32 window swapchain or an offscreen target with readback, instanced meshes, depth, debug lines, and CPU
+ *     window swapchain (a Win32 HWND, or a Wayland or X11 (Xlib) window on Linux) or an offscreen target with readback, instanced meshes, depth, debug lines, and CPU
  *     and GPU frame times (timestamp queries when the queue supports them). Without Vulkan every call fails with
  *     a status and a plain-language reason; nothing crashes.
  *
@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 11u
+#define SU_RENDER_API_VERSION 12u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -477,14 +477,15 @@ SU_RENDER_API uint32_t su_render_enumerate(SuRenderDeviceInfo *out, uint32_t cap
 #define SU_RENDER_FLAG_NO_VSYNC 0x2u     /* prefer MAILBOX, then IMMEDIATE, over FIFO */
 
 typedef struct SuRenderDesc {
-    uint32_t struct_size;          /* sizeof(SuRenderDesc), or SU_RENDER_DESC_V1_SIZE for the first-slice fields */
+    uint32_t struct_size;          /* sizeof(SuRenderDesc), SU_RENDER_DESC_V2_SIZE (API 11 and earlier: no
+                                    * window_system fields) or SU_RENDER_DESC_V1_SIZE (first-slice fields only) */
     uint32_t flags;                /* SU_RENDER_FLAG_* */
-    void *hwnd;                    /* Windows HWND to present to, or NULL for an offscreen target */
-    uint32_t width, height;        /* offscreen size, or the initial window size */
+    void *hwnd;                    /* Windows HWND to present to, or NULL (offscreen, or window_system below) */
+    uint32_t width, height;        /* offscreen size, or the initial window size in pixels */
     uint32_t max_instances;        /* debug instances per frame; 0 = 16384 */
     uint32_t max_line_vertices;    /* per frame; 0 = 131072 */
     int32_t device_index;          /* index from su_render_enumerate, or -1 for the best device */
-    /* ---- fields after this line need struct_size == sizeof(SuRenderDesc) ---- */
+    /* ---- fields after this line need struct_size >= SU_RENDER_DESC_V2_SIZE ---- */
     const char *pipeline_cache_path; /* load at create and save at destroy (NULL: no persistence) */
     uint32_t upload_budget_bytes;  /* staging bytes copied per frame (each frame slot owns this much); 0 = 16 MiB */
     uint32_t max_resources;        /* meshes + textures + materials + models alive at once; 0 = 16384 */
@@ -493,17 +494,50 @@ typedef struct SuRenderDesc {
     uint32_t max_hud_vertices;     /* per frame; 0 = 49152 */
     uint32_t max_fx_tex_vertices;  /* textured fx per frame; 0 = 98304 */
     uint32_t max_fx_batches;       /* textured fx batches per frame; 0 = 256 */
+    /* ---- API 12: a native window other than a Win32 HWND (hwnd stays NULL). Fields after this line need
+     * struct_size == sizeof(SuRenderDesc); SU_RENDER_DESC_V2_SIZE is the size of API 11 and earlier. ---- */
+    uint32_t window_system;        /* SU_RENDER_WINDOW_*; NONE: hwnd, or offscreen when hwnd is NULL */
+    void *window_display;          /* WAYLAND: struct wl_display *; XLIB: Display * */
+    void *window_surface;          /* WAYLAND: struct wl_surface *; XLIB: unused (NULL) */
+    uint64_t window_id;            /* XLIB: the Window (an X11 XID); WAYLAND: unused (0) */
+    uint32_t acquire_timeout_us;   /* window targets: longest wait for a swapchain image, in microseconds; 0 = 50000.
+                                    * A frame whose image does not arrive in time is skipped (SU_E_RESOURCE_LIMIT;
+                                    * the wait is reported as wait_ms), so a compositor that stops releasing images
+                                    * cannot stall the host loop for longer than this per frame. Keep it below the
+                                    * host's clock clamp (space_demo: 8 ticks at 120 Hz = 66.7 ms; the fixed-step
+                                    * clock drops ticks beyond it) and above the longest normal FIFO wait (about one
+                                    * refresh: 16.7 ms at 60 Hz, 33.3 ms at 30 Hz), or frames are skipped while the
+                                    * window is visible. The 50 ms default fits a refresh of 30 Hz or more. */
 } SuRenderDesc;
 #define SU_RENDER_DESC_V1_SIZE ((uint32_t)offsetof(SuRenderDesc, pipeline_cache_path))
+/* sizeof the API 11 descriptor: window_system starts in its tail padding, rounded to its pointer alignment. */
+#define SU_RENDER_DESC_V2_SIZE \
+    ((uint32_t)((offsetof(SuRenderDesc, window_system) + sizeof(void *) - 1u) / sizeof(void *) * sizeof(void *)))
 
-/* Creates the renderer. SU_E_UNSUPPORTED_METHOD without a usable Vulkan device (message says why), SU_E_IO for
- * a surface or swapchain the platform refuses, SU_E_RESOURCE_LIMIT for out-of-memory. Every pipeline is created
- * here (through the pipeline cache when one is configured), never during a frame. */
+/* Native window systems of SuRenderDesc.window_system (Linux and other non-Windows builds; on Windows only NONE).
+ * The window stays owned by the caller and must outlive the renderer. sutekh/window.h creates one and fills these
+ * fields (su_window_render_desc). With a window whose surface does not report its size (Wayland), the size comes
+ * from SuRenderDesc.width/height and later su_render_resize calls, in pixels. */
+#define SU_RENDER_WINDOW_NONE 0u
+#define SU_RENDER_WINDOW_WAYLAND 1u        /* VK_KHR_wayland_surface */
+#define SU_RENDER_WINDOW_XLIB 2u           /* VK_KHR_xlib_surface (also XWayland) */
+
+/* Creates the renderer. SU_E_UNSUPPORTED_METHOD without a usable Vulkan device (message says why), or for a window
+ * system this build or the Vulkan loader does not support (for example an HWND outside Windows, or no
+ * VK_KHR_wayland_surface); SU_E_IO for a surface or swapchain the platform refuses; SU_E_RESOURCE_LIMIT for
+ * out-of-memory; SU_E_INVALID_ARGUMENT for an hwnd together with a window_system, or missing window handles.
+ * Every pipeline is created here (through the pipeline cache when one is configured), never during a frame. */
 SU_RENDER_API uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char message[256]);
 /* Waits for the device, saves the pipeline cache (when configured) and frees everything. */
 SU_RENDER_API void su_render_destroy(SuRenderer *r);
 SU_RENDER_API uint32_t su_render_device(const SuRenderer *r, SuRenderDeviceInfo *out);
-/* Window resized (also detected from the swapchain). A zero size pauses presentation. */
+/* Window resized (also detected from the swapchain), in pixels. A zero width or height pauses presentation: frame
+ * calls then return SU_E_RESOURCE_LIMIT without acquiring a swapchain image (the window is minimized, hidden or
+ * occluded). The pause ends with a non-zero su_render_resize. It also ends by itself when the surface reported
+ * 0 x 0 at the pause and later reports a non-zero extent (a Win32 window minimized and restored, as before API 12).
+ * A pause at a real or unknown extent (a host pause for occlusion, an iconified X11 window, which keeps its extent;
+ * a Wayland surface, which reports none; a failed capabilities query) waits for the host's non-zero size. API 12:
+ * the pause is explicit; before, a zero size only waited for the surface extent to become non-zero. */
 SU_RENDER_API void su_render_resize(SuRenderer *r, uint32_t width, uint32_t height);
 
 /* ---- GPU resources: asynchronous upload, generational handles, deferred retirement ----
@@ -1003,8 +1037,11 @@ typedef struct SuRenderStats {
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given
  * view and projection (a standard 0..1 depth projection such as su_mat4f_perspective; the renderer converts it to
- * its reversed-Z depth), no sky, clamp tonemapping. Returns SU_OK, or SU_E_RESOURCE_LIMIT when the window is
- * minimized (nothing drawn), or another status with the reason in su_render_last_error. */
+ * its reversed-Z depth), no sky, clamp tonemapping. Returns SU_OK, or SU_E_RESOURCE_LIMIT when nothing was drawn
+ * (the window is minimized or paused, the swapchain is out of date, or no swapchain image became available within
+ * SuRenderDesc.acquire_timeout_us), or another status with the reason in su_render_last_error. su_render_frame_ex
+ * likewise. API 12 bounds the wait for an image; vkQueuePresentKHR is not bounded (a driver may throttle inside it,
+ * for example Mesa's Wayland FIFO on a compositor without wp_fifo_manager_v1), so present_ms can still grow. */
 SU_RENDER_API uint32_t su_render_frame(SuRenderer *r, const SuRenderView *view, const SuRenderInstance *instances,
                                        uint32_t instance_count, const SuRenderLineVertex *lines, uint32_t line_vertex_count);
 SU_RENDER_API uint32_t su_render_stats(const SuRenderer *r, SuRenderStats *out);

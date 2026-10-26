@@ -5,7 +5,8 @@
  *   1. Device state (SuInputState): what the platform layer samples: keys, mouse motion and buttons, gamepads,
  *      with monotonic timestamps. Relative quantities (mouse motion, wheel) are accumulated between samples.
  *      On Windows it comes from Raw Input (keyboard, mouse) and XInput (gamepads): see the Win32 section below.
- *      Tests and other platforms can fill it directly.
+ *      On Linux it comes from the window backend (sutekh/window.h, SDL3), through the portable device events
+ *      below, which convert to the same conventions. Tests and other platforms can fill it directly.
  *   2. Mapping (SuInputMap, SuInputMapper): a table of bindings from device sources to actions, applied once
  *      per simulation tick. Dead zones, response curves, the mouse virtual stick, scaling and clamping live
  *      here, never in the simulation. All arithmetic is integer (Q16.16), so a mapper fed the same sequence
@@ -18,8 +19,8 @@
  * two's complement. Keys are named by physical position: the PC scan code set 1 make code, with 0x100 added for
  * E0-prefixed keys (so the key left of S is SU_KEY_A on every keyboard layout).
  *
- * Library: su_input (static). The mapping and record parts are portable C17; the Win32 part is built on
- * Windows only. Threading: one mapper or Win32 context must not be used from two threads at once. */
+ * Library: su_input (static). The mapping, record and device-event parts are portable C17; the Win32 part is
+ * built on Windows only. Threading: one mapper or Win32 context must not be used from two threads at once. */
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #ifndef SUTEKH_INPUT_H
@@ -38,7 +39,7 @@ extern "C" {
 /* su_input is a static library: its functions are never imported from the host DLL. */
 #define SU_INPUT_API
 
-#define SU_INPUT_API_VERSION 1u
+#define SU_INPUT_API_VERSION 2u              /* 2: portable device events (su_input_state_apply) */
 #define SU_INPUT_ONE 65536              /* Q16.16 full deflection */
 #define SU_INPUT_KEY_COUNT 512u         /* scan code set 1, E0-prefixed keys at 0x100 + code */
 #define SU_INPUT_MAX_PADS 4u
@@ -193,9 +194,12 @@ typedef struct SuInputPad {
 #define SU_INPUT_MOUSE_X2 0x10u
 
 /* Facts about where a state came from (SuInputState.flags). */
-#define SU_INPUT_FLAG_MOUSE_ABSOLUTE 0x1u  /* the mouse reported absolute positions (typical of remote desktop);
-                                              motion is the difference of successive positions, in pixels */
-#define SU_INPUT_FLAG_NO_XINPUT 0x2u       /* no XInput library: gamepads are never connected */
+#define SU_INPUT_FLAG_MOUSE_ABSOLUTE 0x1u  /* the mouse reported absolute positions (typical of remote desktop;
+                                              on Linux whenever relative mouse mode is off); motion is the
+                                              difference of successive positions, in pixels (Linux: window
+                                              coordinates, which are pixels at pixel density 1) */
+#define SU_INPUT_FLAG_NO_XINPUT 0x2u       /* no XInput library (Linux: no gamepad subsystem): gamepads are never
+                                              connected */
 #define SU_INPUT_FLAG_FOCUS_LOST 0x4u      /* focus was lost since the previous sample: keys and buttons were released */
 
 typedef struct SuInputState {
@@ -363,6 +367,56 @@ typedef struct SuInputFields {
  * SU_E_INVALID_ARGUMENT. */
 SU_INPUT_API uint32_t su_input_record_writes(const SuInputRecord *r, const SuInputFields *fields, uint64_t entity,
                                             SuHostInput *out, uint32_t *count);
+
+/* ---- portable device events (the Linux window backend, sutekh/window.h; tests; hosts with their own loop) ----
+ *
+ * A platform layer that receives discrete device events translates them to SuInputEvent and applies them to a
+ * live SuInputState; su_input_state_take then yields one sample, exactly as su_input_win32_sample does. The
+ * result has the Win32 conventions, so the same physical input gives the same state, and therefore the same
+ * records, on every platform: keys are converted from USB HID usages to scan code set 1 positions, gamepads use
+ * the XInput button bits and ranges (+y up, triggers 0..255), mouse motion is in counts (+y down), the wheel in
+ * 120ths of a notch. Integer only; no allocation. */
+
+#define SU_INPUT_EV_KEY 1u           /* code: USB HID keyboard usage (page 0x07); value: 1 down, 0 up */
+#define SU_INPUT_EV_MOUSE_MOTION 2u  /* x, y: relative counts (+y down) */
+#define SU_INPUT_EV_MOUSE_BUTTON 3u  /* code: one SU_INPUT_MOUSE_* bit; value: 1 down, 0 up */
+#define SU_INPUT_EV_WHEEL 4u         /* value: 120 per notch, + away from the user */
+#define SU_INPUT_EV_PAD_CONNECT 5u   /* device: pad slot; value: 1 connected (all inputs at rest), 0 removed */
+#define SU_INPUT_EV_PAD_BUTTON 6u    /* device: pad slot; code: one SU_PAD_* bit; value: 1 down, 0 up */
+#define SU_INPUT_EV_PAD_AXIS 7u      /* device: pad slot; code: SU_INPUT_PAD_AXIS_*; value: sticks -32768..32767
+                                        (+y up), triggers 0..255; out-of-range values are clamped */
+#define SU_INPUT_EV_FOCUS 8u         /* value: 1 focused; 0 releases every key and button (SU_INPUT_FLAG_FOCUS_LOST) */
+
+#define SU_INPUT_PAD_AXIS_LX 0u
+#define SU_INPUT_PAD_AXIS_LY 1u
+#define SU_INPUT_PAD_AXIS_RX 2u
+#define SU_INPUT_PAD_AXIS_RY 3u
+#define SU_INPUT_PAD_AXIS_LT 4u
+#define SU_INPUT_PAD_AXIS_RT 5u
+
+typedef struct SuInputEvent {
+    uint32_t type;      /* SU_INPUT_EV_* */
+    uint32_t code;
+    uint32_t device;    /* pad slot, 0..SU_INPUT_MAX_PADS - 1, for pad events; else 0 */
+    int32_t value;
+    int32_t x, y;       /* mouse motion */
+    uint64_t time_ns;   /* monotonic time of the event (key_ns, mouse_ns, changed_ns) */
+} SuInputEvent;
+
+/* Scan code set 1 position (SU_KEY_*) of a USB HID keyboard usage, or 0 for a usage without one (Pause, which
+ * Raw Input does not report either, media and reserved usages). The ISO key between left shift and Z (usage
+ * 0x64) is 0x56; the ISO key left of Enter (0x32) shares SU_KEY_BACKSLASH, as on Windows. */
+SU_INPUT_API uint32_t su_input_key_from_hid(uint32_t usage);
+
+/* Applies one event to a live state. Mouse motion and wheel are accumulated (saturating at the i32 range). Keys
+ * without a set 1 position are ignored (SU_OK). Pad events for a disconnected slot other than CONNECT are
+ * ignored. SU_E_INVALID_ARGUMENT for an unknown type, a pad slot >= SU_INPUT_MAX_PADS, or a code that is not
+ * one defined bit or axis; the state is then unchanged. */
+SU_INPUT_API uint32_t su_input_state_apply(SuInputState *live, const SuInputEvent *e);
+
+/* One sample: copies live to out with sample_ns = now_ns, then clears the relative quantities (motion, wheel)
+ * and the per-sample flags (SU_INPUT_FLAG_FOCUS_LOST) of live. */
+SU_INPUT_API void su_input_state_take(SuInputState *live, uint64_t now_ns, SuInputState *out);
 
 /* ---- Windows: Raw Input (keyboard, mouse) and XInput (gamepads) ---- */
 #if defined(_WIN32)

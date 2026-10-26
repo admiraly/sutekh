@@ -1,0 +1,12 @@
+{
+  "commit": "f5e5f6588921eed3d7d048ce43d9eb1ff0da0ffc",
+  "license": "Zlib",
+  "license_file": "LICENSE.txt",
+  "license_sha256": "97f35b302b361680ec1e891e95d2d52097bb95abff361434916d99dc1305f127",
+  "license_sha256_note": "sha256 of the license file with CRLF normalized to LF",
+  "name": "SDL3 headers",
+  "origin": "https://github.com/libsdl-org/SDL.git",
+  "pinned_by": "tools/bootstrap_sdl3_headers.py",
+  "tag": "release-3.2.30",
+  "use": "build-time headers of the optional Linux window backend (src/platform/window_sdl3.c); the SDL3 library (3.2.0 or later) is opened at run time; not redistributed"
+}

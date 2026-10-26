@@ -141,6 +141,10 @@ Local validation of this round:
   lines.
 - **Mutation set.** `run_mutants.py` on the final source: 6 of 6 caught (table in `docs/DETERMINISM_MATRIX.md`
   section 2).
+- **After merging `origin/main` (`31192d9`, registered host operators and the Linux window).** The PR was conflicting
+  in `PACK_VALIDATION.json` only, which was regenerated. GCC Release native, Clang Release native and Clang UBSan
+  were rebuilt: full ctest 167 tests each, 0 failures, the same 2 skips, and 0 `runtime error` lines. The matrix
+  ctests passed against the unchanged expectations, so main's changes did not move any digest.
 
 Source hashes of this round:
 

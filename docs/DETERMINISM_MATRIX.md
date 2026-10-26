@@ -263,7 +263,9 @@ Further local checks:
   - Every keyframe and per-tick digest matched, and every build's replay files are byte-identical to GCC's.
 - **Per build.** `determinism_regress`, `determinism_rts_engine` and `determinism_op_coverage` (110 of 110) passed on
   every build in the table.
-- **Full ctest suites:** see the handoff for the counts on the final head.
+- **Full ctest suites** (GCC and Clang Release with native, Clang UBSan), after merging `origin/main`: 167 tests
+  each, 0 failures, 2 skipped (`native_unwind` is Windows-only; `audio_device` has no device), and no UBSan
+  `runtime error`.
 
 CI legs: the PR's checks, recorded in `planning/handoffs/2026-10-26-determinism-matrix.md` with the run on the
 final head. Each Windows leg plays the Linux GCC and Linux Clang replays on every tier it has, and a Linux job plays
