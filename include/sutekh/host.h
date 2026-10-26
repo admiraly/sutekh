@@ -201,7 +201,10 @@ SU_HOST_API uint32_t su_host_read(const SuHostWorld *w, uint32_t field_id, uint6
 
 /* Canonical snapshot: "SUHSNAP" 0x00 | u32 version 1 | world identity (32 bytes) | u64 tick |
  * u64 state length | world canonical state (SUWSTATE v2) | u64 log length | event log (SUEL). Size query
- * with buf NULL; SU_E_RESOURCE_LIMIT when cap is too small (*written = size needed). */
+ * with buf NULL; SU_E_RESOURCE_LIMIT when cap is too small (*written = size needed).
+ * A world with operator state (see "operator state" below; 2026-10-26) writes version 2 instead: the same parts,
+ * then u64 operator state length | operator state section (SUOPSTAT). A world without operator state writes
+ * exactly the version 1 bytes above, and each kind of world accepts only its own version. */
 SU_HOST_API uint32_t su_host_snapshot_size(const SuHostWorld *w, size_t *size);
 SU_HOST_API uint32_t su_host_snapshot_write(const SuHostWorld *w, uint8_t *buf, size_t cap, size_t *written);
 /* Replaces the world's state with the snapshot's (same world identity, else SU_E_SCHEMA_MISMATCH). Strict:
@@ -374,9 +377,9 @@ SU_HOST_API uint32_t su_host_set_operator_data(SuHostWorld *w, const char *syste
  *     tick is committed, and its input record stays queued. SuHostError.message holds 255 bytes, shared with the
  *     tick, the system ID and the code name, so a long reason (or a long system ID) is cut at the end; keep reasons
  *     short (well under 100 bytes) when they matter.
- *   - Determinism: the results must be a function of the columns, alive, generation, tick and operator data alone
- *     (no clock, no thread timing, no state kept across calls), so that a restore and re-simulation reproduces
- *     them. The engine zero-fills the scratch before every call (always; scratch is not world state and is not in
+ *   - Determinism: the results must be a function of the columns, alive, generation, tick, operator data and the
+ *     operator state (run->state) alone (no clock, no thread timing, nothing else kept across calls), so that a
+ *     restore and re-simulation reproduces them. The engine zero-fills the scratch before every call (always; scratch is not world state and is not in
  *     snapshots, so nothing may survive in it from one tick to the next).
  *   - No allocation in the tick (ENGINE_CONSTITUTION C11): the scratch (scratch_size(capacity) bytes), the
  *     column table and the alive/generation views are allocated once at world creation. run must not allocate.
@@ -444,6 +447,10 @@ typedef struct SuHostOperatorField {
     const char *name;  /* identifier: 1..255 bytes of [A-Za-z0-9_.-], unique */
 } SuHostOperatorField;
 
+/* An operator's state (see "operator state" below): a handle passed in SuHostOperatorRun.state, or a read-only view
+ * of the committed state (su_host_operator_state). */
+typedef struct SuHostState SuHostState;
+
 /* A declared lane as run sees it. Fixed layout (see "Versioning"). */
 typedef struct SuHostOperatorColumn {
     uint32_t field_id;   /* the descriptor's ID */
@@ -471,6 +478,9 @@ typedef struct SuHostOperatorRun {
     char *reason;                         /* reason_cap bytes, "" at entry: on failure run may write a NUL-terminated
                                            * reason, appended to the step's err->message */
     size_t reason_cap;
+    /* Added 2026-10-26 (issue 139; present when struct_size covers it): the operator's state, mutable during this
+     * call (see "operator state"), or NULL when the descriptor declares none. */
+    SuHostState *state;
 } SuHostOperatorRun;
 
 typedef struct SuHostOperatorDesc {
@@ -502,11 +512,20 @@ typedef struct SuHostOperatorDesc {
     uint32_t (*parse_data)(const uint8_t *data, size_t len, void **parsed, char *why, size_t why_cap, void *user);
     void (*release_data)(void *parsed, void *user);
     void *user;                           /* passed to every callback */
+    /* Version 2 (2026-10-26, issue 139): operator state (see "operator state"). All four zero: no state, and the
+     * operator, its identity and the world's snapshots are exactly those of version 1. state_max_entries and
+     * state_max_bytes are both 0 or both nonzero. */
+    uint32_t state_flags;                 /* SU_HOST_STATE_* below, or 0 */
+    uint32_t state_max_entries;           /* 1..SU_HOST_STATE_MAX_ENTRIES: most entries the state can hold */
+    uint32_t state_max_bytes;             /* 1..SU_HOST_STATE_MAX_BYTES: most value bytes (sum of lengths) */
+    uint32_t state_reserved;              /* 0 */
 } SuHostOperatorDesc;
 
 /* Size of the first released SuHostOperatorDesc (through user): 120 bytes with 8-byte pointers (LP64, LLP64), 84
  * with 4-byte pointers (ILP32). The library pins these values at compile time. */
 #define SU_HOST_OPERATOR_DESC_V1_SIZE (offsetof(SuHostOperatorDesc, user) + sizeof(void *))
+/* Version 2 (through state_reserved): 136 bytes with 8-byte pointers, 100 with 4-byte pointers. */
+#define SU_HOST_OPERATOR_DESC_V2_SIZE (offsetof(SuHostOperatorDesc, state_reserved) + sizeof(uint32_t))
 
 /* Zeroes *d (padding included) and sets struct_size: use it before filling a descriptor. */
 #define SU_HOST_OPERATOR_DESC_INIT(d) \
@@ -522,6 +541,131 @@ typedef struct SuHostOperatorDesc {
  * reserved prefix, or operator_name is reserved, SU_E_RESOURCE_LIMIT when the registry is full or memory runs
  * out. */
 SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, SuHostError *err);
+
+/* ---- operator state (additive, API version 1; 2026-10-26, issue 139) ----
+ *
+ * A registered operator may own authoritative variable-size state that does not fit fixed 32-bit columns (for
+ * example sparse per-entity overlays keyed by entity handle). It declares it in its descriptor (state_max_entries,
+ * state_max_bytes, state_flags) and the engine owns the bytes: a map from a key (entity, sub) to a value of 1 or
+ * more bytes, kept sorted by key (entity, then sub, both unsigned). The operator reads and changes it only through
+ * the functions below, on run->state during run.
+ *
+ * Canonical: the state's bytes are a function of its logical content alone (the set of keys and their value
+ * bytes), never of the order or history of the calls that produced it or of the engine's memory layout. Encoding
+ * (inside the snapshot's SUOPSTAT section, per system with state): u32 entry count | u64 value bytes | per entry in
+ * key order: u64 entity | u64 sub | u32 length | then the values, concatenated in key order. Two runs that reach the
+ * same entries give the same bytes, whatever the order of their puts and erases (tested).
+ *
+ * Where it is: in the canonical snapshot (version 2, see su_host_snapshot_write), so in su_host_digest,
+ * su_host_digest_fast, both restores and replay keyframes, exactly like columns. A world without operator state
+ * keeps version 1 snapshots, so its snapshots, digests and replays are byte-identical to earlier releases.
+ * Section: "SUOPSTAT" 0x00 | u32 version 1 | u32 system count | per system with state, in schedule order:
+ * u32 schedule index | the encoding above. Restores are strict: unsorted or duplicate keys, a zero length, lengths
+ * that disagree with the totals, more than the declared maximum entries or bytes, a wrong count or index, a
+ * truncated or oversized section are SU_E_PARSE, and the world is unchanged.
+ *
+ * Transactions: changes made during a tick become committed state only when the tick publishes. A failing tick (its
+ * run, any later system, or the boundary) leaves the committed state exactly as it was, as for columns.
+ *
+ * Bounds (ENGINE_CONSTITUTION C11): every buffer is allocated at world creation for the declared maximum: two
+ * arenas of state_max_bytes and two entry tables of state_max_entries (24 bytes each), plus 4 bytes per entry for
+ * compaction (calloc'd, so untouched pages cost no physical memory on systems with lazy allocation). Nothing is
+ * allocated in a tick or by su_host_snapshot_restore_inplace. A change that would exceed either maximum is refused
+ * with SU_E_RESOURCE_LIMIT and changes nothing; whether a change fits depends only on the logical state (entries and
+ * the sum of value lengths), never on fragmentation (the engine compacts). run may handle the refusal or return it:
+ * the tick then fails with SU_E_RESOURCE_LIMIT, nothing is committed, and err->message says the state cap was
+ * reached.
+ * Costs: lookup O(log n); inserting or erasing a key moves the entry table (O(n) entries of 24 bytes); the first
+ * change in a tick copies the entry table (O(n)); value bytes are never copied per tick (a changed value is
+ * written to free arena space, copy-on-write; a value already written in this tick and rewritten with the same length
+ * is reused in place), except by a compaction when the free space runs out, which copies the live values once.
+ *
+ * Keys and entities (ENGINE_CONSTITUTION C05): keys are stable IDs, never addresses. entity is normally an entity
+ * handle (slot | generation << 32), which stays valid across snapshot, restore and replay because the entity table
+ * is restored with the state; sub is the operator's (for example a brick index). Values are opaque bytes: an
+ * operator that stores references in them must store handles or its own stable IDs, never pointers.
+ * Despawned entities: with SU_HOST_STATE_DROP_DEAD the engine owns this: put and alloc refuse a key whose entity is
+ * not alive in this tick's working entity table (SU_E_STALE_HANDLE), and when a tick publishes, every entry whose
+ * entity is no longer alive in the committed entity table (despawned during the tick, or by su_host_despawn before
+ * it) is erased, as part of that tick. Restored keys must have a generation in 1..0xFFFFFFFE. Without the flag,
+ * entity is an opaque u64 and the operator is responsible (for example su_host_state_erase_entity when it sees a
+ * handle die).
+ * Either way the outcome is deterministic: the rule depends only on the state and the entity table.
+ *
+ * Pointers: data pointers returned by the functions below point into engine memory; they are valid until the next
+ * change of that state (put, alloc, modify, erase, erase_entity) or the end of the run call (for views: until the
+ * next call that changes the world). put's data must not point into the state (SU_E_INVALID_ARGUMENT).
+ *
+ * Parallel chunked operators (issue 142; not implemented): the API is designed to allow a deterministic merge. A
+ * chunked call would get a journal handle: reads see the state as it was before the operator's first chunk;
+ * put/alloc/erase/erase_entity append to a per-chunk journal (bounded, allocated at world creation from a new
+ * trailing descriptor field) and modify is limited to keys whose entity slot lies in the chunk's row range. After the
+ * last chunk the engine applies the journals in canonical chunk order (0 .. chunk_count - 1), each in call order, so
+ * the result depends on the chunking (a function of the row count) and never on thread timing; the same key written
+ * by two chunks keeps the later chunk's value (or a declared merge callback combines them in chunk order, part of the
+ * identity). The caps are then checked on the merged result, which fails the tick with SU_E_RESOURCE_LIMIT. An
+ * operator keying per-entity data by handle and writing only its own rows never conflicts. No function here returns
+ * memory that must survive a call, so a journal needs no change to these signatures.
+ *
+ * Identity: a declared state folds state_flags, state_max_entries and state_max_bytes into the system's semantic
+ * hash (so into the world identity): snapshots and replays only load into a world with the same declaration.
+ * Built-in operators have no state; their identities and snapshots are unchanged. */
+
+#define SU_HOST_STATE_MAX_ENTRIES UINT32_C(16777216)  /* 2^24 entries per operator */
+#define SU_HOST_STATE_MAX_BYTES UINT32_C(1073741824)  /* 2^30 value bytes per operator */
+#define SU_HOST_STATE_DROP_DEAD UINT32_C(1)           /* entity is an entity handle; dead entities' entries are erased
+                                                       * (above). Every other bit is reserved and refused. */
+
+typedef struct SuHostStateEntry {
+    uint64_t entity;
+    uint64_t sub;
+    const void *data;   /* len bytes (see "Pointers") */
+    uint32_t len;
+    uint32_t reserved;  /* 0 */
+} SuHostStateEntry;
+
+typedef struct SuHostStateInfo {
+    uint32_t entries;      /* current */
+    uint32_t max_entries;  /* declared */
+    uint64_t bytes;        /* current sum of value lengths */
+    uint64_t max_bytes;    /* declared */
+    uint32_t flags;        /* declared state_flags */
+    uint32_t writable;     /* 1 inside run (run->state), 0 for a view */
+} SuHostStateInfo;
+
+/* Read access, on run->state or a view. SU_E_INVALID_ARGUMENT for NULL arguments or an index out of range. */
+SU_HOST_API uint32_t su_host_state_info(const SuHostState *s, SuHostStateInfo *out);
+/* Number of entries (0 for NULL). */
+SU_HOST_API uint32_t su_host_state_count(const SuHostState *s);
+/* Index of the first entry whose key is >= (entity, sub), or su_host_state_count when none: for example all entries
+ * of one entity are lower_bound(entity, 0) up to the first index whose entity differs. */
+SU_HOST_API uint32_t su_host_state_lower_bound(const SuHostState *s, uint64_t entity, uint64_t sub);
+/* Entry at index (0..count-1, key order). */
+SU_HOST_API uint32_t su_host_state_entry(const SuHostState *s, uint32_t index, SuHostStateEntry *out);
+/* Value of (entity, sub): SU_OK with *data and *len, or SU_OK with *data NULL and *len 0 when there is no entry. */
+SU_HOST_API uint32_t su_host_state_get(const SuHostState *s, uint64_t entity, uint64_t sub, const void **data,
+                                       uint32_t *len);
+
+/* Changes: only on run->state during run (a view, or a handle used outside its run, is SU_E_INVALID_ARGUMENT).
+ * len 1..state_max_bytes. Refusals change nothing: SU_E_RESOURCE_LIMIT at a cap (above), SU_E_STALE_HANDLE with
+ * SU_HOST_STATE_DROP_DEAD for an entity that is not alive. */
+/* Inserts or replaces (entity, sub) with a copy of data. */
+SU_HOST_API uint32_t su_host_state_put(SuHostState *s, uint64_t entity, uint64_t sub, const void *data,
+                                       uint32_t len);
+/* Inserts or replaces (entity, sub) with len zero bytes and returns them writable in *data. */
+SU_HOST_API uint32_t su_host_state_alloc(SuHostState *s, uint64_t entity, uint64_t sub, uint32_t len, void **data);
+/* The existing value of (entity, sub), writable in place (copy-on-write: the committed bytes are not touched until
+ * the tick publishes); *data NULL and *len 0 when there is no entry. Never refused for lack of space. */
+SU_HOST_API uint32_t su_host_state_modify(SuHostState *s, uint64_t entity, uint64_t sub, void **data,
+                                          uint32_t *len);
+/* Erases (entity, sub) if present; *erased (optional) receives 1 or 0. */
+SU_HOST_API uint32_t su_host_state_erase(SuHostState *s, uint64_t entity, uint64_t sub, uint32_t *erased);
+/* Erases every entry of entity; *erased (optional) receives how many. */
+SU_HOST_API uint32_t su_host_state_erase_entity(SuHostState *s, uint64_t entity, uint32_t *erased);
+
+/* Read-only view of the committed state of system index (between ticks; for rendering, tools and tests), valid until
+ * the world is destroyed; what it shows changes with the world. SU_E_INVALID_ARGUMENT when the system has no state. */
+SU_HOST_API uint32_t su_host_operator_state(const SuHostWorld *w, uint32_t index, const SuHostState **state);
 
 /* ---- execution tiers (additive, API version 1; 2026-10-18) ----
  * Every tier gives bit-identical results (states, events, digests): the tiers are differential-tested against

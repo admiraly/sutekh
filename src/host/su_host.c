@@ -6,6 +6,7 @@
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #include "sutekh/host.h"
 #include "host/su_host_internal.h"
+#include "host/su_host_state.h"
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -38,6 +39,11 @@
 #define HOST_DEFAULT_EVENT_LOG 1024u
 #define HOST_SNAP_MAGIC "SUHSNAP"   /* 7 bytes + 0x00 */
 #define HOST_SNAP_VERSION 1u
+#define HOST_SNAP_VERSION_OPSTATE 2u   /* a world with operator state (issue 139): + operator state section */
+#define HOST_OPSTATE_MAGIC "SUOPSTAT"  /* 8 bytes + 0x00 */
+#define HOST_OPSTATE_MAGIC_BYTES 9u
+#define HOST_OPSTATE_VERSION 1u
+#define HOST_OPSTATE_HEADER (HOST_OPSTATE_MAGIC_BYTES + 4u + 4u)
 #define HOST_SNAP_HEADER (8u + 4u + 32u + 8u + 8u)
 #define HOST_INPUT_MAGIC "SUINPUT"  /* 7 bytes + 0x00 */
 #define HOST_INPUT_VERSION 1u
@@ -581,6 +587,13 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
                     (unsigned long long)su_world_row_count(hw->w),
                     st == SU_E_RESOURCE_LIMIT ? " (capacity above the operator's row limit, or out of memory)" : "");
             goto fail;
+        }
+    }
+    /* Operator state (issue 139): owned by the instances; the world keeps the pointers for snapshots and steps. */
+    for (i = 0; i < hw->sched.count; i++) {
+        if (hw->ops[i] != NULL && hw->ops[i]->state != NULL) {
+            hw->opstate[i] = hw->ops[i]->state(hw->sched.sys[i].host_inst);
+            hw->opstate_count += hw->opstate[i] != NULL ? 1u : 0u;
         }
     }
     compute_identity(hw);
@@ -1256,6 +1269,12 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
         }
         st = su_sched_run_ticks_opt(w->w, &w->sched, 1u, NULL, NULL, NULL, &one, &failed);
         if (st != SU_OK || one != 1u) {
+            uint32_t k;
+            for (k = 0; k < w->sched.count; k++) {
+                if (w->opstate[k] != NULL) {
+                    su_hstate_abort(w->opstate[k]); /* operator state changes of the failed tick are dropped */
+                }
+            }
             if (undo != NULL) {
                 undo_record(w, undo, undo_n);
             }
@@ -1281,6 +1300,16 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
             break;
         }
         free(undo);
+        {
+            /* The tick published: its operator state changes become committed state (with SU_HOST_STATE_DROP_DEAD,
+             * after erasing the entries of entities the committed entity table no longer holds alive). */
+            uint32_t k;
+            for (k = 0; k < w->sched.count; k++) {
+                if (w->opstate[k] != NULL) {
+                    su_hstate_commit(w->opstate[k], su_world_entities_committed(w->w));
+                }
+            }
+        }
         if (r != NULL) {
             drop_record(w, find_record(w, t));
         }
@@ -1324,6 +1353,132 @@ uint32_t su_host_read(const SuHostWorld *w, uint32_t field_id, uint64_t first, u
 
 /* ---------- snapshots ---------- */
 
+/* Operator state section (issue 139): "SUOPSTAT" 0x00 | u32 version | u32 system count | per system with state, in
+ * schedule order: u32 schedule index | its encoding (su_hstate_encode). */
+static size_t opstate_size(const SuHostWorld *w) {
+    size_t n = HOST_OPSTATE_HEADER;
+    uint32_t i;
+    for (i = 0; i < w->sched.count; i++) {
+        if (w->opstate[i] != NULL) {
+            n += 4u + su_hstate_encoded_size(w->opstate[i]);
+        }
+    }
+    return n;
+}
+
+static void opstate_write(const SuHostWorld *w, uint8_t *p) {
+    uint32_t i;
+    memcpy(p, HOST_OPSTATE_MAGIC, HOST_OPSTATE_MAGIC_BYTES);
+    put_u32(p + HOST_OPSTATE_MAGIC_BYTES, HOST_OPSTATE_VERSION);
+    put_u32(p + HOST_OPSTATE_MAGIC_BYTES + 4u, w->opstate_count);
+    p += HOST_OPSTATE_HEADER;
+    for (i = 0; i < w->sched.count; i++) {
+        if (w->opstate[i] != NULL) {
+            put_u32(p, i);
+            su_hstate_encode(w->opstate[i], p + 4u);
+            p += 4u + su_hstate_encoded_size(w->opstate[i]);
+        }
+    }
+}
+
+/* Parses the section strictly into every state's working side (the committed states are untouched). On failure the
+ * loaded sides are dropped and err says why (SU_E_PARSE). */
+static uint32_t opstate_load(SuHostWorld *w, const uint8_t *p, size_t len, SuHostError *err) {
+    size_t pos = HOST_OPSTATE_HEADER;
+    uint32_t i;
+    char why[160];
+    uint32_t st = SU_OK;
+    if (len < HOST_OPSTATE_HEADER || memcmp(p, HOST_OPSTATE_MAGIC, HOST_OPSTATE_MAGIC_BYTES) != 0 ||
+        rd_u32(p + HOST_OPSTATE_MAGIC_BYTES) != HOST_OPSTATE_VERSION ||
+        rd_u32(p + HOST_OPSTATE_MAGIC_BYTES + 4u) != w->opstate_count) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX,
+                       "operator state section: magic, version or system count is wrong");
+    }
+    for (i = 0; i < w->sched.count && st == SU_OK; i++) {
+        size_t used = 0;
+        if (w->opstate[i] == NULL) {
+            continue;
+        }
+        if (len - pos < 4u || rd_u32(p + pos) != i) {
+            st = set_err(err, SU_E_PARSE, i, UINT64_MAX, "operator state section: system index %u expected",
+                         (unsigned)i);
+            break;
+        }
+        pos += 4u;
+        why[0] = '\0';
+        st = su_hstate_load(w->opstate[i], p + pos, len - pos, &used, why, sizeof why);
+        if (st != SU_OK) {
+            set_err(err, st, i, UINT64_MAX, "operator state of system %u (%s): %s", (unsigned)i,
+                    w->sched.sys[i].system_id, why);
+            break;
+        }
+        pos += used;
+    }
+    if (st == SU_OK && pos != len) {
+        st = set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "operator state section has trailing bytes");
+    }
+    if (st != SU_OK) {
+        for (i = 0; i < w->sched.count; i++) {
+            if (w->opstate[i] != NULL) {
+                su_hstate_abort(w->opstate[i]);
+            }
+        }
+    }
+    return st;
+}
+
+/* Exchanges every state's committed and loaded sides (a second call undoes the first). */
+static void opstate_swap(SuHostWorld *w) {
+    uint32_t i;
+    for (i = 0; i < w->sched.count; i++) {
+        if (w->opstate[i] != NULL) {
+            su_hstate_swap(w->opstate[i]);
+        }
+    }
+}
+
+/* Splits a snapshot for w: header checks, then the state, log and operator state parts (version 2 only;
+ * op_off and op_len 0 otherwise). Every part must be in range and the parts must cover len exactly. */
+static uint32_t snapshot_split(const SuHostWorld *w, const uint8_t *buf, size_t len, uint64_t *state_len,
+                               uint64_t *log_len, size_t *op_off, size_t *op_len, SuHostError *err) {
+    uint32_t version;
+    uint64_t rest;
+    *op_off = 0;
+    *op_len = 0;
+    if (len < HOST_SNAP_HEADER + 8u || memcmp(buf, HOST_SNAP_MAGIC, 8u) != 0 ||
+        ((version = rd_u32(buf + 8)) != HOST_SNAP_VERSION && version != HOST_SNAP_VERSION_OPSTATE)) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "not a host snapshot (magic or version)");
+    }
+    if (memcmp(buf + 12, w->identity, 32u) != 0) {
+        return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
+                       "snapshot belongs to a different world identity (schema, systems, capacity or caps)");
+    }
+    if (version != (w->opstate_count > 0u ? HOST_SNAP_VERSION_OPSTATE : HOST_SNAP_VERSION)) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX,
+                       "snapshot version %u does not match the world (version 2 exactly when it has operator state)",
+                       (unsigned)version);
+    }
+    *state_len = rd_u64(buf + 52);
+    if (*state_len > len - HOST_SNAP_HEADER - 8u) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot state length is out of range");
+    }
+    rest = len - HOST_SNAP_HEADER - 8u - *state_len;
+    *log_len = rd_u64(buf + HOST_SNAP_HEADER + *state_len);
+    if (w->opstate_count == 0u) {
+        if (*log_len != rest) {
+            return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+        }
+        return SU_OK;
+    }
+    if (rest < 8u || *log_len > rest - 8u ||
+        rd_u64(buf + HOST_SNAP_HEADER + 8u + *state_len + *log_len) != rest - 8u - *log_len) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+    }
+    *op_off = (size_t)(HOST_SNAP_HEADER + 8u + *state_len + *log_len + 8u);
+    *op_len = (size_t)(rest - 8u - *log_len);
+    return SU_OK;
+}
+
 static uint32_t snapshot_parts(const SuHostWorld *w, size_t *state_len, uint64_t *log_len, size_t *total) {
     uint32_t st;
     st = su_world_canonical_size(w->w, state_len);
@@ -1338,6 +1493,13 @@ static uint32_t snapshot_parts(const SuHostWorld *w, size_t *state_len, uint64_t
         return SU_E_RESOURCE_LIMIT;
     }
     *total = HOST_SNAP_HEADER + *state_len + 8u + (size_t)*log_len;
+    if (w->opstate_count > 0u) {
+        size_t op = opstate_size(w);
+        if (op > SIZE_MAX - 8u - *total) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        *total += 8u + op;
+    }
     return SU_OK;
 }
 
@@ -1371,7 +1533,7 @@ uint32_t su_host_snapshot_write(const SuHostWorld *w, uint8_t *buf, size_t cap, 
         return buf == NULL ? SU_E_INVALID_ARGUMENT : SU_E_RESOURCE_LIMIT;
     }
     memcpy(buf, HOST_SNAP_MAGIC, 8u);
-    put_u32(buf + 8, HOST_SNAP_VERSION);
+    put_u32(buf + 8, w->opstate_count > 0u ? HOST_SNAP_VERSION_OPSTATE : HOST_SNAP_VERSION);
     memcpy(buf + 12, w->identity, 32u);
     put_u64(buf + 44, su_world_tick(w->w));
     put_u64(buf + 52, (uint64_t)state_len);
@@ -1386,6 +1548,11 @@ uint32_t su_host_snapshot_write(const SuHostWorld *w, uint8_t *buf, size_t cap, 
     st = su_evlog_dump(su_ent_rt_log(w->sched.ent), buf + off, log_len, &log_got);
     if (st != SU_OK || log_got != log_len) {
         return st != SU_OK ? st : SU_E_INTERNAL;
+    }
+    if (w->opstate_count > 0u) {
+        off += (size_t)log_len;
+        put_u64(buf + off, (uint64_t)(total - off - 8u));
+        opstate_write(w, buf + off + 8u);
     }
     return SU_OK;
 }
@@ -1408,27 +1575,18 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
     uint64_t lm = 0;
     uint8_t *check = NULL;
     size_t check_len = 0;
+    size_t op_off = 0;
+    size_t op_len = 0;
+    int op_loaded = 0;
     uint32_t st;
 
     clear_err(err);
     if (w == NULL || buf == NULL) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "invalid arguments");
     }
-    if (len < HOST_SNAP_HEADER + 8u || memcmp(buf, HOST_SNAP_MAGIC, 8u) != 0 ||
-        rd_u32(buf + 8) != HOST_SNAP_VERSION) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "not a host snapshot (magic or version)");
-    }
-    if (memcmp(buf + 12, w->identity, 32u) != 0) {
-        return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
-                       "snapshot belongs to a different world identity (schema, systems, capacity or caps)");
-    }
-    state_len = rd_u64(buf + 52);
-    if (state_len > len - HOST_SNAP_HEADER - 8u) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot state length is out of range");
-    }
-    log_len = rd_u64(buf + HOST_SNAP_HEADER + state_len);
-    if (log_len != len - HOST_SNAP_HEADER - 8u - state_len) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+    st = snapshot_split(w, buf, len, &state_len, &log_len, &op_off, &op_len, err);
+    if (st != SU_OK) {
+        return st;
     }
     fd = schedule_fields(&w->sched);
     if (fd == NULL) {
@@ -1471,6 +1629,14 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
         set_err(err, st, UINT32_MAX, UINT64_MAX, "event log does not restore");
         goto fail;
     }
+    if (w->opstate_count > 0u) {
+        /* Operator state into the states' free sides (the committed states are untouched until the swap). */
+        st = opstate_load(w, buf + op_off, op_len, err);
+        if (st != SU_OK) {
+            goto fail;
+        }
+        op_loaded = 1;
+    }
     /* Swap in the new state, then require the bytes to be canonical: the restored state must encode back to
      * exactly the input. Otherwise the old state is put back. */
     old_w = w->w;
@@ -1479,6 +1645,9 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
     w->sched.ent = nrt;
     nw = NULL;
     nrt = NULL;
+    if (op_loaded) {
+        opstate_swap(w);
+    }
     check = malloc(len);
     if (check == NULL || su_host_snapshot_write(w, check, len, &check_len) != SU_OK || check_len != len ||
         memcmp(check, buf, len) != 0) {
@@ -1486,6 +1655,9 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
         nrt = w->sched.ent;
         w->w = old_w;
         w->sched.ent = old_rt;
+        if (op_loaded) {
+            opstate_swap(w);
+        }
         st = set_err(err, check == NULL ? SU_E_RESOURCE_LIMIT : SU_E_TYPE, UINT32_MAX, UINT64_MAX,
                      "snapshot bytes are not canonical");
         goto fail;
@@ -1500,6 +1672,17 @@ fail:
     su_ent_rt_destroy(nrt);
     su_world_destroy(nw);
     return st;
+}
+
+uint32_t su_host_operator_state(const SuHostWorld *w, uint32_t index, const SuHostState **state) {
+    if (state != NULL) {
+        *state = NULL;
+    }
+    if (w == NULL || state == NULL || index >= w->sched.count || w->opstate[index] == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *state = w->opstate[index];
+    return SU_OK;
 }
 
 uint32_t su_host_digest(const SuHostWorld *w, uint8_t out[32]) {
@@ -1670,27 +1853,17 @@ static uint32_t rollback_scratch(SuHostWorld *w) {
 uint32_t su_host_snapshot_restore_inplace(SuHostWorld *w, const uint8_t *buf, size_t len, SuHostError *err) {
     uint64_t state_len;
     uint64_t log_len;
+    size_t op_off = 0;
+    size_t op_len = 0;
     uint32_t st;
 
     clear_err(err);
     if (w == NULL || buf == NULL) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "invalid arguments");
     }
-    if (len < HOST_SNAP_HEADER + 8u || memcmp(buf, HOST_SNAP_MAGIC, 8u) != 0 ||
-        rd_u32(buf + 8) != HOST_SNAP_VERSION) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "not a host snapshot (magic or version)");
-    }
-    if (memcmp(buf + 12, w->identity, 32u) != 0) {
-        return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
-                       "snapshot belongs to a different world identity (schema, systems, capacity or caps)");
-    }
-    state_len = rd_u64(buf + 52);
-    if (state_len > len - HOST_SNAP_HEADER - 8u) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot state length is out of range");
-    }
-    log_len = rd_u64(buf + HOST_SNAP_HEADER + state_len);
-    if (log_len != len - HOST_SNAP_HEADER - 8u - state_len) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+    st = snapshot_split(w, buf, len, &state_len, &log_len, &op_off, &op_len, err);
+    if (st != SU_OK) {
+        return st;
     }
     st = rollback_scratch(w);
     if (st != SU_OK) {
@@ -1710,9 +1883,19 @@ uint32_t su_host_snapshot_restore_inplace(SuHostWorld *w, const uint8_t *buf, si
         return set_err(err, st, UINT32_MAX, UINT64_MAX,
                        st == SU_E_SCHEMA_MISMATCH ? "event log capacity disagrees" : "event log does not parse");
     }
-    /* 3. Commit: neither step can fail after the checks above. */
+    /* 2b. Operator state into the states' free sides (allocated with the world; the committed states are untouched). */
+    if (w->opstate_count > 0u) {
+        st = opstate_load(w, buf + op_off, op_len, err);
+        if (st != SU_OK) {
+            return st;
+        }
+    }
+    /* 3. Commit: none of these steps can fail after the checks above. */
     su_world_restore_canonical_commit(w->w, buf + HOST_SNAP_HEADER, w->rb_ents);
     (void)su_evlog_swap(su_ent_rt_log(w->sched.ent), w->rb_log);
+    if (w->opstate_count > 0u) {
+        opstate_swap(w);
+    }
     return SU_OK;
 }
 
