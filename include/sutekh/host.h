@@ -568,17 +568,24 @@ SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, S
  * run, any later system, or the boundary) leaves the committed state exactly as it was, as for columns.
  *
  * Bounds (ENGINE_CONSTITUTION C11): every buffer is allocated at world creation for the declared maximum: two
- * arenas of state_max_bytes and two entry tables of state_max_entries (24 bytes each), plus 4 bytes per entry for
- * compaction (calloc'd, so untouched pages cost no physical memory on systems with lazy allocation). Nothing is
+ * arenas of 2 x state_max_bytes each (4 x state_max_bytes in all; the slack is what keeps compactions rare, below),
+ * two entry tables of state_max_entries (24 bytes each) and 4 bytes per entry for compaction (calloc'd, so untouched
+ * pages cost no physical memory on systems with lazy allocation; pages once written stay resident). Nothing is
  * allocated in a tick or by su_host_snapshot_restore_inplace. A change that would exceed either maximum is refused
  * with SU_E_RESOURCE_LIMIT and changes nothing; whether a change fits depends only on the logical state (entries and
  * the sum of value lengths), never on fragmentation (the engine compacts). run may handle the refusal or return it:
  * the tick then fails with SU_E_RESOURCE_LIMIT, nothing is committed, and err->message says the state cap was
  * reached.
  * Costs: lookup O(log n); inserting or erasing a key moves the entry table (O(n) entries of 24 bytes); the first
- * change in a tick copies the entry table (O(n)); value bytes are never copied per tick (a changed value is
- * written to free arena space, copy-on-write; a value already written in this tick and rewritten with the same length
- * is reused in place), except by a compaction when the free space runs out, which copies the live values once.
+ * change in a tick copies the entry table (O(n)); value bytes are not copied per tick (a changed value is written to
+ * free arena space, copy-on-write; a value already written in this tick and rewritten with the same length is reused
+ * in place). When an arena's free space runs out, a compaction copies the live values (at most state_max_bytes) once
+ * and leaves at least state_max_bytes free, so compactions copy at most as many bytes as were written since the
+ * previous one: amortized O(1) per written byte, also with the live state at the cap. The tick that compacts pays
+ * O(live bytes) at once (worst case: state_max_bytes copied in one change).
+ * With SU_HOST_STATE_DROP_DEAD the publish scans the entries (O(n)) only when an entity may have died since the last
+ * scan: su_host_despawn since then, a despawn applied by the tick (seen in the tick's event records, O(events of the
+ * tick)), or a restore. Other ticks pay nothing for it.
  *
  * Keys and entities (ENGINE_CONSTITUTION C05): keys are stable IDs, never addresses. entity is normally an entity
  * handle (slot | generation << 32), which stays valid across snapshot, restore and replay because the entity table
@@ -594,18 +601,37 @@ SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, S
  *
  * Pointers: data pointers returned by the functions below point into engine memory; they are valid until the next
  * change of that state (put, alloc, modify, erase, erase_entity) or the end of the run call (for views: until the
- * next call that changes the world). put's data must not point into the state (SU_E_INVALID_ARGUMENT).
+ * next call that changes the world). Only the pointers of su_host_state_alloc and su_host_state_modify may be
+ * written. The pointers of su_host_state_get and su_host_state_entry (and everything read through a view) are const
+ * for a reason: they may point at committed bytes shared with the last published state, so writing through them
+ * changes committed state (and later snapshots, digests and rollbacks) without the engine noticing; it is a contract
+ * violation the engine does not detect (ENGINE_CONSTITUTION C07). put's data must not point into the state
+ * (SU_E_INVALID_ARGUMENT).
  *
- * Parallel chunked operators (issue 142; not implemented): the API is designed to allow a deterministic merge. A
- * chunked call would get a journal handle: reads see the state as it was before the operator's first chunk;
- * put/alloc/erase/erase_entity append to a per-chunk journal (bounded, allocated at world creation from a new
- * trailing descriptor field) and modify is limited to keys whose entity slot lies in the chunk's row range. After the
- * last chunk the engine applies the journals in canonical chunk order (0 .. chunk_count - 1), each in call order, so
- * the result depends on the chunking (a function of the row count) and never on thread timing; the same key written
- * by two chunks keeps the later chunk's value (or a declared merge callback combines them in chunk order, part of the
- * identity). The caps are then checked on the merged result, which fails the tick with SU_E_RESOURCE_LIMIT. An
- * operator keying per-entity data by handle and writing only its own rows never conflicts. No function here returns
- * memory that must survive a call, so a journal needs no change to these signatures.
+ * Parallel chunked operators (issue 142; plan, not implemented). Lockstep peers may run with different thread counts,
+ * so nothing below may depend on the worker count:
+ *   - Opt-in by a descriptor flag (part of the identity). An operator without it always gets the serial call
+ *     described above (one call, read-your-writes, the guarantees above), on any number of workers. An operator with
+ *     it always gets the chunked semantics below, also when the engine runs every chunk on one thread and also when
+ *     the world has a single chunk (chunk_count == 1).
+ *   - The partition depends only on the world's capacity: fixed-size row chunks (the chunk size is a constant of the
+ *     engine version, like SU_CHUNK_SLOTS for IR systems); the worker count only decides which thread runs which chunk.
+ *   - Reads: every chunk sees the state as it was when the operator's run began in this tick (frozen; other chunks'
+ *     changes are never visible). A chunk sees its own changes through su_host_state_get and su_host_state_modify
+ *     (its journal is looked up first); su_host_state_count, su_host_state_lower_bound and su_host_state_entry
+ *     enumerate the frozen state only.
+ *   - Writes: put/alloc/modify/erase/erase_entity append to the chunk's own journal (modify copies the value into
+ *     it). Each chunk's journal has a declared capacity (operations and bytes; new trailing descriptor fields) and
+ *     is allocated at world creation for every chunk of the capacity. A change that does not fit in the chunk's
+ *     journal is refused with SU_E_RESOURCE_LIMIT, modify included: the guarantee that modify is never refused for
+ *     lack of space holds for the serial call only. The refusal depends only on that chunk's own calls, so it is
+ *     deterministic. The journal capacities are declared caps and join the semantic hash like state_max_*.
+ *   - Merge: after the last chunk the engine applies the journals in canonical chunk order (0 .. chunk_count - 1),
+ *     each in call order. The same key changed by two chunks keeps the later chunk's result (or a declared merge
+ *     callback combines the values in chunk order; the callback is part of the identity). The caps (state_max_*) are
+ *     checked on the merged result; exceeding one fails the tick with SU_E_RESOURCE_LIMIT and nothing is committed.
+ *   - An operator keying per-entity data by handle and changing only its own rows' keys never conflicts. Because the
+ *     signatures here return no memory that must survive a call, the journal needs no change to them.
  *
  * Identity: a declared state folds state_flags, state_max_entries and state_max_bytes into the system's semantic
  * hash (so into the world identity): snapshots and replays only load into a world with the same declaration.
@@ -631,6 +657,8 @@ typedef struct SuHostStateInfo {
     uint64_t max_bytes;    /* declared */
     uint32_t flags;        /* declared state_flags */
     uint32_t writable;     /* 1 inside run (run->state), 0 for a view */
+    uint64_t compactions;  /* diagnostic: compactions since the world was created (not state: not in snapshots or
+                            * digests, not reset by restores) */
 } SuHostStateInfo;
 
 /* Read access, on run->state or a view. SU_E_INVALID_ARGUMENT for NULL arguments or an index out of range. */
@@ -655,7 +683,8 @@ SU_HOST_API uint32_t su_host_state_put(SuHostState *s, uint64_t entity, uint64_t
 /* Inserts or replaces (entity, sub) with len zero bytes and returns them writable in *data. */
 SU_HOST_API uint32_t su_host_state_alloc(SuHostState *s, uint64_t entity, uint64_t sub, uint32_t len, void **data);
 /* The existing value of (entity, sub), writable in place (copy-on-write: the committed bytes are not touched until
- * the tick publishes); *data NULL and *len 0 when there is no entry. Never refused for lack of space. */
+ * the tick publishes); *data NULL and *len 0 when there is no entry. Never refused for lack of space (in this
+ * version's serial call; see the chunked plan above for issue 142). */
 SU_HOST_API uint32_t su_host_state_modify(SuHostState *s, uint64_t entity, uint64_t sub, void **data,
                                           uint32_t *len);
 /* Erases (entity, sub) if present; *erased (optional) receives 1 or 0. */

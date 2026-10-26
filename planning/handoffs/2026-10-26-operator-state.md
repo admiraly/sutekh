@@ -4,8 +4,9 @@
 
 ## State and scope
 
-Locally verified on `feat/issue-139-operator-state`, based on `origin/main` `31192d9` (merge of PR #147, issue 137).
-CI and integration are pending.
+Locally verified on `feat/issue-139-operator-state`. The first revision was based on `origin/main` `31192d9` (merge
+of PR #147, issue 137). Review round 1 is rebased onto `70ce82d` (merge of PR #150). Integration is pending. The
+results below "Local validation" are from the first revision; review round 1 is at the end.
 
 Exact modified paths:
 
@@ -43,17 +44,28 @@ Chosen over operator serialize/deserialize hooks. Reasons:
    caps), straight into W, which is preallocated. The in-place restore stays allocation-free and accepts exactly
    what the allocating restore accepts.
 4. **Bounded (C11) with defined exhaustion.** Everything is allocated at world creation: two arenas of
-   `state_max_bytes`, two entry tables, one compaction permutation. A change past `state_max_entries` or
+   2 x `state_max_bytes` each (review round 1; before: 1 x), two entry tables, one compaction permutation. A change past `state_max_entries` or
    `state_max_bytes` is `SU_E_RESOURCE_LIMIT` and changes nothing. Whether a change fits depends only on the logical
    size, because the engine compacts. A compaction never writes C's arena: it copies into the spare arena, or works
    in place once W has its own arena.
 5. **#142 compatible** (below). Every call is a keyed operation that can be journaled per chunk and merged in chunk
    order. No function returns memory that must outlive a call.
 
-Cost model (documented in `host.h`): lookup O(log n); inserting or erasing a key moves the entry table (O(n) x 24
-bytes); the first change in a tick copies the entry table; value bytes are copied only on write (once per value per
-tick, or reused in place when rewritten at the same length in the same tick) and by compactions. Not measured; no
-performance claim is made.
+Cost model (documented in `host.h`), by construction:
+- lookup O(log n); inserting or erasing a key moves the entry table (O(n) x 24 bytes);
+- the first change in a tick copies the entry table;
+- value bytes are copied only on write: once per value per tick, or reused in place when rewritten at the same
+  length in the same tick;
+- compactions: each arena is 2 x `state_max_bytes`, so a compaction (copies at most the live bytes, at most
+  `state_max_bytes`) leaves at least `state_max_bytes` free. Compactions therefore copy at most as many bytes as
+  were written since the previous one: amortized O(1) per written byte, also with the live state at the cap. The
+  compacting change itself pays O(live bytes) at once. Memory cost: 4 x `state_max_bytes` of virtual memory per
+  operator and world (calloc'd: pages are resident only once written);
+- `SU_HOST_STATE_DROP_DEAD` purge: O(n) only on a publish after which an entity may have died (a
+  `su_host_despawn` since the last purge, a despawn applied by the tick, or a restore); O(events of the tick) to
+  find out; nothing otherwise.
+
+Timing was not measured, and no performance claim is made.
 
 ## Other decisions
 
@@ -83,26 +95,44 @@ performance claim is made.
   by `su_host_despawn` before it). Restored keys must have a generation in 1..0xFFFFFFFE. Without the flag, `entity`
   is an opaque u64 and the operator is responsible (`su_host_state_erase_entity`). Both rules depend only on state
   plus entity table, so both are deterministic. Entries of an entity despawned between ticks stay visible (and in
-  snapshots) until the next tick publishes. That is documented.
+  snapshots) until the next tick publishes. That is documented. The purge scan only runs when an entity may have
+  died since the last one: `su_host_despawn` marks the states, `su_host_step` looks for `SU_EVENT_DESPAWNED` among
+  the tick's event records (or assumes a death when the ring evicted some of them before they were read), and a
+  restore marks them too. An IR event that uses that kind value only causes an extra scan.
 - **Changes only inside `run`.** Changes through a view (`su_host_operator_state`) or after `run` returns are
   `SU_E_INVALID_ARGUMENT`, even with the const cast away, so every state change is a function of the tick and
   replays reproduce it. `put` from the state's own memory is refused.
 - **Cap failures:** `run` may handle `SU_E_RESOURCE_LIMIT` or return it. The tick then fails with that code, nothing
-  is committed, and the step message ends with "(operator state cap reached)".
+  is committed, and the step message ends with "(operator state cap reached)", only when the returned code is
+  `SU_E_RESOURCE_LIMIT` and the run saw a cap refusal.
+- **Writable pointers:** only those of `su_host_state_alloc` and `su_host_state_modify`. The `get`/`entry`/view
+  pointers may point at bytes shared with the committed state, so writing through them corrupts committed state
+  undetected (documented as a contract violation, C07).
 
 ## Plan for issue 142 (parallel chunked operators; not implemented, also in `host.h`)
 
-- A chunked call gets a journal handle. Reads see the state as it was before the operator's first chunk.
-  put/alloc/erase/erase_entity append to a per-chunk journal. The journal is bounded and allocated at creation from
-  a new trailing descriptor field.
-- `modify` is limited to keys whose entity slot lies in the chunk's row range.
-- After the last chunk, the engine applies the journals in canonical chunk order (0..chunk_count-1), each in call
-  order. The chunking depends only on the row count, so the result never depends on thread timing.
-- The same key written by two chunks keeps the later chunk's value, or a declared merge callback combines the
-  values in chunk order. The callback is part of the identity.
-- Caps are checked on the merged result; exceeding them fails the tick (`SU_E_RESOURCE_LIMIT`).
-- An operator that keys per-entity data by handle and writes only its own rows never conflicts. The signatures need
-  no change.
+Rewritten in review round 1. The first version was unsound for lockstep: its results depended on whether the
+engine chose chunked or serial runs, which depends on the worker count.
+
+- **Selection** is by declaration only: a descriptor flag that is part of the identity. Without it, an operator always
+  gets today's serial call (read-your-writes, `modify` never refused for space), on any number of workers. With it,
+  the operator always gets chunked semantics, also on one thread and also for a single chunk (`chunk_count == 1`).
+- **Partition:** a function of the world's capacity only: fixed-size row chunks, the chunk size an engine-version
+  constant like `SU_CHUNK_SLOTS`. Workers only decide which thread runs which chunk.
+- **Reads:** every chunk sees the state as it was when the operator's run began in this tick, frozen, and never
+  another chunk's changes. A chunk sees its own changes through `get` and `modify` (its journal is consulted first).
+  `count`, `lower_bound` and `entry` enumerate the frozen state only.
+- **Writes:** `put`/`alloc`/`modify`/`erase`/`erase_entity` append to the chunk's journal; `modify` copies the value
+  in. Each journal has a declared capacity (operations and bytes, new trailing descriptor fields), allocated at
+  world creation for every chunk of the capacity. A change that does not fit is `SU_E_RESOURCE_LIMIT`, `modify`
+  included. That refusal depends only on the chunk's own calls, so it is deterministic. The journal capacities are
+  declared caps and join the semantic hash.
+- **Merge:** after the last chunk the journals are applied in chunk order (0..chunk_count-1), each in call order.
+  The same key changed by two chunks keeps the later chunk's result, or a declared merge callback (part of the
+  identity) combines them in chunk order. `state_max_*` are checked on the merged result; exceeding one fails the
+  tick, nothing committed.
+- An operator keying per-entity data by handle and changing only its own rows' keys never conflicts. No signature
+  changes.
 
 ## Local validation
 
@@ -218,17 +248,65 @@ record/verify), and the source is restored and compared. 22 engine mutants, **22
 Repository checks: `python3 tools/validate_pack.py --check-report` passed, `python3
 tools/check_repository_license.py` passed, `git diff --check` clean.
 
-## Source SHA-256 (the validated sources)
+## Review round 1
 
-- `include/sutekh/host.h` `e2c1169691ece2125c0f623d22523faf73dbffe727070dec0f39caab433cbc5c`
-- `src/host/su_host_state.c` `525b68302d2a8c2a10695d3290b835138aaa690ae77e1980418e7a936d9e92c6`
-- `src/host/su_host_state.h` `37438bcdafc40effb41d1ac3e5112d95cd227ec0750381d31d4ecf33a5420406`
-- `src/host/su_host.c` `078c596714e63d2a0c4c686abcab57e4767ca12814a9edf6f69df285b3126003`
-- `src/host/su_host_registered.c` `f27dc31d717b94a5adb1917244b562e99a95dffc9b1e33559c6fc8dd66eb9b8b`
-- `src/host/su_host_internal.h` `469d63f0e6205ccbb187d9b084bf30ab8212cdbe0e09d6e57979fce5dc6b2fd5`
-- `src/host/su_host_operators.c` `12eae5870dd583ad319592be0da24626adb4c9294d05962bda10a91c4bdfb739`
-- `tests/host/test_host_opstate.c` `6357b06b07af6f174ba29a2396ad634e245477533f3c1154b7e42ee343e09766`
-- `cmake/SutekhHostOps.cmake` `761fbe7ef0d7e7df453b595cddfbbd7f9264c5fc16cc394e9cf3564d1b4f2f1f`
+The independent review returned PASS-WITH-NITS with no correctness bug; CI passed (7 jobs). Fixes:
+
+1. **Compaction near the byte cap.** Each arena is now 2 x `state_max_bytes`. Before, with the live state near the
+   cap, the first rewrite of every tick compacted all of W, costing O(live) per tick. Now a compaction leaves at
+   least `state_max_bytes` free, so it is amortized O(1) per written byte. Memory: 4 x `state_max_bytes` virtual per
+   operator and world (was 2x), resident only once written. `SuHostStateInfo.compactions` (a diagnostic counter,
+   not state) makes it testable: at 4,024 of 4,096 live bytes, 100 changing ticks compact at most 4 times (101
+   without the slack, mutant M27).
+2. **DROP_DEAD purge only after possible deaths.** Triggers: `su_host_despawn`, a `SU_EVENT_DESPAWNED` record in the
+   tick's events (or events evicted before being read), or a restore. Otherwise the publish does no scan. Costs are
+   documented in `host.h`. New tests: a despawn applied inside the tick (`game.clear` is now IR 0.2 with
+   `despawn_self`), and a restored snapshot holding entries that were purged after it was taken.
+3. **"(operator state cap reached)"** is appended only when `run` returned `SU_E_RESOURCE_LIMIT` (tested with a run
+   that sees refusals and then fails with another code).
+4. **Pointers** (`host.h`): only `alloc`/`modify` pointers are writable. Writing through `get`/`entry`/view pointers
+   corrupts committed state undetected.
+5. **#142 plan rewritten** (`host.h` and the section above):
+   - selection by declaration only, journal semantics even for one chunk;
+   - the partition depends only on capacity;
+   - reads are frozen, plus the chunk's own changes through `get`/`modify`;
+   - per-chunk journal caps with deterministic `SU_E_RESOURCE_LIMIT`, `modify` included;
+   - the caps are part of the identity.
+   The `modify` comment now limits "never refused" to the serial call.
+
+Also tracked separately (not touched here): the `su_replay_open` use-after-free on an error path is #148; the
+allocation when an input record applies in `su_host_step` is #149.
+
+Test changes:
+- canonicality runs 300 ticks, and only the reordered world's placed bytes are counted (more than one arena, so it
+  compacts);
+- the allocation test counts each world separately: 600 ticks each, each placing more than an arena, 0
+  allocations in 1,200 ticks plus the in-place restore.
+
+Validation (same machine and commands as above):
+
+- GCC Debug **145/145**, GCC Release **145/145** (skip: `audio_device`), GCC Debug `SUTEKH_NATIVE=ON` **162/162** (skips:
+  `native_unwind`, `audio_device`); 0 warnings.
+- `host_opstate` 3040 checks, `host_opstate_dll` 3030, 0 failures.
+- Clang ASan+UBSan, `host_opstate*` and `host_registered*`: 19/19, 0 diagnostics.
+- Byte-identical comparison repeated against the new base `70ce82d` (Release, `git archive`, 136 tests): all files
+  identical, list hash `49a3d1717eb3f5d6a0a07f275998a8260ac3cf71f8cd5a3e57d037a3d157f418`, unchanged.
+- Pack report, license check and `git diff --check` pass.
+
+Mutation check, round 1:
+- the 21 earlier mutants (M1-M20, M22) plus five new ones: tick despawns not detected, host despawn not noted, a
+  restore not re-arming the purge, the cap note on any failure code, and the arena without slack;
+- **26 of 26 killed**;
+- M21 (the copy compaction keeps the value being replaced) is now an equivalent mutant: the slack absorbs it, and it
+  only wastes space until the next compaction. It was dropped.
+
+Source SHA-256 (round 1):
+- `include/sutekh/host.h` `b46e9b217868b9b6a8c2ac105cb00b9a629fd931566e577d4065f8234ae6a39d`
+- `src/host/su_host_state.c` `6f4f09038e813d98efa69a42f95f204c8112850804c832b9f8178f5fa634e58c`
+- `src/host/su_host_state.h` `d8b4a4d0bc23cebfa4404e835ebc8eb6725d40cec30fafb56cb8552610e00aa1`
+- `src/host/su_host.c` `1fe8fb1f6524e251a8275aa2c111a14e6b45d2d8561140cbee6fbc7c69ce1f24`
+- `src/host/su_host_registered.c` `9da7d37f7b6599cc6aeb7f93296d2516461704591d0dc48a94b9af4fded83ce2`
+- `tests/host/test_host_opstate.c` `525003be287832a1e5b649c4ca9bc2d2179ddbb2e2d3835e325f72933429d89f`
 
 ## Unrun checks and limitations
 
@@ -236,7 +314,7 @@ tools/check_repository_license.py` passed, `git diff --check` clean.
   `_Static_assert` values are stated for it). No CI result is claimed.
 - **No timing measured.** The cost model above is by construction, not measured.
 - **Allocation counting** covers the static Linux build only, as in #137. `su_host_step` still allocates when an input
-  record applies (pre-existing, outside this change), so the counted ticks run without inputs.
+  record applies (pre-existing, outside this change, #149), so the counted ticks run without inputs.
 - **In-process only**, as registered operators: the worker and `sutekh serve` do not see them.
 - **Not in scope:** state for built-in operators, host-side mutation between ticks (deliberately absent, so every
   change is part of a tick and replays reproduce it), the #142 journal (planned above).

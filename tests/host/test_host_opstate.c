@@ -104,6 +104,8 @@ void *__wrap_realloc(void *p, size_t n) {
                                                * descending key order, CHURN again (in-place compaction of values that
                                                * are no longer in key order) */
 #define CMD_FILL UINT32_C(0xFFFF0009)         /* put 64-byte values at subs 2000.. until refused (err) */
+#define CMD_KILL UINT32_C(0xFFFF000A)         /* game.clear despawns the row in the tick (despawn_self) */
+#define CMD_FLOOD_FAIL UINT32_C(0xFFFF000B)   /* lenient flood, then the run fails with another code */
 
 enum { F_HIT = 1, F_AMT = 2, F_BRICKS = 3, F_BYTES = 4, F_SUM = 5, F_ERR = 6 };
 enum { C_HIT, C_AMT, C_BRICKS, C_BYTES, C_SUM, C_ERR, C_COUNT };
@@ -239,6 +241,7 @@ static uint32_t row_op(const SuHostOperatorRun *r, SuHostState *s, uint64_t i, u
         return su_host_state_erase_entity(s, e, NULL);
     case CMD_FLOOD:
     case CMD_FLOOD_LENIENT:
+    case CMD_FLOOD_FAIL:
         for (b = 0; b < hit && st == SU_OK; b++) {
             void *v = NULL;
             st = su_host_state_alloc(s, e, b, brick_len(b), &v);
@@ -251,7 +254,7 @@ static uint32_t row_op(const SuHostOperatorRun *r, SuHostState *s, uint64_t i, u
             *err_out = st;
             return SU_OK;
         }
-        return st;
+        return amt == CMD_FLOOD_FAIL ? SU_E_CANDIDATE_FAILED : st;
     case CMD_CHURN:
     case CMD_CHURN_FAIL:
         st = churn(s, e, hit - 1u);
@@ -311,6 +314,8 @@ static uint32_t row_op(const SuHostOperatorRun *r, SuHostState *s, uint64_t i, u
         g_misuse_status = st == SU_OK && old != NULL ? su_host_state_put(s, e, 9u, old, len) : SU_E_INTERNAL;
         return SU_OK;
     }
+    case CMD_KILL:
+        return SU_OK;
     default:
         return damage(s, e, hit - 1u, amt, r->tick);
     }
@@ -464,13 +469,18 @@ static void game_build(Game *g, const SuHostOperatorDesc *d) {
                        "\"schema\":{\"id\":\"game.hull\",\"version\":1,\"layout_generation\":1},"
                        "\"numeric_profile\":\"u32_mod_v1\",\"fields\":["
                        "{\"id\":1,\"name\":\"hit\",\"type\":\"u32\",\"read\":false,\"write\":true},"
-                       "{\"id\":2,\"name\":\"amt\",\"type\":\"u32\",\"read\":false,\"write\":true}],");
+                       "{\"id\":2,\"name\":\"amt\",\"type\":\"u32\",\"read\":true,\"write\":true}],");
     put(&g->clear_cap, "\"schedule\":{\"phase\":\"simulate\",\"after\":[\"%s\"],\"before\":[],\"parallel\":\"serial\"},",
         d->system_id);
-    put(&g->clear_cap, "\"limits\":{\"max_instructions\":4096,\"max_rows\":1000000,\"allocation\":\"forbidden\"},"
-                       "\"tests\":[\"tests/host/test_host_opstate.c\"]}");
-    put(&g->clear_lir, "{\"ir_version\":\"0.1\",\"system_id\":\"game.clear\",\"numeric_profile\":\"u32_mod_v1\","
-                       "\"query\":\"game.hull\",\"instructions\":[{\"op\":\"const_u32\",\"dst\":\"z\",\"value\":0},"
+    put(&g->clear_cap, "\"limits\":{\"max_instructions\":4096,\"max_rows\":1000000,\"allocation\":\"forbidden\","
+                       "\"max_struct_per_row\":1,\"max_events_per_row\":0},"
+                       "\"tests\":[\"tests/host/test_host_opstate.c\"],\"ir_version\":\"0.2\"}");
+    put(&g->clear_lir, "{\"ir_version\":\"0.2\",\"system_id\":\"game.clear\",\"numeric_profile\":\"u32_mod_v1\","
+                       "\"query\":\"game.hull\",\"instructions\":[{\"op\":\"load_u32\",\"dst\":\"a\",\"field\":\"amt\"},"
+                       "{\"op\":\"const_u32\",\"dst\":\"k\",\"value\":4294901770},"
+                       "{\"op\":\"eq_u32\",\"dst\":\"c\",\"a\":\"a\",\"b\":\"k\"},"
+                       "{\"op\":\"despawn_self\",\"cond\":\"c\"},"
+                       "{\"op\":\"const_u32\",\"dst\":\"z\",\"value\":0},"
                        "{\"op\":\"store_u32\",\"field\":\"hit\",\"src\":\"z\"},"
                        "{\"op\":\"store_u32\",\"field\":\"amt\",\"src\":\"z\"}]}");
     put(&g->fixture, "{\"fixture_format\":\"0.1\",\"schema_id\":\"game.hull\",\"schema_version\":1,\"tick\":0,"
@@ -952,21 +962,24 @@ static void test_canonical(const Game *g) {
     if (a == NULL || b == NULL) {
         return;
     }
-    g_placed = 0;
-    for (t = 0; t < 150u; t++) {
+    placed_b = 0;
+    for (t = 0; t < 300u; t++) {
+        uint64_t p0;
         push_script(a, t);
         push_script(b, t);
         g_order = 0;
         step(a, 1u);
         g_order = 1;
+        p0 = g_placed;
         step(b, 1u);
+        placed_b += g_placed - p0;
         g_order = 0;
     }
-    placed_b = g_placed;
     sa = snapshot(a, &la);
     sb = snapshot(b, &lb);
     check(la == lb && memcmp(sa, sb, la) == 0, "other mutation orders, churn and compactions give identical bytes");
-    check(placed_b > 2u * MAX_BYTES, "the runs placed %llu value bytes, more than both arenas (compactions ran)",
+    check(placed_b > 2u * MAX_BYTES, "the reordered run placed %llu value bytes, more than an arena (2 x max): "
+                                     "compactions ran",
           (unsigned long long)placed_b);
     free(sa);
     free(sb);
@@ -1117,6 +1130,12 @@ static void test_caps(const Game *g) {
           "world unchanged after the refused tick");
     su_host_input_clear(w, 0u);
     same_as_twin(w, twin, "refused flood");
+    /* A run that saw refusals but fails with another code: the message does not blame the cap. */
+    push_cmd(w, 5u, 200u, CMD_FLOOD_FAIL);
+    st = su_host_step(w, 1u, &done, &err);
+    check(st == SU_E_CANDIDATE_FAILED && strstr(err.message, "cap reached") == NULL,
+          "another failure code is not reported as the cap: %s", err.message);
+    su_host_input_clear(w, 0u);
     /* Lenient flood: the operator handles the refusal; the state holds what fitted, exactly at a cap. */
     push_cmd(w, 5u, 200u, CMD_FLOOD_LENIENT);
     step(w, 1u);
@@ -1160,6 +1179,22 @@ static void test_caps(const Game *g) {
         }
         check(su_host_state_get(vs, e6, 2000u, &data, &len) == SU_OK && len == 8u && n6b == n6 && b6b == b6 - 56u,
               "churn at the byte cap succeeded");
+    }
+    {
+        /* With the live state at the cap, 100 ticks that each rewrite one 64-byte value (plus the heat) compact only
+         * when the arena's slack is used up: about once per state_max_bytes written, not once per tick. */
+        SuHostStateInfo i0, i1;
+        uint32_t k;
+        (void)su_host_state_info(view(w), &i0);
+        for (k = 0; k < 100u; k++) {
+            push_cmd(w, 6u, 2002u + k % 40u, 7u);
+            step(w, 1u);
+        }
+        (void)su_host_state_info(view(w), &i1);
+        check(i0.bytes > MAX_BYTES - 128u && i1.compactions - i0.compactions <= 4u,
+              "near the cap, 100 changing ticks compacted %llu times (live %llu of %u bytes)",
+              (unsigned long long)(i1.compactions - i0.compactions), (unsigned long long)i0.bytes,
+              (unsigned)MAX_BYTES);
     }
     su_host_world_destroy(w);
     su_host_world_destroy(twin);
@@ -1415,6 +1450,20 @@ static void test_drop_dead(const Game *dd, const Game *g) {
     before = su_host_state_count(view(w));
     check(su_host_despawn(w, e3, &err) == SU_OK && su_host_despawn(p, e3p, &err) == SU_OK, "despawn slot 3");
     check(su_host_state_count(view(w)) == before, "entries stay until the next tick publishes");
+    {
+        /* A snapshot taken now holds the pending entries; after a purge, restoring it must purge them again. */
+        size_t sl = 0;
+        uint8_t *pending = snapshot(w, &sl);
+        SuHostError e2;
+        step(w, 1u);
+        check(su_host_state_count(view(w)) < before + 2u &&
+                  su_host_state_lower_bound(view(w), e3, 0u) == su_host_state_lower_bound(view(w), e3 + 1u, 0u),
+              "purged after one tick");
+        check(su_host_snapshot_restore_inplace(w, pending, sl, &e2) == SU_OK &&
+                  su_host_state_lower_bound(view(w), e3, 0u) < su_host_state_lower_bound(view(w), e3 + 1u, 0u),
+              "the restored snapshot has the pending entries again");
+        free(pending);
+    }
     push_cmd(w, 0u, 1u, CMD_STALE);
     push_cmd(p, 0u, 1u, CMD_STALE);
     step(w, 1u);
@@ -1457,6 +1506,22 @@ static void test_drop_dead(const Game *dd, const Game *g) {
         (void)data;
         (void)len;
     }
+    {
+        /* A despawn applied by the tick itself (game.clear's despawn_self): purged at that tick's publish. */
+        uint64_t e8 = handle_at(w, 8u), e8p = handle_at(p, 8u);
+        uint32_t gone = 1;
+        check(su_host_state_lower_bound(view(w), e8, 0u) < su_host_state_lower_bound(view(w), e8 + 1u, 0u),
+              "slot 8 has entries");
+        push_cmd(w, 8u, 0u, CMD_KILL);
+        push_cmd(p, 8u, 0u, CMD_KILL);
+        step(w, 1u);
+        step(p, 1u);
+        gone = su_host_entity_at(w, 8u, &enew) == SU_E_STALE_HANDLE &&
+               su_host_state_lower_bound(view(w), e8, 0u) == su_host_state_lower_bound(view(w), e8 + 1u, 0u);
+        check(gone, "DROP_DEAD: entries of an entity despawned inside the tick are erased at its publish");
+        check(su_host_state_lower_bound(view(p), e8p, 0u) < su_host_state_lower_bound(view(p), e8p + 1u, 0u),
+              "without the flag they stay");
+    }
     /* A new entity in the slot has a new generation: it starts without entries. */
     check(su_host_spawn(w, NULL, 0u, 99u, &enew, &err) == SU_OK && (uint32_t)enew == 3u && enew != e3,
           "respawn in slot 3");
@@ -1490,7 +1555,7 @@ static void test_alloc(const Game *g, const Game *dd) {
     SuHostError err;
     uint8_t *snap;
     size_t len = 0;
-    uint64_t t, placed0;
+    uint64_t t, placed0, placed_w, placed_x;
     if (w == NULL || x == NULL) {
         return;
     }
@@ -1499,20 +1564,27 @@ static void test_alloc(const Game *g, const Game *dd) {
     snap = snapshot(w, &len);
     check(su_host_snapshot_restore_inplace(w, snap, len, &err) == SU_OK, "first in-place restore (allocates scratch)");
     (void)su_host_despawn(x, handle_at(x, 4u), &err); /* the purge runs in the counted window */
-    placed0 = g_placed;
     g_allocs = 0;
     g_count_alloc = 1;
-    for (t = 0; t < 300u; t++) {
+    placed0 = g_placed;
+    for (t = 0; t < 600u; t++) {
         (void)su_host_step(w, 1u, NULL, &err);
+    }
+    placed_w = g_placed - placed0;
+    placed0 = g_placed;
+    for (t = 0; t < 600u; t++) {
         (void)su_host_step(x, 1u, NULL, &err);
     }
+    placed_x = g_placed - placed0;
     (void)su_host_snapshot_restore_inplace(w, snap, len, &err);
     g_count_alloc = 0;
-    check(g_allocs == 0u, "no allocation in 600 ticks with state changes, compactions, a purge and an in-place "
+    check(g_allocs == 0u, "no allocation in 1,200 ticks with state changes, compactions, a purge and an in-place "
                           "restore (%lu)",
           g_allocs);
-    check(g_placed - placed0 > MAX_BYTES, "the counted ticks placed more bytes than the arena (compactions ran)");
-    check(su_host_tick(w) == 1u && su_host_tick(x) == 301u, "worlds stepped");
+    check(placed_w > 2u * MAX_BYTES && placed_x > 2u * MAX_BYTES,
+          "each world placed more bytes than an arena (%llu, %llu): compactions ran in the counted ticks",
+          (unsigned long long)placed_w, (unsigned long long)placed_x);
+    check(su_host_tick(w) == 1u && su_host_tick(x) == 601u, "worlds stepped");
     free(snap);
     su_host_world_destroy(w);
     su_host_world_destroy(x);

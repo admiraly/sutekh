@@ -351,7 +351,9 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
         ri->reason[sizeof ri->reason - 1u] = '\0';
         snprintf(ri->why, sizeof ri->why, "operator run returned %s%s%s%s", su_host_status_name(st),
                  ri->reason[0] != '\0' ? ": " : "", ri->reason,
-                 ri->state != NULL && su_hstate_cap_refusals(ri->state) > 0u ? " (operator state cap reached)" : "");
+                 st == SU_E_RESOURCE_LIMIT && ri->state != NULL && su_hstate_cap_refusals(ri->state) > 0u
+                     ? " (operator state cap reached)"
+                     : "");
         return st;
     }
     if (check_inputs) {

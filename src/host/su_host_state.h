@@ -30,8 +30,12 @@ void su_hstate_end_run(SuHostState *s);
 /* Refusals at a cap since the last begin_run (for the step's error message). */
 uint32_t su_hstate_cap_refusals(const SuHostState *s);
 
-/* The tick published: with SU_HOST_STATE_DROP_DEAD erase entries whose entity is not alive in ents (the committed
- * table after the tick), then W becomes C. Cannot fail. */
+/* An entity may have died (su_host_despawn, or a despawn applied by a tick): the next commit scans for dead entries.
+ * Restores (su_hstate_swap) set the same mark. */
+void su_hstate_note_despawn(SuHostState *s);
+/* The tick published: with SU_HOST_STATE_DROP_DEAD, and only when an entity may have died since the last purge
+ * (su_hstate_note_despawn), erase entries whose entity is not alive in ents (the committed table after the tick);
+ * then W becomes C. Cannot fail. */
 void su_hstate_commit(SuHostState *s, const SuEnts *ents);
 /* The tick failed (or a loaded state is discarded): C stays, W is dropped. */
 void su_hstate_abort(SuHostState *s);

@@ -7,7 +7,10 @@
  *     are never written during the tick (copy-on-write: modify copies such a value to top first);
  *   - a compaction never runs in C's arena: while W shares it, the live values are copied, in key order, into the
  *     other arena; once W has its own arena, the compaction is in place (values moved down in offset order).
- * So whether a change fits depends only on the entry count and the sum of value lengths (the logical state). */
+ * So whether a change fits depends only on the entry count and the sum of value lengths (the logical state).
+ * Each arena holds 2 x state_max_bytes: a compaction leaves at least state_max_bytes free, so the bytes it copies
+ * (at most the live bytes) are paid for by at least as many bytes written since the previous one (amortized O(1)
+ * per written byte), also when the live state sits at the cap. */
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #include "host/su_host_state.h"
@@ -42,6 +45,7 @@ struct SuHostState {
     uint32_t flags;
     uint32_t max_entries;
     uint64_t max_bytes;
+    uint64_t arena_bytes;    /* 2 x max_bytes per arena (slack: see the file comment) */
     uint8_t *arena[2];
     HsEntry *table[2];
     uint32_t *perm;          /* max_entries: in-place compaction order */
@@ -50,7 +54,9 @@ struct SuHostState {
     uint64_t base;           /* active and w.ar == c.ar: offsets >= base were written in this tick */
     int active;              /* W diverged from C in this tick */
     int writable;            /* inside run */
+    int maybe_dead;          /* DROP_DEAD: an entity may have died since the last purge (su_hstate_note_despawn) */
     uint32_t cap_refusals;
+    uint64_t compactions;    /* diagnostic (SuHostStateInfo.compactions) */
     const uint8_t *alive;    /* run's working entity views (DROP_DEAD checks) */
     const uint32_t *gen;
     uint64_t rows;
@@ -102,8 +108,13 @@ uint32_t su_hstate_create(uint32_t max_entries, uint32_t max_bytes, uint32_t fla
     s->flags = flags;
     s->max_entries = max_entries;
     s->max_bytes = max_bytes;
-    s->arena[0] = calloc(1u, max_bytes);
-    s->arena[1] = calloc(1u, max_bytes);
+    s->arena_bytes = 2u * (uint64_t)max_bytes;
+    if (s->arena_bytes > (uint64_t)SIZE_MAX) {
+        free(s);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    s->arena[0] = calloc(1u, (size_t)s->arena_bytes);
+    s->arena[1] = calloc(1u, (size_t)s->arena_bytes);
     s->table[0] = calloc(max_entries, sizeof(HsEntry));
     s->table[1] = calloc(max_entries, sizeof(HsEntry));
     s->perm = calloc(max_entries, sizeof(uint32_t));
@@ -224,6 +235,7 @@ static void compact(SuHostState *s, uint32_t skip) {
     HsSide *w = &s->w;
     uint64_t pos = 0;
     uint32_t i;
+    s->compactions++;
     if (w->ar == s->c.ar) {
         uint32_t to = 1u - s->c.ar;
         for (i = 0; i < w->n; i++) {
@@ -288,7 +300,7 @@ static uint32_t place(SuHostState *s, uint64_t entity, uint64_t sub, uint32_t le
         *out = s->arena[w->ar] + w->e[i].off; /* already written in this tick: replaced in place */
         return SU_OK;
     }
-    if (w->top + len > s->max_bytes) {
+    if (w->top + len > s->arena_bytes) {
         compact(s, exists ? i : NONE);
     }
     if (!exists) {
@@ -330,9 +342,14 @@ uint32_t su_hstate_cap_refusals(const SuHostState *s) {
     return s->cap_refusals;
 }
 
+void su_hstate_note_despawn(SuHostState *s) {
+    s->maybe_dead = 1;
+}
+
 void su_hstate_commit(SuHostState *s, const SuEnts *ents) {
     HsSide t;
-    if ((s->flags & SU_HOST_STATE_DROP_DEAD) != 0u && ents != NULL) {
+    if ((s->flags & SU_HOST_STATE_DROP_DEAD) != 0u && ents != NULL && s->maybe_dead) {
+        s->maybe_dead = 0;
         const HsSide *d = cur(s);
         uint32_t i, first = NONE;
         for (i = 0; i < d->n; i++) {
@@ -463,6 +480,7 @@ void su_hstate_swap(SuHostState *s) {
     s->c = s->w;
     s->w = t;
     s->active = 0;
+    s->maybe_dead = 1; /* a restored state may hold entries of entities that are dead in the restored table */
 }
 
 /* ---------- public functions (host.h) ---------- */
@@ -480,6 +498,7 @@ uint32_t su_host_state_info(const SuHostState *s, SuHostStateInfo *out) {
     out->max_bytes = s->max_bytes;
     out->flags = s->flags;
     out->writable = s->writable ? 1u : 0u;
+    out->compactions = s->compactions;
     return SU_OK;
 }
 
@@ -528,7 +547,7 @@ uint32_t su_host_state_put(SuHostState *s, uint64_t entity, uint64_t sub, const 
     a = (uintptr_t)data;
     b = a + len;
     for (k = 0; k < 2u; k++) {
-        uintptr_t lo = (uintptr_t)s->arena[k], hi = lo + (uintptr_t)s->max_bytes;
+        uintptr_t lo = (uintptr_t)s->arena[k], hi = lo + (uintptr_t)s->arena_bytes;
         if (a < hi && b > lo) {
             return SU_E_INVALID_ARGUMENT; /* data points into the state: a compaction could move it */
         }
@@ -570,7 +589,7 @@ uint32_t su_host_state_modify(SuHostState *s, uint64_t entity, uint64_t sub, voi
     w = &s->w;
     i = find(w, entity, sub);
     if (!is_private(s, i)) {
-        if (w->top + w->e[i].len <= s->max_bytes) {
+        if (w->top + w->e[i].len <= s->arena_bytes) {
             memcpy(s->arena[w->ar] + w->top, s->arena[w->ar] + w->e[i].off, w->e[i].len);
             w->e[i].off = (uint32_t)w->top;
             w->top += w->e[i].len;

@@ -886,6 +886,14 @@ uint32_t su_host_despawn(SuHostWorld *w, uint64_t entity, SuHostError *err) {
         return set_err(err, st == SU_E_INVALID_ARGUMENT ? st : SU_E_STALE_HANDLE, UINT32_MAX, UINT64_MAX,
                        "entity handle is stale");
     }
+    {
+        uint32_t k;
+        for (k = 0; k < w->sched.count; k++) {
+            if (w->opstate[k] != NULL) {
+                su_hstate_note_despawn(w->opstate[k]); /* DROP_DEAD: the next published tick purges */
+            }
+        }
+    }
     st = log_record(w, SU_EVENT_DESPAWNED, SU_ENTITY_SLOT(entity), SU_ENTITY_SLOT(entity), SU_ENTITY_GEN(entity));
     return st == SU_OK ? SU_OK
                        : set_err(err, SU_E_INTERNAL, UINT32_MAX, UINT64_MAX, "despawn record could not be appended");
@@ -1228,6 +1236,34 @@ static void undo_record(SuHostWorld *w, const UndoCell *cells, uint32_t n) {
 
 /* ---------- stepping ---------- */
 
+/* 1 when a despawn may have been applied by the tick whose events are [seq0, next_seq) of the log: a
+ * SU_EVENT_DESPAWNED record among them (an IR event of that kind counts too, harmlessly), or events evicted before
+ * they could be read. Reads at most the tick's events, without allocating. */
+static int tick_despawned(const SuEventLog *log, uint64_t seq0) {
+    uint64_t next = su_evlog_next_seq(log);
+    uint64_t cur = seq0;
+    if (next == seq0) {
+        return 0;
+    }
+    if (su_evlog_oldest_seq(log) > seq0) {
+        return 1;
+    }
+    while (cur < next) {
+        SuEvent ev[32];
+        uint64_t n = 0, nc = 0, skipped = 0, dropped = 0, i;
+        if (su_evlog_read(log, cur, 32u, ev, &n, &nc, &skipped, &dropped) != SU_OK || n == 0u || skipped != 0u) {
+            return 1;
+        }
+        for (i = 0; i < n; i++) {
+            if (ev[i].kind == SU_EVENT_DESPAWNED) {
+                return 1;
+            }
+        }
+        cur = nc;
+    }
+    return 0;
+}
+
 uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostError *err) {
     uint64_t n = 0;
     uint32_t st = SU_OK;
@@ -1246,6 +1282,7 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
         uint32_t undo_n = 0;
         uint64_t one = 0;
         uint32_t failed = UINT32_MAX;
+        uint64_t seq0 = su_evlog_next_seq(su_ent_rt_log(w->sched.ent));
 
         /* A registered operator's failure reason belongs to one tick attempt. */
         {
@@ -1304,8 +1341,15 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
             /* The tick published: its operator state changes become committed state (with SU_HOST_STATE_DROP_DEAD,
              * after erasing the entries of entities the committed entity table no longer holds alive). */
             uint32_t k;
+            int died = -1; /* computed once, only for a world with operator state */
             for (k = 0; k < w->sched.count; k++) {
                 if (w->opstate[k] != NULL) {
+                    if (died < 0) {
+                        died = tick_despawned(su_ent_rt_log(w->sched.ent), seq0);
+                    }
+                    if (died) {
+                        su_hstate_note_despawn(w->opstate[k]);
+                    }
                     su_hstate_commit(w->opstate[k], su_world_entities_committed(w->w));
                 }
             }
