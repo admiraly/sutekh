@@ -404,7 +404,7 @@ those of the v1 variant of the same suffix. Only candidate selection and the bud
   any, pairs examined, the pair budget, entries skipped (v2) and whether the budget was hit, plus totals since world
   creation, so a host sees truncation without scanning `hit_flags`.
 
-Evidence: `space3d_ops` runs every scene test a second time on the v2 descriptors, and a third time with the grid
+Evidence: `space3d_ops_v2` runs every scene test of `space3d_ops` on the v2 descriptors, and `space3d_ops_v2_grid` with the grid
 forced (`space3d_test_force_grid`): equal to the brute force on every lane wherever no flag 1 or 4 is set, as v1.
 `space3d_dense` (host API): the converging scene above (15,000 movers of 0.25 m, 3 m per tick, on four 8 m targets,
 one of them a mover) loses no contact in v2 (10,992 found and 4,008 displaced by two earlier contacts, as the brute

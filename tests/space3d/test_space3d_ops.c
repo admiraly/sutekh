@@ -1945,30 +1945,25 @@ static void test_compound(void) {
     D = FAM(&g_space3d_query_desc);
 }
 
-int main(void) {
-    test_descriptor();
-    test_known();
-    test_random();
-    test_limits();
-    test_prox();
-    test_shape();
-    test_mesh();
-    test_compound();
-    /* space3d_ops_v2 (issue 163): its descriptors, then every scene test again on them. */
-    test_descriptor_v2();
-    g_v2 = 1;
-    D = FAM(&g_space3d_query_desc);
-    printf("space3d_ops_v2 pass:\n");
-    test_known();
-    test_random();
-    test_limits();
-    test_prox();
-    test_shape();
-    test_mesh();
-    test_compound();
-    /* and again with the grid forced (the sweep path ran above wherever it fits its limit): same contract. */
-    space3d_test_force_grid(1);
-    printf("space3d_ops_v2 pass, grid forced:\n");
+/* Usage: test_space3d_ops [v2 | v2grid]. No argument: the v1 descriptors (ctest space3d_ops); v2: their
+ * descriptors and every scene test on space3d_ops_v2 (space3d_ops_v2); v2grid: the same with the grid forced
+ * (space3d_ops_v2_grid). Separate processes, so each stays within the sanitizer lane's test timeout. */
+int main(int argc, char **argv) {
+    const char *mode = argc > 1 ? argv[1] : "";
+    if (strcmp(mode, "v2") == 0 || strcmp(mode, "v2grid") == 0) {
+        test_descriptor_v2();
+        g_v2 = 1;
+        D = FAM(&g_space3d_query_desc);
+        if (strcmp(mode, "v2grid") == 0) {
+            space3d_test_force_grid(1); /* the sweep path runs in "v2" wherever it fits its limit: same contract */
+        }
+        printf("space3d_ops_v2 pass%s:\n", strcmp(mode, "v2grid") == 0 ? ", grid forced" : "");
+    } else if (mode[0] != '\0') {
+        fprintf(stderr, "usage: test_space3d_ops [v2 | v2grid]\n");
+        return 2;
+    } else {
+        test_descriptor();
+    }
     test_known();
     test_random();
     test_limits();
@@ -1977,8 +1972,6 @@ int main(void) {
     test_mesh();
     test_compound();
     space3d_test_force_grid(0);
-    g_v2 = 0;
-    D = &g_space3d_query_desc;
-    printf("test_space3d_ops: %d checks, %d failures\n", g_checks, g_failures);
+    printf("test_space3d_ops%s%s: %d checks, %d failures\n", mode[0] ? " " : "", mode, g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

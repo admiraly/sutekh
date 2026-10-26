@@ -21,8 +21,9 @@ Exact modified paths:
   `SuHostOperatorCounters` and `su_host_operator_counters` (additive; built-in space3d operators of both families;
   `SU_E_UNSUPPORTED_METHOD` for registered operators); the four v2 operators in the built-in table.
 - `src/runtime/rts/host_registry.c`: the v2 descriptors in the worker's production table (`sutekh serve`).
-- `tests/space3d/test_space3d_ops.c`: v2 descriptor checks; every scene test rerun on v2, then on v2 with the grid
-  forced. `tests/space3d/test_space3d_dense.c` (new) and `cmake/SutekhHostOps.cmake` (ctest `space3d_dense`).
+- `tests/space3d/test_space3d_ops.c`, `cmake/SutekhNumeric3D.cmake`: v2 descriptor checks; every scene test rerun on v2
+  (ctest `space3d_ops_v2`) and on v2 with the grid forced (`space3d_ops_v2_grid`): separate processes, because one
+  process running all three passes exceeded the 900 s sanitizer timeout on CI (first CI run of the PR). `tests/space3d/test_space3d_dense.c` (new) and `cmake/SutekhHostOps.cmake` (ctest `space3d_dense`).
 - `tests/host/test_host_opstate.c`: counters refused for a registered operator and an IR system.
 - `tests/determinism/det_matrix.c`, `expected_digests.txt` (13 lines appended, the 191 existing lines unchanged),
   `expected_tiers.txt` (5 lines): workload `s3_dense`.
@@ -98,6 +99,9 @@ v1 is fast in the dense scenes only because it stops after 2^22 pairs and drops 
 budget, v2 costs the same in the converging scene and about twice as much in the pile-up (every visit there is an
 overlapping pair ranked for the top 32); the sparse scene costs about 16% more (rank keeping). The v1 path in this
 branch is main's code plus flag counting into the stats.
+
+CI round 1 (`d60b1de`): both ASan+UBSan lanes timed out in `space3d_ops` (900 s; the three passes in one process).
+Split into three ctests; locally under ASan+UBSan each takes about 164 s.
 
 ## Unrun or not covered
 
