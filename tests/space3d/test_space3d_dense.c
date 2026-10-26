@@ -196,7 +196,10 @@ static void build_sparse(SuHostWorld *w, Scene *sc) {
         p0.y = rq(400) - 200 * ONE;
         p0.z = rq(400) - 200 * ONE;
         if (i < SHELL_MOVERS) {
-            spawn(w, 1u, p0, su_v3_add(p0, su_v3_scale(rdir(), rq(3))), ONE / 4 + rq(1) / 2);
+            /* one random draw per statement: argument evaluation order is unspecified */
+            int64_t r = ONE / 4 + rq(1) / 2, sp = rq(3);
+            SuV3 d = rdir();
+            spawn(w, 1u, p0, su_v3_add(p0, su_v3_scale(d, sp)), r);
         } else {
             spawn(w, 2u, p0, p0, ONE + rq(6));
         }
@@ -213,7 +216,8 @@ static void build(SuHostWorld *w, Scene *sc, uint32_t nshell, uint32_t npile) {
     for (i = 0; i < nshell; i++) {
         uint32_t t = i % TARGETS;
         SuV3 c = V(cx[t][0], cx[t][1], cx[t][2]), d = rdir();
-        int64_t gap = ONE / 100 + rq(2) + rq(1) / 2; /* [0.01, 2.51) m off the surface */
+        int64_t gap = ONE / 100 + rq(2); /* [0.01, 2.51) m off the surface (one draw per statement) */
+        gap += rq(1) / 2;
         SuV3 p0 = su_v3_add(c, su_v3_scale(d, r_t + r_m + gap));
         SuV3 p1 = su_v3_sub(p0, su_v3_scale(d, speed));
         uint32_t s = spawn(w, 1u, p0, p1, r_m);
