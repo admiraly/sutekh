@@ -53,6 +53,17 @@ if(TARGET su_agent AND SUTEKH_BUILD_TESTS)
     endforeach()
 endif()
 
+# Dense space3d scenes above the v1 sweep budget (issue 163): space3d.query vs space3d.query2 through the host API,
+# su_host_operator_counters, no allocation in the tick (glibc), pinned digests. `--bench N` times N ticks per scene.
+if(SUTEKH_BUILD_TESTS)
+    add_executable(test_space3d_dense "${CMAKE_CURRENT_SOURCE_DIR}/tests/space3d/test_space3d_dense.c")
+    target_include_directories(test_space3d_dense PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(test_space3d_dense PRIVATE su_host su_space3d su_ir)
+    sutekh_apply_warnings(test_space3d_dense)
+    add_test(NAME space3d_dense COMMAND test_space3d_dense WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(space3d_dense PROPERTIES TIMEOUT 600)
+endif()
+
 # Registered host operators (include/sutekh/host.h, "registered host operators"; issue 137): an operator defined in
 # the test translation unit, outside the engine library, registered at run time. Static and DLL builds; the static
 # Linux build also counts malloc/calloc/realloc during ticks (-Wl,--wrap) to show the tick allocates nothing.

@@ -29,6 +29,13 @@
 #define SPACE3D_CAND_MAX 32u            /* broadphase candidates kept per mover per tick */
 #define SPACE3D_CONTACTS 2u             /* contacts reported per mover */
 #define SPACE3D_SWEEP_BUDGET (1u << 22) /* overlapping-interval pairs examined per tick */
+/* space3d_ops_v2 (2026-10-26, issue 163): the space3d.query2* descriptors. Same lanes and narrow phase as v1; the
+ * broadphase keeps the best candidates of every overlapping pair (sweep, or a hierarchical grid in dense scenes) and
+ * its pair budget degrades locally (docs/SPACE3D.md "Broadphase v2"). */
+#define SPACE3D_OPS_VERSION2 2u
+#define SPACE3D_PAIR_BUDGET_MIN (1u << 22)  /* v2 pair budget: max(this, SPACE3D_PAIR_BUDGET_PER_ROW * rows) */
+#define SPACE3D_PAIR_BUDGET_PER_ROW 1024u   /* grid entries visited per row of world capacity */
+#define SPACE3D_SWEEP_TRY_PER_ROW 512u      /* v2 tries the sweep first, up to this many pairs per entry */
 
 /* kind values */
 #define SPACE3D_KIND_NONE 0u
@@ -45,7 +52,8 @@
 /* hit_flags bits */
 #define SPACE3D_FLAG_CAND_TRUNCATED 1u    /* more than SPACE3D_CAND_MAX candidates overlapped */
 #define SPACE3D_FLAG_CONTACT_TRUNCATED 2u /* more than SPACE3D_CONTACTS contacts were found */
-#define SPACE3D_FLAG_SWEEP_BUDGET 4u      /* the tick's sweep budget ran out (set on every mover) */
+#define SPACE3D_FLAG_SWEEP_BUDGET 4u      /* v1: the tick's sweep budget ran out (set on every mover); v2: the pair
+                                           * budget cut this mover's own-level search (this mover only) */
 
 /* gate_dir values */
 #define SPACE3D_GATE_NONE 0u
@@ -104,7 +112,33 @@ typedef struct Space3dStats {
     uint64_t contacts;        /* contacts found (before the per-mover cap) */
     uint64_t mesh_nodes;      /* static meshes: BVH nodes visited (sweeps and distances) */
     uint64_t mesh_tri_tests;  /* static meshes: exact triangle tests */
+    /* Budget and truncation (2026-10-26, issue 163; both families). */
+    uint64_t pair_budget;     /* the run's budget: v1 SPACE3D_SWEEP_BUDGET, v2 max(2^22, 1024 rows) */
+    uint64_t pairs_skipped;   /* v2: own-level entries not visited because of the budget; v1: 0 */
+    uint32_t budget_hit;      /* the budget limited the run (v1: the sweep stopped; v2: some mover was cut) */
+    uint32_t budget_cut;      /* v2: own-level entries each mover may visit (UINT32_MAX: no cut); v1: 0 */
+    uint64_t cross_entries;   /* v2: entries visited at coarser grid levels (never cut); v1: 0 */
+    uint32_t rows_cand_truncated, rows_contact_truncated, rows_budget; /* movers with flag 1, 2, 4 */
+    uint32_t rows_truncated;  /* movers with any flag */
+    uint32_t grid;            /* v2: 1 when the sweep gave up and the grid ran (sweep_pairs then counts grid entries) */
 } Space3dStats;
+
+/* Cumulative counters of one context since it was created (or reset): every run counts, also re-simulated ticks
+ * and ticks that a later system failed. Diagnostics, not world state. */
+typedef struct Space3dCounters {
+    uint64_t runs;
+    uint64_t runs_truncated;       /* runs with at least one mover flagged 1, 2 or 4 */
+    uint64_t runs_budget;          /* runs whose budget limited the broadphase */
+    uint64_t rows_truncated;       /* sum over runs of movers with any flag */
+    uint64_t rows_budget;          /* sum over runs of movers with flag 4 */
+    uint64_t pairs_skipped;        /* sum over runs of Space3dStats.pairs_skipped */
+} Space3dCounters;
+
+/* v2 bucket table slot (issue 163): a cell hash and its run [beg, end) of sorted entries (end == 0: empty). */
+typedef struct Space3dSlot {
+    uint64_t key;
+    uint32_t beg, end;
+} Space3dSlot;
 
 /* Per-row scratch of one operator instance (sized for max_rows rows). The temporal-coherence cache (prev_*) only
  * seeds the sweep sort; the sort's result is the same permutation without it, so it is not world state. */
@@ -119,11 +153,25 @@ typedef struct Space3dScratch {
     uint32_t *gate_slot;
     uint32_t *prev_coll, *prev_order;
     uint32_t prev_n, prev_axis;
+    /* v2 (issue 163). Per row: the cell hash and level of its grid entry, its grid query's entry count, the centre
+     * of its bounds (unsigned), the rank of its worst kept candidate and its entry index. Per sorted entry: its bounds
+     * (unsigned; lo xyz, hi xyz) and level | 0x40 for a mover. The bucket table (a power of two >= 2 * max_rows
+     * slots) maps a cell hash to its run of sorted entries; hcut holds the cut mark (1) and the mixed-run mark (2). */
+    uint64_t *gkey, *gctr[3], *gworst;
+    uint32_t *gcount;
+    uint8_t *glevel;
+    uint64_t *ebox;
+    uint8_t *eflag;
+    uint32_t *eidx;
+    struct Space3dSlot *htab;
+    uint8_t *hcut;
+    uint32_t hmask;
 } Space3dScratch;
 
 struct S3MeshSet;
 typedef struct Space3dCtx {
     Space3dStats last;
+    Space3dCounters total;    /* since creation (diagnostics; the host API's su_host_operator_counters) */
     int brute_force;          /* test seam: nonzero skips the broadphase and tests every mover pair (O(n^2)) */
     Space3dScratch *scratch;  /* never NULL for a usable context */
     struct S3MeshSet *meshes; /* static meshes (instances only; NULL: kind 8 rows are ignored) */
@@ -156,6 +204,14 @@ extern const SuHostOpDesc g_space3d_query_shape_desc;
  * A mover with compound = 0xFFFFFFFF (or an unknown index, or no set) and rot0 all zero is the mover of
  * space3d.query_shape bit for bit. docs/SPACE3D.md "Compound movers". */
 extern const SuHostOpDesc g_space3d_query_compound_desc;
+/* space3d_ops_v2 (issue 163): the four variants above with the v2 broadphase and pair budget. Lanes, narrow phase,
+ * proximity, shapes, compounds, meshes, gates and contact order are those of the v1 variant of the same suffix;
+ * only candidate selection and the budget differ (docs/SPACE3D.md "Broadphase v2"). When no mover has flag 1 or
+ * 4, results equal the brute-force (no broadphase) results, as for v1. */
+extern const SuHostOpDesc g_space3d_query2_desc;
+extern const SuHostOpDesc g_space3d_query2_prox_desc;
+extern const SuHostOpDesc g_space3d_query2_shape_desc;
+extern const SuHostOpDesc g_space3d_query2_compound_desc;
 /* The descriptor's static context (process-wide scratch for SPACE3D_MAX_ROWS rows; one world per worker
  * process, not reentrant). */
 Space3dCtx *space3d_query_ctx(void);
@@ -174,10 +230,17 @@ void space3d_query_instance_destroy(void *ctx); /* NULL-safe; matches su_sched_s
  * given once (SU_E_INVALID_ARGUMENT for NULL or a second set); the static context never holds one. Without a set,
  * results are those of the operator without meshes, bit for bit. */
 uint32_t space3d_query_instance_set_meshes(Space3dCtx *ctx, struct S3MeshSet *set);
+/* Test seam (issue 163): nonzero makes the v2 descriptors skip the sweep and always build the grid. Results are the
+ * same unless the grid's budget cuts (that is the contract this seam lets tests check). Process-wide; tests only. */
+void space3d_test_force_grid(int on);
 /* Canonical constants text (its SHA-256 is the descriptor's constants_hash). */
 const char *space3d_constants_text(void);
 const char *space3d_prox_constants_text(void);
 const char *space3d_shape_constants_text(void);
 const char *space3d_compound_constants_text(void);
+const char *space3d2_constants_text(void);
+const char *space3d2_prox_constants_text(void);
+const char *space3d2_shape_constants_text(void);
+const char *space3d2_compound_constants_text(void);
 
 #endif

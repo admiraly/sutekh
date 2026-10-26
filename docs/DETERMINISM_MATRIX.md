@@ -49,7 +49,8 @@ bit-identical committed state at every tick: columns, entity table, event log an
   `space3d.query_compound` run with sphere movers, capsule movers and compound movers against spheres, rotating
   oriented boxes, rotating capsules, rotating static meshes from operator data, and rectangular, disc and
   elliptical gates. 10,780 to 17,234 contacts are reported per 600-tick run, and every result lane feeds the next
-  tick's motion (section 2).
+  tick's motion (section 2). The v2 broadphase (`space3d.query2`, issue 163) runs under load in `s3_dense`: its
+  sweep path, its grid path and the grid's pair-budget cut (flag 4) all occur and feed motion.
 - **Entity runtime.** Spawn, despawn, events, slot reuse, generation growth, an evicting event log, and the
   cross-chunk command and event merge (`churn3k`: 3,072 slots, three `SU_CHUNK_SLOTS` chunks).
 
@@ -98,14 +99,18 @@ bit-identical committed state at every tick: columns, entity table, event log an
 - **space3d operator paths not exercised:**
   - A narrow-phase product on an `INT64_MIN` half extent cannot be reached through the operator, because the
     broadphase bounds of such a box are empty. It is covered directly by `test_det_regress` (D1).
-  - Candidate and contact truncation occur (the `flags` counts of the activity lines), but the per-tick sweep
-    budget (flag 4) was not checked separately.
+  - Candidate and contact truncation occur (the `flags` counts of the activity lines). The v1 per-tick sweep
+    budget (flag 4 of `space3d.query*`) is not exercised by a matrix workload (its world-wide stop is covered by
+    `space3d_dense`, one build at a time); the v2 budget cut is (`s3_dense`, its budget line).
+  - Of the v2 variants only `space3d.query2` runs in the matrix; `query2_prox`, `query2_shape` and
+    `query2_compound` share its broadphase and the v1 variants' remaining code, and are checked against the brute
+    force by `space3d_ops`.
 - **Out of scope:** rendering, audio, and every host-side computation outside the engine. A host that derives its
   command stream from its own logic must make that logic deterministic too (section 5, D2).
 
 ## 2. Workloads and comparison
 
-`tests/determinism/det_matrix.c` runs eleven workloads through the public host API on one tier mode and writes a
+`tests/determinism/det_matrix.c` runs twelve workloads through the public host API on one tier mode and writes a
 manifest. Per workload, the manifest holds:
 
 - the `su_host_digest` of every keyframe (every 60 ticks, and the last tick);
@@ -137,6 +142,7 @@ are this workload's.
 | `churn` | `det.churn` (IR 0.3 with `despawn_self`, `emit_event`) | 900 | entity churn in 96 slots (one chunk), see below |
 | `churn3k` | as `churn` | 300 | the same in 3,072 slots (three chunks): about 2,800 live entities, up to 47 host spawns per tick, 32 host despawns every 5th tick, IR deaths and events |
 | `s3_query`, `s3_prox`, `s3_shape`, `s3_compound` | `det.s3move` (`det.s3move_c` for compound), then the named space3d operator | 600 each | see below |
+| `s3_dense` | `det.s3move`, then `space3d.query2` (`space3d_ops_v2`, issue 163) | 300 | 3,204 rows: 2,800 movers start in a 1 m ball (every pair overlaps: grid, pair budget cut on the first ticks), 400 converge on four 6 m spheres; they spread, so later ticks take the sweep path. Kicks every 30 ticks. An extra manifest line (`budget`) sums the last-run counters of `su_host_operator_counters` per tick: ticks cut, flag-4 movers, entries skipped |
 
 `sixdof` and `probe04`:
 

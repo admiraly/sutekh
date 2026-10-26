@@ -64,7 +64,7 @@ A world that uses the operator has schema ID `space3d` and reserves these field 
 | 30 | `radius` | q32 | read | sphere/mover/capsule radius, disc gate radius |
 | 32, 34, 36 | `half_x/y/z` | q32 | read | box half extents; capsule half length along local z (`half_z`); gate rectangle half width/height; ellipse semi-axes along local x and y |
 | 40 | `hit_count` | u32 | write | contacts reported (0..2) |
-| 41 | `hit_flags` | u32 | write | 1 candidates truncated, 2 contacts truncated, 4 sweep budget exhausted |
+| 41 | `hit_flags` | u32 | write | 1 candidates truncated, 2 contacts truncated, 4 pair budget (v1: the tick's sweep budget ran out, set on every mover; v2: this mover's broadphase was cut, section 3 "Broadphase v2") |
 | 42 + 10k | `ck_slot`, `ck_gen` | u32 | write | contact k (k = 0, 1): other row's slot and generation (slot 0xFFFFFFFF when absent) |
 | 44 + 10k | `ck_toi` | q32 | write | time of impact within the tick, [0, 1] |
 | 46 + 10k, 48 + 10k, 50 + 10k | `ck_nx/ny/nz` | q32 | write | unit contact normal from the other shape towards the mover |
@@ -371,12 +371,63 @@ bit-identical). Native tier: the operator is compiled C under every tier (not lo
 
 **Accuracy domain.** Results are bit-exact for every input. Geometric accuracy holds while the relative coordinates of a tested pair stay within about 16 km and radii and extents within about 4 km (squares stay inside Q32.32); outside that range intermediate values saturate deterministically.
 
+**Broadphase v2 (`space3d_ops_v2`, 2026-10-26, issue 163).** In v1 the 2^22 sweep budget is world-wide: when a dense
+scene exhausts it, every mover gets flag 4 and the pairs after that point are never examined, so collision stops for
+most of the world (a 15,000-mover converging scene in `space3d_dense` loses 7,552 of 15,000 certain contacts that
+way). The v1 descriptors keep that behaviour, and their constants hashes, records and digests, byte for byte. A world
+opts into v2 by listing the v2 records instead: `space3d.query2`, `space3d.query2_prox`, `space3d.query2_shape` and
+`space3d.query2_compound` (`profiles/space3d/space3d_query2*.capsule.json`; operator `space3d_ops_v2`, operator
+version 2). Their lanes, narrow phase, proximity, capsule and compound movers, meshes, gates and contact order are
+those of the v1 variant of the same suffix. Only candidate selection and the budget differ:
+
+- *Candidates.* Every mover takes the collidables whose bounds overlap its own on all three axes (with the same
+  bounds and slack as v1; a row whose bounds are empty on an axis, lo > hi, is not collidable). It keeps the 32 best
+  by (rank, slot), whatever the order in which they were found: rank = (63 - level) in the top 6 bits, then the L1
+  distance from the centre of the mover's bounds to the other's bounds (saturated at 2^58 - 1), where level is the
+  other's grid level below. So larger bodies come first and then the nearest: in a swarm converging on a ship or a
+  station, the ship is kept and the excess neighbours are dropped (flag 1). v1 keeps the first 32 in sweep order.
+- *Finding them.* Sort and sweep, as v1, when the number of interval-overlap pairs on the sweep axis is at most 512
+  per collidable (counted exactly before sweeping, one binary search per row). Otherwise a hierarchical grid: a row's
+  level is the smallest l with every bounds extent at most 2^l raw units (cells of 2^l raw, so one to three cells per
+  axis per query); one entry per row at the cell of its lower corner; a mover visits its own level and every coarser
+  level that has entries, a static row only the coarser levels that have movers, and a pair across levels is given to
+  both sides by the finer row's query. Cells are looked up by a 64-bit hash with an exact cell check. Both methods
+  give the same result unless the grid's budget cuts.
+- *Budget (declared capacity, part of the identity).* The pair budget is max(2^22, 1024 x capacity) grid entries
+  visited per tick (capacity: the world's row count; 67,108,864 at 65,536 rows). When the grid's per-row entry counts
+  sum to more than the budget, every row's query visits at most `cut` entries, the largest value with
+  sum(min(count, cut)) <= budget, in a fixed order (coarser levels first, so large bodies are kept; in each level the
+  cell of the row's centre first, then by z, y, x; entries in slot order). Only the most crowded rows are cut. A cut
+  mover gets flag 4, and so does every mover with an entry in a coarser-level cell that a cut query did not finish
+  (it may have lost the pair that query would have given it). Movers outside the crowded region keep every contact.
+- *Counters.* `su_host_operator_counters` (host API, both families) returns the last run's movers with flag 1, 2, 4 or
+  any, pairs examined, the pair budget, entries skipped (v2) and whether the budget was hit, plus totals since world
+  creation, so a host sees truncation without scanning `hit_flags`.
+
+Evidence: `space3d_ops` runs every scene test a second time on the v2 descriptors, and a third time with the grid
+forced (`space3d_test_force_grid`): equal to the brute force on every lane wherever no flag 1 or 4 is set, as v1.
+`space3d_dense` (host API): the converging scene above (15,000 movers of 0.25 m, 3 m per tick, on four 8 m targets,
+one of them a mover) loses no contact in v2 (10,992 found and 4,008 displaced by two earlier contacts, as the brute
+force reports them; 0 lost; no shell mover flagged 4), and a pile-up of 3,000 movers fired from one point beside
+1,000 converging ones cuts only the piled movers (all 3,000 flag 4, 0 of the converging ones); counters equal the
+lanes, no allocation in the tick, pinned digests. Determinism matrix workload `s3_dense` (cut, grid and sweep ticks).
+
 ## 4. Resource bounds
 
 Static meshes (section 2): the set is allocated once at `su_host_set_operator_data`, never in a tick; traversal uses
 fixed stacks of 128 entries (BVH depth is at most 25 for 2^24 triangles).
 
 Worlds above 65,536 rows are refused (`SU_E_RESOURCE_LIMIT`, before any store). Scratch is static (about 12 MiB, admitted at process start; no allocation in the tick). Work per tick: O(n log n) sort, at most 2^22 sweep pair examinations, at most 32 narrow-phase tests per mover, one gate test per mover. The operator is not reentrant (one world per worker process, as for the RTS operators).
+
+v2 (2026-10-26): the scratch holds v2's grid arrays as well, about 132 bytes per row more (cell key, level, count,
+bounds centre, worst kept rank, sorted bounds copy, entry index, and a bucket table of a power of two of at least 2 x
+rows slots at 17 bytes each): about 335 bytes per row in all, 21 MiB for the static context's 65,536 rows (virtual;
+pages a v1-only process never touches are not committed) and the same per instance row. The pair budget costs no
+memory: it bounds time. Work per tick in v2: O(n log n) sorts and binary searches; either at most 512 sweep pairs
+per row, or the grid's lookups (at most 27 per level per row) plus at most max(2^22, 1024 x capacity) entry visits;
+at most 32 narrow-phase tests per mover. Measured (i7-14700K, one core, GCC 16.2 -O3, `test_space3d_dense --bench`,
+2026-10-26; observations, not budgets): about 6 ns per grid entry visited and 10 to 15 ns per entry when nearly
+every visit is an overlapping pair; a full 2^22 budget about 40 ms.
 
 ## 5. Evidence
 

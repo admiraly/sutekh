@@ -43,15 +43,43 @@ static void space3d_data_release(void *shared) {
     s3mesh_set_release((S3MeshSet *)shared);
 }
 
+static void space3d_counters(const void *inst, SuHostOperatorCounters *out) {
+    const Space3dCtx *ctx = (const Space3dCtx *)inst;
+    const Space3dStats *l = &ctx->last;
+    out->runs = ctx->total.runs;
+    out->rows_truncated = l->rows_truncated;
+    out->rows_cand_truncated = l->rows_cand_truncated;
+    out->rows_contact_truncated = l->rows_contact_truncated;
+    out->rows_budget = l->rows_budget;
+    out->pairs_examined = l->sweep_pairs;
+    out->pair_budget = l->pair_budget;
+    out->pairs_skipped = l->pairs_skipped;
+    out->budget_hit = l->budget_hit;
+    out->runs_truncated = ctx->total.runs_truncated;
+    out->runs_budget = ctx->total.runs_budget;
+    out->total_rows_truncated = ctx->total.rows_truncated;
+    out->total_rows_budget = ctx->total.rows_budget;
+    out->total_pairs_skipped = ctx->total.pairs_skipped;
+}
+
 static const HostOperator k_operators[] = {
     {&g_space3d_query_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
     {&g_space3d_query_prox_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
     {&g_space3d_query_shape_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
     {&g_space3d_query_compound_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+    /* space3d_ops_v2 (issue 163): the same variants with the grid broadphase and the local pair budget. */
+    {&g_space3d_query2_desc, "space3d_ops_v2", space3d_create, space3d_query_instance_destroy, space3d_data,
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+    {&g_space3d_query2_prox_desc, "space3d_ops_v2", space3d_create, space3d_query_instance_destroy, space3d_data,
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+    {&g_space3d_query2_shape_desc, "space3d_ops_v2", space3d_create, space3d_query_instance_destroy, space3d_data,
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+    {&g_space3d_query2_compound_desc, "space3d_ops_v2", space3d_create, space3d_query_instance_destroy,
+     space3d_data, space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
 };
 
 #define HOST_OPERATOR_COUNT (sizeof k_operators / sizeof k_operators[0])

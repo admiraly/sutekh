@@ -11,12 +11,23 @@ extern const SuHostOpDesc g_space3d_query_desc;
 extern const SuHostOpDesc g_space3d_query_prox_desc;
 extern const SuHostOpDesc g_space3d_query_shape_desc;
 extern const SuHostOpDesc g_space3d_query_compound_desc;
+extern const SuHostOpDesc g_space3d_query2_desc;
+extern const SuHostOpDesc g_space3d_query2_prox_desc;
+extern const SuHostOpDesc g_space3d_query2_shape_desc;
+extern const SuHostOpDesc g_space3d_query2_compound_desc;
 
-/* Production table: the two RTS host operators, space3d.query, space3d.query_prox, space3d.query_shape and
- * space3d.query_compound. */
-static const SuHostOpDesc *const k_host_table[] = {&g_rts_spatial_desc,         &g_rts_scatter_desc,
-                                                   &g_space3d_query_desc,       &g_space3d_query_prox_desc,
-                                                   &g_space3d_query_shape_desc, &g_space3d_query_compound_desc,
+/* Production table: the two RTS host operators, space3d.query, space3d.query_prox, space3d.query_shape,
+ * space3d.query_compound and their space3d_ops_v2 variants (space3d.query2*, issue 163). */
+static const SuHostOpDesc *const k_host_table[] = {&g_rts_spatial_desc,
+                                                   &g_rts_scatter_desc,
+                                                   &g_space3d_query_desc,
+                                                   &g_space3d_query_prox_desc,
+                                                   &g_space3d_query_shape_desc,
+                                                   &g_space3d_query_compound_desc,
+                                                   &g_space3d_query2_desc,
+                                                   &g_space3d_query2_prox_desc,
+                                                   &g_space3d_query2_shape_desc,
+                                                   &g_space3d_query2_compound_desc,
                                                    NULL};
 
 #ifdef SU_TEST_HOST_REGISTRY

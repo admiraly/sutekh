@@ -396,6 +396,45 @@ SU_HOST_API uint32_t su_host_operator_info(uint32_t index, const char **system_i
 SU_HOST_API uint32_t su_host_set_operator_data(SuHostWorld *w, const char *system_id, const uint8_t *data,
                                                size_t len, SuHostError *err);
 
+/* Operator counters (additive, API version 1; 2026-10-26, issue 163): truncation and budget counters of a built-in
+ * query operator (the space3d family), so a host sees degraded results without scanning per-row flags. "Last run"
+ * fields describe the operator's most recent run in this world (all zero before the first); "total" fields sum
+ * every run since the world was created, in this process: re-simulated ticks after a restore count again, and so
+ * does a run in a tick that a later system failed. They are diagnostics, not world state (not in snapshots,
+ * digests or the identity), and they are a deterministic function of the runs counted. Set out->struct_size to
+ * at least sizeof(SuHostOperatorCounters) (only that many bytes are written) and reserved to 0. Returns SU_OK,
+ * SU_E_INVALID_ARGUMENT (NULL, bad struct_size, index out of range, an IR system), or SU_E_UNSUPPORTED_METHOD (a
+ * host operator without counters: registered operators).
+ *
+ * space3d meanings (docs/SPACE3D.md section 3, hit_flags): rows_* count movers with hit_flags 1 (candidates
+ * truncated), 2 (contacts truncated), 4 (budget) or any of them. space3d_ops_v1 (space3d.query*): pair_budget is
+ * the fixed 2^22 sweep budget, budget_hit means the sweep stopped and every mover got flag 4 (pairs_skipped is 0:
+ * v1 does not count what it did not examine). space3d_ops_v2 (space3d.query2*): pair_budget is max(2^22, 1024 x
+ * capacity), budget_hit means some movers' own-level search was cut, and pairs_skipped is the exact number of grid
+ * entries those movers did not visit. */
+typedef struct SuHostOperatorCounters {
+    uint32_t struct_size;            /* in: sizeof(SuHostOperatorCounters) */
+    uint32_t reserved;               /* in: 0 */
+    uint64_t runs;                   /* runs since world creation (this process) */
+    /* last run */
+    uint64_t rows_truncated;         /* movers with any truncation or budget flag */
+    uint64_t rows_cand_truncated;
+    uint64_t rows_contact_truncated;
+    uint64_t rows_budget;
+    uint64_t pairs_examined;         /* broadphase pairs (v1) or grid entries (v2) visited */
+    uint64_t pair_budget;
+    uint64_t pairs_skipped;
+    uint64_t budget_hit;             /* 1 when the budget limited the run, else 0 */
+    /* totals since world creation (this process) */
+    uint64_t runs_truncated;         /* runs with at least one flagged mover */
+    uint64_t runs_budget;            /* runs whose budget limited the broadphase */
+    uint64_t total_rows_truncated;
+    uint64_t total_rows_budget;
+    uint64_t total_pairs_skipped;
+} SuHostOperatorCounters;
+
+SU_HOST_API uint32_t su_host_operator_counters(const SuHostWorld *w, uint32_t index, SuHostOperatorCounters *out);
+
 /* ---- registered host operators (additive, API version 1; 2026-10-26) ----
  *
  * A game can add host operators of its own (native cross-row systems that IR cannot express) without building

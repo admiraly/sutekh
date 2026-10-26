@@ -2068,6 +2068,22 @@ uint32_t su_host_operator_state(const SuHostWorld *w, uint32_t index, const SuHo
     return SU_OK;
 }
 
+uint32_t su_host_operator_counters(const SuHostWorld *w, uint32_t index, SuHostOperatorCounters *out) {
+    uint32_t size;
+    if (w == NULL || out == NULL || out->struct_size < sizeof *out || out->reserved != 0u ||
+        index >= w->sched.count || w->sched.sys[index].kind != SU_SYS_KIND_HOST || w->ops[index] == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (w->ops[index]->counters == NULL) {
+        return SU_E_UNSUPPORTED_METHOD;
+    }
+    size = out->struct_size;
+    memset(out, 0, sizeof *out);
+    out->struct_size = size;
+    w->ops[index]->counters(w->sched.sys[index].host_inst, out);
+    return SU_OK;
+}
+
 uint32_t su_host_digest(const SuHostWorld *w, uint8_t out[32]) {
     size_t size = 0;
     size_t got = 0;
