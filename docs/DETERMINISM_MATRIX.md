@@ -267,10 +267,21 @@ Further local checks:
   each, 0 failures, 2 skipped (`native_unwind` is Windows-only; `audio_device` has no device), and no UBSan
   `runtime error`.
 
-CI legs: the PR's checks, recorded in `planning/handoffs/2026-10-26-determinism-matrix.md` with the run on the
-final head. Each Windows leg plays the Linux GCC and Linux Clang replays on every tier it has, and a Linux job plays
-every Windows leg's replays on all four tier modes. A compare job requires every manifest (static and DLL, every
-tier mode, every leg) to equal the expectation.
+CI legs: observed on PR #145, run 40271629352, commit `16c99ca`. All 14 jobs passed. Details are in
+`planning/handoffs/2026-10-26-determinism-matrix.md`.
+
+| Leg | Compiler (pinned) | Tier modes | Replays played |
+|---|---|---|---|
+| `determinism-linux` gcc, Release, native | GNU 15.2.0 | reference, planned, mixed, native; DLL | (recorded) |
+| `determinism-linux` clang, Release, native | Clang 21.1.8 | reference, planned, mixed, native; DLL | (recorded) |
+| `determinism-windows` clang, Release | Clang 20.1.8, x86_64-pc-windows-msvc | reference, planned, mixed_vm; DLL | Linux GCC and Linux Clang, every mode: 54 of 54 |
+| `determinism-windows` clang native, Release | Clang 20.1.8, msvc target, AsmJit | reference, planned, mixed, native; DLL | Linux GCC and Linux Clang, every mode: 72 of 72 |
+| `determinism-windows` MSVC `cl`, Release | MSVC 19.51.36260.0 | reference, planned, mixed_vm; DLL | Linux GCC and Linux Clang, every mode: 54 of 54 |
+| `determinism-play-windows-on-linux` | GNU 15.2.0, native | reference, planned, mixed, native | all three Windows legs: 108 of 108 |
+| `determinism-compare` | | | 36 of 36 manifests (static and DLL, every mode, every leg) equal the expectation |
+
+The existing jobs also run the determinism ctests on their builds, and all passed: `gcc16` (GCC 16.2 Release),
+`runtime` (Debug), `runtime-native`, `runtime-windows` (clang Debug) and `runtime-windows-msvc` (Debug).
 
 ## 4. Divergence audit
 

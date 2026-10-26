@@ -271,7 +271,29 @@ step failed: pwsh did not expand `-DCMAKE_CXX_COMPILER=$cxx`. Fixed in `bd24204`
 
 The final head of the first round (`7bc562a`, docs only) passed all 13 jobs (run 40263702485).
 
-**Fix round.** `<to be filled from the PR checks of the fix-round head>`
+**Fix round, run 40271629352, commit `16c99ca` (the fix round merged with `origin/main`).** All 14 jobs passed.
+Observed in the job logs:
+
+- **Compiler pins.** Every leg printed its pin and passed it: `linux-gcc` GNU 15.2.0, `linux-clang` Clang 21.1.8,
+  `windows-clang` and `windows-clang-native` Clang 20.1.8, `windows-msvc` MSVC 19.51.36260.0.
+- **`determinism-linux`.** gcc and clang: 14/14 determinism ctests each. These include the matrix in the reference,
+  planned, mixed and native modes with the placement comparison and rollback, the DLL, op coverage and its
+  self-test, the committed racer fixture, `determinism_regress` and `determinism_rts_engine`.
+- **`determinism-windows`.**
+  - clang: 13/13 ctests.
+  - clang native: 14/14.
+  - MSVC: 13/13.
+  - Every leg played the nine Linux GCC and nine Linux Clang replays on each tier mode it has: 54, 72 and 54
+    "every digest matches" lines.
+- **`determinism-play-windows-on-linux`.** 108 of 108 playbacks matched: the nine replays of each of the three
+  Windows legs, in four tier modes, on Linux GCC 15.2 with native.
+- **`determinism-compare`.** "36 of 36 manifests equal tests/determinism/expected_digests.txt": static and DLL, every
+  tier mode, every leg.
+- **Existing jobs.** `gcc16`, `runtime`, `runtime-native`, `runtime-windows`, `runtime-windows-msvc` and `validate`
+  passed.
+
+Commit `3bc4244` (the fix round before the merge) ran no checks: GitHub reported the PR as conflicting, in
+`PACK_VALIDATION.json` only. The later docs-only head records this section; its run is in the PR's checks.
 
 ## SHA-256 evidence
 
