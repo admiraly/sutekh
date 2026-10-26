@@ -8,6 +8,9 @@ Modes:
               LICENSE.txt are checked out), verify the commit and the license, and write
               third_party/sdl3-headers.lock.json
   --check     verify an existing checkout offline against the lock file
+  --dest DIR  use DIR/sdl3 instead of third_party/sdl3, for a project that includes Sutekh as a submodule and must
+              not write into it; the tracked lock file is then verified, never written, and an unusable DIR/sdl3 is
+              replaced only with --force. Configure with -DSUTEKH_DEPS_DIR=DIR.
 
 Only the headers are used: su_window opens the SDL3 shared library (libSDL3.so.0) at run time, as su_render opens
 the Vulkan loader, so nothing links against SDL and headless builds never need it. The headers are those of the
@@ -47,6 +50,12 @@ def license_digest(path):
         return hashlib.sha256(fh.read().replace(b"\r\n", b"\n")).hexdigest()
 
 
+def lock_agrees(digest):
+    with open(LOCK, "r", encoding="utf-8") as fh:
+        lock = json.load(fh)
+    return lock.get("commit") == COMMIT and lock.get("license_sha256") == digest
+
+
 def verify():
     rc, head, _ = git(["-C", DEST, "rev-parse", "HEAD"])
     if rc != 0 or head != COMMIT:
@@ -82,14 +91,18 @@ def clone():
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--dest", help="directory that receives sdl3/ (default: third_party)")
+    ap.add_argument("--force", action="store_true", help="with --dest: replace an unusable DIR/sdl3")
     args = ap.parse_args(argv)
+    global DEST
+    if args.dest:
+        DEST = os.path.join(os.path.abspath(args.dest), "sdl3")
     if args.check:
         digest, err = verify()
         if err is not None:
             print("FAIL: " + err)
             return 1
-        lock = json.load(open(LOCK, "r", encoding="utf-8"))
-        if lock.get("commit") != COMMIT or lock.get("license_sha256") != digest:
+        if not lock_agrees(digest):
             print("FAIL: lock file disagrees with the checkout")
             return 1
         print("sdl3-headers %s ok (%s)" % (TAG, COMMIT))
@@ -98,6 +111,9 @@ def main(argv):
         digest, err = verify()
         if err is None:
             print("sdl3-headers %s already present" % TAG)
+        elif args.dest and not args.force:
+            print("FAIL: %s is not the pinned checkout (%s); pass --force to replace it" % (DEST, err))
+            return 1
         else:
             print("replacing an unusable checkout: " + err)
             shutil.rmtree(DEST)
@@ -110,6 +126,13 @@ def main(argv):
     if err is not None:
         print("FAIL: " + err)
         return 1
+    if args.dest:
+        # The lock file belongs to the Sutekh checkout, which a --dest user must not modify: check it instead.
+        if not lock_agrees(digest):
+            print("FAIL: lock file %s disagrees with the checkout" % LOCK)
+            return 1
+        print("sdl3-headers %s at %s in %s; license sha256 %s" % (TAG, COMMIT, DEST, digest))
+        return 0
     lock = {
         "name": "SDL3 headers",
         "origin": URL,
