@@ -285,8 +285,7 @@ enum { V_SAME, V_VERSION, V_CONSTANTS, V_NAME, V_FLAGS, V_SCRATCH };
 
 static void fleet_desc(SuHostOperatorDesc *d, int variant) {
     uint32_t i;
-    memset(d, 0, sizeof *d);
-    d->struct_size = sizeof *d;
+    SU_HOST_OPERATOR_DESC_INIT(d);
     d->system_id = "game.target";
     d->schema_id = "game.fleet";
     d->operator_name = variant == V_NAME ? "fleet_ops_v1b" : "fleet_ops_v1";
@@ -750,6 +749,11 @@ static void test_registration(const Game *g) {
     REFUSE(SU_E_INVALID_ARGUMENT, bad.parse_data = NULL, "release_data without parse_data");
     REFUSE(SU_E_INVALID_ARGUMENT, bad.system_id = "game target", "system_id with a space");
     REFUSE(SU_E_INVALID_ARGUMENT, bad.system_id = "", "empty system_id");
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.system_id = ".", "system_id without a letter or digit (.)");
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.system_id = "-", "system_id without a letter or digit (-)");
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.system_id = "..", "system_id without a letter or digit (..)");
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.operator_name = "_-_", "operator_name without a letter or digit");
+    REFUSE(SU_E_INVALID_ARGUMENT, f[0].name = ".", "field name without a letter or digit");
     REFUSE(SU_E_INVALID_ARGUMENT, bad.schema_id = NULL, "NULL schema_id");
     REFUSE(SU_E_INVALID_ARGUMENT, bad.operator_name = "fleet ops", "operator_name with a space");
     REFUSE(SU_E_INVALID_ARGUMENT, bad.operator_version = 0u, "operator_version 0");
@@ -772,6 +776,8 @@ static void test_registration(const Game *g) {
     REFUSE(SU_E_DUPLICATE_KEY, bad.system_id = "Space3D.query", "reserved prefix in mixed case");
     REFUSE(SU_E_DUPLICATE_KEY, bad.operator_name = "space3d_ops_v1", "a built-in operator name");
     REFUSE(SU_E_DUPLICATE_KEY, bad.operator_name = "RTS_OPS_v1", "a reserved operator family name");
+    REFUSE(SU_E_DUPLICATE_KEY, bad.operator_name = "space3d-ops_v1", "a reserved name with '-' for '_'");
+    REFUSE(SU_E_DUPLICATE_KEY, bad.operator_name = "Rts-Ops-v7", "a reserved name, mixed case and '-'");
 #undef REFUSE
     check(su_host_operator_count() == base, "refusals register nothing");
 
@@ -788,6 +794,11 @@ static void test_registration(const Game *g) {
     st = try_register(&bad, &err);
     check(st == SU_E_DUPLICATE_KEY && strstr(err.message, "already registered") != NULL, "duplicate ID: %s (%s)",
           su_host_status_name(st), err.message);
+    bad = d;
+    bad.system_id = "GAME.Target";
+    st = try_register(&bad, &err);
+    check(st == SU_E_DUPLICATE_KEY && strstr(err.message, "game.target") != NULL,
+          "duplicate ID in another letter case: %s (%s)", su_host_status_name(st), err.message);
     check(su_host_operator_count() == base + 1u, "duplicate registers nothing");
 }
 
@@ -1046,8 +1057,7 @@ static uint32_t refuse_scratch(uint64_t capacity, size_t *bytes, void *user) {
 
 static void bad_desc(SuHostOperatorDesc *b, const char *sid, uint32_t flags) {
     uint32_t i;
-    memset(b, 0, sizeof *b);
-    b->struct_size = sizeof *b;
+    SU_HOST_OPERATOR_DESC_INIT(b);
     b->flags = flags;
     b->system_id = sid;
     b->schema_id = "game.fleet";
@@ -1381,6 +1391,8 @@ static void test_desc_versions(void) {
     SuHostError err;
     uint32_t st;
     check(SU_HOST_OPERATOR_DESC_V1_SIZE <= sizeof(SuHostOperatorDesc), "v1 size within the descriptor");
+    check(SU_HOST_OPERATOR_DESC_V1_SIZE == (sizeof(void *) == 8u ? 120u : 84u), "v1 size pinned (%u)",
+          (unsigned)SU_HOST_OPERATOR_DESC_V1_SIZE);
     bad_desc(&d, "game.v1size", 0u);
     d.struct_size = (uint32_t)SU_HOST_OPERATOR_DESC_V1_SIZE;
     st = su_host_register_operator(&d, &err);

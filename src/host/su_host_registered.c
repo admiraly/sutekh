@@ -63,6 +63,13 @@ typedef struct RegInst {
     char why[256];                /* reason of the last failed run, "" otherwise */
 } RegInst;
 
+/* The v1 descriptor size is frozen: inserting a field before `user` must not move it (host.h, "Versioning"). */
+_Static_assert(SU_HOST_OPERATOR_DESC_V1_SIZE == (sizeof(void *) == 8u ? 120u : 84u),
+               "SU_HOST_OPERATOR_DESC_V1_SIZE moved: v1 descriptor fields may not change");
+_Static_assert(sizeof(void *) == 8u || sizeof(void *) == 4u, "unsupported pointer size");
+_Static_assert(offsetof(SuHostOperatorDesc, constants_hash) == (sizeof(void *) == 8u ? 48u : 32u),
+               "v1 descriptor layout changed");
+
 /* POSIX: a statically initialized pthread mutex; Windows: a zeroed SRWLOCK is SRWLOCK_INIT. */
 #if defined(_WIN32)
 static SuMutex g_lock = {0};
@@ -76,11 +83,27 @@ static const char *const k_reserved_prefixes[] = {"rts.", "space3d.", "sutekh."}
 /* Operator names of the engine's families (rts_ops_v<N>, space3d_ops_v<N>) and the engine's own namespace. */
 static const char *const k_reserved_names[] = {"rts_ops", "space3d_ops", "sutekh"};
 
-/* 1 when s begins with prefix, ignoring ASCII letter case. */
+/* ASCII letter case folded, and '-' counted as '_' (so "space3d-ops" is "space3d_ops"). */
+static int fold(char c) {
+    return c == '-' ? '_' : tolower((unsigned char)c);
+}
+
+/* 1 when s begins with prefix, folding as above. */
 static int has_prefix_ci(const char *s, const char *prefix) {
     size_t i;
     for (i = 0; prefix[i] != '\0'; i++) {
-        if (s[i] == '\0' || tolower((unsigned char)s[i]) != tolower((unsigned char)prefix[i])) {
+        if (s[i] == '\0' || fold(s[i]) != fold(prefix[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* 1 when a and b are equal ignoring ASCII letter case. */
+static int equal_ci(const char *a, const char *b) {
+    size_t i;
+    for (i = 0; a[i] != '\0' || b[i] != '\0'; i++) {
+        if (tolower((unsigned char)a[i]) != tolower((unsigned char)b[i])) {
             return 0;
         }
     }
@@ -109,9 +132,10 @@ static char *dup_str(const char *s) {
     return p;
 }
 
-/* 1 when s is 1..max bytes of [A-Za-z0-9_.-]. */
+/* 1 when s is 1..max bytes of [A-Za-z0-9_.-] with at least one letter or digit. */
 static int ident_ok(const char *s, size_t max) {
     size_t i, n;
+    int alnum = 0;
     if (s == NULL) {
         return 0;
     }
@@ -125,8 +149,9 @@ static int ident_ok(const char *s, size_t max) {
               c == '-')) {
             return 0;
         }
+        alnum |= c != '_' && c != '.' && c != '-';
     }
-    return 1;
+    return alnum;
 }
 
 static int ends_with(const char *s, const char *suffix) {
@@ -343,6 +368,14 @@ static void reg_identity(const void *inst, uint8_t semantic[32]) {
 static const char *reg_last_error(const void *inst) {
     const RegInst *ri = (const RegInst *)inst;
     return ri != NULL ? ri->why : "";
+}
+
+/* Called by su_host_step before every tick, so a reason can only belong to this tick's attempt. */
+static void reg_clear_error(void *inst) {
+    RegInst *ri = (RegInst *)inst;
+    if (ri != NULL) {
+        ri->why[0] = '\0';
+    }
 }
 
 static uint32_t reg_set_data(const HostOperator *op, void *inst, const uint8_t *data, size_t len, void **shared,
@@ -617,15 +650,16 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError
     r->op.reg = r;
     r->op.last_error = reg_last_error;
     r->op.identity = reg_identity;
+    r->op.clear_error = reg_clear_error;
     r->op.record_name = r->operator_name;
 
     su_mutex_lock(&g_lock);
     for (i = 0; i < g_reg_count; i++) {
-        if (strcmp(g_reg[i]->system_id, r->system_id) == 0) {
+        if (equal_ci(g_reg[i]->system_id, r->system_id)) {
             su_mutex_unlock(&g_lock);
             reg_entry_free(r);
-            return reg_err(err, SU_E_DUPLICATE_KEY, UINT32_MAX, "system_id %s is already registered",
-                           desc->system_id);
+            return reg_err(err, SU_E_DUPLICATE_KEY, UINT32_MAX, "system_id %s is already registered (as %s)",
+                           desc->system_id, g_reg[i]->system_id);
         }
     }
     if (g_reg_count >= SU_HOST_MAX_REGISTERED_OPERATORS) {

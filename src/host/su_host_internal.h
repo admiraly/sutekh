@@ -43,6 +43,8 @@ typedef struct HostOperator {
     /* Registered operators: folds the world-specific part of the identity (flags, scratch size for the world's
      * capacity) into the entry's semantic hash at world creation. NULL for built-in operators. */
     void (*identity)(const void *inst, uint8_t semantic[32]);
+    /* Registered operators: forgets the last failure reason (su_host_step, before every tick). NULL for built-ins. */
+    void (*clear_error)(void *inst);
     /* SuHostOpDesc.operator_name override for the record check and the semantic hash: NULL for built-in operators
      * (their name is derived from the descriptor, host_decl.h), operator_name for registered ones. */
     const char *record_name;
@@ -74,6 +76,7 @@ struct SuHostWorld {
     SuEventLog *rb_log;
     uint32_t stepped;              /* su_host_step ran at least one tick */
     uint32_t opdata_mask;          /* bit i: schedule entry i received operator data */
+    const HostOperator *ops[SU_SCHED_MAX_SYSTEMS]; /* host entry i's operator (NULL for IR entries), set at creation */
 };
 
 #endif

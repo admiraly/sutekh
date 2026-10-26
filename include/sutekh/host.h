@@ -33,6 +33,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "sutekh/status.h"
 
@@ -370,7 +371,9 @@ SU_HOST_API uint32_t su_host_set_operator_data(SuHostWorld *w, const char *syste
  *     committed, also the rows run does not store; dead rows are zeroed by the world at publish.
  *   - run returns SU_OK, or any SU_E_* code: the tick then fails in this system (err->index, err->tick; the
  *     message names the code and, if run wrote one, its reason, see SuHostOperatorRun.reason), nothing of the
- *     tick is committed, and its input record stays queued.
+ *     tick is committed, and its input record stays queued. SuHostError.message holds 255 bytes, shared with the
+ *     tick, the system ID and the code name, so a long reason (or a long system ID) is cut at the end; keep reasons
+ *     short (well under 100 bytes) when they matter.
  *   - Determinism: the results must be a function of the columns, alive, generation, tick and operator data alone
  *     (no clock, no thread timing, no state kept across calls), so that a restore and re-simulation reproduces
  *     them. The engine zero-fills the scratch before every call (always; scratch is not world state and is not in
@@ -401,9 +404,12 @@ SU_HOST_API uint32_t su_host_set_operator_data(SuHostWorld *w, const char *syste
  * record with SU_E_CAPABILITY_DENIED as before. A game that needs it in a worker must build it into a worker of its
  * own (not provided).
  *
- * Versioning: SuHostOperatorDesc.struct_size may be any size from SU_HOST_OPERATOR_DESC_V1_SIZE up; fields beyond
- * the library's own sizeof(SuHostOperatorDesc) must be zero (a nonzero unknown field is refused, so a request this
- * library cannot honour fails instead of being ignored), and only struct_size bytes are read. The library fills
+ * Versioning: SuHostOperatorDesc.struct_size may be any size from SU_HOST_OPERATOR_DESC_V1_SIZE up; bytes beyond
+ * the library's own sizeof(SuHostOperatorDesc) must be zero (a nonzero unknown byte is refused, so a request this
+ * library cannot honour fails instead of being ignored), and only struct_size bytes are read. The check is
+ * byte-based, so callers must zero the whole descriptor (memset, or SU_HOST_OPERATOR_DESC_INIT) before filling it,
+ * padding included; the same holds for any later versioned struct of this section. Fields added later are laid out
+ * without padding (each at an offset aligned for its type, the struct size a multiple of 8). The library fills
  * SuHostOperatorRun.struct_size; an operator reads only the fields that size covers. Fields are only ever appended.
  * SuHostOperatorColumn stays as it is (no stride, no growth): per-lane additions arrive as new trailing
  * SuHostOperatorRun fields (parallel arrays indexed like columns). Unknown flag bits are refused.
@@ -470,12 +476,14 @@ typedef struct SuHostOperatorRun {
 typedef struct SuHostOperatorDesc {
     uint32_t struct_size;                 /* >= SU_HOST_OPERATOR_DESC_V1_SIZE; normally sizeof(SuHostOperatorDesc) */
     uint32_t flags;                       /* SU_HOST_OPERATOR_* above, or 0 */
-    const char *system_id;                /* identifier, 1..127 bytes; the prefixes "rts.", "space3d." and "sutekh."
-                                           * (any letter case) are reserved for engine operators */
+    const char *system_id;                /* identifier, 1..127 bytes, unique ignoring letter case; the prefixes
+                                           * "rts.", "space3d." and "sutekh." (any letter case) are reserved for
+                                           * engine operators */
     const char *schema_id;                /* identifier: the operator's own schema ID, 1..255 bytes (records may
                                            * bind it to another schema) */
     const char *operator_name;            /* identifier: host.operator of the record, 1..255 bytes; names beginning
-                                           * with "rts_ops", "space3d_ops" or "sutekh" (any case) are reserved */
+                                           * with "rts_ops", "space3d_ops" or "sutekh" (any case, '-' counted as
+                                           * '_') are reserved */
     uint32_t operator_version;            /* >= 1 */
     uint32_t field_count;                 /* 1..1024 */
     const SuHostOperatorField *fields;
@@ -496,14 +504,21 @@ typedef struct SuHostOperatorDesc {
     void *user;                           /* passed to every callback */
 } SuHostOperatorDesc;
 
-/* Size of the first released SuHostOperatorDesc (through user). */
+/* Size of the first released SuHostOperatorDesc (through user): 120 bytes with 8-byte pointers (LP64, LLP64), 84
+ * with 4-byte pointers (ILP32). The library pins these values at compile time. */
 #define SU_HOST_OPERATOR_DESC_V1_SIZE (offsetof(SuHostOperatorDesc, user) + sizeof(void *))
 
-/* Identifiers: 1..max bytes of [A-Za-z0-9_.-] (ASCII; no quote, space, control character or other byte).
+/* Zeroes *d (padding included) and sets struct_size: use it before filling a descriptor. */
+#define SU_HOST_OPERATOR_DESC_INIT(d) \
+    (memset((d), 0, sizeof(SuHostOperatorDesc)), (d)->struct_size = (uint32_t)sizeof(SuHostOperatorDesc))
+
+/* Identifiers: 1..max bytes of [A-Za-z0-9_.-] (ASCII; no quote, space, control character or other byte), with at
+ * least one letter or digit.
  * Registers an operator for this process. Failures (nothing is registered): SU_E_INVALID_ARGUMENT for a malformed
  * descriptor (struct_size, a nonzero field this library does not know, NULL run/strings, unknown flags, a name
  * that is not an identifier, field table rules above; err->index = the offending field when there is one),
- * SU_E_DUPLICATE_KEY when system_id is already registered, names an operator built into this library or uses a
+ * SU_E_DUPLICATE_KEY when system_id is already registered (ignoring letter case),
+ * names an operator built into this library or uses a
  * reserved prefix, or operator_name is reserved, SU_E_RESOURCE_LIMIT when the registry is full or memory runs
  * out. */
 SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, SuHostError *err);

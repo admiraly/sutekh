@@ -565,6 +565,9 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
                 op->destroy(inst);
             }
         }
+        if (st == SU_OK) {
+            hw->ops[i] = op;
+        }
         if (st == SU_OK && op->identity != NULL) {
             /* Registered operators: flags and this world's scratch size join the system's semantic hash (and so
              * su_host_system_info, the world identity and replay headers). */
@@ -1231,6 +1234,15 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
         uint64_t one = 0;
         uint32_t failed = UINT32_MAX;
 
+        /* A registered operator's failure reason belongs to one tick attempt. */
+        {
+            uint32_t k;
+            for (k = 0; k < w->sched.count; k++) {
+                if (w->ops[k] != NULL && w->ops[k]->clear_error != NULL) {
+                    w->ops[k]->clear_error(w->sched.sys[k].host_inst);
+                }
+            }
+        }
         /* Records for ticks already behind the world can no longer apply. */
         while (w->rec_count > 0u && w->recs[0].tick < t) {
             drop_record(w, &w->recs[0]);
@@ -1254,8 +1266,9 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
             {
                 /* A registered operator says why its run failed (an undeclared write, its own code). */
                 const char *detail = "";
-                if (failed != UINT32_MAX && w->sched.sys[failed].kind == SU_SYS_KIND_HOST) {
-                    const HostOperator *op = su_host_operator_find(w->sched.sys[failed].system_id);
+                if (failed != UINT32_MAX && failed < SU_SCHED_MAX_SYSTEMS &&
+                    w->sched.sys[failed].kind == SU_SYS_KIND_HOST) {
+                    const HostOperator *op = w->ops[failed];
                     if (op != NULL && op->last_error != NULL) {
                         detail = op->last_error(w->sched.sys[failed].host_inst);
                     }

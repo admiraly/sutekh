@@ -184,7 +184,7 @@ Not budgets. Same machine (i7-14700K), Release, single core.
   is not attributed here (likely cache effects alongside the tick's other work), and no breakdown was measured.
   `SU_HOST_OPERATOR_TRUST_INPUTS` removes the cost and the protection.
 
-## SHA-256 evidence (final sources)
+## SHA-256 evidence (review round 1 sources; superseded where listed under round 2)
 
 - `include/sutekh/host.h` `5cb7614162d34d12d709d36fe722efe97aa0f2e4b72e36f2e6b6d9e9717060db`
 - `src/host/su_host_registered.c` `2fc144002da5a85f73eed4b9d8a67893efebd365091610be07b1ed7a20176f3d`
@@ -197,6 +197,40 @@ Not budgets. Same machine (i7-14700K), Release, single core.
 - `cmake/SutekhHostOps.cmake` `dec6ff1754ef21c93c33b4183957f3d901b070ea8feb58ce9ed2b722a11f0b76`
 - Release `libsutekh_host.so` `50ba67d42eb25f73034c80ffb223c07cd0fa19771e7e0c4e5dc1f894ac60dd9a`
 - Release `test_host_registered` `638bb4e0664fa2bd9aab7541ecdfcc480f5db34634035297540bb2f17483f47c`
+
+## Review round 2 (final small commit)
+
+Changes:
+- `host.h`: callers must zero the whole descriptor before filling it, because the tail check is byte-based.
+  `SU_HOST_OPERATOR_DESC_INIT(d)` does it (memset plus `struct_size`; `host.h` now includes `<string.h>`). Fields
+  added later are laid out without padding.
+- `SU_HOST_OPERATOR_DESC_V1_SIZE` is pinned by `_Static_assert`s in `su_host_registered.c`: 120 bytes with 8-byte
+  pointers, 84 with 4-byte pointers, plus the `constants_hash` offset. The test checks the value at run time. ILP32 was
+  not compiled here.
+- The `err->message` truncation is documented: 255 bytes, shared with the tick, the system ID and the code name.
+- The failure reason is cleared before every tick for every registered host entry. The world caches each entry's
+  operator at creation (`SuHostWorld.ops`), so the tick takes no registry lock, and a reason can no longer outlive its
+  tick attempt (for example after a failure before `run` is reached). No test reaches that internal failure path.
+- Duplicate system IDs are compared ignoring letter case. Identifiers need at least one letter or digit (`.`, `-`, `..`,
+  `_-_` refused). Reserved operator names fold `-` to `_` (`space3d-ops_v1`, `Rts-Ops-v7` refused).
+
+Validation (same machine and flags as above):
+- GCC Debug and Release: **135/135** each, with the `audio_device` skip.
+- Native: **152/152**, with 2 platform skips.
+- Clang ASan+UBSan, the 10 `host_registered*` tests only: 10/10, 0 diagnostics.
+- `host_registered` 568 checks, `host_registered_dll` 564, 0 failures.
+- The baseline digest comparison is identical again.
+- Three new mutants (case-sensitive duplicates, no alphanumeric rule, `-` not folded) are all killed.
+- Pack report, license check and `git diff --check` pass.
+- The full ASan suite was not rerun in this round. The round 1 run, identical to main, stands.
+
+Source SHA-256 (round 2):
+- `include/sutekh/host.h` `8c6ad57ecc46f20d2367b7156b48ae5879b2c5cae03da06a20abf2f80127c149`
+- `src/host/su_host.c` `eed4313ad682f5a0d24709eed2507a67a87768c130d9fcb22c8c158b0d53b70d`
+- `src/host/su_host_internal.h` `1dd011d6bac6e16c324156d232aea3f8bf1264a0a3765f6681322323d25da3f8`
+- `src/host/su_host_operators.c` `ae911ab52bbbffb755ec84adf00bde111611bd0db1e43b1ead8fade1bcb7fcbf`
+- `src/host/su_host_registered.c` `15f8d512bf22348b466a547bcd189a09f5f98079030e94b7b753046d2924706e`
+- `tests/host/test_host_registered.c` `7034d0b966c3a37c99471a17c5622ef8ef8e157fbea912ab6788ff8bc0ab824a`
 
 ## Unrun checks and limitations
 
