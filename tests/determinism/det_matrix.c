@@ -31,6 +31,10 @@
  *                       and per-tick digest is verified (SU_REPLAY_DESYNC names the first differing tick)
  *     --dump-dir DIR    write the snapshot of every keyframe to DIR/<workload>.<tick>.suhsnap (for comparing the
  *                       states of two builds field by field after a mismatch)
+ *     --max-ticks T     reduced run (sanitizer builds): every workload stops at tick T at the latest (T a multiple of
+ *                       its keyframe interval). --expect then compares only the keyframe digests up to T, which
+ *                       equal the full run's; the rest of the manifest describes the shorter run
+ *     --expect-same F   compare the whole manifest with F (a manifest of the same run on another tier or library)
  *   native: systems the native backend refuses (entity operations, host operators) stay on the planned tier; the
  *   manifest's tier lines (not compared) say where each system ran. */
 /* SPDX-FileCopyrightText: 2026 admiraly */
@@ -1191,6 +1195,8 @@ typedef struct Opts {
     const char *dump_dir;
     const char *only;
     const char *expect_tiers;
+    const char *expect_same;
+    uint64_t max_ticks; /* 0: every workload's full length; otherwise its first max_ticks ticks (reduced run) */
     int rollback;
 } Opts;
 
@@ -1549,14 +1555,35 @@ static int compare_tiers(const Manifest *t, const char *path) {
     return ok;
 }
 
-/* Compares the manifest with the expectation, line by line (CR ignored). */
-static int compare(const Manifest *m, const char *path, const Opts *o) {
+/* In a reduced run (--max-ticks T) compared with a full-length expectation, only the keyframe lines of ticks up to T
+ * are the same: the first T ticks of every workload are the full run's first T ticks, while the trace, end-state and
+ * replay lines describe the shorter run. Every line counts otherwise. */
+static int prefix_line(const char *ln, size_t len, uint64_t max_ticks) {
+    char name[64], kind[16], buf[LINE_CAP];
+    unsigned long long tick = 0;
+    if (max_ticks == 0u) {
+        return 1;
+    }
+    if (len >= sizeof buf) {
+        len = sizeof buf - 1u;
+    }
+    memcpy(buf, ln, len);
+    buf[len] = '\0';
+    return sscanf(buf, "%63s %15s %llu", name, kind, &tick) == 3 && strcmp(kind, "kf") == 0 && tick <= max_ticks;
+}
+
+/* Compares the manifest with the expectation, line by line (CR ignored). max_ticks != 0: only the keyframe prefix
+ * (prefix_line) of both. */
+static int compare(const Manifest *m, const char *path, const Opts *o, uint64_t max_ticks) {
     Bytes b;
     char *s, *nl;
     uint32_t i = 0;
     int bad = 0;
     if (!slurp(path, &b)) {
         return 0;
+    }
+    while (i < m->n && !prefix_line(m->line[i], strlen(m->line[i]), max_ticks)) {
+        i++;
     }
     s = (char *)b.p;
     while (*s != '\0' && !bad) {
@@ -1569,6 +1596,8 @@ static int compare(const Manifest *m, const char *path, const Opts *o) {
         if (len > 0u && s[0] != '#') {
             if (o->only != NULL && (strncmp(s, o->only, strlen(o->only)) != 0 || s[strlen(o->only)] != ' ')) {
                 /* another workload */
+            } else if (!prefix_line(s, len, max_ticks)) {
+                /* not part of a reduced run's comparable prefix */
             } else if (i >= m->n || strlen(m->line[i]) != len || memcmp(m->line[i], s, len) != 0) {
                 fprintf(stderr, "det_matrix: MISMATCH\n  expected: %.*s\n  got:      %s\n", (int)len, s,
                         i < m->n ? m->line[i] : "(nothing)");
@@ -1585,6 +1614,9 @@ static int compare(const Manifest *m, const char *path, const Opts *o) {
                 }
             } else {
                 i++;
+                while (i < m->n && !prefix_line(m->line[i], strlen(m->line[i]), max_ticks)) {
+                    i++;
+                }
             }
         }
         if (nl == NULL) {
@@ -1662,6 +1694,15 @@ int main(int argc, char **argv) {
             o.expect_tiers = v;
         } else if (strcmp(a, "--rollback") == 0) {
             o.rollback = strcmp(v, "0") != 0;
+        } else if (strcmp(a, "--expect-same") == 0) {
+            o.expect_same = v;
+        } else if (strcmp(a, "--max-ticks") == 0) {
+            char *end = NULL;
+            o.max_ticks = strtoull(v, &end, 10);
+            if (v[0] < '1' || v[0] > '9' || end == NULL || *end != '\0') {
+                fprintf(stderr, "det_matrix: --max-ticks needs a positive tick count\n");
+                return 2;
+            }
         } else {
             fprintf(stderr, "det_matrix: unknown option %s\n", a);
             return 2;
@@ -1670,7 +1711,7 @@ int main(int argc, char **argv) {
     if (o.fixtures == NULL) {
         fprintf(stderr, "usage: det_matrix --fixtures DIR --tier reference|planned|native|mixed [--out FILE]"
                         " [--expect FILE] [--expect-tiers FILE] [--replay-dir DIR] [--play-dir DIR] [--dump-dir DIR]"
-                        " [--only NAME] [--rollback 0|1]\n");
+                        " [--only NAME] [--rollback 0|1] [--max-ticks T] [--expect-same FILE]\n");
         return 2;
     }
     if (o.tier == SU_HOST_TIER_NATIVE && !su_host_native_available()) {
@@ -1714,7 +1755,25 @@ int main(int argc, char **argv) {
     tiers.line = calloc(64, LINE_CAP);
     m.n = tiers.n = 0;
     if (m.line == NULL || tiers.line == NULL) {
+        free(m.line);
+        free(tiers.line);
         return 2;
+    }
+    if (o.max_ticks != 0u) {
+        for (k = 0; k < nwl; k++) {
+            if (wls[k].ticks > o.max_ticks) {
+                if (o.max_ticks % wls[k].keyframe != 0u) {
+                    fprintf(stderr, "det_matrix: --max-ticks %llu is not a multiple of %s's keyframe interval %llu\n",
+                            (unsigned long long)o.max_ticks, wls[k].name, (unsigned long long)wls[k].keyframe);
+                    free(m.line);
+                    free(tiers.line);
+                    return 2;
+                }
+                wls[k].ticks = o.max_ticks;
+            }
+        }
+        printf("det_matrix: reduced run: every workload stops at tick %llu at the latest\n",
+               (unsigned long long)o.max_ticks);
     }
     for (k = 0; k < nwl && !g_failed; k++) {
         if (o.only != NULL && strcmp(o.only, wls[k].name) != 0) {
@@ -1722,6 +1781,8 @@ int main(int argc, char **argv) {
         }
         if (wls[k].create == rts_create &&
             !rts_load(&c, strcmp(wls[k].name, "rts_duel16") == 0 ? "rts_duel16" : "rts_mixed1024")) {
+            free(m.line);
+            free(tiers.line);
             return 2;
         }
         if (o.play_dir != NULL) {
@@ -1743,6 +1804,8 @@ int main(int argc, char **argv) {
             FILE *f = strcmp(o.out, "-") == 0 ? stdout : fopen(o.out, "wb");
             if (f == NULL) {
                 fprintf(stderr, "det_matrix: cannot write %s\n", o.out);
+                free(m.line);
+                free(tiers.line);
                 return 2;
             }
             fprintf(f, "# sutekh determinism matrix v1 (tests/determinism/det_matrix.c): workload kind tick value\n");
@@ -1754,13 +1817,25 @@ int main(int argc, char **argv) {
             }
         }
         if (o.expect != NULL && !g_failed) {
-            if (!compare(&m, o.expect, &o)) {
+            if (!compare(&m, o.expect, &o, o.max_ticks)) {
                 g_failed = 1;
+            } else if (o.max_ticks != 0u) {
+                printf("det_matrix: tier %s: keyframe digests up to tick %llu equal %s\n", mode_name(o.tier),
+                       (unsigned long long)o.max_ticks, o.expect);
             } else {
                 printf("det_matrix: tier %s: %u lines equal %s\n", mode_name(o.tier), (unsigned)m.n, o.expect);
             }
         }
+        if (o.expect_same != NULL && !g_failed) {
+            if (!compare(&m, o.expect_same, &o, 0u)) {
+                g_failed = 1;
+            } else {
+                printf("det_matrix: tier %s: %u lines equal %s\n", mode_name(o.tier), (unsigned)m.n, o.expect_same);
+            }
+        }
     }
     printf("det_matrix: %s\n", g_failed ? "FAILED" : "ok");
+    free(m.line);
+    free(tiers.line);
     return g_failed ? 1 : 0;
 }

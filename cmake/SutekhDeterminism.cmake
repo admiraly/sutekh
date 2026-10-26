@@ -75,21 +75,59 @@ if(TARGET su_agent)
     if(SUTEKH_NATIVE)
         list(APPEND SU_DET_TIERS native)
     endif()
+    # Sanitizer builds run every workload for its first SUTEKH_DET_MAX_TICKS ticks (default 120 when SUTEKH_SANITIZE
+    # is set or the build uses -fsanitize=address; empty = full length). Every workload, tier, restore, rollback and
+    # playback still runs. The keyframe digests up to that tick are compared with the committed cross-build
+    # expectation (they are the full run's first keyframes); the rest of each tier's manifest is compared with the
+    # reference tier's manifest from the same build (determinism_matrix_reference sets that up), never with pinned
+    # reduced-run constants. Full-length lanes are unchanged.
+    set(SUTEKH_DET_MAX_TICKS "" CACHE STRING
+        "Determinism matrix ticks per workload (a multiple of 60); empty: full length, or 120 in sanitizer builds")
+    set(_su_det_max "${SUTEKH_DET_MAX_TICKS}")
+    if(_su_det_max STREQUAL "" AND (SUTEKH_SANITIZE OR SUTEKH_ASAN_BUILD))
+        set(_su_det_max 120)
+    endif()
+    set(_su_det_reduced "")
+    if(NOT _su_det_max STREQUAL "")
+        set(_su_det_reduced --max-ticks ${_su_det_max})
+        message(STATUS "Sutekh determinism matrix: reduced run, ${_su_det_max} ticks per workload")
+    endif()
+    set(_su_det_ref_manifest "${CMAKE_BINARY_DIR}/det_manifest_reference.txt")
     foreach(tier ${SU_DET_TIERS})
+        set(_su_det_same "")
+        if(_su_det_reduced AND NOT tier STREQUAL "reference")
+            set(_su_det_same --expect-same "${_su_det_ref_manifest}")
+        endif()
         add_test(NAME determinism_matrix_${tier} COMMAND det_matrix --fixtures "${SU_DET_FIXTURES}" --tier ${tier}
-                 --expect "${SU_DET_EXPECT}" --expect-tiers "${SU_DET_TIERS_EXPECT}"
+                 --expect "${SU_DET_EXPECT}" --expect-tiers "${SU_DET_TIERS_EXPECT}" ${_su_det_reduced} ${_su_det_same}
                  --out "${CMAKE_BINARY_DIR}/det_manifest_${tier}.txt" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(determinism_matrix_${tier} PROPERTIES FIXTURES_REQUIRED det_fixtures TIMEOUT 900)
+        if(_su_det_reduced)
+            if(tier STREQUAL "reference")
+                set_tests_properties(determinism_matrix_${tier} PROPERTIES FIXTURES_SETUP det_reduced_reference)
+            else()
+                set_tests_properties(determinism_matrix_${tier} PROPERTIES
+                                     FIXTURES_REQUIRED "det_fixtures;det_reduced_reference")
+            endif()
+        endif()
     endforeach()
-    # The same through the DLL, and a recording made by the static library played back through the DLL.
+    # The same through the DLL, and a recording made by the static library played back through the DLL. The DLL
+    # run writes the replays (fixture det_replays): if it fails, determinism_play_static is reported as not run.
+    set(_su_det_same "")
+    if(_su_det_reduced)
+        set(_su_det_same --expect-same "${_su_det_ref_manifest}")
+    endif()
     add_test(NAME determinism_matrix_dll COMMAND det_matrix_dll --fixtures "${SU_DET_FIXTURES}" --tier planned
              --expect "${SU_DET_EXPECT}" --expect-tiers "${SU_DET_TIERS_EXPECT}" --replay-dir "${SU_DET_FIXTURES}"
-             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+             ${_su_det_reduced} ${_su_det_same} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME determinism_play_static COMMAND det_matrix --fixtures "${SU_DET_FIXTURES}" --tier reference
-             --play-dir "${SU_DET_FIXTURES}" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    set_tests_properties(determinism_matrix_dll determinism_play_static PROPERTIES FIXTURES_REQUIRED det_fixtures
-                         TIMEOUT 900)
-    set_tests_properties(determinism_play_static PROPERTIES DEPENDS determinism_matrix_dll)
+             --play-dir "${SU_DET_FIXTURES}" ${_su_det_reduced} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(determinism_matrix_dll determinism_play_static PROPERTIES TIMEOUT 900)
+    set_tests_properties(determinism_matrix_dll PROPERTIES FIXTURES_SETUP det_replays FIXTURES_REQUIRED det_fixtures)
+    set_tests_properties(determinism_play_static PROPERTIES FIXTURES_REQUIRED "det_fixtures;det_replays")
+    if(_su_det_reduced)
+        set_tests_properties(determinism_matrix_dll PROPERTIES FIXTURES_REQUIRED "det_fixtures;det_reduced_reference")
+    endif()
 endif()
 
 # Regression fixtures of the matrix findings (D1: space3d box sign products on INT64_MIN half extents).

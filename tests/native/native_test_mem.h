@@ -24,6 +24,7 @@
 #if defined(_WIN32)
 #include <windows.h>
 #else
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -258,6 +259,10 @@ static inline int su_nt_store_faults(const void *code, uint8_t v) {
     pid = fork();
     if (pid == 0) {
         volatile uint8_t *p = (volatile uint8_t *)(uintptr_t)code;
+        /* The expected fault kills the child with the default action. Under AddressSanitizer its SEGV handler
+         * would otherwise print an error report for this deliberate fault, which the sanitizer CI job rejects. */
+        signal(SIGSEGV, SIG_DFL);
+        signal(SIGBUS, SIG_DFL);
         *p = v;
         _exit(0);
     }

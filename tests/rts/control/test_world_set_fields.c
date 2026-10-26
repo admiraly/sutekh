@@ -165,6 +165,7 @@ int main(int argc, char **argv) {
     st = run_json(h_world_create, create, &f);
     CHECK(st == SU_OK, "world.create of the RTS fixture: %s (%s)", su_status_name(st), f.msg);
     if (st != SU_OK || s->worlds[0].inst.w == NULL) {
+        free_worlds(s);
         free(s);
         fprintf(stderr, "%d checks, %d failures\n", g_checks, g_failures);
         return 1;
@@ -229,6 +230,7 @@ int main(int argc, char **argv) {
     CHECK(committed("formation_slot", 3) == 2u && committed("formation_gen", 3) == 9u,
           "formation fields written on slot 4");
 
+    free_worlds(s); /* worker.c teardown: worlds, schedules and entity runtimes */
     free(s);
     fprintf(stderr, "%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

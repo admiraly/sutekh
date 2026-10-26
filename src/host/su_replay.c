@@ -461,6 +461,27 @@ static int is_digest_tick(const SuReplayInfo *in, uint64_t t) {
     return !is_keyframe_tick(in, t) && in->digest_interval != 0u && (t - in->start_tick) % in->digest_interval == 0u;
 }
 
+static uint64_t gcd_u64(uint64_t a, uint64_t b) {
+    while (b != 0u) {
+        uint64_t r = a % b;
+        a = b;
+        b = r;
+    }
+    return a;
+}
+
+/* Number of digest ticks in [start, end] (digest_interval != 0): offsets o in [0, end - start] that are multiples
+ * of the digest interval but not of the keyframe interval, so span/di minus span/lcm (o = 0 is in both). Computed,
+ * not counted tick by tick: the span comes from the input and can be close to 2^64. */
+static uint64_t digest_tick_count(const SuReplayInfo *in) {
+    uint64_t span = in->end_tick - in->start_tick;
+    uint64_t di = in->digest_interval;
+    uint64_t kf = in->keyframe_interval;
+    uint64_t q = di / gcd_u64(di, kf);
+    uint64_t both = q > UINT64_MAX / kf ? 0u : span / (q * kf); /* nonzero multiples of lcm(di, kf) */
+    return span / di - both;
+}
+
 uint32_t su_replay_open(const uint8_t *bytes, size_t len, SuReplay **out, SuHostError *err) {
     SuReplay *r = NULL;
     SuReplayInfo *in;
@@ -675,12 +696,7 @@ uint32_t su_replay_open(const uint8_t *bytes, size_t len, SuReplay **out, SuHost
         return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "replay is missing keyframes");
     }
     if (in->digest_interval != 0u) {
-        uint64_t want = 0;
-        uint64_t u;
-        for (u = in->start_tick; u <= in->end_tick; u++) {
-            want += is_digest_tick(in, u) ? 1u : 0u;
-        }
-        if (want != nd) {
+        if (digest_tick_count(in) != (uint64_t)nd) {
             su_replay_close(r);
             return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "replay is missing digest records");
         }
@@ -692,9 +708,10 @@ uint32_t su_replay_open(const uint8_t *bytes, size_t len, SuReplay **out, SuHost
         uint8_t d[32];
         sha(r->bytes + r->keyframes[0].off, r->keyframes[0].len, d);
         if (memcmp(d, in->initial_digest, 32u) != 0) {
+            /* in points into r: report the start tick before su_replay_close frees it. */
+            set_err(err, SU_E_PARSE, UINT32_MAX, in->start_tick, "initial keyframe does not match the header digest");
             su_replay_close(r);
-            return set_err(err, SU_E_PARSE, UINT32_MAX, in->start_tick,
-                           "initial keyframe does not match the header digest");
+            return SU_E_PARSE;
         }
     }
     in->keyframe_count = nk;

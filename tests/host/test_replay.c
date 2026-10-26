@@ -286,6 +286,144 @@ static void test_tamper(void) {
     su_replay_free(bytes);
 }
 
+/* Little-endian reads of the recording layout (src/host/su_replay.c), for locating records in the bytes. */
+static uint64_t le(const uint8_t *p, unsigned n) {
+    uint64_t v = 0;
+    while (n-- > 0u) {
+        v = (v << 8) | p[n];
+    }
+    return v;
+}
+
+/* Advances *at past a length-prefixed text; 0 when it runs past len. */
+static int skip_text(const uint8_t *b, size_t len, size_t *at) {
+    uint64_t n;
+    if (*at + 4u > len) {
+        return 0;
+    }
+    n = le(b + *at, 4u);
+    if (n > len - *at - 4u) {
+        return 0;
+    }
+    *at += 4u + (size_t)n;
+    return 1;
+}
+
+/* Offset of the initial keyframe's snapshot bytes: the header (magic, versions, engine text, identity, schema
+ * digest, systems, seed, rate, start tick, initial digest, intervals), then K, tick and length. 0 if it does not
+ * walk. */
+static size_t initial_keyframe_body(const uint8_t *b, size_t len, size_t *body_len) {
+    size_t at = 9u + 4u + 4u;
+    uint32_t sys;
+    uint32_t i;
+    if (!skip_text(b, len, &at) || at + 64u + 4u > len) {
+        return 0;
+    }
+    at += 64u;
+    sys = (uint32_t)le(b + at, 4u);
+    at += 4u;
+    for (i = 0; i < sys; i++) {
+        if (!skip_text(b, len, &at) || at + 32u > len) {
+            return 0;
+        }
+        at += 32u;
+        if (!skip_text(b, len, &at)) {
+            return 0;
+        }
+    }
+    at += 8u + 4u + 8u + 32u + 8u + 8u;
+    if (at + 17u > len || b[at] != (uint8_t)'K') {
+        return 0;
+    }
+    *body_len = (size_t)le(b + at + 9u, 8u);
+    at += 17u;
+    return *body_len <= len - at ? at : 0u;
+}
+
+/* Regression (issue 148): a recording whose initial keyframe does not match the header digest is refused with
+ * the start tick in the error. The refusal used to read the start tick through the replay it had just freed
+ * (heap-use-after-free, reported by AddressSanitizer). */
+static void test_initial_keyframe_mismatch(void) {
+    uint8_t *bytes = NULL;
+    uint8_t *bad;
+    size_t len = 0;
+    size_t body_len = 0;
+    size_t body;
+    SuReplay *r = NULL;
+    SuHostError e;
+
+    record(&bytes, &len, NULL);
+    body = initial_keyframe_body(bytes, len, &body_len);
+    CHECK(body != 0u && body_len > 0u);
+    bad = malloc(len);
+    CHECK(bad != NULL);
+    if (body != 0u && body_len > 0u && bad != NULL) {
+        memcpy(bad, bytes, len);
+        bad[body + body_len - 1u] ^= 0x01u; /* last snapshot byte: framing intact, digest differs */
+        CHECK(su_replay_open(bad, len, &r, &e) == SU_E_PARSE && r == NULL);
+        CHECK(e.code == SU_E_PARSE && e.tick == 0u && e.index == UINT32_MAX);
+        CHECK(strstr(e.message, "initial keyframe does not match") != NULL);
+        /* The untouched recording still opens. */
+        CHECK(su_replay_open(bytes, len, &r, &e) == SU_OK && r != NULL);
+        su_replay_close(r);
+    }
+    free(bad);
+    su_replay_free(bytes);
+}
+
+static void put_le(uint8_t *p, uint64_t v, unsigned n) {
+    unsigned i;
+    for (i = 0; i < n; i++) {
+        p[i] = (uint8_t)(v >> (8u * i));
+    }
+}
+
+/* Regression: a header whose keyframe interval spans nearly 2^64 ticks. The recording keeps the real header and
+ * initial keyframe and sets keyframe_interval = UINT64_MAX and digest_interval = 1, then a second keyframe and the
+ * end record at tick UINT64_MAX: two keyframes, as that layout calls for, and no digest record. Open must refuse
+ * it for the missing digests; it used to count the digest ticks one by one over the whole span and never return. */
+static void test_huge_span(void) {
+    uint8_t *bytes = NULL;
+    uint8_t *bad;
+    size_t len = 0;
+    size_t body_len = 0;
+    size_t body;
+    size_t k_at;
+    size_t k_len;
+    size_t n;
+    SuReplay *r = NULL;
+    SuHostError e;
+
+    record(&bytes, &len, NULL);
+    body = initial_keyframe_body(bytes, len, &body_len);
+    CHECK(body != 0u);
+    if (body == 0u) {
+        su_replay_free(bytes);
+        return;
+    }
+    k_at = body - 17u;     /* K, tick, length */
+    k_len = 17u + body_len; /* the whole initial keyframe record */
+    bad = malloc(k_at + 2u * k_len + 41u);
+    CHECK(bad != NULL);
+    if (bad != NULL) {
+        memcpy(bad, bytes, k_at + k_len);           /* header and initial keyframe */
+        put_le(bad + k_at - 16u, UINT64_MAX, 8u);   /* keyframe_interval */
+        put_le(bad + k_at - 8u, 1u, 8u);            /* digest_interval */
+        n = k_at + k_len;
+        memcpy(bad + n, bytes + k_at, k_len);       /* a second keyframe ... */
+        put_le(bad + n + 1u, UINT64_MAX, 8u);       /* ... at tick UINT64_MAX */
+        n += k_len;
+        bad[n] = (uint8_t)'E';
+        put_le(bad + n + 1u, UINT64_MAX, 8u);       /* end tick */
+        memset(bad + n + 9u, 0, 32u);               /* final digest (not reached) */
+        n += 41u;
+        CHECK(su_replay_open(bad, n, &r, &e) == SU_E_PARSE && r == NULL);
+        CHECK(strstr(e.message, "missing digest records") != NULL);
+    }
+    free(bad);
+    su_replay_free(bytes);
+}
+
 static void test_writer_errors(void) {
     SuHostWorld *w = make_world(0);
     SuHostWorld *other = make_world(0);
@@ -362,6 +500,8 @@ int main(int argc, char **argv) {
         free(b.data);
     } else if (argc == 1) {
         test_record_and_play();
+        test_initial_keyframe_mismatch();
+        test_huge_span();
         test_tamper();
         test_writer_errors();
     } else {

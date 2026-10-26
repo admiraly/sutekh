@@ -20,6 +20,7 @@ option(SUTEKH_BUILD_EXAMPLES "Build Sutekh's example programs (examples/)" ${PRO
 
 include(cmake/SutekhWarnings.cmake)
 include(cmake/SutekhPlatform.cmake)
+include(cmake/SutekhSanitizers.cmake)
 
 # Frozen contract headers (single owner: M0-00). Consumed read-only.
 set(SUTEKH_CONTRACT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -741,6 +742,8 @@ add_executable(test_replay tests/host/test_replay.c)
 target_link_libraries(test_replay PRIVATE su_host)
 sutekh_apply_warnings(test_replay)
 add_test(NAME host_replay COMMAND test_replay WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# A bounded run: the open-time layout checks once looped over the whole tick span of a hostile header.
+set_tests_properties(host_replay PROPERTIES TIMEOUT 300)
 add_executable(test_replay_dll tests/host/test_replay.c)
 target_link_libraries(test_replay_dll PRIVATE sutekh_host)
 sutekh_apply_warnings(test_replay_dll)
@@ -787,3 +790,6 @@ include(cmake/SutekhHostOps.cmake)
 include(cmake/SutekhDeterminism.cmake)
 include(cmake/SutekhPresentation.cmake)
 include(cmake/SutekhPublic.cmake)
+# Sanitizer builds only: the documented worker environment (cmake/SutekhSanitizers.cmake). Deferred so it runs
+# after every test, including those registered by earlier deferred calls (cmake/SutekhNumeric3D.cmake).
+cmake_language(DEFER CALL sutekh_sanitizer_test_environment)
