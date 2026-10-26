@@ -371,6 +371,59 @@ static void test_initial_keyframe_mismatch(void) {
     su_replay_free(bytes);
 }
 
+static void put_le(uint8_t *p, uint64_t v, unsigned n) {
+    unsigned i;
+    for (i = 0; i < n; i++) {
+        p[i] = (uint8_t)(v >> (8u * i));
+    }
+}
+
+/* Regression: a header whose keyframe interval spans nearly 2^64 ticks. The recording keeps the real header and
+ * initial keyframe and sets keyframe_interval = UINT64_MAX and digest_interval = 1, then a second keyframe and the
+ * end record at tick UINT64_MAX: two keyframes, as that layout calls for, and no digest record. Open must refuse
+ * it for the missing digests; it used to count the digest ticks one by one over the whole span and never return. */
+static void test_huge_span(void) {
+    uint8_t *bytes = NULL;
+    uint8_t *bad;
+    size_t len = 0;
+    size_t body_len = 0;
+    size_t body;
+    size_t k_at;
+    size_t k_len;
+    size_t n;
+    SuReplay *r = NULL;
+    SuHostError e;
+
+    record(&bytes, &len, NULL);
+    body = initial_keyframe_body(bytes, len, &body_len);
+    CHECK(body != 0u);
+    if (body == 0u) {
+        su_replay_free(bytes);
+        return;
+    }
+    k_at = body - 17u;     /* K, tick, length */
+    k_len = 17u + body_len; /* the whole initial keyframe record */
+    bad = malloc(k_at + 2u * k_len + 41u);
+    CHECK(bad != NULL);
+    if (bad != NULL) {
+        memcpy(bad, bytes, k_at + k_len);           /* header and initial keyframe */
+        put_le(bad + k_at - 16u, UINT64_MAX, 8u);   /* keyframe_interval */
+        put_le(bad + k_at - 8u, 1u, 8u);            /* digest_interval */
+        n = k_at + k_len;
+        memcpy(bad + n, bytes + k_at, k_len);       /* a second keyframe ... */
+        put_le(bad + n + 1u, UINT64_MAX, 8u);       /* ... at tick UINT64_MAX */
+        n += k_len;
+        bad[n] = (uint8_t)'E';
+        put_le(bad + n + 1u, UINT64_MAX, 8u);       /* end tick */
+        memset(bad + n + 9u, 0, 32u);               /* final digest (not reached) */
+        n += 41u;
+        CHECK(su_replay_open(bad, n, &r, &e) == SU_E_PARSE && r == NULL);
+        CHECK(strstr(e.message, "missing digest records") != NULL);
+    }
+    free(bad);
+    su_replay_free(bytes);
+}
+
 static void test_writer_errors(void) {
     SuHostWorld *w = make_world(0);
     SuHostWorld *other = make_world(0);
@@ -448,6 +501,7 @@ int main(int argc, char **argv) {
     } else if (argc == 1) {
         test_record_and_play();
         test_initial_keyframe_mismatch();
+        test_huge_span();
         test_tamper();
         test_writer_errors();
     } else {
