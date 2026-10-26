@@ -5,7 +5,8 @@
 # CMakeLists.txt, when su_host, sutekh_host and su_space3d exist.
 foreach(host_lib su_host sutekh_host)
     target_sources(${host_lib} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/host/su_host_operators.c"
-                                       "${CMAKE_CURRENT_SOURCE_DIR}/src/host/su_host_registered.c")
+                                       "${CMAKE_CURRENT_SOURCE_DIR}/src/host/su_host_registered.c"
+                                       "${CMAKE_CURRENT_SOURCE_DIR}/src/host/su_host_state.c")
 endforeach()
 target_link_libraries(su_host PRIVATE su_space3d)
 target_link_libraries(sutekh_host PRIVATE su_space3d)
@@ -90,6 +91,40 @@ foreach(check "dll:same" "static:version" "dll:constants" "static:name" "dll:fla
     endif()
     add_test(NAME host_registered_verify_${what} COMMAND ${exe} verify "${SU_HOST_REGISTERED_DIR}" ${what})
     set_tests_properties(host_registered_verify_${what} PROPERTIES FIXTURES_REQUIRED host_registered_files)
+endforeach()
+
+# Operator state (include/sutekh/host.h, "operator state"; issue 139): a registered operator owning canonical
+# variable-size state, static and DLL; the static Linux build counts allocations in the tick. Cross-process: record,
+# then verify with the same declaration (DLL) and with other caps, flags or no state (refused: world identity).
+foreach(variant "" "_dll")
+    add_executable(test_host_opstate${variant} "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/test_host_opstate.c")
+    if(variant STREQUAL "_dll")
+        target_link_libraries(test_host_opstate${variant} PRIVATE sutekh_host)
+    else()
+        target_link_libraries(test_host_opstate${variant} PRIVATE su_host)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_compile_definitions(test_host_opstate${variant} PRIVATE SU_TEST_WRAP_ALLOC)
+            target_link_options(test_host_opstate${variant} PRIVATE "LINKER:--wrap=malloc,--wrap=calloc,--wrap=realloc")
+        endif()
+    endif()
+    sutekh_apply_warnings(test_host_opstate${variant})
+    add_test(NAME host_opstate${variant} COMMAND test_host_opstate${variant})
+endforeach()
+set(SU_HOST_OPSTATE_DIR "${CMAKE_CURRENT_BINARY_DIR}/host_opstate")
+file(MAKE_DIRECTORY "${SU_HOST_OPSTATE_DIR}")
+add_test(NAME host_opstate_record COMMAND test_host_opstate record "${SU_HOST_OPSTATE_DIR}")
+set_tests_properties(host_opstate_record PROPERTIES FIXTURES_SETUP host_opstate_files)
+foreach(check "dll:same" "static:same" "static:entries" "dll:bytes" "static:flags" "dll:nostate")
+    string(REPLACE ":" ";" parts "${check}")
+    list(GET parts 0 build)
+    list(GET parts 1 what)
+    if(build STREQUAL "dll")
+        set(exe test_host_opstate_dll)
+    else()
+        set(exe test_host_opstate)
+    endif()
+    add_test(NAME host_opstate_verify_${what}_${build} COMMAND ${exe} verify "${SU_HOST_OPSTATE_DIR}" ${what})
+    set_tests_properties(host_opstate_verify_${what}_${build} PROPERTIES FIXTURES_REQUIRED host_opstate_files)
 endforeach()
 endif() # SUTEKH_BUILD_TESTS
 

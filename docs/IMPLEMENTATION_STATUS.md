@@ -451,6 +451,20 @@ zeroed before every call, nothing allocated in the tick. In-process only (not in
 worker). Evidence: `tests/host/test_host_registered.c` (static and DLL; cross-process identity checks), handoff
 `planning/handoffs/2026-10-26-registered-operators.md`.
 
+## Operator state in snapshots, digests and replays (26 October 2026)
+
+Downstream request work outside the milestone order (issue 139; M3 gates unchanged). Implemented and tested: a
+registered host operator may declare bounded variable-size state (`SuHostOperatorDesc` version 2:
+`state_max_entries`, `state_max_bytes`, `state_flags`; `include/sutekh/host.h`, "operator state"). The engine owns the
+bytes: a map from (entity, sub) keys to values, kept sorted, changed during `run` through `su_host_state_put/alloc/
+modify/erase/erase_entity` and read through a view between ticks. It is in the canonical snapshot (version 2 with a
+`SUOPSTAT` section, only for worlds with state), so in both digests, both restores and replay keyframes; changes
+commit with the tick or are dropped with it; every buffer is allocated at world creation; caps are structured
+refusals that depend only on the logical state; `SU_HOST_STATE_DROP_DEAD` erases dead entities' entries at publish.
+Worlds without operator state keep byte-identical snapshots, digests and replays. In-process only, like registered
+operators. Evidence: `tests/host/test_host_opstate.c` (static and DLL; cross-process identity checks), handoff
+`planning/handoffs/2026-10-26-operator-state.md`.
+
 ## Schedule size and declared world schemas (26 October 2026)
 
 Downstream request work outside the milestone order (issue 144; M3 gates unchanged). Implemented and tested: an

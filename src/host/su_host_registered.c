@@ -13,6 +13,7 @@
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #include "host/su_host_internal.h"
+#include "host/su_host_state.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -59,6 +60,7 @@ typedef struct RegInst {
     void *scratch;
     size_t scratch_bytes;
     RegData *data;
+    SuHostState *state;           /* operator state (issue 139), NULL when the descriptor declares none */
     char reason[128];             /* SuHostOperatorRun.reason, "" at every call */
     char why[256];                /* reason of the last failed run, "" otherwise */
 } RegInst;
@@ -67,6 +69,10 @@ typedef struct RegInst {
 _Static_assert(SU_HOST_OPERATOR_DESC_V1_SIZE == (sizeof(void *) == 8u ? 120u : 84u),
                "SU_HOST_OPERATOR_DESC_V1_SIZE moved: v1 descriptor fields may not change");
 _Static_assert(sizeof(void *) == 8u || sizeof(void *) == 4u, "unsupported pointer size");
+/* Version 2 appends four u32 without padding (issue 139). */
+_Static_assert(SU_HOST_OPERATOR_DESC_V2_SIZE == (sizeof(void *) == 8u ? 136u : 100u),
+               "SU_HOST_OPERATOR_DESC_V2_SIZE moved");
+_Static_assert(sizeof(SuHostOperatorDesc) == SU_HOST_OPERATOR_DESC_V2_SIZE, "descriptor has trailing padding");
 _Static_assert(offsetof(SuHostOperatorDesc, constants_hash) == (sizeof(void *) == 8u ? 48u : 32u),
                "v1 descriptor layout changed");
 
@@ -194,6 +200,7 @@ static void reg_destroy(void *p) {
         return;
     }
     data_unref(ri->data);
+    su_hstate_destroy(ri->state);
     free(ri->cols);
     free(ri->in_hash);
     free(ri->alive);
@@ -231,6 +238,14 @@ static uint32_t reg_create(const HostOperator *op, uint64_t rows, void **inst) {
     for (i = 0; i < n; i++) {
         ri->cols[i].field_id = r->desc.fields[i].id;
         ri->cols[i].access = r->desc.fields[i].access;
+    }
+    if (r->pub.state_max_entries != 0u) {
+        uint32_t st = su_hstate_create(r->pub.state_max_entries, r->pub.state_max_bytes, r->pub.state_flags,
+                                       &ri->state);
+        if (st != SU_OK) {
+            reg_destroy(ri);
+            return st;
+        }
     }
     if (r->pub.scratch_size != NULL) {
         size_t bytes = 0;
@@ -324,11 +339,21 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
     run.data = ri->data != NULL ? ri->data->parsed : NULL;
     run.reason = ri->reason;
     run.reason_cap = sizeof ri->reason;
+    run.state = ri->state;
+    if (ri->state != NULL) {
+        su_hstate_begin_run(ri->state, ri->alive, ri->gen, ri->rows);
+    }
     st = r->pub.run(&run, r->pub.user);
+    if (ri->state != NULL) {
+        su_hstate_end_run(ri->state); /* changes stay in the working state: su_host_step commits or drops them */
+    }
     if (st != SU_OK) {
         ri->reason[sizeof ri->reason - 1u] = '\0';
-        snprintf(ri->why, sizeof ri->why, "operator run returned %s%s%s", su_host_status_name(st),
-                 ri->reason[0] != '\0' ? ": " : "", ri->reason);
+        snprintf(ri->why, sizeof ri->why, "operator run returned %s%s%s%s", su_host_status_name(st),
+                 ri->reason[0] != '\0' ? ": " : "", ri->reason,
+                 st == SU_E_RESOURCE_LIMIT && ri->state != NULL && su_hstate_cap_refusals(ri->state) > 0u
+                     ? " (operator state cap reached)"
+                     : "");
         return st;
     }
     if (check_inputs) {
@@ -363,6 +388,26 @@ static void reg_identity(const void *inst, uint8_t semantic[32]) {
     su_sha256_update(&c, semantic, 32u);
     su_sha256_update(&c, b, sizeof b);
     su_sha256_final(&c, semantic);
+    if (ri->state != NULL) {
+        /* Operator state (issue 139): SHA-256("sutekh.host.state.v1\0" || hash above || u32 state_flags ||
+         * u32 state_max_entries || u32 state_max_bytes), little-endian. Without state the hash is the one above. */
+        const uint32_t v[3] = {ri->reg->pub.state_flags, ri->reg->pub.state_max_entries, ri->reg->pub.state_max_bytes};
+        uint32_t k;
+        for (k = 0; k < 3u; k++) {
+            for (i = 0; i < 4u; i++) {
+                b[4u * k + i] = (uint8_t)(v[k] >> (8u * i));
+            }
+        }
+        su_sha256_init(&c);
+        su_sha256_update(&c, (const uint8_t *)"sutekh.host.state.v1", 21u);
+        su_sha256_update(&c, semantic, 32u);
+        su_sha256_update(&c, b, 12u);
+        su_sha256_final(&c, semantic);
+    }
+}
+
+static SuHostState *reg_state(void *inst) {
+    return inst != NULL ? ((RegInst *)inst)->state : NULL;
 }
 
 static const char *reg_last_error(const void *inst) {
@@ -543,6 +588,22 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError
     if (desc->run == NULL) {
         return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "run is NULL");
     }
+    /* Operator state (version 2 fields; all zero for a version 1 descriptor). */
+    if (desc->state_reserved != 0u || (desc->state_max_entries == 0u) != (desc->state_max_bytes == 0u) ||
+        (desc->state_max_entries == 0u && desc->state_flags != 0u)) {
+        return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX,
+                       "state: state_max_entries and state_max_bytes must be both 0 (no state, flags 0) or both "
+                       "nonzero, state_reserved 0");
+    }
+    if ((desc->state_flags & ~SU_HOST_STATE_DROP_DEAD) != 0u) {
+        return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "unknown state_flags 0x%x",
+                       (unsigned)(desc->state_flags & ~SU_HOST_STATE_DROP_DEAD));
+    }
+    if (desc->state_max_entries > SU_HOST_STATE_MAX_ENTRIES || desc->state_max_bytes > SU_HOST_STATE_MAX_BYTES) {
+        return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX,
+                       "state: at most %u entries and %u bytes", (unsigned)SU_HOST_STATE_MAX_ENTRIES,
+                       (unsigned)SU_HOST_STATE_MAX_BYTES);
+    }
     if (desc->release_data != NULL && desc->parse_data == NULL) {
         return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "release_data without parse_data");
     }
@@ -651,6 +712,7 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError
     r->op.last_error = reg_last_error;
     r->op.identity = reg_identity;
     r->op.clear_error = reg_clear_error;
+    r->op.state = reg_state;
     r->op.record_name = r->operator_name;
 
     su_mutex_lock(&g_lock);
