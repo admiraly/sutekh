@@ -692,9 +692,10 @@ uint32_t su_replay_open(const uint8_t *bytes, size_t len, SuReplay **out, SuHost
         uint8_t d[32];
         sha(r->bytes + r->keyframes[0].off, r->keyframes[0].len, d);
         if (memcmp(d, in->initial_digest, 32u) != 0) {
+            /* in points into r: report the start tick before su_replay_close frees it. */
+            set_err(err, SU_E_PARSE, UINT32_MAX, in->start_tick, "initial keyframe does not match the header digest");
             su_replay_close(r);
-            return set_err(err, SU_E_PARSE, UINT32_MAX, in->start_tick,
-                           "initial keyframe does not match the header digest");
+            return SU_E_PARSE;
         }
     }
     in->keyframe_count = nk;

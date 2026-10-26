@@ -286,6 +286,91 @@ static void test_tamper(void) {
     su_replay_free(bytes);
 }
 
+/* Little-endian reads of the recording layout (src/host/su_replay.c), for locating records in the bytes. */
+static uint64_t le(const uint8_t *p, unsigned n) {
+    uint64_t v = 0;
+    while (n-- > 0u) {
+        v = (v << 8) | p[n];
+    }
+    return v;
+}
+
+/* Advances *at past a length-prefixed text; 0 when it runs past len. */
+static int skip_text(const uint8_t *b, size_t len, size_t *at) {
+    uint64_t n;
+    if (*at + 4u > len) {
+        return 0;
+    }
+    n = le(b + *at, 4u);
+    if (n > len - *at - 4u) {
+        return 0;
+    }
+    *at += 4u + (size_t)n;
+    return 1;
+}
+
+/* Offset of the initial keyframe's snapshot bytes: the header (magic, versions, engine text, identity, schema
+ * digest, systems, seed, rate, start tick, initial digest, intervals), then K, tick and length. 0 if it does not
+ * walk. */
+static size_t initial_keyframe_body(const uint8_t *b, size_t len, size_t *body_len) {
+    size_t at = 9u + 4u + 4u;
+    uint32_t sys;
+    uint32_t i;
+    if (!skip_text(b, len, &at) || at + 64u + 4u > len) {
+        return 0;
+    }
+    at += 64u;
+    sys = (uint32_t)le(b + at, 4u);
+    at += 4u;
+    for (i = 0; i < sys; i++) {
+        if (!skip_text(b, len, &at) || at + 32u > len) {
+            return 0;
+        }
+        at += 32u;
+        if (!skip_text(b, len, &at)) {
+            return 0;
+        }
+    }
+    at += 8u + 4u + 8u + 32u + 8u + 8u;
+    if (at + 17u > len || b[at] != (uint8_t)'K') {
+        return 0;
+    }
+    *body_len = (size_t)le(b + at + 9u, 8u);
+    at += 17u;
+    return *body_len <= len - at ? at : 0u;
+}
+
+/* Regression (issue 148): a recording whose initial keyframe does not match the header digest is refused with
+ * the start tick in the error. The refusal used to read the start tick through the replay it had just freed
+ * (heap-use-after-free, reported by AddressSanitizer). */
+static void test_initial_keyframe_mismatch(void) {
+    uint8_t *bytes = NULL;
+    uint8_t *bad;
+    size_t len = 0;
+    size_t body_len = 0;
+    size_t body;
+    SuReplay *r = NULL;
+    SuHostError e;
+
+    record(&bytes, &len, NULL);
+    body = initial_keyframe_body(bytes, len, &body_len);
+    CHECK(body != 0u && body_len > 0u);
+    bad = malloc(len);
+    CHECK(bad != NULL);
+    if (body != 0u && body_len > 0u && bad != NULL) {
+        memcpy(bad, bytes, len);
+        bad[body + body_len - 1u] ^= 0x01u; /* last snapshot byte: framing intact, digest differs */
+        CHECK(su_replay_open(bad, len, &r, &e) == SU_E_PARSE && r == NULL);
+        CHECK(e.code == SU_E_PARSE && e.tick == 0u && e.index == UINT32_MAX);
+        CHECK(strstr(e.message, "initial keyframe does not match") != NULL);
+        /* The untouched recording still opens. */
+        CHECK(su_replay_open(bytes, len, &r, &e) == SU_OK && r != NULL);
+        su_replay_close(r);
+    }
+    free(bad);
+    su_replay_free(bytes);
+}
+
 static void test_writer_errors(void) {
     SuHostWorld *w = make_world(0);
     SuHostWorld *other = make_world(0);
@@ -362,6 +447,7 @@ int main(int argc, char **argv) {
         free(b.data);
     } else if (argc == 1) {
         test_record_and_play();
+        test_initial_keyframe_mismatch();
         test_tamper();
         test_writer_errors();
     } else {
