@@ -113,10 +113,12 @@ found 2 reports (the UAF and the 4040-byte leak) and exited 1. `python -I tests/
 ran 8 tests, OK. `tools/check_repository_license.py` passed. `tools/validate_pack.py --check-report` passed.
 `git diff --check` was clean.
 
+GitHub Actions on PR 154 (run 40288625904, Ubuntu clang 21.1.8): every job passed. `sanitizers` native OFF:
+139 tests, 0 failures, scanner 103 logs / 0 reports, 15m54s. Native ON: 156 tests, 0 failures, scanner 138 logs /
+0 reports, 17m57s. The runner registers more tests than the local lanes (139/156 against 136/153).
+
 ## Unrun
 
-- The GitHub Actions `sanitizers` job itself (needs the PR run). Ubuntu's clang 18 is not the clang 22 used here.
-  The `vm.mmap_rnd_bits=28` step is the usual guard for that runner kernel.
 - ASan+UBSan with renderer, window or importer on (lavapipe and SDL are not instrumented; not attempted).
 - GCC sanitizers. TSan. MSan. Windows/MSVC sanitizers (`SUTEKH_SANITIZE` refuses MSVC).
 - Leak checking inside seccomp-contained disposable children (ptrace denied by design; see the gap above).
