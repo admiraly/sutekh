@@ -142,11 +142,11 @@ uint32_t su_sched_set_max_systems(SuSchedule *s, uint32_t max_systems);
 /* Declares the world schema independently of the systems (issue 144). Only on an empty schedule, at most once.
  * lanes (n entries, 1..SU_LIMIT_FIELDS) are storage lanes: type SU_TYPE_U32, value_type SU_TYPE_U32, I32, I64 or
  * Q32, unique IDs and names (1..SU_WORLD_NAME_MAX bytes); access is ignored. The schedule's schema_id,
- * schema_version and layout_generation become the declared ones, and every later su_sched_add* must match them
- * (SU_E_SCHEMA_MISMATCH). su_sched_finalize then starts from the declared lanes (access 0) and refuses a system
- * field that is not one of them, or that disagrees with it in name, storage or value type
- * (SU_E_SCHEMA_MISMATCH). Lanes no system binds stay in the table with access 0. SU_E_INVALID_ARGUMENT for a
- * malformed table, SU_E_RESOURCE_LIMIT when memory runs out. */
+ * schema_version and layout_generation (both >= 1) become the declared ones, and every later su_sched_add* must match
+ * them (SU_E_SCHEMA_MISMATCH). su_sched_finalize then starts from the declared lanes (access 0) and refuses a system
+ * field that is not one of them, or that disagrees with it in name, storage or value type (SU_E_SCHEMA_MISMATCH). Lanes
+ * no system binds stay in the table with access 0. SU_E_INVALID_ARGUMENT for a malformed table, SU_E_RESOURCE_LIMIT
+ * when memory runs out. */
 uint32_t su_sched_declare_schema(SuSchedule *s, const char *schema_id, uint32_t schema_version, uint32_t gen,
                                  const SuSchedField *lanes, uint32_t n);
 

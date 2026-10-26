@@ -90,7 +90,7 @@ uint32_t su_sched_declare_schema(SuSchedule *s, const char *schema_id, uint32_t 
     SuSchedField *tab;
     uint32_t i, j;
     if (s == NULL || s->count != 0u || s->declared || lanes == NULL || n == 0u || n > SU_LIMIT_FIELDS ||
-        !name_ok(schema_id)) {
+        !name_ok(schema_id) || schema_version == 0u || gen == 0u) {
         return SU_E_INVALID_ARGUMENT;
     }
     for (i = 0; i < n; i++) {

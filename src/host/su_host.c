@@ -116,22 +116,37 @@ typedef struct CapsuleFacts {
     uint32_t before_count;
 } CapsuleFacts;
 
-static uint32_t string_items(const SuJsonValue *arr, const char **out, uint32_t cap) {
-    uint32_t n = 0;
+/* schedule.after / schedule.before (issue 144): absent is empty; otherwise an array of at most SU_SCHED_MAX_SYSTEMS
+ * strings. Anything else is refused (SU_E_TYPE, or SU_E_RESOURCE_LIMIT for too many items) with the reason in why,
+ * instead of being dropped. */
+static uint32_t edge_items(const SuJsonValue *arr, const char *key, const char **out, uint32_t *n, char *why,
+                           size_t why_cap) {
     size_t k;
-    if (arr == NULL || arr->type != SU_JSON_ARRAY) {
-        return 0;
+    *n = 0;
+    if (arr == NULL) {
+        return SU_OK;
     }
-    for (k = 0; k < arr->u.array.count && n < cap; k++) {
+    if (arr->type != SU_JSON_ARRAY) {
+        snprintf(why, why_cap, "schedule.%s is not an array", key);
+        return SU_E_TYPE;
+    }
+    if (arr->u.array.count > SU_SCHED_MAX_SYSTEMS) {
+        snprintf(why, why_cap, "schedule.%s lists %llu items; at most %u", key, (unsigned long long)arr->u.array.count,
+                 (unsigned)SU_SCHED_MAX_SYSTEMS);
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (k = 0; k < arr->u.array.count; k++) {
         const SuJsonValue *e = arr->u.array.items[k];
-        if (e->type == SU_JSON_STRING) {
-            out[n++] = e->u.string.data;
+        if (e->type != SU_JSON_STRING) {
+            snprintf(why, why_cap, "schedule.%s item %u is not a string", key, (unsigned)k);
+            return SU_E_TYPE;
         }
+        out[(*n)++] = e->u.string.data;
     }
-    return n;
+    return SU_OK;
 }
 
-static uint32_t capsule_facts(const SuHostCapsule *c, CapsuleFacts *f) {
+static uint32_t capsule_facts(const SuHostCapsule *c, CapsuleFacts *f, char *why, size_t why_cap) {
     SuJsonLimits lim;
     SuJsonError jerr;
     const SuJsonValue *schema;
@@ -140,6 +155,7 @@ static uint32_t capsule_facts(const SuHostCapsule *c, CapsuleFacts *f) {
 
     memset(f, 0, sizeof *f);
     f->phase = "";
+    snprintf(why, why_cap, "schema version, layout generation or schedule block");
     lim.max_bytes = c->capsule_len;
     lim.max_depth = HOST_JSON_DEPTH;
     st = su_json_parse(c->capsule_json, c->capsule_len, &lim, &f->doc, &jerr);
@@ -161,9 +177,11 @@ static uint32_t capsule_facts(const SuHostCapsule *c, CapsuleFacts *f) {
     if (member(sch, "phase") != NULL && member(sch, "phase")->type == SU_JSON_STRING) {
         f->phase = member(sch, "phase")->u.string.data;
     }
-    f->after_count = string_items(member(sch, "after"), f->after, SU_SCHED_MAX_SYSTEMS);
-    f->before_count = string_items(member(sch, "before"), f->before, SU_SCHED_MAX_SYSTEMS);
-    return SU_OK;
+    st = edge_items(member(sch, "after"), "after", f->after, &f->after_count, why, why_cap);
+    if (st == SU_OK) {
+        st = edge_items(member(sch, "before"), "before", f->before, &f->before_count, why, why_cap);
+    }
+    return st;
 }
 
 /* Effect analysis over the whole schedule, as world.create runs it (worker.c check_system_effects_ovr):
@@ -431,19 +449,72 @@ static void compute_identity(SuHostWorld *hw) {
 
 /* Declared world schema (issue 144): expands SuHostSchema fields into storage lanes (i64/q32: "x.lo" at J, "x.hi" at
  * J + 1) and declares them on the schedule. */
-static uint32_t declare_schema(SuHostWorld *hw, const SuHostSchema *sc, SuHostError *err) {
+/* Versioned descriptor copy (the SuHostOperatorDesc convention): struct_size >= v1, only struct_size bytes read,
+ * bytes beyond the library's struct must be zero. Returns the offending byte offset + 1, or 0 when the tail is zero. */
+static size_t nonzero_tail(const void *p, size_t lib_size, size_t struct_size) {
+    size_t k;
+    for (k = lib_size; k < struct_size; k++) {
+        if (((const unsigned char *)p)[k] != 0u) {
+            return k + 1u;
+        }
+    }
+    return 0u;
+}
+
+/* The capsule rule for field names (su_lir.c): [A-Za-z_][A-Za-z0-9_]*. */
+static int field_name_ok(const char *s) {
+    size_t i;
+    if (s == NULL || s[0] == '\0') {
+        return 0;
+    }
+    for (i = 0; s[i] != '\0'; i++) {
+        char c = s[i];
+        int alpha = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+        int digit = c >= '0' && c <= '9';
+        if (i == 0 ? !alpha : !(alpha || digit)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int lane_like(const char *s) {
+    size_t n = s != NULL ? strlen(s) : 0u;
+    return n > 3u && (strcmp(s + n - 3u, ".lo") == 0 || strcmp(s + n - 3u, ".hi") == 0);
+}
+
+static uint32_t declare_schema(SuHostWorld *hw, const SuHostSchema *caller, SuHostError *err) {
+    SuHostSchema local;
+    const SuHostSchema *sc = &local;
     SuSchedField *lanes;
     uint32_t n = 0, i, j;
     uint32_t st;
-    if (sc->struct_size != sizeof *sc || sc->fields == NULL || sc->schema_id == NULL || sc->field_count == 0u ||
+    size_t bad;
+    if (caller->struct_size < SU_HOST_SCHEMA_V1_SIZE) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "schema: struct_size %u is below %u",
+                       (unsigned)caller->struct_size, (unsigned)SU_HOST_SCHEMA_V1_SIZE);
+    }
+    bad = nonzero_tail(caller, sizeof local, caller->struct_size);
+    if (bad != 0u) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                       "schema: byte %u is a field this library does not know and is not zero", (unsigned)(bad - 1u));
+    }
+    memset(&local, 0, sizeof local);
+    memcpy(&local, caller, caller->struct_size < sizeof local ? caller->struct_size : sizeof local);
+    if (sc->fields == NULL || sc->schema_id == NULL || sc->field_count == 0u ||
         sc->field_count > SU_HOST_SCHEMA_MAX_LANES) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
-                       "schema: struct_size, fields, schema_id or field_count (1..%u) is invalid",
+                       "schema: fields, schema_id or field_count (1..%u) is invalid",
                        (unsigned)SU_HOST_SCHEMA_MAX_LANES);
     }
     if (strlen(sc->schema_id) == 0u || strlen(sc->schema_id) > SU_WORLD_NAME_MAX) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "schema: schema_id must be 1..%u bytes",
                        (unsigned)SU_WORLD_NAME_MAX);
+    }
+    if (sc->schema_version == 0u || sc->layout_generation == 0u) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                       "schema: schema_version and layout_generation must be >= 1 (got %u and %u)",
+                       (unsigned)sc->schema_version, (unsigned)sc->layout_generation);
     }
     lanes = calloc((size_t)sc->field_count * 2u, sizeof *lanes);
     if (lanes == NULL) {
@@ -463,6 +534,19 @@ static uint32_t declare_schema(SuHostWorld *hw, const SuHostSchema *sc, SuHostEr
             free(lanes);
             return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX, "schema field %u: the name must be 1..%u bytes",
                            (unsigned)i, (unsigned)(SU_WORLD_NAME_MAX - (wide ? 3u : 0u)));
+        }
+        if (!field_name_ok(f->name)) {
+            free(lanes);
+            return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                           lane_like(f->name)
+                               ? "schema field %u: \"%s\" is a lane name; declare the i64/q32 field itself"
+                               : "schema field %u: name \"%s\" must match [A-Za-z_][A-Za-z0-9_]*",
+                           (unsigned)i, f->name);
+        }
+        if (f->id == 0u) {
+            free(lanes);
+            return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX, "schema field %u (%s): field IDs are >= 1",
+                           (unsigned)i, f->name);
         }
         if (wide && f->id == UINT32_MAX) {
             free(lanes);
@@ -578,12 +662,16 @@ _Static_assert(SU_HOST_MAX_CAPSULES <= 64u, "opdata_mask has one bit per schedul
 _Static_assert(SU_HOST_SCHEMA_MAX_LANES == SU_LIMIT_FIELDS, "declared schemas use the field limit");
 _Static_assert(SU_HOST_WORLD_DESC_V1_SIZE == offsetof(SuHostWorldDesc, schema), "v1 descriptor ends at seed");
 _Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V1_SIZE == 80u, "first-release SuHostWorldDesc is 80 bytes");
+_Static_assert(sizeof(void *) != 8u || sizeof(SuHostWorldDesc) == 88u, "SuHostWorldDesc with the schema is 88 bytes");
+_Static_assert(SU_HOST_SCHEMA_V1_SIZE == (sizeof(void *) == 8u ? 32u : 24u), "first-release SuHostSchema size");
+_Static_assert(sizeof(SuHostSchema) == SU_HOST_SCHEMA_V1_SIZE, "SuHostSchema has no padding after the v1 fields");
 
 uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out, SuHostError *err) {
     SuHostWorld *hw = NULL;
     SuHostWorldDesc dv;
     const SuHostWorldDesc *desc = &dv;
     CapsuleFacts *facts = NULL;
+    char fwhy[160];
     uint32_t nfacts = 0;
     uint32_t i;
     uint32_t st;
@@ -593,15 +681,24 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "out is NULL");
     }
     *out = NULL;
-    if (desc_in == NULL ||
-        (desc_in->struct_size != sizeof *desc_in && desc_in->struct_size != SU_HOST_WORLD_DESC_V1_SIZE)) {
+    /* Versioning (host.h): the v1 size, or the library's size or larger with a zero tail; only struct_size bytes are
+     * read, and a first-release descriptor has no schema (NULL). A size ending inside the schema pointer is refused. */
+    if (desc_in == NULL || desc_in->struct_size < SU_HOST_WORLD_DESC_V1_SIZE ||
+        (desc_in->struct_size > SU_HOST_WORLD_DESC_V1_SIZE && desc_in->struct_size < sizeof *desc_in)) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
                        "descriptor: struct_size, capsules (1..%u), reserved0 or fixture is invalid",
                        (unsigned)SU_HOST_MAX_CAPSULES);
     }
-    /* Read only struct_size bytes: a first-release descriptor has no schema (NULL). */
+    {
+        size_t bad = nonzero_tail(desc_in, sizeof dv, desc_in->struct_size);
+        if (bad != 0u) {
+            return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                           "descriptor: byte %u is a field this library does not know and is not zero",
+                           (unsigned)(bad - 1u));
+        }
+    }
     memset(&dv, 0, sizeof dv);
-    memcpy(&dv, desc_in, desc_in->struct_size);
+    memcpy(&dv, desc_in, desc_in->struct_size < sizeof dv ? desc_in->struct_size : sizeof dv);
     if (desc->capsules != NULL && desc->capsule_count > SU_HOST_MAX_CAPSULES) {
         return set_err(err, SU_E_RESOURCE_LIMIT, SU_HOST_MAX_CAPSULES, UINT64_MAX,
                        "%u capsules: a world schedules at most %u systems (capsule %u does not fit)",
@@ -647,11 +744,10 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
         SuDiag diag;
         if (c->capsule_json != NULL && c->lir_json == NULL && c->lir_len == 0u &&
             c->capsule_len <= HOST_CAPSULE_JSON_MAX) {
-            st = capsule_facts(c, &facts[i]);
+            st = capsule_facts(c, &facts[i], fwhy, sizeof fwhy);
             nfacts = i + 1u;
             if (st != SU_OK) {
-                set_err(err, st, i, UINT64_MAX, "capsule %u: schema version, layout generation or schedule block",
-                        (unsigned)i);
+                set_err(err, st, i, UINT64_MAX, "capsule %u: %s", (unsigned)i, fwhy);
                 goto fail;
             }
             st = add_host_record(hw, c, &facts[i], i, err);
@@ -666,11 +762,10 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
                          (unsigned)i);
             goto fail;
         }
-        st = capsule_facts(c, &facts[i]);
+        st = capsule_facts(c, &facts[i], fwhy, sizeof fwhy);
         nfacts = i + 1u;
         if (st != SU_OK) {
-            set_err(err, st, i, UINT64_MAX, "capsule %u: schema version, layout generation or schedule block",
-                    (unsigned)i);
+            set_err(err, st, i, UINT64_MAX, "capsule %u: %s", (unsigned)i, fwhy);
             goto fail;
         }
         m = calloc(1, sizeof *m);

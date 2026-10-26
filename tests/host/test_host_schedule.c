@@ -119,7 +119,7 @@ static void test_chain64(void) {
     SuHostError err;
     uint32_t model[CHAIN_ROWS][CHAIN_MAX + 1u];
     uint32_t r, f, t, k;
-    char hex[65], hex2[65], d5[65], d10[65];
+    char hex[65], hex2[65], d5[65] = "", d10[65];
     uint8_t *snap5 = NULL, *rep = NULL;
     size_t snap5_len = 0, rep_len = 0;
     uint64_t done = 0;
@@ -249,6 +249,31 @@ static void test_chain64(void) {
     }
     d.struct_size = (uint32_t)SU_HOST_WORLD_DESC_V1_SIZE - 8u;
     check(su_host_world_create(&d, &wv1, &err) == SU_E_INVALID_ARGUMENT && wv1 == NULL, "a short descriptor");
+    d.struct_size = (uint32_t)SU_HOST_WORLD_DESC_V1_SIZE + 4u;
+    check(su_host_world_create(&d, &wv1, &err) == SU_E_INVALID_ARGUMENT && wv1 == NULL,
+          "a size ending inside the schema pointer");
+    /* Larger than the library's descriptor: a zero tail is accepted, a nonzero one refused. */
+    {
+        unsigned char big[sizeof(SuHostWorldDesc) + 24u];
+        SuHostWorldDesc *bd = (SuHostWorldDesc *)(void *)big;
+        uint8_t i1[32], i2[32];
+        d.struct_size = (uint32_t)sizeof d;
+        memset(big, 0, sizeof big);
+        memcpy(big, &d, sizeof d);
+        bd->struct_size = (uint32_t)sizeof big;
+        check(su_host_world_create(bd, &wv1, &err) == SU_OK, "a larger descriptor with a zero tail: %s", err.message);
+        if (wv1 != NULL) {
+            su_host_world_identity(wv1, i1);
+            su_host_world_identity(w2, i2);
+            check(memcmp(i1, i2, 32u) == 0, "larger descriptor: same identity");
+            su_host_world_destroy(wv1);
+            wv1 = NULL;
+        }
+        big[sizeof(SuHostWorldDesc) + 17u] = 0x80u;
+        check(su_host_world_create(bd, &wv1, &err) == SU_E_INVALID_ARGUMENT && wv1 == NULL &&
+                  strstr(err.message, "does not know") != NULL,
+              "a larger descriptor with a nonzero tail: %s", err.message);
+    }
 
     su_replay_free(rep);
     free(snap5);
@@ -300,6 +325,45 @@ static void test_admission(void) {
     check(err.code == SU_E_INVALID_ARGUMENT && strstr(err.message, "ordering cycle") != NULL,
           "edge against the order: %s", err.message);
     chain_free(&c);
+    edges[10] = NULL;
+
+    /* Edge lists are refused, not truncated: more than 64 items (SU_E_RESOURCE_LIMIT), a non-string item or a
+     * non-array (SU_E_TYPE), each with the capsule index; exactly 64 items (repeats of one edge) are accepted. */
+    {
+        static char many[65u * 12u + 1u], sixty_four[64u * 12u + 1u];
+        uint32_t q;
+        size_t at = 0, at64 = 0;
+        for (q = 0; q < 65u; q++) {
+            /* chain_capsule writes ["<edge>"]: items joined by "," give a list of q + 1 strings. */
+            at += (size_t)snprintf(many + at, sizeof many - at, "%schain.s00", q > 0u ? "\",\"" : "");
+            if (q < 64u) {
+                at64 += (size_t)snprintf(sixty_four + at64, sizeof sixty_four - at64, "%schain.s00",
+                                         q > 0u ? "\",\"" : "");
+            }
+        }
+        edges[1] = many;
+        chain_build(&c, 3u, CHAIN_ROWS, edges);
+        desc_init(&d, c.caps, 3u, &c.fixture, 0u);
+        check(su_host_world_create(&d, &w, &err) == SU_E_RESOURCE_LIMIT && w == NULL && err.index == 1u &&
+                  strstr(err.message, "schedule.after lists 65 items") != NULL,
+              "65 after items are refused: %s", err.message);
+        chain_free(&c);
+        edges[1] = sixty_four;
+        chain_build(&c, 3u, CHAIN_ROWS, edges);
+        desc_init(&d, c.caps, 3u, &c.fixture, 0u);
+        check(su_host_world_create(&d, &w, &err) == SU_OK, "64 after items are accepted: %s", err.message);
+        su_host_world_destroy(w);
+        w = NULL;
+        chain_free(&c);
+        edges[1] = "chain.s00\",7,\"chain.s00";
+        chain_build(&c, 3u, CHAIN_ROWS, edges);
+        desc_init(&d, c.caps, 3u, &c.fixture, 0u);
+        check(su_host_world_create(&d, &w, &err) == SU_E_TYPE && w == NULL && err.index == 1u &&
+                  strstr(err.message, "schedule.after item 1 is not a string") != NULL,
+              "a non-string after item is refused: %s (%s)", err.message, su_host_status_name(err.code));
+        chain_free(&c);
+        edges[1] = NULL;
+    }
 }
 
 /* Event-emitting systems for the entity budget: "emit.sKK" reads x and emits kind 100 + K for every row with x != 0. */
@@ -908,6 +972,9 @@ static void test_declared_schema(void) {
     char d5[65], d10[65], hex[65];
     int model_ok = 1;
 
+    memset(&m5, 0, sizeof m5); /* set at tick 5; initialised for MSVC C4701 */
+    memset(d5, 0, sizeof d5);
+
     sch_build(&s, V_OK);
     schema_init(&schema, k_schema, (uint32_t)(sizeof k_schema / sizeof k_schema[0]));
     w = sch_world(&s, &schema, &m, &err);
@@ -1155,6 +1222,25 @@ static void test_refusals(void) {
         expect_bad_schema(null_name, 2u, 1u, "a NULL name");
         expect_bad_schema(top, 1u, 0u, "a q32 field at UINT32_MAX");
         expect_bad_schema(k_schema, 0u, UINT32_MAX, "no fields");
+        {
+            /* Names follow the capsule rule; IDs are >= 1. */
+            static const SuHostSchemaField dash[] = {{1, SU_TYPE_U32, "a"}, {2, SU_TYPE_U32, "b-c"}};
+            static const SuHostSchemaField digit[] = {{1, SU_TYPE_U32, "1x"}};
+            static const SuHostSchemaField dot[] = {{1, SU_TYPE_U32, "a.b"}};
+            static const SuHostSchemaField quote[] = {{1, SU_TYPE_U32, "a\"b"}};
+            static const SuHostSchemaField lo[] = {{1, SU_TYPE_U32, "a"}, {2, SU_TYPE_U32, "x.lo"}};
+            static const SuHostSchemaField hi[] = {{2, SU_TYPE_I32, "x.hi"}};
+            static const SuHostSchemaField id0[] = {{1, SU_TYPE_U32, "a"}, {0, SU_TYPE_U32, "z"}};
+            static const SuHostSchemaField id0w[] = {{0, SU_TYPE_I64, "w"}};
+            expect_bad_schema(dash, 2u, 1u, "a name with '-'");
+            expect_bad_schema(digit, 1u, 0u, "a name starting with a digit");
+            expect_bad_schema(dot, 1u, 0u, "a name with '.'");
+            expect_bad_schema(quote, 1u, 0u, "a name with a quote");
+            expect_bad_schema(lo, 2u, 1u, "a plain field named like a low lane");
+            expect_bad_schema(hi, 1u, 0u, "a plain field named like a high lane");
+            expect_bad_schema(id0, 2u, 1u, "field id 0");
+            expect_bad_schema(id0w, 1u, 0u, "an i64 field at id 0");
+        }
     }
     /* struct_size of the schema, and a NULL schema id. */
     {
@@ -1172,6 +1258,49 @@ static void test_refusals(void) {
         schema_init(&schema, k_schema, (uint32_t)(sizeof k_schema / sizeof k_schema[0]));
         schema.schema_id = NULL;
         check(su_host_world_create(&d, &w, &err) == SU_E_INVALID_ARGUMENT, "schema without an id");
+        /* A message about the lane rule for x.lo. */
+        {
+            static const SuHostSchemaField lo[] = {{2, SU_TYPE_U32, "x.lo"}};
+            schema_init(&schema, lo, 1u);
+            check(su_host_world_create(&d, &w, &err) == SU_E_INVALID_ARGUMENT &&
+                      strstr(err.message, "lane name") != NULL,
+                  "x.lo is named as a lane: %s", err.message);
+        }
+        /* schema_version and layout_generation >= 1: refused as a declaration, not a capsule mismatch. */
+        schema_init(&schema, k_schema, (uint32_t)(sizeof k_schema / sizeof k_schema[0]));
+        schema.schema_version = 0u;
+        check(su_host_world_create(&d, &w, &err) == SU_E_INVALID_ARGUMENT && err.index == UINT32_MAX &&
+                  strstr(err.message, "schema_version and layout_generation") != NULL,
+              "schema version 0: %s", err.message);
+        schema_init(&schema, k_schema, (uint32_t)(sizeof k_schema / sizeof k_schema[0]));
+        schema.layout_generation = 0u;
+        check(su_host_world_create(&d, &w, &err) == SU_E_INVALID_ARGUMENT && err.index == UINT32_MAX,
+              "layout generation 0: %s", err.message);
+        /* Versioned sizes of SuHostSchema: below v1, v1, larger with a zero tail, larger with a nonzero tail. */
+        {
+            unsigned char big[sizeof(SuHostSchema) + 16u];
+            SuHostSchema *bs = (SuHostSchema *)(void *)big;
+            check(SU_HOST_SCHEMA_V1_SIZE == sizeof(SuHostSchema), "SuHostSchema v1 size");
+            schema_init(&schema, k_schema, (uint32_t)(sizeof k_schema / sizeof k_schema[0]));
+            schema.struct_size = (uint32_t)SU_HOST_SCHEMA_V1_SIZE - 4u;
+            check(su_host_world_create(&d, &w, &err) == SU_E_INVALID_ARGUMENT, "schema below the v1 size");
+            schema.struct_size = (uint32_t)SU_HOST_SCHEMA_V1_SIZE;
+            check(su_host_world_create(&d, &w, &err) == SU_OK, "schema of the v1 size: %s", err.message);
+            su_host_world_destroy(w);
+            w = NULL;
+            memset(big, 0, sizeof big);
+            memcpy(big, &schema, sizeof schema);
+            bs->struct_size = (uint32_t)sizeof big;
+            d.schema = bs;
+            check(su_host_world_create(&d, &w, &err) == SU_OK, "larger schema with a zero tail: %s", err.message);
+            su_host_world_destroy(w);
+            w = NULL;
+            big[sizeof(SuHostSchema) + 5u] = 1u;
+            check(su_host_world_create(&d, &w, &err) == SU_E_INVALID_ARGUMENT && w == NULL &&
+                      strstr(err.message, "does not know") != NULL,
+                  "larger schema with a nonzero tail: %s", err.message);
+            d.schema = &schema;
+        }
         /* A fixture must hold every declared column, the schema-only ones included. */
         {
             static const char *fx = "{\"fixture_format\":\"0.1\",\"schema_id\":\"t.sch\",\"schema_version\":1,"

@@ -83,7 +83,7 @@ typedef struct SuHostCapsule {
 } SuHostCapsule;
 
 typedef struct SuHostWorldDesc {
-    uint32_t struct_size;            /* sizeof(SuHostWorldDesc) */
+    uint32_t struct_size;            /* sizeof(SuHostWorldDesc), or SU_HOST_WORLD_DESC_V1_SIZE (see below) */
     uint32_t capsule_count;          /* 1..SU_HOST_MAX_CAPSULES */
     const SuHostCapsule *capsules;   /* schedule order */
     /* Optional initial state in the world fixture format of world.create ({"schema_id", "tick": 0,
@@ -104,16 +104,23 @@ typedef struct SuHostWorldDesc {
     const struct SuHostSchema *schema;
 } SuHostWorldDesc;
 
-/* Size of the first released SuHostWorldDesc (through seed): 80 bytes on LP64 and LLP64. struct_size must be this
- * or sizeof(SuHostWorldDesc). */
+/* Size of the first released SuHostWorldDesc (through seed): 80 bytes with 8-byte pointers (LP64, LLP64; pinned at
+ * compile time). Versioning as for SuHostOperatorDesc: struct_size may be SU_HOST_WORLD_DESC_V1_SIZE, or
+ * sizeof(SuHostWorldDesc) (88 bytes with 8-byte pointers) or larger, in which case every byte beyond the library's
+ * sizeof(SuHostWorldDesc) must be zero (a nonzero unknown byte is SU_E_INVALID_ARGUMENT, so a request this library
+ * cannot honour fails instead of being ignored). Only struct_size bytes are read. A size below the v1 size, or one
+ * that ends inside the schema pointer, is SU_E_INVALID_ARGUMENT. Zero the whole descriptor (memset) before filling
+ * it. */
 #define SU_HOST_WORLD_DESC_V1_SIZE (offsetof(SuHostWorldDesc, seed) + sizeof(uint64_t))
 
 /* Creates a world. Capsules are verified (any SU_E_* of su_lir_verify, err->index = capsule index), joined
  * into one schedule (SU_E_SCHEMA_MISMATCH when they disagree on schema or a field) and checked by the effect
  * analysis (SU_E_SCHEMA_MISMATCH or SU_E_INVALID_ARGUMENT for conflicts, cycles and edges against the
  * capsule order). More than SU_HOST_MAX_CAPSULES capsules is SU_E_RESOURCE_LIMIT with err->index =
- * SU_HOST_MAX_CAPSULES (the first capsule that does not fit); 0 capsules is SU_E_INVALID_ARGUMENT. On failure
- * *out is NULL.
+ * SU_HOST_MAX_CAPSULES (the first capsule that does not fit); 0 capsules is SU_E_INVALID_ARGUMENT. A capsule's
+ * schedule.after or schedule.before list with more than SU_HOST_MAX_CAPSULES items is SU_E_RESOURCE_LIMIT, and one
+ * that is not an array of strings is SU_E_TYPE (err->index = the capsule; 2026-10-26: such items used to be
+ * dropped). On failure *out is NULL.
  *
  * Schedule size (2026-10-26, issue 144): creation checks every system's lanes against the union table and every pair
  * of systems in the effect analysis (one pass over the ID-sorted lanes of the two); a tick runs every system once,
@@ -544,17 +551,17 @@ SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, S
 
 /* ---- declared world schemas (additive, API version 1; 2026-10-26, issue 144) ----
  *
- * By default a world's schema is the union of the fields its capsules bind, so a field must be bound by some
- * system. A declared schema lists the fields of the world independently of the capsules: SuHostWorldDesc.schema
- * points at an SuHostSchema (struct_size = sizeof(SuHostWorldDesc)). Every capsule and host operator record then
- * binds a subset of it: its schema ID, version and layout generation must equal the declared ones, and every field
- * it binds must be a declared lane with the same ID, storage name and value type (the union-table checks of the
- * default schema, against the declaration). Anything else is SU_E_SCHEMA_MISMATCH with err->index = the capsule
- * and the field named in err->message. Fields no system binds are ordinary columns: the host writes them with
- * input records (su_host_input_push, su_host_input_push_i64) or spawn values, reads them (su_host_column,
- * su_host_read, su_host_read_i64), and later systems or operators read them in later ticks; su_host_field_info
- * reports them with access 0. They are in the fixture (every lane must be present), snapshots, both digests,
- * in-place restore and replays like any column.
+ * By default a world's schema is the union of the fields its capsules bind, so a field must be bound by some system. A
+ * declared schema lists the fields of the world independently of the capsules: SuHostWorldDesc.schema points at an
+ * SuHostSchema (SuHostWorldDesc.struct_size must cover the schema pointer). Every capsule and host operator record then
+ * binds a subset of it: its schema ID, version and layout generation must equal the declared ones, and every field it
+ * binds must be a declared lane with the same ID, storage name and value type (the union-table checks of the default
+ * schema, against the declaration). Anything else is SU_E_SCHEMA_MISMATCH with err->index = the capsule and the field
+ * named in err->message. Fields no system binds are ordinary columns: the host writes them with input records
+ * (su_host_input_push, su_host_input_push_i64) or spawn values, reads them (su_host_column, su_host_read,
+ * su_host_read_i64), and later systems or operators read them in later ticks; su_host_field_info reports them with
+ * access 0. They are in the fixture (every lane must be present), snapshots, both digests, in-place restore and replays
+ * like any column.
  *
  * Lanes (the IR 0.3 rule): a u32 or i32 field is one lane (its ID and name). An i64 or q32 field with ID J and name
  * "x" is two lanes: J "x.lo" (bits 0..31) and J + 1 "x.hi" (bits 32..63), both with the field's value type, so
@@ -570,26 +577,36 @@ SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, S
  * schema (and the reverse), even when the columns are the same. A world without a declared schema is unchanged:
  * same schedule, identity, snapshots, digests and replays as before.
  *
+ * Field names follow the capsule rule ([A-Za-z_][A-Za-z0-9_]*, 1..255 bytes; 252 for i64/q32, whose lanes add
+ * ".lo"/".hi"), so every declared field can be bound by a capsule; a name such as "x.lo" is therefore refused (the
+ * lanes of a 64-bit field are declared as the field). Field IDs are >= 1 (as capsule field IDs), and schema_version
+ * and layout_generation are >= 1 (as a capsule's schema block).
+ *
  * Failures of the declaration itself are SU_E_INVALID_ARGUMENT, err->index = the field index when there is one:
- * struct_size, NULL pointers, 0 or too many fields or lanes, an unknown type, an empty name or a name longer than
- * 255 bytes (252 for i64/q32: the lane suffix), a duplicate lane ID or lane name. */
+ * struct_size (versioning as SuHostWorldDesc: SU_HOST_SCHEMA_V1_SIZE, or larger with a zero tail beyond the
+ * library's sizeof(SuHostSchema)), NULL pointers, an empty or too long schema ID, schema_version or
+ * layout_generation 0, 0 or too many fields or lanes, an unknown type, field ID 0, a name outside the rule above, a
+ * duplicate lane ID or lane name. */
 
 #define SU_HOST_SCHEMA_MAX_LANES 1024u
 
 typedef struct SuHostSchemaField {
-    uint32_t id;       /* ID of the field's (first) lane */
+    uint32_t id;       /* ID of the field's (first) lane, >= 1 */
     uint32_t type;     /* SU_TYPE_U32, SU_TYPE_I32, SU_TYPE_I64 or SU_TYPE_Q32 (sutekh/ir.h) */
     const char *name;  /* the field name as capsules declare it (lanes "name.lo"/"name.hi" for i64/q32) */
 } SuHostSchemaField;
 
 typedef struct SuHostSchema {
-    uint32_t struct_size;               /* sizeof(SuHostSchema) */
+    uint32_t struct_size;               /* sizeof(SuHostSchema), >= SU_HOST_SCHEMA_V1_SIZE */
     uint32_t field_count;               /* 1..SU_HOST_SCHEMA_MAX_LANES */
     const SuHostSchemaField *fields;    /* any order */
     const char *schema_id;              /* 1..255 bytes; every capsule's schema.id and the fixture's schema_id */
-    uint32_t schema_version;            /* every capsule's schema.version */
-    uint32_t layout_generation;         /* every capsule's schema.layout_generation */
+    uint32_t schema_version;            /* >= 1; every capsule's schema.version */
+    uint32_t layout_generation;         /* >= 1; every capsule's schema.layout_generation */
 } SuHostSchema;
+
+/* Size of the first released SuHostSchema: 32 bytes with 8-byte pointers, 24 with 4-byte pointers (pinned). */
+#define SU_HOST_SCHEMA_V1_SIZE (offsetof(SuHostSchema, layout_generation) + sizeof(uint32_t))
 
 /* ---- execution tiers (additive, API version 1; 2026-10-18) ----
  * Every tier gives bit-identical results (states, events, digests): the tiers are differential-tested against

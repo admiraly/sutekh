@@ -230,6 +230,45 @@ Sources as committed (the handoff itself excluded):
 - `tests/host/sched_fixtures.h` `90a72a86c0214ee8a91451c12a236bbb333eff0d347ae7b0cf2f06aa4f6f57ff`
 - Release `libsutekh_host.so` `45ecc479627a83c77cb5f7c05b82bb5671dc5d8bf45f27e6b2a63ee42f42643f`
 
+## Fix round 1 (independent review: CI red on MSVC)
+
+The review found no engine correctness bug (a mixed 1..64-system harness with events, despawns and an operator at
+index 63 matched its reference model, also under ASan+UBSan; byte-identical output against main, also for a binary
+built with main's header; linear cost). CI failed on Windows MSVC `cl /W4 /WX`. Changes:
+
+1. `tests/host/test_host_schedule.c`: `m5` (C4701 "potentially uninitialized", the CI failure) and `d5` are
+   initialised. New code was re-read for other `/W4` warnings: no shadowed locals remain (the facts reason buffer is
+   `fwhy`, not a second `why`), every `size_t` to `uint32_t` narrowing is an explicit cast, and the only aggregates
+   assigned conditionally are initialised first. MSVC itself was not run locally; CI is the check.
+2. Declared field names follow the capsule rule `[A-Za-z_][A-Za-z0-9_]*` (`su_lir.c` `ident_ok`), so every declared
+   field can be bound by a capsule. Names such as `x.lo`/`x.hi` for a plain field are refused with a message that
+   points at declaring the i64/q32 field itself. Field IDs must be >= 1, as capsule field IDs. Tests: `-`, leading
+   digit, `.`, quote, `x.lo`, `x.hi`, ID 0 (u32 and i64).
+3. Descriptor sizing, the `SuHostOperatorDesc` convention:
+   - `SuHostWorldDesc.struct_size` may be `SU_HOST_WORLD_DESC_V1_SIZE` or `sizeof(SuHostWorldDesc)` or larger;
+   - bytes beyond the library's struct must be zero, and only `struct_size` bytes are read;
+   - a size that ends inside the schema pointer (between v1 and the full size) is refused.
+   - `SuHostSchema` takes `struct_size >= SU_HOST_SCHEMA_V1_SIZE` with the same tail rule.
+   - Sizes are pinned by `_Static_assert`: v1 80 and full 88 bytes with 8-byte pointers, schema 32 or 24.
+   - Tests: below v1, v1, between, full, larger with a zero tail (same identity) and larger with a nonzero tail, for
+     both structs.
+4. `schedule.after`/`before`: more than `SU_SCHED_MAX_SYSTEMS` items is `SU_E_RESOURCE_LIMIT`, a non-string item or
+   a non-array is `SU_E_TYPE`, with `err->index` = the capsule and the list named. Before, extra and non-string items
+   were dropped. IR capsules already had non-string items refused by the verifier at `/schedule/after/N`; the new
+   check runs first. Tests: 65 items refused, 64 accepted, a non-string item refused. The worker's parser is
+   unchanged.
+5. A declared `schema_version` or `layout_generation` of 0 is `SU_E_INVALID_ARGUMENT` for the declaration
+   (`err->index` `UINT32_MAX`), not a capsule mismatch; `su_sched_declare_schema` refuses it too.
+6. Memory: `sizeof(SuSchedule)` grew from 3,624 to 26,944 bytes (`SuSysEntry` is 416 bytes, 64 entries; GCC, x86-64).
+   The worker keeps several on the stack: locals in `worker.c` at the world.create, candidate, restore, migration
+   and replace paths (`sched`/`nsched`, one per function, about 27 KB each; nesting depth not audited),
+   plus one inside each `WorkerWorld` and `WorkerMig` (heap). Moving `sys[]` to the heap would avoid it but changes
+   the struct-copy semantics the worker relies on (`ww->sched = mig->sched`), so it was left as is.
+
+Mutation check of the new rules: 7 mutants (name rule off, ID 0 allowed, tail not checked, edge count not checked,
+non-string edge allowed, version/generation 0 allowed, cut sizes allowed), 7 killed (the edge-count mutant overflows
+the facts array and crashes the test).
+
 ## Not run / open
 
 - MSVC, clang-cl, macOS, ILP32 (`SU_HOST_WORLD_DESC_V1_SIZE` is `offsetof(seed) + 8`; `_Static_assert`s pin it to
