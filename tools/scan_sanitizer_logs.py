@@ -33,6 +33,10 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip().splitlines()[-1], file=sys.stderr)
         return 2
     root = Path(argv[1])
+    if not root.exists():
+        print(f'scan_sanitizer_logs: log directory {root} does not exist; the sanitizer run did not create it '
+              '(was ASAN_OPTIONS/UBSAN_OPTIONS log_path set, and the directory made before the run?)', file=sys.stderr)
+        return 2
     if not root.is_dir():
         print(f'scan_sanitizer_logs: {root} is not a directory', file=sys.stderr)
         return 2

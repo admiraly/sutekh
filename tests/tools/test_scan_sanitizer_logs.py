@@ -78,8 +78,10 @@ class Scan(unittest.TestCase):
         self.assertEqual(run({"san.1": "==1==AddressSanitizer: something new\n"})[0], 1)
 
     def test_missing_directory_is_a_usage_error(self):
-        with contextlib.redirect_stderr(io.StringIO()):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
             self.assertEqual(scan.main(["scan_sanitizer_logs.py", str(ROOT / "no-such-directory")]), 2)
+        self.assertIn("does not exist", err.getvalue())
 
 
 if __name__ == "__main__":
