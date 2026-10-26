@@ -220,6 +220,63 @@ static void report_cycle(const SuEffectGraph *g, uint32_t s, char *err, size_t c
     free(seen);
 }
 
+/* Fills g->conf by merging ID-sorted field tables. Returns 1 when done, 0 when a system has duplicate field IDs or
+ * memory runs out (the caller then compares exhaustively). */
+static int merge_conflicts(SuEffectGraph *g) {
+    uint32_t n = g->n;
+    uint32_t *ord = malloc((size_t)(n > 0u ? n : 1u) * SU_LIMIT_FIELDS * sizeof *ord);
+    uint32_t i, j, k;
+    if (ord == NULL) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        const uint32_t *fid = &g->fid[(size_t)i * SU_LIMIT_FIELDS];
+        uint32_t *o = &ord[(size_t)i * SU_LIMIT_FIELDS];
+        /* Insertion sort: linear on the ascending tables the verifier produces. */
+        for (k = 0; k < g->nf[i]; k++) {
+            uint32_t at = k;
+            while (at > 0u && fid[o[at - 1u]] > fid[k]) {
+                o[at] = o[at - 1u];
+                at--;
+            }
+            o[at] = k;
+        }
+        for (k = 1; k < g->nf[i]; k++) {
+            if (fid[o[k - 1u]] == fid[o[k]]) {
+                free(ord);
+                return 0;
+            }
+        }
+    }
+    for (i = 0; i < n; i++) {
+        for (j = i + 1u; j < n; j++) {
+            const uint32_t *oi = &ord[(size_t)i * SU_LIMIT_FIELDS];
+            const uint32_t *oj = &ord[(size_t)j * SU_LIMIT_FIELDS];
+            uint32_t a = 0, b = 0;
+            while (a < g->nf[i] && b < g->nf[j]) {
+                size_t xa = (size_t)i * SU_LIMIT_FIELDS + oi[a];
+                size_t xb = (size_t)j * SU_LIMIT_FIELDS + oj[b];
+                if (g->fid[xa] < g->fid[xb]) {
+                    a++;
+                } else if (g->fid[xa] > g->fid[xb]) {
+                    b++;
+                } else {
+                    uint32_t ra = g->rd[xa], wa = g->wr[xa], rb = g->rd[xb], wb = g->wr[xb];
+                    if ((wa && wb) || (wa && rb) || (ra && wb)) {
+                        g->conf[i * n + j] = 1u;
+                        g->conf[j * n + i] = 1u;
+                        break;
+                    }
+                    a++;
+                    b++;
+                }
+            }
+        }
+    }
+    free(ord);
+    return 1;
+}
+
 uint32_t su_effects_build(const SuEffectInput *in, uint32_t n, SuEffectGraph **out, char *err,
                           size_t err_cap) {
     SuEffectGraph *g;
@@ -406,28 +463,34 @@ uint32_t su_effects_build(const SuEffectInput *in, uint32_t n, SuEffectGraph **o
         }
     }
 
-    /* 4. effect conflicts (derived), then rejection for parallel unordered pairs. */
-    for (i = 0; i < n; i++) {
-        for (j = i + 1u; j < n; j++) {
-            uint32_t a;
-            for (a = 0; a < g->nf[i]; a++) {
-                uint32_t b;
-                uint32_t id = g->fid[(size_t)i * SU_LIMIT_FIELDS + a];
-                for (b = 0; b < g->nf[j]; b++) {
-                    uint32_t ra;
-                    uint32_t wa;
-                    uint32_t rb;
-                    uint32_t wb;
-                    if (g->fid[(size_t)j * SU_LIMIT_FIELDS + b] != id) {
-                        continue;
-                    }
-                    ra = g->rd[(size_t)i * SU_LIMIT_FIELDS + a];
-                    wa = g->wr[(size_t)i * SU_LIMIT_FIELDS + a];
-                    rb = g->rd[(size_t)j * SU_LIMIT_FIELDS + b];
-                    wb = g->wr[(size_t)j * SU_LIMIT_FIELDS + b];
-                    if ((wa && wb) || (wa && rb) || (ra && wb)) {
-                        g->conf[i * n + j] = 1u;
-                        g->conf[j * n + i] = 1u;
+    /* 4. effect conflicts (derived), then rejection for parallel unordered pairs. conf[i][j] is "some field ID
+     * both systems bind conflicts", so it does not depend on the order fields are compared in: with unique IDs per
+     * system (verified modules and host declarations), a merge over ID-sorted tables gives the same result in
+     * O(lanes) per pair instead of O(lanes^2) (issue 144: up to SU_SCHED_MAX_SYSTEMS systems). */
+    if (merge_conflicts(g) == 0) {
+        /* duplicate IDs in a table, or no memory for the merge: compare every pair of fields */
+        for (i = 0; i < n; i++) {
+            for (j = i + 1u; j < n; j++) {
+                uint32_t a;
+                for (a = 0; a < g->nf[i]; a++) {
+                    uint32_t b;
+                    uint32_t id = g->fid[(size_t)i * SU_LIMIT_FIELDS + a];
+                    for (b = 0; b < g->nf[j]; b++) {
+                        uint32_t ra;
+                        uint32_t wa;
+                        uint32_t rb;
+                        uint32_t wb;
+                        if (g->fid[(size_t)j * SU_LIMIT_FIELDS + b] != id) {
+                            continue;
+                        }
+                        ra = g->rd[(size_t)i * SU_LIMIT_FIELDS + a];
+                        wa = g->wr[(size_t)i * SU_LIMIT_FIELDS + a];
+                        rb = g->rd[(size_t)j * SU_LIMIT_FIELDS + b];
+                        wb = g->wr[(size_t)j * SU_LIMIT_FIELDS + b];
+                        if ((wa && wb) || (wa && rb) || (ra && wb)) {
+                            g->conf[i * n + j] = 1u;
+                            g->conf[j * n + i] = 1u;
+                        }
                     }
                 }
             }

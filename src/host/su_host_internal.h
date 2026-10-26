@@ -78,7 +78,7 @@ struct SuHostWorld {
     SuEnts *rb_ents;               /* scratch for su_host_snapshot_restore_inplace (allocated on first use) */
     SuEventLog *rb_log;
     uint32_t stepped;              /* su_host_step ran at least one tick */
-    uint32_t opdata_mask;          /* bit i: schedule entry i received operator data */
+    uint64_t opdata_mask;          /* bit i: schedule entry i received operator data (SU_HOST_MAX_CAPSULES <= 64) */
     const HostOperator *ops[SU_SCHED_MAX_SYSTEMS]; /* host entry i's operator (NULL for IR entries), set at creation */
     SuHostState *opstate[SU_SCHED_MAX_SYSTEMS]; /* entry i's operator state (owned by its instance), or NULL */
     uint32_t opstate_count;        /* entries with state; 0 = version 1 snapshots */

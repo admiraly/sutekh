@@ -465,6 +465,20 @@ Worlds without operator state keep byte-identical snapshots, digests and replays
 operators. Evidence: `tests/host/test_host_opstate.c` (static and DLL; cross-process identity checks), handoff
 `planning/handoffs/2026-10-26-operator-state.md`.
 
+## Schedule size and declared world schemas (26 October 2026)
+
+Downstream request work outside the milestone order (issue 144; M3 gates unchanged). Implemented and tested: an
+in-process host world (`include/sutekh/host.h`) schedules up to 64 systems (`SU_HOST_MAX_CAPSULES`, IR capsules and
+host operators; the 65th is `SU_E_RESOURCE_LIMIT`), with bounded creation costs (the effect analysis compares ID-sorted
+field tables per pair) and the existing admission (entity tick budget over every system, the 32-kernel native
+registry). A world may declare its schema (`SuHostWorldDesc.schema`, "declared world schemas": fields, IDs, value
+types, the i64/q32 two-lane rule, names) independently of its capsules; capsules and operator records bind a subset
+under the union-table checks, and fields no system binds are ordinary host-written and host-read columns. The
+declared schema is part of the world identity. Worlds without a declared schema are unchanged (pinned identities and
+digests from before the change, byte-identical replays and snapshots). The control plane (`sutekh serve`, worker,
+agent) keeps 8 systems per world. Evidence: `tests/host/test_host_schedule.c`, `tests/host/test_host_compat.c`, handoff
+`planning/handoffs/2026-10-26-schedule-schema.md`.
+
 ## space3d compound movers (20 October 2026)
 
 Downstream request work outside the milestone order (M3 gates unchanged). Implemented and tested: a fourth space3d
