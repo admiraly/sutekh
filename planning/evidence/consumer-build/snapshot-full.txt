@@ -1,0 +1,594 @@
+ctestfile add_test([=[asset_bc]=] "<BLD>/test_asset_bc")
+ctestfile add_test([=[asset_dds]=] "<BLD>/test_asset_dds")
+ctestfile add_test([=[asset_gltf]=] "<BLD>/test_asset_gltf" "<BLD>/asset_gltf_work")
+ctestfile add_test([=[asset_pak]=] "<BLD>/test_asset_pak")
+ctestfile add_test([=[audio_acceptance]=] "<BLD>/test_audio_acceptance" "<BLD>/audio_acceptance_export")
+ctestfile add_test([=[audio_adpcm]=] "<BLD>/test_audio_adpcm")
+ctestfile add_test([=[audio_agent]=] "<BLD>/test_audio_agent" "<SRC>")
+ctestfile add_test([=[audio_asset]=] "<BLD>/test_audio_asset")
+ctestfile add_test([=[audio_bus]=] "<BLD>/test_audio_bus")
+ctestfile add_test([=[audio_callback]=] "<BLD>/test_audio_callback" "<SRC>/tests/fixtures/audio/tone440_stereo.ogg")
+ctestfile add_test([=[audio_cluster]=] "<BLD>/test_audio_cluster")
+ctestfile add_test([=[audio_controls_identical]=] "python3" "-I" "<SRC>/tests/audio/compare_controls.py" "<BLD>/test_audio_runtime" "<BLD>/test_audio_runtime_reference")
+ctestfile add_test([=[audio_device]=] "<BLD>/test_audio_device")
+ctestfile add_test([=[audio_event]=] "<BLD>/test_audio_event")
+ctestfile add_test([=[audio_graph]=] "<BLD>/test_audio_graph")
+ctestfile add_test([=[audio_graph_alloc]=] "<BLD>/test_audio_graph_alloc")
+ctestfile add_test([=[audio_inspect]=] "<BLD>/test_audio_inspect" "<BLD>/audio_inspect_export")
+ctestfile add_test([=[audio_lowpass]=] "<BLD>/test_audio_lowpass")
+ctestfile add_test([=[audio_mixer]=] "<BLD>/test_audio" "<SRC>/tests/fixtures/audio/tone440_stereo.ogg")
+ctestfile add_test([=[audio_music_stream]=] "<BLD>/test_audio_music_stream" "<SRC>/tests/fixtures/audio/tone440_stereo.ogg")
+ctestfile add_test([=[audio_offline]=] "<BLD>/test_audio_offline")
+ctestfile add_test([=[audio_parameter]=] "<BLD>/test_audio_parameter")
+ctestfile add_test([=[audio_runtime]=] "<BLD>/test_audio_runtime")
+ctestfile add_test([=[audio_spatial]=] "<BLD>/test_audio_spatial")
+ctestfile add_test([=[audio_stream]=] "<BLD>/test_audio_stream" "<BLD>/audio_stream_work" "<SRC>/tests/fixtures/audio/tone440_stereo.ogg")
+ctestfile add_test([=[audio_system]=] "<BLD>/test_audio_system")
+ctestfile add_test([=[audio_system_alloc]=] "<BLD>/test_audio_system_alloc")
+ctestfile add_test([=[audio_voice_policy]=] "<BLD>/test_audio_voice_policy")
+ctestfile add_test([=[churn]=] "<BLD>/test_churn")
+ctestfile add_test([=[cmdq]=] "<BLD>/test_cmdq")
+ctestfile add_test([=[cmdq_admission]=] "<BLD>/test_cmdq_admission")
+ctestfile add_test([=[cmdq_percap]=] "<BLD>/test_cmdq_percap")
+ctestfile add_test([=[containment]=] "<BLD>/test_containment" "<BLD>/recovery_worker" "<BLD>/containment_scratch" "<SRC>")
+ctestfile add_test([=[control]=] "<BLD>/test_control" "<BLD>/worker_stub")
+ctestfile add_test([=[demo_headless_rollback]=] "<BLD>/space_demo" "--headless" "--script" "--frames" "240" "--rollback-check" "--expect-digest" "fa02b76e1269693a5f4daa5c7139818c0fff106bd5f57c656556e1336aa1defd")
+ctestfile add_test([=[demo_headless_wrong_digest]=] "/usr/bin/cmake" "-DDEMO=<BLD>/space_demo" "-DMODE=headless" "-P" "<SRC>/tests/presentation/expect_digest_failure.cmake")
+ctestfile add_test([=[demo_offscreen_rollback]=] "<BLD>/space_demo" "--offscreen" "<BLD>/space_demo.ppm" "--frames" "240" "--rollback-check" "--expect-digest" "fa02b76e1269693a5f4daa5c7139818c0fff106bd5f57c656556e1336aa1defd")
+ctestfile add_test([=[demo_offscreen_wrong_digest]=] "/usr/bin/cmake" "-DDEMO=<BLD>/space_demo" "-DMODE=offscreen" "-DOUT=<BLD>/space_demo_wrong.ppm" "-P" "<SRC>/tests/presentation/expect_digest_failure.cmake")
+ctestfile add_test([=[demo_window_exercise]=] "<BLD>/space_demo" "--script" "--frames" "150" "--exercise-window" "--no-audio" "--debris" "500")
+ctestfile add_test([=[entities]=] "<BLD>/test_entities")
+ctestfile add_test([=[entity_tick]=] "<BLD>/test_entity_tick")
+ctestfile add_test([=[example_arena_generated]=] "/usr/bin/python3.14" "-I" "<SRC>/examples/host_space3d/gen_arena.py" "--check")
+ctestfile add_test([=[example_arena_host]=] "<BLD>/arena_host" "--root" "<SRC>" "--ticks" "900" "--rollback-check" "--quiet" "--expect-digest" "3b1f7e1dc74d79f9fd0d86bddd1478e614cd717c8b9184956322b564c3f8eac9")
+ctestfile add_test([=[example_arena_host_respond]=] "<BLD>/arena_host" "--root" "<SRC>" "--ticks" "900" "--rollback-check" "--respond" "--quiet" "--expect-digest" "fab7f11055eb56e58164e4a614098ce6940d5ff142c3d40bf64df08a305eb238")
+ctestfile add_test([=[example_minimal_host]=] "<BLD>/minimal_host")
+ctestfile add_test([=[hardening]=] "<BLD>/test_hardening" "<BLD>/hardening_scratch")
+ctestfile add_test([=[haze_math]=] "<BLD>/test_haze_math")
+ctestfile add_test([=[host03]=] "<BLD>/test_host03")
+ctestfile add_test([=[host04]=] "<BLD>/test_host04")
+ctestfile add_test([=[host_api]=] "<BLD>/test_host")
+ctestfile add_test([=[host_api_dll]=] "<BLD>/test_host_dll")
+ctestfile add_test([=[host_clock]=] "<BLD>/test_clock")
+ctestfile add_test([=[host_entry]=] "<BLD>/test_host_entry" "<BLD>/host_entry_scratch")
+ctestfile add_test([=[host_ops]=] "<BLD>/test_host_ops" "<BLD>/host_ops_racer_n8.json")
+ctestfile add_test([=[host_ops_dll]=] "<BLD>/test_host_ops_dll" "<BLD>/host_ops_racer_n8.json")
+ctestfile add_test([=[host_ops_fixture]=] "<BLD>/racer_microcosm" "--root" "<SRC>" "--n" "8" "--ticks" "1" "--warmup" "0" "--dump-fixture" "<BLD>/host_ops_racer_n8.json")
+ctestfile add_test([=[host_replay]=] "<BLD>/test_replay")
+ctestfile add_test([=[host_replay_record]=] "<BLD>/test_replay" "record" "<BLD>/host_replay.bin")
+ctestfile add_test([=[host_replay_verify_dll]=] "<BLD>/test_replay_dll" "verify" "<BLD>/host_replay.bin")
+ctestfile add_test([=[host_restore]=] "<BLD>/test_host_restore" "<BLD>/host_restore_scratch")
+ctestfile add_test([=[host_rollback]=] "<BLD>/test_host_rollback")
+ctestfile add_test([=[host_rollback_bench_smoke]=] "/usr/bin/python3.14" "-I" "<SRC>/bench/host/run_host_rollback.py" "--bench" "<BLD>/bench_host_rollback" "--racer" "<BLD>/racer_microcosm" "--work" "<BLD>/host_rollback_scratch" "--n" "8,16" "--tiers" "reference,planned" "--repeat" "1" "--iters" "5")
+ctestfile add_test([=[host_rollback_dll]=] "<BLD>/test_host_rollback_dll")
+ctestfile add_test([=[input_events]=] "<BLD>/test_input_events")
+ctestfile add_test([=[input_map]=] "<BLD>/test_input")
+ctestfile add_test([=[ir03]=] "<BLD>/test_ir03")
+ctestfile add_test([=[ir03_diff]=] "/usr/bin/python3.14" "-I" "<SRC>/tests/ir03/ir03_diff.py" "--driver" "<BLD>/ir03_driver" "--work" "<BLD>/ir03_diff_scratch" "--programs" "300" "--rows" "48" "--seed" "1")
+ctestfile add_test([=[ir04]=] "<BLD>/test_ir04")
+ctestfile add_test([=[ir04_diff]=] "/usr/bin/python3.14" "-I" "<SRC>/tests/ir03/ir03_diff.py" "--driver" "<BLD>/ir03_driver" "--work" "<BLD>/ir04_diff_scratch" "--programs" "300" "--rows" "48" "--seed" "2" "--ir04")
+ctestfile add_test([=[ir]=] "<BLD>/test_ir")
+ctestfile add_test([=[lir_oom]=] "<BLD>/test_lir_oom")
+ctestfile add_test([=[migration]=] "<BLD>/test_migrate" "<SRC>/tests/fixtures" "<BLD>/migration_expected.json")
+ctestfile add_test([=[migration_alloc_points]=] "python3" "-I" "<SRC>/tests/migration-runtime/check_alloc_points.py" "<SRC>/src/world/migration/su_migrate.c")
+ctestfile add_test([=[migration_alloc_points_selftest]=] "python3" "-I" "<SRC>/tests/migration-runtime/check_alloc_points.py" "--self-test")
+ctestfile add_test([=[migration_model]=] "python3" "-I" "<SRC>/tests/migration/model.py" "--fixtures" "<SRC>/tests/fixtures" "--out" "<BLD>/migration_expected.json")
+ctestfile add_test([=[migration_runtime]=] "<BLD>/test_migrate_runtime" "<BLD>/recovery_worker" "<SRC>" "<BLD>/migration_runtime_scratch")
+ctestfile add_test([=[num]=] "<BLD>/test_num")
+ctestfile add_test([=[num_fast]=] "<BLD>/test_num_fast" "200000" "1")
+ctestfile add_test([=[num_fast_portable]=] "<BLD>/test_num_fast_portable" "100000" "2")
+ctestfile add_test([=[num_model]=] "/usr/bin/python3.14" "-I" "<SRC>/tests/num/q32_model.py" "--binary" "<BLD>/test_num" "--count" "20000" "--seeds" "1" "2" "3")
+ctestfile add_test([=[particles]=] "<BLD>/test_particles")
+ctestfile add_test([=[path_fifo]=] "<BLD>/test_path_fifo")
+ctestfile add_test([=[point_lights_math]=] "<BLD>/test_point_lights")
+ctestfile add_test([=[recovery]=] "<BLD>/test_recovery" "<BLD>/recovery_worker" "<SRC>" "<BLD>/recovery_scratch" "<BLD>/sutekh")
+ctestfile add_test([=[reload]=] "<BLD>/test_reload" "<BLD>/worker_stub" "<SRC>")
+ctestfile add_test([=[render_assets]=] "<BLD>/test_render_assets" "<BLD>/render_assets_work")
+ctestfile add_test([=[render_bloom]=] "<BLD>/test_render_bloom")
+ctestfile add_test([=[render_distortion]=] "<BLD>/test_render_distortion")
+ctestfile add_test([=[render_flame]=] "<BLD>/test_render_flame")
+ctestfile add_test([=[render_font_fresh]=] "python3" "-I" "<SRC>/tools/gen_font.py" "--check")
+ctestfile add_test([=[render_ghost]=] "<BLD>/test_render_ghost" "<BLD>/render_assets_work")
+ctestfile add_test([=[render_haze]=] "<BLD>/test_render_haze")
+ctestfile add_test([=[render_offscreen]=] "<BLD>/test_render_offscreen" "<BLD>/render_offscreen.ppm")
+ctestfile add_test([=[render_paint]=] "<BLD>/test_render_paint")
+ctestfile add_test([=[render_particles]=] "<BLD>/test_render_particles")
+ctestfile add_test([=[render_portable]=] "<BLD>/test_render_portable")
+ctestfile add_test([=[render_sampler]=] "<BLD>/test_render_ghost" "<BLD>/render_assets_work" "--sampler-repro")
+ctestfile add_test([=[render_shaders_fresh]=] "python3" "-I" "<SRC>/tools/compile_shaders.py" "--check")
+ctestfile add_test([=[render_texfx]=] "<BLD>/test_render_texfx")
+ctestfile add_test([=[render_util]=] "<BLD>/test_render_util")
+ctestfile add_test([=[rts_b1_hidden]=] "python3" "-I" "<SRC>/bench/rts/agent_experiments/evaluate_b1_hidden.py" "--binary" "<BLD>/sutekh" "--out" "<BLD>/b1-hidden-results.json")
+ctestfile add_test([=[rts_b1_install]=] "python3" "-I" "<SRC>/bench/rts/agent_experiments/install_b1_live.py" "--binary" "<BLD>/sutekh" "--out" "<BLD>/b1-install-results.json")
+ctestfile add_test([=[rts_b2_hidden]=] "python3" "-I" "<SRC>/bench/rts/agent_experiments/evaluate_b2_hidden.py" "--binary" "<BLD>/sutekh" "--out" "<BLD>/b2-hidden-results.json")
+ctestfile add_test([=[rts_b2_install]=] "python3" "-I" "<SRC>/bench/rts/agent_experiments/install_b2_live.py" "--binary" "<BLD>/sutekh" "--out" "<BLD>/b2-install-results.json")
+ctestfile add_test([=[rts_b3_hidden]=] "python3" "-I" "<SRC>/bench/rts/agent_experiments/evaluate_b3_hidden.py" "--binary" "<BLD>/sutekh" "--out" "<BLD>/b3-hidden-results.json")
+ctestfile add_test([=[rts_b3_install]=] "python3" "-I" "<SRC>/bench/rts/agent_experiments/install_b3_live.py" "--binary" "<BLD>/sutekh" "--out" "<BLD>/b3-install-results.json")
+ctestfile add_test([=[rts_behavior_regeneration]=] "python3" "-I" "<SRC>/bench/rts/agent_experiments/check_regeneration.py")
+ctestfile add_test([=[rts_capacity]=] "<BLD>/test_rts_capacity")
+ctestfile add_test([=[rts_caps_engine]=] "python3" "-I" "<SRC>/tests/rts/load/test_caps_engine.py" "<BLD>/sutekh")
+ctestfile add_test([=[rts_churn]=] "<BLD>/test_rts_churn")
+ctestfile add_test([=[rts_control_domains]=] "<BLD>/test_control_domains")
+ctestfile add_test([=[rts_ctrl_engine]=] "python3" "-I" "<SRC>/tests/rts/load/test_ctrl_engine.py" "<BLD>/sutekh")
+ctestfile add_test([=[rts_e2e_edges]=] "python3" "-I" "<SRC>/tests/rts/e2e/edge_fixtures.py" "--binary" "<BLD>/sutekh")
+ctestfile add_test([=[rts_load_engine]=] "python3" "-I" "<SRC>/tests/rts/load/test_load_engine.py" "<BLD>/sutekh")
+ctestfile add_test([=[rts_model_digest]=] "python3" "-I" "<SRC>/tests/rts/replay/test_model_snapshot.py" "--binary" "<BLD>/sutekh" "--max-rows" "1024" "--ticks" "4")
+ctestfile add_test([=[rts_native_diff]=] "python3" "-I" "<SRC>/tests/rts/native/diff_driver.py" "--driver" "<BLD>/test_rts_diff" "--work" "<BLD>/rts_native_diff_scratch")
+ctestfile add_test([=[rts_native_ops]=] "<BLD>/test_rts_ops" "<SRC>" "<BLD>")
+ctestfile add_test([=[rts_native_records]=] "<BLD>/test_rts_records" "<SRC>" "<BLD>")
+ctestfile add_test([=[rts_projectile_mutant]=] "python3" "-I" "<SRC>/tests/rts/e2e/projectile_mutant.py" "--binary" "<BLD>/sutekh")
+ctestfile add_test([=[rts_ref_m3_mutants]=] "python3" "-I" "<SRC>/tests/rts/ref/m3_control_mutants.py")
+ctestfile add_test([=[rts_replay]=] "python3" "-I" "<SRC>/tests/rts/replay/test_replay.py")
+ctestfile add_test([=[rts_replay_engine]=] "python3" "-I" "<SRC>/tests/rts/replay/test_replay_engine.py" "<BLD>/sutekh")
+ctestfile add_test([=[rts_snapshot_limit]=] "<BLD>/test_rts_snapshot_limit")
+ctestfile add_test([=[rts_world_set_fields]=] "<BLD>/test_world_set_fields" "<BLD>/rts_world_set_fields_scratch")
+ctestfile add_test([=[rts_world_spawn_batch]=] "<BLD>/test_world_spawn_batch" "<BLD>/rts_world_spawn_batch_scratch")
+ctestfile add_test([=[scheduler]=] "<BLD>/test_scheduler")
+ctestfile add_test([=[snapshot]=] "<BLD>/test_snapshot")
+ctestfile add_test([=[snapshot_cp]=] "<BLD>/test_snapshot_cp" "<BLD>/worker_stub" "<SRC>")
+ctestfile add_test([=[space3d_bind]=] "<BLD>/test_space3d_bind" "<BLD>")
+ctestfile add_test([=[space3d_geom]=] "<BLD>/test_space3d_geom")
+ctestfile add_test([=[space3d_mesh]=] "<BLD>/test_space3d_mesh")
+ctestfile add_test([=[space3d_ops]=] "<BLD>/test_space3d_ops")
+ctestfile add_test([=[space3d_racer_generated]=] "/usr/bin/python3.14" "-I" "<SRC>/bench/space3d/gen_racer.py" "--check")
+ctestfile add_test([=[space3d_racer_replay]=] "/usr/bin/python3.14" "-I" "<SRC>/bench/space3d/run_bench.py" "--driver" "<BLD>/racer_microcosm" "--check")
+ctestfile add_test([=[space3d_serve]=] "/usr/bin/python3.14" "-I" "<SRC>/tests/space3d/test_space3d_serve.py" "--binary" "<BLD>/sutekh" "--driver" "<BLD>/racer_microcosm" "--work" "<BLD>/space3d_serve_scratch" "--arena" "<BLD>/arena_host")
+ctestfile add_test([=[tick_workers]=] "<BLD>/test_tick_workers")
+ctestfile add_test([=[vm]=] "<BLD>/test_vm")
+ctestfile add_test([=[vm_tiers]=] "<BLD>/test_vm_tiers")
+ctestfile add_test([=[window_events]=] "<BLD>/test_window_events")
+ctestfile add_test([=[window_no_display]=] "<BLD>/test_window_swapchain" "--no-display")
+ctestfile add_test([=[window_swapchain]=] "<BLD>/test_window_swapchain")
+ctestfile add_test([=[window_swapchain_xvfb]=] "/usr/bin/xvfb-run" "-a" "-s" "-screen 0 1280x800x24" "env" "-u" "WAYLAND_DISPLAY" "SDL_VIDEO_DRIVER=x11" "<BLD>/test_window_swapchain" "--x11")
+ctestfile add_test([=[world]=] "<BLD>/test_world")
+ctestfile add_test([=[world_acct]=] "<BLD>/test_world_acct")
+ctestfile add_test([=[world_entities]=] "<BLD>/test_world_ents")
+ctestfile add_test([=[world_ext_retired]=] "<BLD>/test_world_ext_retired")
+ctestfile add_test([=[world_restore_null]=] "<BLD>/test_world_restore_null")
+ctestfile set_tests_properties([=[asset_bc]=] PROPERTIES )
+ctestfile set_tests_properties([=[asset_dds]=] PROPERTIES )
+ctestfile set_tests_properties([=[asset_gltf]=] PROPERTIES )
+ctestfile set_tests_properties([=[asset_pak]=] PROPERTIES  WORKING_DIRECTORY "<BLD>")
+ctestfile set_tests_properties([=[audio_acceptance]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_adpcm]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_agent]=] PROPERTIES  WORKING_DIRECTORY "<BLD>")
+ctestfile set_tests_properties([=[audio_asset]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_bus]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_callback]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_cluster]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_controls_identical]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_device]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[audio_event]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_graph]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_graph_alloc]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_inspect]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_lowpass]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_mixer]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_music_stream]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_offline]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_parameter]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_runtime]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_spatial]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_stream]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_system]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_system_alloc]=] PROPERTIES )
+ctestfile set_tests_properties([=[audio_voice_policy]=] PROPERTIES )
+ctestfile set_tests_properties([=[churn]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[cmdq]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[cmdq_admission]=] PROPERTIES )
+ctestfile set_tests_properties([=[cmdq_percap]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[containment]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[control]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[demo_headless_rollback]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[demo_headless_wrong_digest]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[demo_offscreen_rollback]=] PROPERTIES  SKIP_RETURN_CODE "3" WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[demo_offscreen_wrong_digest]=] PROPERTIES  SKIP_REGULAR_EXPRESSION "SKIP: no presentation" WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[demo_window_exercise]=] PROPERTIES  SKIP_RETURN_CODE "3" WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[entities]=] PROPERTIES )
+ctestfile set_tests_properties([=[entity_tick]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[example_arena_generated]=] PROPERTIES )
+ctestfile set_tests_properties([=[example_arena_host]=] PROPERTIES )
+ctestfile set_tests_properties([=[example_arena_host_respond]=] PROPERTIES )
+ctestfile set_tests_properties([=[example_minimal_host]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[hardening]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[haze_math]=] PROPERTIES )
+ctestfile set_tests_properties([=[host03]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host04]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_api]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_api_dll]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_clock]=] PROPERTIES )
+ctestfile set_tests_properties([=[host_entry]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_ops]=] PROPERTIES  FIXTURES_REQUIRED "host_ops_fixture" TIMEOUT "300" WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_ops_dll]=] PROPERTIES  FIXTURES_REQUIRED "host_ops_fixture" TIMEOUT "300" WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_ops_fixture]=] PROPERTIES  FIXTURES_SETUP "host_ops_fixture")
+ctestfile set_tests_properties([=[host_replay]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_replay_record]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_replay_verify_dll]=] PROPERTIES  DEPENDS "host_replay_record" WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_restore]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_rollback]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[host_rollback_bench_smoke]=] PROPERTIES  TIMEOUT "300")
+ctestfile set_tests_properties([=[host_rollback_dll]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[input_events]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[input_map]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[ir03]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[ir03_diff]=] PROPERTIES )
+ctestfile set_tests_properties([=[ir04]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[ir04_diff]=] PROPERTIES )
+ctestfile set_tests_properties([=[ir]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[lir_oom]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[migration]=] PROPERTIES  DEPENDS "migration_model" WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[migration_alloc_points]=] PROPERTIES )
+ctestfile set_tests_properties([=[migration_alloc_points_selftest]=] PROPERTIES )
+ctestfile set_tests_properties([=[migration_model]=] PROPERTIES )
+ctestfile set_tests_properties([=[migration_runtime]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[num]=] PROPERTIES )
+ctestfile set_tests_properties([=[num_fast]=] PROPERTIES )
+ctestfile set_tests_properties([=[num_fast_portable]=] PROPERTIES )
+ctestfile set_tests_properties([=[num_model]=] PROPERTIES )
+ctestfile set_tests_properties([=[particles]=] PROPERTIES )
+ctestfile set_tests_properties([=[path_fifo]=] PROPERTIES )
+ctestfile set_tests_properties([=[point_lights_math]=] PROPERTIES )
+ctestfile set_tests_properties([=[recovery]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[reload]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[render_assets]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_bloom]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_distortion]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_flame]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_font_fresh]=] PROPERTIES )
+ctestfile set_tests_properties([=[render_ghost]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_haze]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_offscreen]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_paint]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_particles]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_portable]=] PROPERTIES )
+ctestfile set_tests_properties([=[render_sampler]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_shaders_fresh]=] PROPERTIES )
+ctestfile set_tests_properties([=[render_texfx]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[render_util]=] PROPERTIES  WORKING_DIRECTORY "<BLD>")
+ctestfile set_tests_properties([=[rts_b1_hidden]=] PROPERTIES  TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_b1_install]=] PROPERTIES  TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_b2_hidden]=] PROPERTIES  TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_b2_install]=] PROPERTIES  TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_b3_hidden]=] PROPERTIES  TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_b3_install]=] PROPERTIES  TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_behavior_regeneration]=] PROPERTIES )
+ctestfile set_tests_properties([=[rts_capacity]=] PROPERTIES  RUN_SERIAL "TRUE" TIMEOUT "120" WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[rts_caps_engine]=] PROPERTIES )
+ctestfile set_tests_properties([=[rts_churn]=] PROPERTIES  RUN_SERIAL "TRUE" TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_control_domains]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[rts_ctrl_engine]=] PROPERTIES )
+ctestfile set_tests_properties([=[rts_e2e_edges]=] PROPERTIES  TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_load_engine]=] PROPERTIES )
+ctestfile set_tests_properties([=[rts_model_digest]=] PROPERTIES  TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_native_diff]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[rts_native_ops]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[rts_native_records]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[rts_projectile_mutant]=] PROPERTIES  TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_ref_m3_mutants]=] PROPERTIES )
+ctestfile set_tests_properties([=[rts_replay]=] PROPERTIES )
+ctestfile set_tests_properties([=[rts_replay_engine]=] PROPERTIES )
+ctestfile set_tests_properties([=[rts_snapshot_limit]=] PROPERTIES  RUN_SERIAL "TRUE" TIMEOUT "120")
+ctestfile set_tests_properties([=[rts_world_set_fields]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[rts_world_spawn_batch]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[scheduler]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[snapshot]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[snapshot_cp]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[space3d_bind]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[space3d_geom]=] PROPERTIES )
+ctestfile set_tests_properties([=[space3d_mesh]=] PROPERTIES )
+ctestfile set_tests_properties([=[space3d_ops]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[space3d_racer_generated]=] PROPERTIES )
+ctestfile set_tests_properties([=[space3d_racer_replay]=] PROPERTIES  TIMEOUT "300")
+ctestfile set_tests_properties([=[space3d_serve]=] PROPERTIES  TIMEOUT "600")
+ctestfile set_tests_properties([=[tick_workers]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[vm]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[vm_tiers]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[window_events]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[window_no_display]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[window_swapchain]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[window_swapchain_xvfb]=] PROPERTIES  SKIP_RETURN_CODE "77")
+ctestfile set_tests_properties([=[world]=] PROPERTIES )
+ctestfile set_tests_properties([=[world_acct]=] PROPERTIES )
+ctestfile set_tests_properties([=[world_entities]=] PROPERTIES  WORKING_DIRECTORY "<SRC>")
+ctestfile set_tests_properties([=[world_ext_retired]=] PROPERTIES )
+ctestfile set_tests_properties([=[world_restore_null]=] PROPERTIES )
+target arena_host EXECUTABLE <BLD>/arena_host
+target asset_cook EXECUTABLE <BLD>/asset_cook
+target bench_audio_system EXECUTABLE <BLD>/bench_audio_system
+target bench_audio_system_reference EXECUTABLE <BLD>/bench_audio_system_reference
+target bench_host EXECUTABLE <BLD>/bench_host
+target bench_host_rollback EXECUTABLE <BLD>/bench_host_rollback
+target ir03_driver EXECUTABLE <BLD>/ir03_driver
+target minimal_host EXECUTABLE <BLD>/minimal_host
+target racer_microcosm EXECUTABLE <BLD>/racer_microcosm
+target recovery_worker EXECUTABLE <BLD>/recovery_worker
+target space_demo EXECUTABLE <BLD>/space_demo
+target su_agent STATIC_LIBRARY <BLD>/libsu_agent.a
+target su_agent_hooks STATIC_LIBRARY <BLD>/libsu_agent_hooks.a
+target su_asset STATIC_LIBRARY <BLD>/libsu_asset.a
+target su_asset_import STATIC_LIBRARY <BLD>/libsu_asset_import.a
+target su_asset_thirdparty OBJECT_LIBRARY <BLD>/CMakeFiles/su_asset_thirdparty.dir/./src/asset/su_asset_thirdparty.c.o
+target su_audio STATIC_LIBRARY <BLD>/libsu_audio.a
+target su_audio_callback_objs OBJECT_LIBRARY <BLD>/CMakeFiles/su_audio_callback_objs.dir/./src/audio/su_audio_asset.c.o <BLD>/CMakeFiles/su_audio_callback_objs.dir/./src/audio/su_audio_mix.c.o <BLD>/CMakeFiles/su_audio_callback_objs.dir/./src/audio/su_audio_stream.c.o
+target su_audio_cluster_alloc_objs OBJECT_LIBRARY <BLD>/CMakeFiles/su_audio_cluster_alloc_objs.dir/./src/audio/su_audio_cluster.c.o
+target su_audio_event_reference OBJECT_LIBRARY <BLD>/CMakeFiles/su_audio_event_reference.dir/./src/audio/su_audio_event.c.o
+target su_audio_events STATIC_LIBRARY <BLD>/libsu_audio_events.a
+target su_audio_graph_alloc_objs OBJECT_LIBRARY <BLD>/CMakeFiles/su_audio_graph_alloc_objs.dir/./src/audio/su_audio_graph.c.o
+target su_audio_inspect STATIC_LIBRARY <BLD>/libsu_audio_inspect.a
+target su_audio_offline STATIC_LIBRARY <BLD>/libsu_audio_offline.a
+target su_audio_system STATIC_LIBRARY <BLD>/libsu_audio_system.a
+target su_audio_system_alloc_objs OBJECT_LIBRARY <BLD>/CMakeFiles/su_audio_system_alloc_objs.dir/./src/audio/su_audio_bus.c.o <BLD>/CMakeFiles/su_audio_system_alloc_objs.dir/./src/audio/su_audio_cluster.c.o <BLD>/CMakeFiles/su_audio_system_alloc_objs.dir/./src/audio/su_audio_event.c.o <BLD>/CMakeFiles/su_audio_system_alloc_objs.dir/./src/audio/su_audio_graph.c.o <BLD>/CMakeFiles/su_audio_system_alloc_objs.dir/./src/audio/su_audio_inspect.c.o <BLD>/CMakeFiles/su_audio_system_alloc_objs.dir/./src/audio/su_audio_music.c.o <BLD>/CMakeFiles/su_audio_system_alloc_objs.dir/./src/audio/su_audio_offline.c.o <BLD>/CMakeFiles/su_audio_system_alloc_objs.dir/./src/audio/su_audio_parameter.c.o <BLD>/CMakeFiles/su_audio_system_alloc_objs.dir/./src/audio/su_audio_system.c.o <BLD>/CMakeFiles/su_audio_system_alloc_objs.dir/./src/audio/su_audio_voice_policy.c.o
+target su_audio_thirdparty OBJECT_LIBRARY <BLD>/CMakeFiles/su_audio_thirdparty.dir/./src/audio/su_audio_thirdparty.c.o
+target su_cmdq STATIC_LIBRARY <BLD>/libsu_cmdq.a
+target su_cmdq_admission_objs OBJECT_LIBRARY <BLD>/CMakeFiles/su_cmdq_admission_objs.dir/./src/world/entities/su_cmdq.c.o
+target su_ents STATIC_LIBRARY <BLD>/libsu_ents.a
+target su_host STATIC_LIBRARY <BLD>/libsu_host.a
+target su_input STATIC_LIBRARY <BLD>/libsu_input.a
+target su_ir STATIC_LIBRARY <BLD>/libsu_ir.a
+target su_jobs STATIC_LIBRARY <BLD>/libsu_jobs.a
+target su_migrate STATIC_LIBRARY <BLD>/libsu_migrate.a
+target su_platform STATIC_LIBRARY <BLD>/libsu_platform.a
+target su_render STATIC_LIBRARY <BLD>/libsu_render.a
+target su_render_util STATIC_LIBRARY <BLD>/libsu_render_util.a
+target su_rts_control STATIC_LIBRARY <BLD>/libsu_rts_control.a
+target su_snapshot STATIC_LIBRARY <BLD>/libsu_snapshot.a
+target su_space3d STATIC_LIBRARY <BLD>/libsu_space3d.a
+target su_vm STATIC_LIBRARY <BLD>/libsu_vm.a
+target su_window STATIC_LIBRARY <BLD>/libsu_window.a
+target su_world STATIC_LIBRARY <BLD>/libsu_world.a
+target su_world_acct_objs OBJECT_LIBRARY <BLD>/CMakeFiles/su_world_acct_objs.dir/./src/world/entities/su_cmdq.c.o <BLD>/CMakeFiles/su_world_acct_objs.dir/./src/world/entities/su_ents.c.o <BLD>/CMakeFiles/su_world_acct_objs.dir/./src/world/su_world.c.o
+target sutekh EXECUTABLE <BLD>/sutekh
+target sutekh_host SHARED_LIBRARY <BLD>/libsutekh_host.so
+target test_asset_bc EXECUTABLE <BLD>/test_asset_bc
+target test_asset_dds EXECUTABLE <BLD>/test_asset_dds
+target test_asset_gltf EXECUTABLE <BLD>/test_asset_gltf
+target test_asset_pak EXECUTABLE <BLD>/test_asset_pak
+target test_audio EXECUTABLE <BLD>/test_audio
+target test_audio_acceptance EXECUTABLE <BLD>/test_audio_acceptance
+target test_audio_adpcm EXECUTABLE <BLD>/test_audio_adpcm
+target test_audio_agent EXECUTABLE <BLD>/test_audio_agent
+target test_audio_asset EXECUTABLE <BLD>/test_audio_asset
+target test_audio_bus EXECUTABLE <BLD>/test_audio_bus
+target test_audio_callback EXECUTABLE <BLD>/test_audio_callback
+target test_audio_cluster EXECUTABLE <BLD>/test_audio_cluster
+target test_audio_device EXECUTABLE <BLD>/test_audio_device
+target test_audio_event EXECUTABLE <BLD>/test_audio_event
+target test_audio_graph EXECUTABLE <BLD>/test_audio_graph
+target test_audio_graph_alloc EXECUTABLE <BLD>/test_audio_graph_alloc
+target test_audio_inspect EXECUTABLE <BLD>/test_audio_inspect
+target test_audio_lowpass EXECUTABLE <BLD>/test_audio_lowpass
+target test_audio_music_stream EXECUTABLE <BLD>/test_audio_music_stream
+target test_audio_offline EXECUTABLE <BLD>/test_audio_offline
+target test_audio_parameter EXECUTABLE <BLD>/test_audio_parameter
+target test_audio_runtime EXECUTABLE <BLD>/test_audio_runtime
+target test_audio_runtime_reference EXECUTABLE <BLD>/test_audio_runtime_reference
+target test_audio_spatial EXECUTABLE <BLD>/test_audio_spatial
+target test_audio_stream EXECUTABLE <BLD>/test_audio_stream
+target test_audio_system EXECUTABLE <BLD>/test_audio_system
+target test_audio_system_alloc EXECUTABLE <BLD>/test_audio_system_alloc
+target test_audio_voice_policy EXECUTABLE <BLD>/test_audio_voice_policy
+target test_churn EXECUTABLE <BLD>/test_churn
+target test_clock EXECUTABLE <BLD>/test_clock
+target test_cmdq EXECUTABLE <BLD>/test_cmdq
+target test_cmdq_admission EXECUTABLE <BLD>/test_cmdq_admission
+target test_cmdq_percap EXECUTABLE <BLD>/test_cmdq_percap
+target test_containment EXECUTABLE <BLD>/test_containment
+target test_control EXECUTABLE <BLD>/test_control
+target test_control_domains EXECUTABLE <BLD>/test_control_domains
+target test_entities EXECUTABLE <BLD>/test_entities
+target test_entity_tick EXECUTABLE <BLD>/test_entity_tick
+target test_hardening EXECUTABLE <BLD>/test_hardening
+target test_haze_math EXECUTABLE <BLD>/test_haze_math
+target test_host EXECUTABLE <BLD>/test_host
+target test_host03 EXECUTABLE <BLD>/test_host03
+target test_host04 EXECUTABLE <BLD>/test_host04
+target test_host_dll EXECUTABLE <BLD>/test_host_dll
+target test_host_entry EXECUTABLE <BLD>/test_host_entry
+target test_host_ops EXECUTABLE <BLD>/test_host_ops
+target test_host_ops_dll EXECUTABLE <BLD>/test_host_ops_dll
+target test_host_restore EXECUTABLE <BLD>/test_host_restore
+target test_host_rollback EXECUTABLE <BLD>/test_host_rollback
+target test_host_rollback_dll EXECUTABLE <BLD>/test_host_rollback_dll
+target test_input EXECUTABLE <BLD>/test_input
+target test_input_events EXECUTABLE <BLD>/test_input_events
+target test_ir EXECUTABLE <BLD>/test_ir
+target test_ir03 EXECUTABLE <BLD>/test_ir03
+target test_ir04 EXECUTABLE <BLD>/test_ir04
+target test_lir_oom EXECUTABLE <BLD>/test_lir_oom
+target test_migrate EXECUTABLE <BLD>/test_migrate
+target test_migrate_runtime EXECUTABLE <BLD>/test_migrate_runtime
+target test_num EXECUTABLE <BLD>/test_num
+target test_num_fast EXECUTABLE <BLD>/test_num_fast
+target test_num_fast_portable EXECUTABLE <BLD>/test_num_fast_portable
+target test_particles EXECUTABLE <BLD>/test_particles
+target test_path_fifo EXECUTABLE <BLD>/test_path_fifo
+target test_point_lights EXECUTABLE <BLD>/test_point_lights
+target test_recovery EXECUTABLE <BLD>/test_recovery
+target test_reload EXECUTABLE <BLD>/test_reload
+target test_render_assets EXECUTABLE <BLD>/test_render_assets
+target test_render_bloom EXECUTABLE <BLD>/test_render_bloom
+target test_render_distortion EXECUTABLE <BLD>/test_render_distortion
+target test_render_flame EXECUTABLE <BLD>/test_render_flame
+target test_render_ghost EXECUTABLE <BLD>/test_render_ghost
+target test_render_haze EXECUTABLE <BLD>/test_render_haze
+target test_render_offscreen EXECUTABLE <BLD>/test_render_offscreen
+target test_render_paint EXECUTABLE <BLD>/test_render_paint
+target test_render_particles EXECUTABLE <BLD>/test_render_particles
+target test_render_portable EXECUTABLE <BLD>/test_render_portable
+target test_render_texfx EXECUTABLE <BLD>/test_render_texfx
+target test_render_util EXECUTABLE <BLD>/test_render_util
+target test_replay EXECUTABLE <BLD>/test_replay
+target test_replay_dll EXECUTABLE <BLD>/test_replay_dll
+target test_rts_capacity EXECUTABLE <BLD>/test_rts_capacity
+target test_rts_churn EXECUTABLE <BLD>/test_rts_churn
+target test_rts_diff EXECUTABLE <BLD>/test_rts_diff
+target test_rts_ops EXECUTABLE <BLD>/test_rts_ops
+target test_rts_records EXECUTABLE <BLD>/test_rts_records
+target test_rts_snapshot_limit EXECUTABLE <BLD>/test_rts_snapshot_limit
+target test_scheduler EXECUTABLE <BLD>/test_scheduler
+target test_snapshot EXECUTABLE <BLD>/test_snapshot
+target test_snapshot_cp EXECUTABLE <BLD>/test_snapshot_cp
+target test_space3d_bind EXECUTABLE <BLD>/test_space3d_bind
+target test_space3d_geom EXECUTABLE <BLD>/test_space3d_geom
+target test_space3d_mesh EXECUTABLE <BLD>/test_space3d_mesh
+target test_space3d_ops EXECUTABLE <BLD>/test_space3d_ops
+target test_tick_workers EXECUTABLE <BLD>/test_tick_workers
+target test_vm EXECUTABLE <BLD>/test_vm
+target test_vm_tiers EXECUTABLE <BLD>/test_vm_tiers
+target test_window_events EXECUTABLE <BLD>/test_window_events
+target test_window_swapchain EXECUTABLE <BLD>/test_window_swapchain
+target test_world EXECUTABLE <BLD>/test_world
+target test_world_acct EXECUTABLE <BLD>/test_world_acct
+target test_world_ents EXECUTABLE <BLD>/test_world_ents
+target test_world_ext_retired EXECUTABLE <BLD>/test_world_ext_retired
+target test_world_restore_null EXECUTABLE <BLD>/test_world_restore_null
+target test_world_set_fields EXECUTABLE <BLD>/test_world_set_fields
+target test_world_spawn_batch EXECUTABLE <BLD>/test_world_spawn_batch
+target worker_stub EXECUTABLE <BLD>/worker_stub
+test asset_bc props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test asset_dds props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test asset_gltf props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test asset_pak props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_acceptance props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_adpcm props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_agent props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_asset props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_bus props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_callback props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_cluster props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_controls_identical props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_device props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_event props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_graph props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_graph_alloc props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_inspect props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_lowpass props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_mixer props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_music_stream props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_offline props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_parameter props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_runtime props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_spatial props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_stream props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_system props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_system_alloc props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test audio_voice_policy props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test churn props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test cmdq props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test cmdq_admission props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test cmdq_percap props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test containment props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test control props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test demo_headless_rollback props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test demo_headless_wrong_digest props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test demo_offscreen_rollback props=[["SKIP_RETURN_CODE", "3"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
+test demo_offscreen_wrong_digest props=[["SKIP_REGULAR_EXPRESSION", "[\"SKIP: no presentation\"]"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
+test demo_window_exercise props=[["SKIP_RETURN_CODE", "3"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
+test entities props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test entity_tick props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test example_arena_generated props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test example_arena_host props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test example_arena_host_respond props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test example_minimal_host props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test hardening props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test haze_math props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host03 props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host04 props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_api props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_api_dll props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_clock props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_entry props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_ops props=[["DEPENDS", "[\"host_ops_fixture\"]"], ["FIXTURES_REQUIRED", "[\"host_ops_fixture\"]"], ["TIMEOUT", "300.0"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_ops_dll props=[["DEPENDS", "[\"host_ops_fixture\"]"], ["FIXTURES_REQUIRED", "[\"host_ops_fixture\"]"], ["TIMEOUT", "300.0"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_ops_fixture props=[["FIXTURES_SETUP", "[\"host_ops_fixture\"]"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_replay props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_replay_record props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_replay_verify_dll props=[["DEPENDS", "[\"host_replay_record\"]"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_restore props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_rollback props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test host_rollback_bench_smoke props=[["TIMEOUT", "300.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test host_rollback_dll props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test input_events props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test input_map props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test ir props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test ir03 props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test ir03_diff props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test ir04 props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test ir04_diff props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test lir_oom props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test migration props=[["DEPENDS", "[\"migration_model\"]"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
+test migration_alloc_points props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test migration_alloc_points_selftest props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test migration_model props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test migration_runtime props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test num props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test num_fast props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test num_fast_portable props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test num_model props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test particles props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test path_fifo props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test point_lights_math props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test recovery props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test reload props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test render_assets props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_bloom props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_distortion props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_flame props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_font_fresh props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_ghost props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_haze props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_offscreen props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_paint props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_particles props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_portable props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_sampler props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_shaders_fresh props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_texfx props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test render_util props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_b1_hidden props=[["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_b1_install props=[["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_b2_hidden props=[["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_b2_install props=[["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_b3_hidden props=[["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_b3_install props=[["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_behavior_regeneration props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_capacity props=[["RUN_SERIAL", "true"], ["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<SRC>\""]]
+test rts_caps_engine props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_churn props=[["RUN_SERIAL", "true"], ["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_control_domains props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test rts_ctrl_engine props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_e2e_edges props=[["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_load_engine props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_model_digest props=[["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_native_diff props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test rts_native_ops props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test rts_native_records props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test rts_projectile_mutant props=[["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_ref_m3_mutants props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_replay props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_replay_engine props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_snapshot_limit props=[["RUN_SERIAL", "true"], ["TIMEOUT", "120.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test rts_world_set_fields props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test rts_world_spawn_batch props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test scheduler props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test snapshot props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test snapshot_cp props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test space3d_bind props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test space3d_geom props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test space3d_mesh props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test space3d_ops props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test space3d_racer_generated props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test space3d_racer_replay props=[["TIMEOUT", "300.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test space3d_serve props=[["TIMEOUT", "600.0"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test tick_workers props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test vm props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test vm_tiers props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test window_events props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test window_no_display props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test window_swapchain props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test window_swapchain_xvfb props=[["SKIP_RETURN_CODE", "77"], ["WORKING_DIRECTORY", "\"<BLD>\""]]
+test world props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test world_acct props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test world_entities props=[["WORKING_DIRECTORY", "\"<SRC>\""]]
+test world_ext_retired props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
+test world_restore_null props=[["WORKING_DIRECTORY", "\"<BLD>\""]]
