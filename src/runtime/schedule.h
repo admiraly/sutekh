@@ -22,7 +22,15 @@
 #include "sutekh/abi.h"
 #include "world/su_world.h"
 
-#define SU_SCHED_MAX_SYSTEMS 8u
+/* Schedule capacity (issue 144). SU_SCHED_MAX_SYSTEMS is the hard maximum of any schedule (the size of
+ * SuSchedule.sys). A schedule admits at most its own cap: SU_SCHED_DEFAULT_SYSTEMS after su_sched_init (every
+ * control-plane world: worker, agent and their persisted formats keep their 8-system limit), or the value given
+ * to su_sched_set_max_systems (the in-process host API sets SU_HOST_MAX_CAPSULES). Per-system costs are bounded
+ * by the module limits (SU_LIMIT_FIELDS, SU_LIMIT_INSTRUCTIONS, SU_LIMIT_REGISTERS): at creation the union table is
+ * O(systems * lanes * table lanes) and the effect analysis O(systems^2 * lanes + systems^3); a tick runs each system
+ * once at its usual cost. */
+#define SU_SCHED_MAX_SYSTEMS 64u
+#define SU_SCHED_DEFAULT_SYSTEMS 8u
 
 /* Entry kinds (M3-04a, OD-1b, contract M3_RTS_CONTRACT section 3.1). IR entries are the default
  * (kind 0, so every existing entry keeps its meaning). A host entry is an operator compiled into
@@ -97,6 +105,10 @@ typedef struct SuSchedule {
     uint32_t field_count;
     SuSchedField *fields;    /* owned union table, ascending field id */
     SuEntRt *ent;            /* owned entity runtime (event log, caps); NULL until enabled (M2-00c3) */
+    uint32_t max_systems;    /* admission cap; 0 = SU_SCHED_DEFAULT_SYSTEMS (su_sched_set_max_systems) */
+    uint32_t declared;       /* 1: the world schema was declared (su_sched_declare_schema), not derived */
+    uint32_t declared_count;
+    SuSchedField *declared_fields; /* owned; the declared lanes, ascending id, access 0 */
 } SuSchedule;
 
 /* Test seam: called before each system of a tick. Returns nonzero to fail that system
@@ -123,11 +135,25 @@ typedef struct SuSchedTickOpts {
 void su_sched_init(SuSchedule *s);
 /* Destroys every context and module, and frees the field table. */
 void su_sched_free(SuSchedule *s);
+/* Admission cap of s (SU_SCHED_DEFAULT_SYSTEMS unless set). */
+uint32_t su_sched_max_systems(const SuSchedule *s);
+/* Sets the admission cap: 1..SU_SCHED_MAX_SYSTEMS and at least the current count, else SU_E_INVALID_ARGUMENT. */
+uint32_t su_sched_set_max_systems(SuSchedule *s, uint32_t max_systems);
+/* Declares the world schema independently of the systems (issue 144). Only on an empty schedule, at most once.
+ * lanes (n entries, 1..SU_LIMIT_FIELDS) are storage lanes: type SU_TYPE_U32, value_type SU_TYPE_U32, I32, I64 or
+ * Q32, unique IDs and names (1..SU_WORLD_NAME_MAX bytes); access is ignored. The schedule's schema_id,
+ * schema_version and layout_generation become the declared ones, and every later su_sched_add* must match them
+ * (SU_E_SCHEMA_MISMATCH). su_sched_finalize then starts from the declared lanes (access 0) and refuses a system
+ * field that is not one of them, or that disagrees with it in name, storage or value type
+ * (SU_E_SCHEMA_MISMATCH). Lanes no system binds stay in the table with access 0. SU_E_INVALID_ARGUMENT for a
+ * malformed table, SU_E_RESOURCE_LIMIT when memory runs out. */
+uint32_t su_sched_declare_schema(SuSchedule *s, const char *schema_id, uint32_t schema_version, uint32_t gen,
+                                 const SuSchedField *lanes, uint32_t n);
 
 /* Appends a system. Takes ownership of mod on SU_OK only. Fails with
  * SU_E_SCHEMA_MISMATCH when query, schema_version or layout_generation differ from the
  * entries already present, SU_E_INVALID_ARGUMENT for a duplicate system_id, and
- * SU_E_RESOURCE_LIMIT when the schedule is full or the VM context cannot be created. */
+ * SU_E_RESOURCE_LIMIT when the schedule is full (su_sched_max_systems) or the VM context cannot be created. */
 uint32_t su_sched_add(SuSchedule *s, SuLirModule *mod, uint32_t schema_version, uint32_t gen,
                       uint64_t txid, uint64_t system_rev, uint64_t tick);
 /* Appends a host entry (M3-04a, section 3.1). decl is the declaration module built for d by
@@ -158,6 +184,9 @@ uint32_t su_sched_finalize(SuSchedule *s);
  * ("x.lo"/"x.hi": an IR 0.3 i64/q32 field "x" at ID J binds lanes "x.lo" at J and "x.hi" at J + 1). Writes an
  * empty string when no disagreement is found. */
 void su_sched_explain_mismatch(const SuSchedule *s, char *msg, size_t cap);
+/* As su_sched_explain_mismatch; *system receives the index of the system the message is about when the schema is
+ * declared (a system disagreeing with the declared schema), else UINT32_MAX. */
+void su_sched_explain_mismatch_ex(const SuSchedule *s, char *msg, size_t cap, uint32_t *system);
 /* Index of the entry with this system_id, or -1. */
 int su_sched_find(const SuSchedule *s, const char *system_id);
 

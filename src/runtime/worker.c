@@ -93,7 +93,7 @@ typedef struct WorkerMig {
     SuWorld *world;          /* successor world (NULL after swap) */
     SuSchedule sched;        /* replacement schedule, entity runtime not yet attached */
     SuMigratePlan plan;      /* owned: compiled migration, bound to the pre-migration digest */
-    RevPaths paths[SU_SCHED_MAX_SYSTEMS];
+    RevPaths paths[SU_SCHED_DEFAULT_SYSTEMS];
 } WorkerMig;
 
 /* One world: its schedule (ordered verified systems) and committed state. paths[i]
@@ -104,7 +104,7 @@ typedef struct WorkerWorld {
     uint64_t revision;
     WorldInst inst;
     SuSchedule sched;
-    RevPaths paths[SU_SCHED_MAX_SYSTEMS];
+    RevPaths paths[SU_SCHED_DEFAULT_SYSTEMS];
     WorkerMig mig;
     int post_swap;           /* a migration was swapped and its checkpoint is not yet captured */
     int post_ck;             /* the post-migration checkpoint was captured (test seam) */
@@ -128,7 +128,7 @@ typedef struct CkptRec {
     char world_id[WORKER_ID_CAP];
     char snapshot_id[65];
     uint32_t count;
-    CkptSys sys[SU_SCHED_MAX_SYSTEMS];
+    CkptSys sys[SU_SCHED_DEFAULT_SYSTEMS];
 } CkptRec;
 
 typedef struct WorkerState {
@@ -679,8 +679,8 @@ static uint32_t check_system_effects_ovr(const SuSchedule *sched, const RevPaths
     docs = calloc(n, sizeof *docs);
     bufs = calloc(n, sizeof *bufs);
     in = calloc(n, sizeof *in);
-    afters = calloc((size_t)n * SU_SCHED_MAX_SYSTEMS, sizeof *afters);
-    befores = calloc((size_t)n * SU_SCHED_MAX_SYSTEMS, sizeof *befores);
+    afters = calloc((size_t)n * SU_SCHED_DEFAULT_SYSTEMS, sizeof *afters);
+    befores = calloc((size_t)n * SU_SCHED_DEFAULT_SYSTEMS, sizeof *befores);
     after_n = calloc(n, sizeof *after_n);
     before_n = calloc(n, sizeof *before_n);
     if (docs == NULL || bufs == NULL || in == NULL || afters == NULL || befores == NULL || after_n == NULL ||
@@ -698,16 +698,16 @@ static uint32_t check_system_effects_ovr(const SuSchedule *sched, const RevPaths
         if (st != SU_OK) {
             goto done;
         }
-        after_n[i] = string_items(aft, &afters[(size_t)i * SU_SCHED_MAX_SYSTEMS], SU_SCHED_MAX_SYSTEMS);
-        before_n[i] = string_items(bef, &befores[(size_t)i * SU_SCHED_MAX_SYSTEMS], SU_SCHED_MAX_SYSTEMS);
+        after_n[i] = string_items(aft, &afters[(size_t)i * SU_SCHED_DEFAULT_SYSTEMS], SU_SCHED_DEFAULT_SYSTEMS);
+        before_n[i] = string_items(bef, &befores[(size_t)i * SU_SCHED_DEFAULT_SYSTEMS], SU_SCHED_DEFAULT_SYSTEMS);
         in[i].system_id = sched->sys[i].system_id;
         in[i].mod = is_ovr ? ovr_mod : sched->sys[i].mod;
         in[i].phase = phase;
         in[i].priority = 0u;
         in[i].declared_parallel = 1u;
-        in[i].after = &afters[(size_t)i * SU_SCHED_MAX_SYSTEMS];
+        in[i].after = &afters[(size_t)i * SU_SCHED_DEFAULT_SYSTEMS];
         in[i].after_count = after_n[i];
-        in[i].before = &befores[(size_t)i * SU_SCHED_MAX_SYSTEMS];
+        in[i].before = &befores[(size_t)i * SU_SCHED_DEFAULT_SYSTEMS];
         in[i].before_count = before_n[i];
         in[i].host_declared = !is_ovr && sched->sys[i].kind == SU_SYS_KIND_HOST ? 1u : 0u;
     }
@@ -767,7 +767,7 @@ static uint32_t load_schedule(const SuJsonValue *caps, SuSchedule *sched, RevPat
     SuDiag vdiag;
 
     if (caps == NULL || caps->type != SU_JSON_ARRAY || caps->u.array.count == 0 ||
-        caps->u.array.count > SU_SCHED_MAX_SYSTEMS) {
+        caps->u.array.count > SU_SCHED_DEFAULT_SYSTEMS) {
         fail(f, SU_E_TYPE, "capsules must be an array of 1..8 {capsule_path, source_path} objects");
         return SU_E_TYPE;
     }
@@ -2814,7 +2814,7 @@ static uint64_t ckpt_release_world(WorkerState *s, const char *world_id) {
 static uint32_t h_world_snapshot(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
     WorkerWorld *ww;
     const char *expect = str_of(params, "expected_world_revision");
-    SuSnapshotManifestEntry man[SU_SCHED_MAX_SYSTEMS];
+    SuSnapshotManifestEntry man[SU_SCHED_DEFAULT_SYSTEMS];
     SuWorldDesc desc;
     SuWorldFieldDesc *descs = NULL;
     SuCheckpointInfo info;
@@ -2953,7 +2953,7 @@ static uint32_t rebuild_schedule(const CkptRec *rec, const SuSnapshotData *data,
     }
     {
         /* The restored set is analysed like any other installed set (audit item 2). */
-        RevPaths rp[SU_SCHED_MAX_SYSTEMS];
+        RevPaths rp[SU_SCHED_DEFAULT_SYSTEMS];
         for (i = 0; i < rec->count; i++) {
             rp[i] = rec->sys[i].paths;
         }
@@ -2991,7 +2991,7 @@ static uint32_t restore_core(WorkerState *s, WorkerWorld *ww, const CkptRec *rec
     SuSchedule nsched;
     SuWorld *neww = NULL;
     SuEntRt *nrt = NULL;
-    uint64_t txids[SU_SCHED_MAX_SYSTEMS];
+    uint64_t txids[SU_SCHED_DEFAULT_SYSTEMS];
     uint32_t nbegun = 0;
     int parsed = 0;
     char rev[64];
@@ -3240,7 +3240,7 @@ static uint32_t write_new_file(const char *path, const uint8_t *data, size_t len
 
 /* Canonical snapshot of ww's committed root. The caller destroys snap. */
 static uint32_t world_capture(const WorkerWorld *ww, SuSnapshot *snap, WorkerFail *f) {
-    SuSnapshotManifestEntry man[SU_SCHED_MAX_SYSTEMS];
+    SuSnapshotManifestEntry man[SU_SCHED_DEFAULT_SYSTEMS];
     SuWorldDesc desc;
     SuWorldFieldDesc *descs = NULL;
     EntSnap es;
@@ -3452,7 +3452,7 @@ static uint32_t h_internal_world_restore_bytes(WorkerState *s, const SuJsonValue
         return st;
     }
     if (expect == NULL || path == NULL || sha == NULL || mode == NULL || caps == NULL ||
-        caps->type != SU_JSON_ARRAY || caps->u.array.count == 0 || caps->u.array.count > SU_SCHED_MAX_SYSTEMS) {
+        caps->type != SU_JSON_ARRAY || caps->u.array.count == 0 || caps->u.array.count > SU_SCHED_DEFAULT_SYSTEMS) {
         fail(f, SU_E_TYPE, "restore_bytes needs expected_world_revision, snapshot_path, snapshot_sha256, mode and 1..8 capsules");
         return SU_E_TYPE;
     }
@@ -4749,8 +4749,8 @@ static uint32_t docs_load(const SuJsonValue *params, MigDocs *d, WorkerFail *f) 
 
 /* The installed systems as the migration engine sees them: each capsule's field table. */
 typedef struct MigSystems {
-    SuMigrateSystem sys[SU_SCHED_MAX_SYSTEMS];
-    SuWorldFieldDesc *fd[SU_SCHED_MAX_SYSTEMS];
+    SuMigrateSystem sys[SU_SCHED_DEFAULT_SYSTEMS];
+    SuWorldFieldDesc *fd[SU_SCHED_DEFAULT_SYSTEMS];
     uint32_t n;
 } MigSystems;
 
@@ -4951,7 +4951,7 @@ static uint32_t plan_refusal_code(const SuMigratePlan *p) {
 static uint32_t h_internal_world_migrate_plan(WorkerState *s, const SuJsonValue *params, SuBuf *res, WorkerFail *f) {
     WorkerWorld *ww;
     const char *expect = str_of(params, "expected_world_revision");
-    const char *drops[SU_SCHED_MAX_SYSTEMS];
+    const char *drops[SU_SCHED_DEFAULT_SYSTEMS];
     char rev[64];
     MigDocs docs;
     MigSystems ms;
@@ -4980,7 +4980,7 @@ static uint32_t h_internal_world_migrate_plan(WorkerState *s, const SuJsonValue 
     if (st != SU_OK) {
         return st;
     }
-    nd = string_items(su_json_member(params, "drop_systems"), drops, SU_SCHED_MAX_SYSTEMS);
+    nd = string_items(su_json_member(params, "drop_systems"), drops, SU_SCHED_DEFAULT_SYSTEMS);
     st = docs_load(params, &docs, f);
     if (st != SU_OK) {
         return st;
@@ -5020,11 +5020,11 @@ static uint32_t h_internal_world_migrate_prepare(WorkerState *s, const SuJsonVal
     SuMigrateHooks *ahkp = NULL;
     WorkerWorld *ww;
     const char *expect = str_of(params, "expected_world_revision");
-    const char *drops[SU_SCHED_MAX_SYSTEMS];
+    const char *drops[SU_SCHED_DEFAULT_SYSTEMS];
     const SuJsonValue *arr = su_json_member(params, "resubmit");
     const SuJsonValue *to_v = su_json_member(params, "to_layout_generation");
-    CkptSys rs[SU_SCHED_MAX_SYSTEMS];
-    RevPaths npaths[SU_SCHED_MAX_SYSTEMS];
+    CkptSys rs[SU_SCHED_DEFAULT_SYSTEMS];
+    RevPaths npaths[SU_SCHED_DEFAULT_SYSTEMS];
     char rev[64];
     MigDocs docs;
     MigSystems ms;
@@ -5069,8 +5069,8 @@ static uint32_t h_internal_world_migrate_prepare(WorkerState *s, const SuJsonVal
     if (st != SU_OK) {
         return st;
     }
-    nd = string_items(su_json_member(params, "drop_systems"), drops, SU_SCHED_MAX_SYSTEMS);
-    if (arr == NULL || arr->type != SU_JSON_ARRAY || arr->u.array.count == 0u || arr->u.array.count > SU_SCHED_MAX_SYSTEMS) {
+    nd = string_items(su_json_member(params, "drop_systems"), drops, SU_SCHED_DEFAULT_SYSTEMS);
+    if (arr == NULL || arr->type != SU_JSON_ARRAY || arr->u.array.count == 0u || arr->u.array.count > SU_SCHED_DEFAULT_SYSTEMS) {
         fail(f, SU_E_TYPE, "prepare needs 1..8 resubmitted systems");
         return SU_E_TYPE;
     }
@@ -5307,7 +5307,7 @@ static uint32_t h_internal_world_migrate_swap(WorkerState *s, const SuJsonValue 
     const char *want_plan = str_of(params, "plan_hash");
     SuSchedule *ns;
     SuWorld *retired = NULL;
-    uint64_t txids[SU_SCHED_MAX_SYSTEMS];
+    uint64_t txids[SU_SCHED_DEFAULT_SYSTEMS];
     uint32_t nb = 0;
     uint32_t i;
     uint64_t tick;
@@ -5659,7 +5659,7 @@ static uint32_t snapshot_file(const SuJsonValue *params, uint8_t **data, size_t 
 
     *rec_out = NULL;
     if (path == NULL || sha == NULL || caps == NULL || caps->type != SU_JSON_ARRAY || caps->u.array.count == 0u ||
-        caps->u.array.count > SU_SCHED_MAX_SYSTEMS) {
+        caps->u.array.count > SU_SCHED_DEFAULT_SYSTEMS) {
         fail(f, SU_E_TYPE, "snapshot_path, snapshot_sha256 and 1..8 capsules are required");
         return SU_E_TYPE;
     }
@@ -5871,7 +5871,7 @@ static uint32_t h_internal_world_restore_schema(WorkerState *s, const SuJsonValu
     uint64_t ms = 0;
     uint64_t me = 0;
     uint64_t lm = 0;
-    uint64_t txids[SU_SCHED_MAX_SYSTEMS];
+    uint64_t txids[SU_SCHED_DEFAULT_SYSTEMS];
     uint32_t nb = 0;
     uint32_t i;
     uint32_t st = SU_OK;

@@ -6,8 +6,10 @@
  * verifier, schedule, VM and world code.
  *
  * Model
- *   A world is a schema (the union of the fields its capsules bind) plus an ordered schedule of verified IR
- *   systems (1..8 capsules, schedule order = array order, effect analysis as in world.create). Its state is
+ *   A world is a schema (the union of the fields its capsules bind, or a schema declared at creation, see
+ *   "declared world schemas") plus an ordered schedule of verified IR systems and host operators
+ *   (1..SU_HOST_MAX_CAPSULES = 64 entries, schedule order = array order, effect analysis as in world.create;
+ *   the out-of-process control plane keeps its limit of 8). Its state is
  *   the committed root: fixed-capacity 32-bit columns, the generational entity table, the event log and the
  *   tick counter. su_host_step runs whole ticks: a tick either publishes or leaves the committed root as it
  *   was.
@@ -55,7 +57,7 @@ extern "C" {
 
 #define SU_HOST_API_VERSION 1u
 
-#define SU_HOST_MAX_CAPSULES 8u          /* systems per world */
+#define SU_HOST_MAX_CAPSULES 64u         /* systems per world (IR capsules and host operators); 8 before 2026-10-26 */
 #define SU_HOST_TICK_RATE_MAX 10000u     /* ticks per second */
 #define SU_HOST_INPUT_MAX_WRITES 4096u   /* cell writes in one tick's record */
 #define SU_HOST_INPUT_WINDOW 1024u       /* records may be queued this many ticks ahead of the world */
@@ -96,12 +98,29 @@ typedef struct SuHostWorldDesc {
     uint64_t max_events_per_tick;
     uint64_t event_log_max;
     uint64_t seed;                   /* recorded in replays; no engine operation consumes it */
+    /* Appended 2026-10-26 (issue 144); read only when struct_size covers it (SU_HOST_WORLD_DESC_V1_SIZE does not).
+     * NULL: the schema is the union of the fields the capsules bind, exactly as before. Otherwise the declared
+     * world schema (see "declared world schemas" below). */
+    const struct SuHostSchema *schema;
 } SuHostWorldDesc;
+
+/* Size of the first released SuHostWorldDesc (through seed): 80 bytes on LP64 and LLP64. struct_size must be this
+ * or sizeof(SuHostWorldDesc). */
+#define SU_HOST_WORLD_DESC_V1_SIZE (offsetof(SuHostWorldDesc, seed) + sizeof(uint64_t))
 
 /* Creates a world. Capsules are verified (any SU_E_* of su_lir_verify, err->index = capsule index), joined
  * into one schedule (SU_E_SCHEMA_MISMATCH when they disagree on schema or a field) and checked by the effect
  * analysis (SU_E_SCHEMA_MISMATCH or SU_E_INVALID_ARGUMENT for conflicts, cycles and edges against the
- * capsule order). On failure *out is NULL. */
+ * capsule order). More than SU_HOST_MAX_CAPSULES capsules is SU_E_RESOURCE_LIMIT with err->index =
+ * SU_HOST_MAX_CAPSULES (the first capsule that does not fit); 0 capsules is SU_E_INVALID_ARGUMENT. On failure
+ * *out is NULL.
+ *
+ * Schedule size (2026-10-26, issue 144): creation checks every system's lanes against the union table and every pair
+ * of systems in the effect analysis (one pass over the ID-sorted lanes of the two); a tick runs every system once,
+ * serially, at its usual cost. The entity tick buffers of every system that uses entity
+ * operations are admitted together (SU_E_RESOURCE_LIMIT "entity tick buffers exceed the resource budget"), so a
+ * larger schedule reaches that budget at a smaller capacity. Native kernels are a process-wide resource of at most
+ * 32 (su_host_system_set_tier refuses the next one). */
 SU_HOST_API uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, SuHostError *err);
 /* NULL-safe. */
 SU_HOST_API void su_host_world_destroy(SuHostWorld *w);
@@ -121,7 +140,7 @@ SU_HOST_API uint32_t su_host_set_tick_rate(SuHostWorld *w, uint32_t hz);
 typedef struct SuHostFieldInfo {
     uint32_t id;
     uint32_t type;     /* SU_TYPE_* of sutekh/ir.h; every column holds one 32-bit cell per row */
-    uint32_t access;   /* SU_ACCESS_* union over the schedule */
+    uint32_t access;   /* SU_ACCESS_* union over the schedule; 0 for a declared lane no system binds */
     const char *name;  /* owned by the world */
 } SuHostFieldInfo;
 
@@ -522,6 +541,55 @@ typedef struct SuHostOperatorDesc {
  * reserved prefix, or operator_name is reserved, SU_E_RESOURCE_LIMIT when the registry is full or memory runs
  * out. */
 SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, SuHostError *err);
+
+/* ---- declared world schemas (additive, API version 1; 2026-10-26, issue 144) ----
+ *
+ * By default a world's schema is the union of the fields its capsules bind, so a field must be bound by some
+ * system. A declared schema lists the fields of the world independently of the capsules: SuHostWorldDesc.schema
+ * points at an SuHostSchema (struct_size = sizeof(SuHostWorldDesc)). Every capsule and host operator record then
+ * binds a subset of it: its schema ID, version and layout generation must equal the declared ones, and every field
+ * it binds must be a declared lane with the same ID, storage name and value type (the union-table checks of the
+ * default schema, against the declaration). Anything else is SU_E_SCHEMA_MISMATCH with err->index = the capsule
+ * and the field named in err->message. Fields no system binds are ordinary columns: the host writes them with
+ * input records (su_host_input_push, su_host_input_push_i64) or spawn values, reads them (su_host_column,
+ * su_host_read, su_host_read_i64), and later systems or operators read them in later ticks; su_host_field_info
+ * reports them with access 0. They are in the fixture (every lane must be present), snapshots, both digests,
+ * in-place restore and replays like any column.
+ *
+ * Lanes (the IR 0.3 rule): a u32 or i32 field is one lane (its ID and name). An i64 or q32 field with ID J and name
+ * "x" is two lanes: J "x.lo" (bits 0..31) and J + 1 "x.hi" (bits 32..63), both with the field's value type, so
+ * su_host_field_value_type, su_host_read_i64 and su_host_input_push_i64 work on it, and an IR 0.3 capsule declaring
+ * the i64/q32 field "x" at J binds exactly those lanes (a host operator record lists both lanes). Lane IDs and lane
+ * names must be unique across the schema (J = UINT32_MAX cannot hold an i64/q32 field); at most
+ * SU_HOST_SCHEMA_MAX_LANES lanes. Field values start at 0 (no defaults).
+ *
+ * Identity: a declared schema is part of the world identity. The identity becomes SHA-256("SUHSCHEMA\0" ||
+ * identity as defined without a schema || u32 schema-ID length || schema ID || u32 version || u32 layout generation
+ * || u32 lane count || per lane, ascending ID: u32 id | u32 value type | u32 name length | name), before any operator
+ * data is folded in. So a snapshot or replay of a world without a declared schema does not load into one with a
+ * schema (and the reverse), even when the columns are the same. A world without a declared schema is unchanged:
+ * same schedule, identity, snapshots, digests and replays as before.
+ *
+ * Failures of the declaration itself are SU_E_INVALID_ARGUMENT, err->index = the field index when there is one:
+ * struct_size, NULL pointers, 0 or too many fields or lanes, an unknown type, an empty name or a name longer than
+ * 255 bytes (252 for i64/q32: the lane suffix), a duplicate lane ID or lane name. */
+
+#define SU_HOST_SCHEMA_MAX_LANES 1024u
+
+typedef struct SuHostSchemaField {
+    uint32_t id;       /* ID of the field's (first) lane */
+    uint32_t type;     /* SU_TYPE_U32, SU_TYPE_I32, SU_TYPE_I64 or SU_TYPE_Q32 (sutekh/ir.h) */
+    const char *name;  /* the field name as capsules declare it (lanes "name.lo"/"name.hi" for i64/q32) */
+} SuHostSchemaField;
+
+typedef struct SuHostSchema {
+    uint32_t struct_size;               /* sizeof(SuHostSchema) */
+    uint32_t field_count;               /* 1..SU_HOST_SCHEMA_MAX_LANES */
+    const SuHostSchemaField *fields;    /* any order */
+    const char *schema_id;              /* 1..255 bytes; every capsule's schema.id and the fixture's schema_id */
+    uint32_t schema_version;            /* every capsule's schema.version */
+    uint32_t layout_generation;         /* every capsule's schema.layout_generation */
+} SuHostSchema;
 
 /* ---- execution tiers (additive, API version 1; 2026-10-18) ----
  * Every tier gives bit-identical results (states, events, digests): the tiers are differential-tested against
