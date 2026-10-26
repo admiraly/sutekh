@@ -61,10 +61,43 @@ Exact modified paths:
 
 ## Commands and results
 
-Hardware: Intel Core i7-14700K, Linux 7.2.9, GCC 16.2.1, Clang 22.1.8; builds under `/mnt/levyrdisk/scratch/sutekh-163/`
+Hardware: Intel Core i7-14700K, Linux 7.2.9, GCC 16.2.1, Clang 22.1.8; out-of-tree build directories
 (shared machine, other jobs running).
 
-RESULTS_PLACEHOLDER
+Full suites (`ctest -j 6 --output-on-failure`; skips are environment skips present on main: `audio_device` (no audio
+device), `native_unwind` (needs ptrace)):
+
+| Lane | Commit | Result |
+|---|---|---|
+| GCC 16.2 Release | `f404ff8` | 162/162 passed, 1 skipped |
+| GCC Debug | `806cc32` | 162/162 passed, 1 skipped; again with `SUTEKH_VM_TIER=reference`: 162/162 |
+| GCC Debug, `SUTEKH_NATIVE=ON` | `806cc32` | 180/180 passed, 2 skipped |
+| Clang 22 Release, `SUTEKH_NATIVE=ON` | `806cc32` | 179/180: `space3d_dense` failed on its sparse-scene digests. Cause: the test's scene builder drew two random numbers inside one function call's arguments, whose evaluation order differs between GCC and Clang (the operator was not involved: v1 and v2 differed alike). Fixed in `15fcdb4` (one draw per statement, GCC's order kept, pinned digests unchanged); rerun on GCC and Clang: 0 failures, identical digests |
+| Clang Debug ASan+UBSan, `SUTEKH_NATIVE=ON` (the CI sanitizer configuration) | `806cc32` | 179/180, the same `space3d_dense` failure; rerun at `15fcdb4` (`space3d_dense`, `host_opstate*`): 10/10; `scan_sanitizer_logs.py`: 0 reports (leak checks not run: no ptrace here). The determinism matrix ran reduced (120 ticks), as configured |
+
+Pack and license checks: `tools/validate_pack.py --check-report` passed after `--write-report` (476 strict JSON files:
+the four new records); `tools/check_repository_license.py` passed. Not run locally: sanitizer lane with native OFF,
+Windows legs (CI).
+
+Determinism: `expected_digests.txt` regenerated with GCC 16.2.1 Release, reference tier
+(`det_matrix --fixtures <build>/det_fixtures --tier reference --out ...`); the 191 existing lines are unchanged
+(diff: only the 13 `s3_dense` lines appended), so no existing workload was re-pinned. Every lane above ran every
+determinism ctest (reference, planned, mixed, native where built, DLL, play-static) against it and passed. `s3_dense`:
+3 ticks cut, 5,345 flag-4 movers, 2,663,230 entries skipped over 300 ticks.
+
+Performance (`test_space3d_dense --bench 31`, GCC 16.2 -O3, i7-14700K, one core, shared machine, load average about 4;
+ms per tick of `su_host_step` with the operator only; median and minimum of 30 ticks; source `15fcdb4`):
+
+| Scene | v1 `space3d.query` (as main) | v2 `space3d.query2` | v1 with the sweep budget set to 2^40 (scratch build, not shipped) |
+|---|---|---|---|
+| converge: 15,000 movers on 4 targets | 31.4 / 31.3, 7,552 of 15,000 certain contacts lost (flagged) | 82.8 / 82.5, 0 lost | 83.6 / 83.4, 77 lost (first-32 rule) |
+| pile-up: 3,000 from one point + 1,000 converging | 19.5 / 19.2, every mover flagged 4 | 43.3 / 43.1, only the 3,000 piled movers flagged 4 | 20.6 / 20.2 |
+| sparse: 15,000 movers + 400 spheres in 400 m | 4.50 / 4.44 | 5.24 / 5.19 (sweep path); 24.4 / 24.2 with the grid forced | n/a |
+
+v1 is fast in the dense scenes only because it stops after 2^22 pairs and drops the rest. Against v1 with an unlimited
+budget, v2 costs the same in the converging scene and about twice as much in the pile-up (every visit there is an
+overlapping pair ranked for the top 32); the sparse scene costs about 16% more (rank keeping). The v1 path in this
+branch is main's code plus flag counting into the stats.
 
 ## Unrun or not covered
 
