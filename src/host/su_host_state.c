@@ -94,12 +94,43 @@ static int key_cmp(uint64_t ea, uint64_t sa, uint64_t eb, uint64_t sb) {
 
 /* ---------- lifetime ---------- */
 
+/* The reservation of one state (host.h, "operator state", Bounds): the only place its sizes are computed, used by
+ * su_hstate_create to allocate and by world creation to admit a world against its budget. */
+typedef struct HsLayout {
+    uint64_t arena;  /* bytes per arena (two) */
+    uint64_t table;  /* bytes per entry table (two) */
+    uint64_t perm;   /* bytes of the compaction order */
+} HsLayout;
+
+_Static_assert(sizeof(HsEntry) == 24u, "host.h documents 24-byte entry table cells");
+_Static_assert(sizeof(SuHostState) < 256u, "host.h documents a state header under 256 bytes");
+
+static void layout(uint32_t max_entries, uint32_t max_bytes, HsLayout *l) {
+    l->arena = 2u * (uint64_t)max_bytes;
+    l->table = (uint64_t)max_entries * sizeof(HsEntry);
+    l->perm = (uint64_t)max_entries * sizeof(uint32_t);
+}
+
+uint64_t su_hstate_reservation(uint32_t max_entries, uint32_t max_bytes) {
+    HsLayout l;
+    if (max_entries == 0u || max_bytes == 0u) {
+        return 0u;
+    }
+    layout(max_entries, max_bytes, &l);
+    return (uint64_t)sizeof(SuHostState) + 2u * l.arena + 2u * l.table + l.perm;
+}
+
 uint32_t su_hstate_create(uint32_t max_entries, uint32_t max_bytes, uint32_t flags, SuHostState **out) {
     SuHostState *s;
+    HsLayout l;
     *out = NULL;
     if (max_entries == 0u || max_entries > SU_HOST_STATE_MAX_ENTRIES || max_bytes == 0u ||
         max_bytes > SU_HOST_STATE_MAX_BYTES || (flags & ~SU_HOST_STATE_DROP_DEAD) != 0u) {
         return SU_E_INVALID_ARGUMENT;
+    }
+    layout(max_entries, max_bytes, &l);
+    if (l.arena > (uint64_t)SIZE_MAX || l.table > (uint64_t)SIZE_MAX) {
+        return SU_E_RESOURCE_LIMIT;
     }
     s = calloc(1u, sizeof *s);
     if (s == NULL) {
@@ -108,16 +139,12 @@ uint32_t su_hstate_create(uint32_t max_entries, uint32_t max_bytes, uint32_t fla
     s->flags = flags;
     s->max_entries = max_entries;
     s->max_bytes = max_bytes;
-    s->arena_bytes = 2u * (uint64_t)max_bytes;
-    if (s->arena_bytes > (uint64_t)SIZE_MAX) {
-        free(s);
-        return SU_E_RESOURCE_LIMIT;
-    }
-    s->arena[0] = calloc(1u, (size_t)s->arena_bytes);
-    s->arena[1] = calloc(1u, (size_t)s->arena_bytes);
-    s->table[0] = calloc(max_entries, sizeof(HsEntry));
-    s->table[1] = calloc(max_entries, sizeof(HsEntry));
-    s->perm = calloc(max_entries, sizeof(uint32_t));
+    s->arena_bytes = l.arena;
+    s->arena[0] = calloc(1u, (size_t)l.arena);
+    s->arena[1] = calloc(1u, (size_t)l.arena);
+    s->table[0] = calloc(1u, (size_t)l.table);
+    s->table[1] = calloc(1u, (size_t)l.table);
+    s->perm = calloc(1u, (size_t)l.perm);
     if (s->arena[0] == NULL || s->arena[1] == NULL || s->table[0] == NULL || s->table[1] == NULL || s->perm == NULL) {
         su_hstate_destroy(s);
         return SU_E_RESOURCE_LIMIT;

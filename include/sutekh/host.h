@@ -102,16 +102,27 @@ typedef struct SuHostWorldDesc {
      * NULL: the schema is the union of the fields the capsules bind, exactly as before. Otherwise the declared
      * world schema (see "declared world schemas" below). */
     const struct SuHostSchema *schema;
+    /* Appended 2026-10-26 (issue 153); read only when struct_size covers it (SU_HOST_WORLD_DESC_V1_SIZE and
+     * SU_HOST_WORLD_DESC_V2_SIZE do not, and get the default). Most bytes the world's operator state may reserve:
+     * the sum of the reservations of the stateful registered operators it schedules (see "operator state",
+     * Bounds, for the per-operator formula). 0 = SU_HOST_STATE_BUDGET_DEFAULT (not unlimited). It decides whether
+     * su_host_world_create admits the world, never how the world behaves: it is not part of the world identity,
+     * snapshots or replays, so peers may use different budgets. */
+    uint64_t state_budget_bytes;
 } SuHostWorldDesc;
 
+#define SU_HOST_STATE_BUDGET_DEFAULT UINT64_C(1073741824) /* 1 GiB of reserved operator state per world */
+
 /* Size of the first released SuHostWorldDesc (through seed): 80 bytes with 8-byte pointers (LP64, LLP64; pinned at
- * compile time). Versioning as for SuHostOperatorDesc: struct_size may be SU_HOST_WORLD_DESC_V1_SIZE, or
- * sizeof(SuHostWorldDesc) (88 bytes with 8-byte pointers) or larger, in which case every byte beyond the library's
+ * compile time), and of the second (through schema, issue 144): 88 bytes with 8-byte pointers. Versioning as for
+ * SuHostOperatorDesc: struct_size may be SU_HOST_WORLD_DESC_V1_SIZE, SU_HOST_WORLD_DESC_V2_SIZE, or
+ * sizeof(SuHostWorldDesc) (96 bytes with 8-byte pointers) or larger, in which case every byte beyond the library's
  * sizeof(SuHostWorldDesc) must be zero (a nonzero unknown byte is SU_E_INVALID_ARGUMENT, so a request this library
- * cannot honour fails instead of being ignored). Only struct_size bytes are read. A size below the v1 size, or one
- * that ends inside the schema pointer, is SU_E_INVALID_ARGUMENT. Zero the whole descriptor (memset) before filling
- * it. */
+ * cannot honour fails instead of being ignored). Only struct_size bytes are read; fields beyond it are zero (no
+ * schema, the default state budget). A size below the v1 size, or any other size below sizeof(SuHostWorldDesc)
+ * (one that ends inside a field), is SU_E_INVALID_ARGUMENT. Zero the whole descriptor (memset) before filling it. */
 #define SU_HOST_WORLD_DESC_V1_SIZE (offsetof(SuHostWorldDesc, seed) + sizeof(uint64_t))
+#define SU_HOST_WORLD_DESC_V2_SIZE (offsetof(SuHostWorldDesc, state_budget_bytes))
 
 /* Creates a world. Capsules are verified (any SU_E_* of su_lir_verify, err->index = capsule index), joined
  * into one schedule (SU_E_SCHEMA_MISMATCH when they disagree on schema or a field) and checked by the effect
@@ -127,7 +138,14 @@ typedef struct SuHostWorldDesc {
  * serially, at its usual cost. The entity tick buffers of every system that uses entity
  * operations are admitted together (SU_E_RESOURCE_LIMIT "entity tick buffers exceed the resource budget"), so a
  * larger schedule reaches that budget at a smaller capacity. Native kernels are a process-wide resource of at most
- * 32 (su_host_system_set_tier refuses the next one). */
+ * 32 (su_host_system_set_tier refuses the next one).
+ *
+ * Operator-state budget (2026-10-26, issue 153): once the capsules are parsed and before any operator state, column
+ * or operator scratch is allocated, the reservations of the stateful operators ("operator state", Bounds) are summed
+ * in schedule order. The first one that brings the sum over state_budget_bytes (0: SU_HOST_STATE_BUDGET_DEFAULT)
+ * fails creation with SU_E_RESOURCE_LIMIT, err->index = its capsule, and err->message naming its system ID, its
+ * reservation, the sum and the budget; no operator state is allocated. A world without stateful operators is never
+ * refused by it. */
 SU_HOST_API uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, SuHostError *err);
 /* NULL-safe. */
 SU_HOST_API void su_host_world_destroy(SuHostWorld *w);
@@ -609,7 +627,12 @@ SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, S
  * Bounds (ENGINE_CONSTITUTION C11): every buffer is allocated at world creation for the declared maximum: two
  * arenas of 2 x state_max_bytes each (4 x state_max_bytes in all; the slack is what keeps compactions rare, below),
  * two entry tables of state_max_entries (24 bytes each) and 4 bytes per entry for compaction (calloc'd, so untouched
- * pages cost no physical memory on systems with lazy allocation; pages once written stay resident). Nothing is
+ * pages cost no physical memory on systems with lazy allocation; pages once written stay resident). The reservation
+ * of one operator in one world is exactly
+ *     4 x state_max_bytes + 52 x state_max_entries + H bytes,
+ * H being the size of the engine's state header (under 256 bytes; it may change between releases). Worlds admit
+ * their operators' reservations against SuHostWorldDesc.state_budget_bytes (1 GiB by default; see
+ * su_host_world_create). At the maximum caps one operator reserves about 4.8 GiB. Nothing is
  * allocated in a tick or by su_host_snapshot_restore_inplace. A change that would exceed either maximum is refused
  * with SU_E_RESOURCE_LIMIT and changes nothing; whether a change fits depends only on the logical state (entries and
  * the sum of value lengths), never on fragmentation (the engine compacts). run may handle the refusal or return it:

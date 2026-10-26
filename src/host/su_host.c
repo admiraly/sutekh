@@ -668,11 +668,44 @@ _Static_assert(SU_HOST_MAX_CAPSULES <= 64u, "opdata_mask has one bit per schedul
 _Static_assert(SU_HOST_SCHEMA_MAX_LANES == SU_LIMIT_FIELDS, "declared schemas use the field limit");
 _Static_assert(SU_HOST_WORLD_DESC_V1_SIZE == offsetof(SuHostWorldDesc, schema), "v1 descriptor ends at seed");
 _Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V1_SIZE == 80u, "first-release SuHostWorldDesc is 80 bytes");
-_Static_assert(sizeof(void *) != 8u || sizeof(SuHostWorldDesc) == 88u, "SuHostWorldDesc with the schema is 88 bytes");
+_Static_assert(SU_HOST_WORLD_DESC_V2_SIZE == offsetof(SuHostWorldDesc, state_budget_bytes), "v2 ends at schema");
+_Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V2_SIZE == 88u, "v2 SuHostWorldDesc (schema) is 88 bytes");
+_Static_assert(sizeof(void *) != 8u || sizeof(SuHostWorldDesc) == 96u, "SuHostWorldDesc with the budget is 96 bytes");
 _Static_assert(SU_HOST_SCHEMA_V1_SIZE == (sizeof(void *) == 8u ? 32u : 24u), "first-release SuHostSchema size");
 _Static_assert(sizeof(SuHostSchema) == SU_HOST_SCHEMA_V1_SIZE, "SuHostSchema has no padding after the v1 fields");
 
 static uint32_t input_storage_init(SuHostWorld *w); /* inputs, below */
+
+/* Operator-state budget (host.h, SuHostWorldDesc.state_budget_bytes; issue 153): the exact reservations of the
+ * stateful operators, summed in schedule order, before anything of the world's state, columns or operator scratch is
+ * allocated. Runs before su_sched_finalize, while schedule entry i is still capsule i. Allocates nothing. */
+static uint32_t admit_state_budget(const SuHostWorld *hw, uint64_t budget, SuHostError *err) {
+    uint64_t total = 0;
+    uint32_t i;
+    if (budget == 0u) {
+        budget = SU_HOST_STATE_BUDGET_DEFAULT;
+    }
+    for (i = 0; i < hw->sched.count; i++) {
+        uint64_t r;
+        if (hw->sched.sys[i].kind != SU_SYS_KIND_HOST) {
+            continue;
+        }
+        r = su_host_operator_state_reservation(su_host_operator_find(hw->sched.sys[i].system_id));
+        if (r == 0u) {
+            continue;
+        }
+        /* At most SU_HOST_MAX_CAPSULES reservations of under 2^33 bytes each: the sum cannot wrap. */
+        total += r;
+        if (total > budget) {
+            return set_err(err, SU_E_RESOURCE_LIMIT, i, UINT64_MAX,
+                           "capsule %u: the operator state of %s (%llu bytes) brings the world to %llu bytes, over "
+                           "its operator-state budget of %llu bytes",
+                           (unsigned)i, hw->sched.sys[i].system_id, (unsigned long long)r,
+                           (unsigned long long)total, (unsigned long long)budget);
+        }
+    }
+    return SU_OK;
+}
 
 uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out, SuHostError *err) {
     SuHostWorld *hw = NULL;
@@ -689,10 +722,12 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "out is NULL");
     }
     *out = NULL;
-    /* Versioning (host.h): the v1 size, or the library's size or larger with a zero tail; only struct_size bytes are
-     * read, and a first-release descriptor has no schema (NULL). A size ending inside the schema pointer is refused. */
+    /* Versioning (host.h): the v1 or v2 size, or the library's size or larger with a zero tail; only struct_size bytes
+     * are read, and the fields an older size does not cover are zero (no schema, the default state budget). A size
+     * ending inside a field is refused. */
     if (desc_in == NULL || desc_in->struct_size < SU_HOST_WORLD_DESC_V1_SIZE ||
-        (desc_in->struct_size > SU_HOST_WORLD_DESC_V1_SIZE && desc_in->struct_size < sizeof *desc_in)) {
+        (desc_in->struct_size != SU_HOST_WORLD_DESC_V1_SIZE && desc_in->struct_size != SU_HOST_WORLD_DESC_V2_SIZE &&
+         desc_in->struct_size < sizeof *desc_in)) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
                        "descriptor: struct_size, capsules (1..%u), reserved0 or fixture is invalid",
                        (unsigned)SU_HOST_MAX_CAPSULES);
@@ -803,6 +838,10 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
                     (unsigned)i);
             goto fail;
         }
+    }
+    st = admit_state_budget(hw, desc->state_budget_bytes, err);
+    if (st != SU_OK) {
+        goto fail;
     }
     st = su_sched_finalize(&hw->sched);
     if (st != SU_OK) {

@@ -62,6 +62,9 @@ uint32_t su_host_builtin_count(void);
 const HostOperator *su_host_registered_find(const char *system_id);
 uint32_t su_host_registered_count(void);
 const HostOperator *su_host_registered_at(uint32_t index);
+/* Bytes the operator's state reserves in each world (su_hstate_reservation of its declaration; 0 for built-in
+ * operators and registered ones without state). Allocates nothing. */
+uint64_t su_host_operator_state_reservation(const HostOperator *op);
 
 struct SuHostWorld {
     SuSchedule sched;              /* owns the modules, VM contexts and the entity runtime */

@@ -465,6 +465,12 @@ Worlds without operator state keep byte-identical snapshots, digests and replays
 operators. Evidence: `tests/host/test_host_opstate.c` (static and DLL; cross-process identity checks), handoff
 `planning/handoffs/2026-10-26-operator-state.md`.
 
+World-level operator-state budget (issue 153): `SuHostWorldDesc.state_budget_bytes` (appended; 0 and the older
+descriptor sizes mean `SU_HOST_STATE_BUDGET_DEFAULT`, 1 GiB). World creation sums the exact reservation of every
+stateful operator (4 x `state_max_bytes` + 52 x `state_max_entries` + a header) before allocating any state and
+refuses the first one that crosses the budget with `SU_E_RESOURCE_LIMIT`. Not part of the identity. Evidence:
+`tests/host/test_host_opstate.c` section 11, handoff `planning/handoffs/2026-10-26-state-budget.md`.
+
 ## Schedule size and declared world schemas (26 October 2026)
 
 Downstream request work outside the milestone order (issue 144; M3 gates unchanged). Implemented and tested: an
