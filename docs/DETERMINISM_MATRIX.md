@@ -36,15 +36,15 @@ space3d host operators.
   - Clang with UBSan.
 
   Results are in section 3.
-- **CI (GitHub-hosted, results in section 3):**
-  - Linux GCC and Clang Release with the native tier.
-  - Windows LLVM clang (target `x86_64-pc-windows-msvc`, MSVC libraries and UCRT) Release, with and without the
+- **CI (GitHub-hosted, observed, section 3):**
+  - Linux GCC 15.2 and Clang 21.1 Release with the native tier.
+  - Linux GCC 16.2 Release (VM tiers).
+  - Windows LLVM clang 20.1 (target `x86_64-pc-windows-msvc`, MSVC libraries and UCRT) Release, with and without the
     native tier.
-  - Windows MSVC `cl` Release.
-  - The existing suites run the same tests in Debug on Linux GCC 16.2 (container), Linux checked/native, Windows
-    clang and Windows MSVC.
+  - Windows MSVC `cl` 19.51 Release.
+  - Debug builds of Linux GCC (with and without native), Windows clang and Windows MSVC.
 
-  A CI leg counts as qualified only when its job passed on the head commit of the PR that records it.
+  A leg stays qualified only while its CI job passes.
 
 **Not claimed.**
 
@@ -152,16 +152,25 @@ Further local checks:
   (halt on error): 0 failures, 2 skipped (`native_unwind` is Windows-only; `audio_device` has no device). The UBSan
   test log contains no `runtime error`.
 
-CI legs (GitHub-hosted runners; recorded from the PR's checks):
+CI legs: GitHub-hosted runners, observed on PR #145, run 40262502027, commit `bd24204`. Every job of the run
+passed. The manifests of all 13 leg/tier combinations equal the expectation (`determinism-compare`: "13 of 13
+manifests equal").
 
-| Leg | Result |
-|---|---|
-| Linux GCC Release, native (`determinism-linux`) | see `planning/handoffs/2026-10-26-determinism-matrix.md` |
-| Linux Clang Release, native | as above |
-| Windows clang (msvc target) Release, VM tiers, plus Linux GCC replays played | as above |
-| Windows clang Release, native tier | as above |
-| Windows MSVC `cl` Release, VM tiers | as above |
-| Every manifest against the expectation (`determinism-compare`) | as above |
+| Leg | Compiler | Tiers compared with the expectation | Linux GCC replays played |
+|---|---|---|---|
+| `determinism-linux` gcc, Release, native | GCC 15.2.0 (Ubuntu) | reference, planned, native, DLL | (records them) |
+| `determinism-linux` clang, Release, native | Ubuntu clang 21.1.8 | reference, planned, native, DLL | n/a |
+| `determinism-windows` clang, Release | clang 20.1.8, x86_64-pc-windows-msvc | reference, planned, DLL | reference, planned: every digest matches |
+| `determinism-windows` clang native, Release | clang 20.1.8, x86_64-pc-windows-msvc, AsmJit | reference, planned, native, DLL | reference, planned, native: every digest matches |
+| `determinism-windows` MSVC `cl`, Release | MSVC 19.51.36260 | reference, planned, DLL | reference, planned: every digest matches |
+| `gcc16` (existing job; Release, native off, full ctest) | GCC 16.2.0 (container) | reference, planned, DLL | n/a |
+| `runtime` (Linux checked, Debug; full ctest twice, once with the reference VM default) | Ubuntu GCC | reference, planned, DLL | n/a |
+| `runtime-native` (Linux Debug, native; full ctest) | Ubuntu GCC | reference, planned, native, DLL | n/a |
+| `runtime-windows` (Debug, full ctest) | clang, x86_64-pc-windows-msvc | reference, planned, DLL | n/a |
+| `runtime-windows-msvc` (Debug `/W4 /WX`, full ctest) | MSVC `cl` | reference, planned, DLL | n/a |
+
+Every leg also passed `determinism_regress` and `determinism_rts_engine`, including on Windows. Later commits of the
+PR re-run the same jobs; see the handoff for the run on the final head.
 
 ## 4. Divergence audit
 

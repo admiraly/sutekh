@@ -2,9 +2,9 @@
 
 ## State and scope
 
-Branch `feat/issue-141-determinism`, based on `origin/main` at `07d06de`. Everything below was verified locally
-on Linux. The Windows legs exist only in CI; section "CI" records what the PR's checks reported, and nothing about
-Windows is claimed beyond it.
+Branch `feat/issue-141-determinism`, based on `origin/main` at `07d06de`. Linux results were verified locally. The
+Windows legs exist only in CI, and section "CI" records exactly what those jobs reported; nothing about Windows is
+claimed beyond it.
 
 Exact modified paths:
 
@@ -124,8 +124,32 @@ Findings and how each was established:
 
 ## CI
 
-Run `<to be filled from the PR checks>`. Until this section names a run and its job results, no Windows result is
-claimed.
+PR #145. Observed from the job logs (`gh api .../actions/jobs/<id>/logs`), not only from the check badges.
+
+**Run 40261543242, commit `9394d19`.** Every job passed except `determinism-windows` "clang native", whose configure
+step failed: pwsh did not expand `-DCMAKE_CXX_COMPILER=$cxx`. Fixed in `bd24204`, which quotes the argument.
+
+**Run 40262502027, commit `bd24204`.** All 13 jobs passed.
+
+- **`determinism-linux`.** GCC 15.2.0 and Ubuntu clang 21.1.8, Release, native: 10/10 determinism ctests each, then
+  manifests on three tiers.
+- **`determinism-windows`.**
+  - clang 20.1.8 (msvc target), Release: 9/9 determinism ctests. Linux GCC replays played on reference and planned,
+    every digest matched.
+  - clang 20.1.8 with native: 10/10, including `determinism_matrix_native`. `rts.goal`, `rts.combat`, `rts.move`,
+    `racer.move` and `det.sixdof` ran as native kernels. Linux GCC replays played on three tiers, every digest
+    matched.
+  - MSVC 19.51.36260, Release: 9/9. Linux GCC replays played on reference and planned, every digest matched.
+- **`determinism-compare`.** "13 of 13 manifests equal tests/determinism/expected_digests.txt".
+- **Existing suites with the new ctests.**
+  - `gcc16` (GCC 16.2.0 Release): 146/146.
+  - `runtime` (Debug): 146/146, twice.
+  - `runtime-native`: 152/152.
+  - `runtime-windows` (clang Debug): 150/150.
+  - `runtime-windows-msvc` (Debug): 136/136.
+  - `validate` (Linux, Windows): pass.
+
+The final head (this commit adds the CI record to the docs) re-runs the same jobs. Its result is in the PR's checks.
 
 ## SHA-256 evidence
 
@@ -149,7 +173,7 @@ Source hashes are of the files as committed; the binaries were built from them.
 ## Unrun and next
 
 - **Not run locally:**
-  - anything on Windows: no machine is available;
+  - anything on Windows: no machine is available; the CI legs above are the only Windows evidence;
   - Valgrind or MemorySanitizer: not installed or not practical;
   - ARM64, macOS and 32-bit;
   - the native tier under MSVC `cl`: not supported by the build.
