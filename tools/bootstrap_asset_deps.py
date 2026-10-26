@@ -11,6 +11,9 @@ Modes:
   (default)   download every file from the pinned commit, verify its SHA-256 against the pin in this script, and
               write third_party/asset-deps.lock.json
   --check     verify the files already present, offline
+  --dest DIR  use DIR/cgltf and DIR/stb instead of third_party/cgltf and third_party/stb, for a project that includes
+              Sutekh as a submodule and must not write into it; the tracked lock file is not written (its content
+              follows from the pins below). Configure with -DSUTEKH_DEPS_DIR=DIR.
 
 The files are fetched at bootstrap and not redistributed in this repository (as for AsmJit and Vulkan-Headers).
 Without them CMake builds the cooked-asset runtime (src/asset/su_asset_pak.c) and the audio mixer with WAV only,
@@ -27,6 +30,7 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEPS_ROOT = os.path.join(ROOT, "third_party")  # --dest replaces it
 LOCK = os.path.join(ROOT, "third_party", "asset-deps.lock.json")
 
 DEPS = [
@@ -71,14 +75,14 @@ def verify_all():
     errors = []
     for dep in DEPS:
         for name, want in dep["files"].items():
-            path = os.path.join(ROOT, "third_party", dep["dir"], name)
+            path = os.path.join(DEPS_ROOT, dep["dir"], name)
             if not os.path.isfile(path):
-                errors.append("%s missing" % os.path.relpath(path, ROOT))
+                errors.append("%s missing" % path)
                 continue
             with open(path, "rb") as fh:
                 got = sha256_bytes(fh.read())
             if got != want:
-                errors.append("%s has sha256 %s, pinned %s" % (os.path.relpath(path, ROOT), got, want))
+                errors.append("%s has sha256 %s, pinned %s" % (path, got, want))
     return errors
 
 
@@ -106,7 +110,11 @@ def write_lock():
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--dest", help="directory that receives cgltf/ and stb/ (default: third_party)")
     args = ap.parse_args(argv)
+    global DEPS_ROOT
+    if args.dest:
+        DEPS_ROOT = os.path.abspath(args.dest)
     if args.check:
         errors = verify_all()
         for e in errors:
@@ -115,7 +123,7 @@ def main(argv):
             print("asset deps ok (%d files)" % sum(len(d["files"]) for d in DEPS))
         return 1 if errors else 0
     for dep in DEPS:
-        folder = os.path.join(ROOT, "third_party", dep["dir"])
+        folder = os.path.join(DEPS_ROOT, dep["dir"])
         os.makedirs(folder, exist_ok=True)
         for name, want in dep["files"].items():
             path = os.path.join(folder, name)
@@ -142,6 +150,9 @@ def main(argv):
         for e in errors:
             print("FAIL: " + e)
         return 1
+    if args.dest:
+        print("asset deps ok in %s (lock file not written)" % DEPS_ROOT)
+        return 0
     write_lock()
     print("asset deps ok; lock written to %s" % os.path.relpath(LOCK, ROOT))
     return 0
