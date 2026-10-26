@@ -208,7 +208,12 @@ SU_HOST_API uint32_t su_host_read(const SuHostWorld *w, uint32_t field_id, uint6
 SU_HOST_API uint32_t su_host_snapshot_size(const SuHostWorld *w, size_t *size);
 SU_HOST_API uint32_t su_host_snapshot_write(const SuHostWorld *w, uint8_t *buf, size_t cap, size_t *written);
 /* Replaces the world's state with the snapshot's (same world identity, else SU_E_SCHEMA_MISMATCH). Strict:
- * any malformed byte is SU_E_PARSE or SU_E_TYPE and nothing changes. Queued inputs are kept. */
+ * any malformed byte is SU_E_PARSE or SU_E_TYPE and nothing changes. Queued inputs are kept.
+ * Rollback note: queued (pushed, not yet applied) input records are not world state. They are not in snapshots,
+ * digests or replays' keyframes, and both restores leave them queued as they are. Records queued for ticks that the
+ * restore puts back in the future apply again when those ticks are stepped. A rollback user must therefore clear
+ * (su_host_input_clear) or re-push exactly the records it wants re-simulated, for example the corrected predictions
+ * and confirmed remote inputs. The replay functions drop queued records for the ticks they replay. */
 SU_HOST_API uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len, SuHostError *err);
 /* SHA-256 of the canonical snapshot bytes. */
 SU_HOST_API uint32_t su_host_digest(const SuHostWorld *w, uint8_t out[32]);
@@ -630,6 +635,9 @@ SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, S
  *     each in call order. The same key changed by two chunks keeps the later chunk's result (or a declared merge
  *     callback combines the values in chunk order; the callback is part of the identity). The caps (state_max_*) are
  *     checked on the merged result; exceeding one fails the tick with SU_E_RESOURCE_LIMIT and nothing is committed.
+ *   - Failures: when several chunks fail (their run returned an error, or a journal refusal was returned), the tick
+ *     reports the status and reason of the lowest-indexed failing chunk, as chunked IR systems do, never whichever
+ *     thread finished first; nothing of the tick is committed.
  *   - An operator keying per-entity data by handle and changing only its own rows' keys never conflicts. Because the
  *     signatures here return no memory that must survive a call, the journal needs no change to them.
  *

@@ -92,7 +92,6 @@ foreach(check "dll:same" "static:version" "dll:constants" "static:name" "dll:fla
     add_test(NAME host_registered_verify_${what} COMMAND ${exe} verify "${SU_HOST_REGISTERED_DIR}" ${what})
     set_tests_properties(host_registered_verify_${what} PROPERTIES FIXTURES_REQUIRED host_registered_files)
 endforeach()
-endif() # SUTEKH_BUILD_TESTS
 
 # Operator state (include/sutekh/host.h, "operator state"; issue 139): a registered operator owning canonical
 # variable-size state, static and DLL; the static Linux build counts allocations in the tick. Cross-process: record,
@@ -111,7 +110,7 @@ foreach(variant "" "_dll")
     sutekh_apply_warnings(test_host_opstate${variant})
     add_test(NAME host_opstate${variant} COMMAND test_host_opstate${variant})
 endforeach()
-set(SU_HOST_OPSTATE_DIR "${CMAKE_BINARY_DIR}/host_opstate")
+set(SU_HOST_OPSTATE_DIR "${CMAKE_CURRENT_BINARY_DIR}/host_opstate")
 file(MAKE_DIRECTORY "${SU_HOST_OPSTATE_DIR}")
 add_test(NAME host_opstate_record COMMAND test_host_opstate record "${SU_HOST_OPSTATE_DIR}")
 set_tests_properties(host_opstate_record PROPERTIES FIXTURES_SETUP host_opstate_files)
@@ -127,6 +126,7 @@ foreach(check "dll:same" "static:same" "static:entries" "dll:bytes" "static:flag
     add_test(NAME host_opstate_verify_${what}_${build} COMMAND ${exe} verify "${SU_HOST_OPSTATE_DIR}" ${what})
     set_tests_properties(host_opstate_verify_${what}_${build} PROPERTIES FIXTURES_REQUIRED host_opstate_files)
 endforeach()
+endif() # SUTEKH_BUILD_TESTS
 
 # Embedded space3d example: a game schema of its own with space3d.query bound schema-relatively, run through the DLL.
 # Also driven by the space3d_serve test (cmake/SutekhNumeric3D.cmake).

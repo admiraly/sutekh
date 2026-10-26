@@ -250,7 +250,8 @@ tools/check_repository_license.py` passed, `git diff --check` clean.
 
 ## Review round 1
 
-The independent review returned PASS-WITH-NITS with no correctness bug; CI passed (7 jobs). Fixes:
+The independent review of the first revision returned PASS-WITH-NITS with no correctness bug; CI on that revision
+passed its 7 jobs (the consumer job did not exist yet; see review round 2). Fixes:
 
 1. **Compaction near the byte cap.** Each arena is now 2 x `state_max_bytes`. Before, with the live state near the
    cap, the first rewrite of every tick compacted all of W, costing O(live) per tick. Now a compaction leaves at
@@ -308,10 +309,38 @@ Source SHA-256 (round 1):
 - `src/host/su_host_registered.c` `9da7d37f7b6599cc6aeb7f93296d2516461704591d0dc48a94b9af4fded83ce2`
 - `tests/host/test_host_opstate.c` `525003be287832a1e5b649c4ca9bc2d2179ddbb2e2d3835e325f72933429d89f`
 
+## Review round 2
+
+The review found no determinism or correctness problem: 600 differential runs of the purge trigger, 0 divergences.
+Its single FAIL was an integration bug from the merge of `origin/main` (PR #150, consumer build):
+
+1. **Test block outside the guard.** The operator-state test block in `cmake/SutekhHostOps.cmake` had ended up after
+   `endif() # SUTEKH_BUILD_TESTS`, so the "Submodule consumer" CI job (tests off) failed. The block now sits inside the
+   guard and uses `CMAKE_CURRENT_BINARY_DIR`, like the registered-operator block. The round 1 head
+   (`6ef6af0`) was therefore not fully green; the 7 passing jobs quoted in round 1 are from the first revision, before
+   the consumer job existed.
+2. `host.h`, #142 plan: when several chunks fail, the tick reports the lowest-indexed failing chunk's status and
+   reason, as chunked IR systems do.
+3. `host.h`, snapshot restore: queued input records are not in snapshots, digests or keyframes and survive both
+   restores, so rollback users must clear or re-push them. The replay functions drop them for the ticks they replay.
+
+Not in this PR: the world-level budget for operator-state memory (the sum of 4 x `state_max_bytes` per stateful
+operator, which matters with larger schedules) is issue #153, to be done after this PR and #152 land.
+
+Validation:
+
+- `python3 -I tests/consumer/check_consumer.py` (the consumer job's checks, pinned CMake 4.3.0, Ninja): all PASS,
+  including `ctest-list`, `no-engine-tests` and `tree-unchanged`. CMake 3.21.4 was not run locally.
+- GCC Debug **145/145**, GCC Release **145/145**, GCC native **162/162** (platform skips only), 0 warnings.
+- Clang ASan+UBSan, `host_opstate*` and `host_registered*`: 19/19, 0 diagnostics.
+- Engine sources are unchanged since round 1 (only `host.h` comments), so the round 1 byte-identical comparison and
+  mutation results stand.
+- CI on the PR head: see the PR (all 8 jobs required).
+
 ## Unrun checks and limitations
 
 - **Not run:** Windows (MSVC, clang-cl), macOS, renderer-on, ThreadSanitizer, the full ASan suite, ILP32 (only the
-  `_Static_assert` values are stated for it). No CI result is claimed.
+  `_Static_assert` values are stated for it). CI results are on the PR.
 - **No timing measured.** The cost model above is by construction, not measured.
 - **Allocation counting** covers the static Linux build only, as in #137. `su_host_step` still allocates when an input
   record applies (pre-existing, outside this change, #149), so the counted ticks run without inputs.
