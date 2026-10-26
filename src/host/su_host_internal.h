@@ -82,6 +82,14 @@ struct SuHostWorld {
     const HostOperator *ops[SU_SCHED_MAX_SYSTEMS]; /* host entry i's operator (NULL for IR entries), set at creation */
     SuHostState *opstate[SU_SCHED_MAX_SYSTEMS]; /* entry i's operator state (owned by its instance), or NULL */
     uint32_t opstate_count;        /* entries with state; 0 = version 1 snapshots */
+    /* Input application storage (issue 149), allocated at creation so su_host_step allocates nothing: in_max
+     * cells and values (the most writes one record can hold: SU_HOST_INPUT_MAX_WRITES, or fewer when the world
+     * has fewer distinct (slot, field) cells), and one column of in_rows cells. */
+    struct UndoCell *in_cells;
+    uint32_t *in_vals;
+    uint32_t *in_col;
+    uint32_t in_max;
+    uint64_t in_rows;
 };
 
 #endif

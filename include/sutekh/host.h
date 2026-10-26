@@ -211,7 +211,15 @@ SU_HOST_API uint32_t su_host_input_push_encoded(SuHostWorld *w, const uint8_t *b
 /* Runs up to ticks whole ticks (each: apply that tick's record, run every system, publish). *done counts
  * published ticks. A failing tick (a system error, or an input naming a dead entity: SU_E_STALE_HANDLE)
  * leaves the committed root of that tick unchanged, input writes included, keeps its record queued, and
- * stops the call; err->tick and err->index (failing system, UINT32_MAX for inputs) say where. */
+ * stops the call; err->tick and err->index (failing system, UINT32_MAX for inputs) say where.
+ * Allocation (2026-10-26, issue 149; ENGINE_CONSTITUTION C11): applying a tick's record, and undoing it when the
+ * tick fails, allocate nothing. The world allocates that storage at creation, sized from the existing bounds:
+ * min(SU_HOST_INPUT_MAX_WRITES, capacity x field count) cells (a record's writes are unique cells, and pushes refuse
+ * more than SU_HOST_INPUT_MAX_WRITES with SU_E_RESOURCE_LIMIT) and one column of capacity cells. A record larger
+ * than that storage (not reachable through the push functions) fails its tick with SU_E_RESOURCE_LIMIT before
+ * anything is written, like a failing tick above. Pushing a record allocates (outside the tick). The first tick
+ * after world creation or after su_host_snapshot_restore (a new entity runtime) builds the runtime's tick cache;
+ * su_host_snapshot_restore_inplace keeps it. */
 SU_HOST_API uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostError *err);
 
 /* ---- reading state (committed root) ---- */

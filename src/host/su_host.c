@@ -672,6 +672,8 @@ _Static_assert(sizeof(void *) != 8u || sizeof(SuHostWorldDesc) == 88u, "SuHostWo
 _Static_assert(SU_HOST_SCHEMA_V1_SIZE == (sizeof(void *) == 8u ? 32u : 24u), "first-release SuHostSchema size");
 _Static_assert(sizeof(SuHostSchema) == SU_HOST_SCHEMA_V1_SIZE, "SuHostSchema has no padding after the v1 fields");
 
+static uint32_t input_storage_init(SuHostWorld *w); /* inputs, below */
+
 uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out, SuHostError *err) {
     SuHostWorld *hw = NULL;
     SuHostWorldDesc dv;
@@ -875,6 +877,12 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
             hw->opstate_count += hw->opstate[i] != NULL ? 1u : 0u;
         }
     }
+    st = input_storage_init(hw);
+    if (st != SU_OK) {
+        set_err(err, st, UINT32_MAX, UINT64_MAX, "no input application storage for %llu rows",
+                (unsigned long long)su_world_row_count(hw->w));
+        goto fail;
+    }
     compute_identity(hw);
     for (i = 0; i < nfacts; i++) {
         su_json_doc_free(&facts[i].doc);
@@ -900,6 +908,9 @@ void su_host_world_destroy(SuHostWorld *w) {
         free(w->recs[i].writes);
     }
     free(w->recs);
+    free(w->in_cells);
+    free(w->in_vals);
+    free(w->in_col);
     su_ents_destroy(w->rb_ents);
     su_evlog_destroy(w->rb_log);
     su_world_destroy(w->w);
@@ -1412,17 +1423,35 @@ typedef struct UndoCell {
     uint32_t old;
 } UndoCell;
 
-/* Writes cells (sorted by slot, field) into the committed root, one column copy per touched field.
- * values[i] is written to (cells[i].slot, cells[i].field_id). */
-static uint32_t write_cells(SuWorld *wd, const UndoCell *cells, const uint32_t *values, uint32_t n) {
-    uint64_t cap = su_world_row_count(wd);
-    uint32_t *buf = NULL;
-    uint32_t i;
-    uint32_t st = SU_OK;
-    buf = malloc((size_t)(cap > 0u ? cap : 1u) * sizeof *buf);
-    if (buf == NULL) {
+/* Allocates the input application storage of a world (issue 149; ENGINE_CONSTITUTION C11): su_host_step then
+ * applies and undoes input records without allocating. A record holds unique (slot, field) writes, at most
+ * SU_HOST_INPUT_MAX_WRITES (queue_writes refuses more), so it never has more than min(SU_HOST_INPUT_MAX_WRITES,
+ * capacity x field count) writes. */
+static uint32_t input_storage_init(SuHostWorld *w) {
+    uint64_t rows = su_world_row_count(w->w);
+    uint64_t max = rows < SU_HOST_INPUT_MAX_WRITES ? rows : SU_HOST_INPUT_MAX_WRITES;
+    max *= su_world_field_count(w->w); /* <= 4096 x 2^32: no overflow */
+    if (max > SU_HOST_INPUT_MAX_WRITES) {
+        max = SU_HOST_INPUT_MAX_WRITES;
+    }
+    w->in_max = (uint32_t)max;
+    w->in_rows = rows;
+    w->in_cells = malloc((size_t)(max > 0u ? max : 1u) * sizeof *w->in_cells);
+    w->in_vals = malloc((size_t)(max > 0u ? max : 1u) * sizeof *w->in_vals);
+    w->in_col = rows <= SIZE_MAX / sizeof *w->in_col ? malloc((size_t)(rows > 0u ? rows : 1u) * sizeof *w->in_col)
+                                                     : NULL;
+    if (w->in_cells == NULL || w->in_vals == NULL || w->in_col == NULL) {
         return SU_E_RESOURCE_LIMIT;
     }
+    return SU_OK;
+}
+
+/* Writes cells (sorted by slot, field) into the committed root, one column copy per touched field, through the
+ * world's column buffer (w->in_col, w->in_rows cells). values[i] is written to (cells[i].slot, cells[i].field_id). */
+static uint32_t write_cells(SuHostWorld *w, const UndoCell *cells, const uint32_t *values, uint32_t n) {
+    uint32_t *buf = w->in_col;
+    uint32_t i;
+    uint32_t st = SU_OK;
     /* Fields in ascending order of first appearance; each field is written once. */
     for (i = 0; i < n && st == SU_OK; i++) {
         const uint32_t *col = NULL;
@@ -1438,8 +1467,12 @@ static uint32_t write_cells(SuWorld *wd, const UndoCell *cells, const uint32_t *
         if (seen) {
             continue;
         }
-        st = su_world_read_committed(wd, cells[i].field_id, &col, &rows);
+        st = su_world_read_committed(w->w, cells[i].field_id, &col, &rows);
         if (st != SU_OK) {
+            break;
+        }
+        if (rows > w->in_rows) {
+            st = SU_E_RESOURCE_LIMIT; /* not reached: the capacity is fixed at creation */
             break;
         }
         memcpy(buf, col, (size_t)rows * sizeof *buf);
@@ -1448,40 +1481,35 @@ static uint32_t write_cells(SuWorld *wd, const UndoCell *cells, const uint32_t *
                 buf[cells[k].slot] = values[k];
             }
         }
-        st = su_world_put_committed(wd, cells[i].field_id, buf, rows);
+        st = su_world_put_committed(w->w, cells[i].field_id, buf, rows);
     }
-    free(buf);
     return st;
 }
 
-/* Applies tick's record to the committed root. On SU_OK *undo (malloc'd, *undo_n cells) holds the old
- * values. A dead or stale entity is SU_E_STALE_HANDLE and nothing is written. */
-static uint32_t apply_record(SuHostWorld *w, const HostRecord *r, UndoCell **undo, uint32_t *undo_n,
-                             SuHostError *err) {
+/* Applies tick's record to the committed root. On SU_OK *undo_n cells of w->in_cells hold the old values (valid
+ * until the next apply_record). A dead or stale entity is SU_E_STALE_HANDLE, and a record larger than the
+ * world's input storage SU_E_RESOURCE_LIMIT; in both cases nothing is written. Allocates nothing. */
+static uint32_t apply_record(SuHostWorld *w, const HostRecord *r, uint32_t *undo_n, SuHostError *err) {
     const SuEnts *ents = su_world_entities_committed(w->w);
-    UndoCell *cells;
-    uint32_t *vals;
+    UndoCell *cells = w->in_cells;
+    uint32_t *vals = w->in_vals;
     uint32_t i;
     uint32_t st;
 
-    *undo = NULL;
     *undo_n = 0;
     if (r->count == 0u) {
         return SU_OK;
     }
-    cells = malloc((size_t)r->count * sizeof *cells);
-    vals = malloc((size_t)r->count * sizeof *vals);
-    if (cells == NULL || vals == NULL) {
-        free(cells);
-        free(vals);
-        return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, r->tick, "allocation failed");
+    if (r->count > w->in_max) {
+        /* Not reached through the API: queue_writes keeps a record within SU_HOST_INPUT_MAX_WRITES unique cells. */
+        return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, r->tick,
+                       "input for tick %llu has %u writes, more than the world's input storage (%u)",
+                       (unsigned long long)r->tick, (unsigned)r->count, (unsigned)w->in_max);
     }
     for (i = 0; i < r->count; i++) {
         const uint32_t *col = NULL;
         uint64_t rows = 0;
         if (su_ents_validate(ents, (SuEntity)r->writes[i].entity) != SU_OK) {
-            free(cells);
-            free(vals);
             return set_err(err, SU_E_STALE_HANDLE, UINT32_MAX, r->tick,
                            "input for tick %llu names a dead or stale entity (slot %u)", (unsigned long long)r->tick,
                            (unsigned)SU_ENTITY_SLOT(r->writes[i].entity));
@@ -1492,28 +1520,21 @@ static uint32_t apply_record(SuHostWorld *w, const HostRecord *r, UndoCell **und
         cells[i].old = col != NULL ? col[cells[i].slot] : 0u;
         vals[i] = r->writes[i].value;
     }
-    st = write_cells(w->w, cells, vals, r->count);
-    free(vals);
+    st = write_cells(w, cells, vals, r->count);
     if (st != SU_OK) {
-        free(cells);
         return set_err(err, st, UINT32_MAX, r->tick, "input could not be applied");
     }
-    *undo = cells;
     *undo_n = r->count;
     return SU_OK;
 }
 
-static void undo_record(SuHostWorld *w, const UndoCell *cells, uint32_t n) {
-    uint32_t *old = malloc((size_t)(n > 0u ? n : 1u) * sizeof *old);
+/* Restores the n cells apply_record saved in w->in_cells. Allocates nothing. */
+static void undo_record(SuHostWorld *w, uint32_t n) {
     uint32_t i;
-    if (old == NULL) {
-        return;
-    }
     for (i = 0; i < n; i++) {
-        old[i] = cells[i].old;
+        w->in_vals[i] = w->in_cells[i].old;
     }
-    (void)write_cells(w->w, cells, old, n);
-    free(old);
+    (void)write_cells(w, w->in_cells, w->in_vals, n);
 }
 
 /* ---------- stepping ---------- */
@@ -1560,7 +1581,6 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
     while (n < ticks) {
         uint64_t t = su_world_tick(w->w);
         HostRecord *r = find_record(w, t);
-        UndoCell *undo = NULL;
         uint32_t undo_n = 0;
         uint64_t one = 0;
         uint32_t failed = UINT32_MAX;
@@ -1581,7 +1601,7 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
             r = find_record(w, t);
         }
         if (r != NULL) {
-            st = apply_record(w, r, &undo, &undo_n, err);
+            st = apply_record(w, r, &undo_n, err);
             if (st != SU_OK) {
                 break;
             }
@@ -1594,10 +1614,9 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
                     su_hstate_abort(w->opstate[k]); /* operator state changes of the failed tick are dropped */
                 }
             }
-            if (undo != NULL) {
-                undo_record(w, undo, undo_n);
+            if (undo_n > 0u) {
+                undo_record(w, undo_n);
             }
-            free(undo);
             if (st == SU_OK) {
                 st = SU_E_INTERNAL;
             }
@@ -1618,7 +1637,6 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
             }
             break;
         }
-        free(undo);
         {
             /* The tick published: its operator state changes become committed state (with SU_HOST_STATE_DROP_DEAD,
              * after erasing the entries of entities the committed entity table no longer holds alive). */

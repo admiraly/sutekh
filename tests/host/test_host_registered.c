@@ -1169,8 +1169,25 @@ static void test_negative(const Game *g, const SuHostOperatorDesc *d) {
             g_bad_mode = 0;
             step1(w);
             digest_hex(w, before);
+            {
+                /* An input on the failing tick: applied, then undone (issue 149: without allocating). */
+                SuHostInput in;
+                uint64_t e = 0;
+                check(su_host_entity_at(w, 0, &e) == SU_OK, "bad world entity 0");
+                in.entity = e, in.field_id = F_VX, in.value = 50u + (uint32_t)mode;
+                check(su_host_input_push(w, su_host_tick(w), &in, 1, &err) == SU_OK, "push on the failing tick");
+            }
             g_bad_mode = mode;
+#ifdef SU_TEST_WRAP_ALLOC
+            g_allocs = 0;
+            g_count_alloc = 1;
+#endif
             st = su_host_step(w, 1, &done, &err);
+#ifdef SU_TEST_WRAP_ALLOC
+            g_count_alloc = 0;
+            check(g_allocs == 0u, "failing tick with an input (mode %d) allocates nothing (%lu allocations)", mode,
+                  g_allocs);
+#endif
             digest_hex(w, after);
             if (mode < 3) {
                 check(st == SU_E_UNDECLARED_WRITE && err.index == 1u && done == 0u &&
@@ -1185,6 +1202,7 @@ static void test_negative(const Game *g, const SuHostOperatorDesc *d) {
             check(strcmp(before, after) == 0 && su_host_tick(w) == (uint64_t)mode, "failed tick commits nothing");
         }
         g_bad_mode = 0;
+        su_host_input_clear(w, 0); /* the failing ticks' records stay queued */
         check(step1(w), "the world steps again after the failures");
         su_host_world_destroy(w);
     }
@@ -1306,6 +1324,31 @@ static void test_no_alloc(const Game *g) {
     g_count_alloc = 0;
     check(done == 50u && g_allocs == 0u, "50 ticks with the registered operator allocate nothing (%lu allocations)",
           g_allocs);
+    {
+        /* Issue 149: ticks carrying input records (into IR-read and operator-read lanes) allocate nothing either. */
+        uint64_t t0 = su_host_tick(w);
+        uint32_t t, slot;
+        for (t = 0; t < 50u; t++) {
+            SuHostInput in[2u * CAP];
+            uint32_t n = 0;
+            for (slot = 0; slot < CAP; slot++) {
+                uint64_t e = 0;
+                if (su_host_entity_at(w, slot, &e) != SU_OK) {
+                    continue;
+                }
+                in[n].entity = e, in[n].field_id = F_VX, in[n].value = (t + slot) % 5u;
+                n++;
+                in[n].entity = e, in[n].field_id = F_SEEN, in[n].value = t * 3u + slot;
+                n++;
+            }
+            check(su_host_input_push(w, t0 + t, in, n, &err) == SU_OK, "push input for tick %u", (unsigned)t);
+        }
+        g_allocs = 0;
+        g_count_alloc = 1;
+        su_host_step(w, 50, &done, &err);
+        g_count_alloc = 0;
+        check(done == 50u && g_allocs == 0u, "50 ticks with inputs allocate nothing (%lu allocations)", g_allocs);
+    }
     su_host_world_destroy(w);
 #else
     (void)g;
