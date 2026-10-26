@@ -94,14 +94,50 @@ tool versions and the verified LLVM installer checksum are recorded in
 **Sutekh as a submodule.** Set `SUTEKH_TOOLCHAIN_HOME` to a directory that holds
 `local\` and `.venv\` (for example a shared copy, or the consuming project's
 root) before dot-sourcing `tools\env-windows.ps1`; unset, the Sutekh checkout's
-own `local\` and `.venv\` are used. A CMake project that includes Sutekh with
-`add_subdirectory` sees these cache entries and targets: `SUTEKH_PYTHON` (the
-interpreter for Sutekh's Python tests and generators; set it before
-`add_subdirectory` to choose another), `SUTEKH_VULKAN_INCLUDE_DIR` (the Vulkan
-header directory the renderer uses, empty when there is none or
-`SUTEKH_RENDER=OFF`) and, when that is non-empty, the interface target
-`Sutekh::vulkan_headers`. Warnings are errors by default; `-DSUTEKH_WERROR=OFF`
-keeps them as warnings (for a compiler newer than the ones CI checks).
+own `local\` and `.venv\` are used.
+
+A CMake project (CMake 3.21 or later; 3.21.4 is the oldest release tested, and
+3.20 cannot enable C17 for compilers that default to C23) includes Sutekh with
+`add_subdirectory(extern/sutekh)` and links the namespaced targets:
+
+```cmake
+add_subdirectory(extern/sutekh)
+target_link_libraries(game PRIVATE Sutekh::host)   # static; Sutekh::host_shared is the DLL
+if(TARGET Sutekh::render)                          # optional: built when Vulkan headers were found
+    target_link_libraries(game PRIVATE Sutekh::render)
+endif()
+```
+
+- Libraries: `Sutekh::host` (`host.h`, `clock.h`, `replay.h`), `Sutekh::host_shared`
+  (the same API as `sutekh_host.dll` / `libsutekh_host.so`; defines `SUTEKH_HOST_DLL`),
+  `Sutekh::input`, `Sutekh::window` (Linux, with the SDL3 headers), `Sutekh::render`
+  (with Vulkan headers), `Sutekh::render_util`, `Sutekh::asset`, `Sutekh::asset_import`,
+  `Sutekh::audio`, `Sutekh::audio_events`, `Sutekh::audio_offline`, `Sutekh::audio_inspect`,
+  `Sutekh::audio_system`, and the interface target `Sutekh::vulkan_headers`. Programs:
+  `Sutekh::sutekh` (the engine and control plane) and `Sutekh::asset_cook`.
+  `SUTEKH_PUBLIC_TARGETS` lists the ones this configuration has.
+- Their usage requirement is `include/` only: engine-internal directories (`src/`,
+  `src/platform/`, `profiles/`) stay PRIVATE, so consumer code cannot include engine
+  internals by accident. When Sutekh is not the top-level project, `include/` reaches
+  the consumer as a SYSTEM directory and the consumer's own warning flags do not apply
+  to engine headers.
+- `SUTEKH_BUILD_TESTS`, `SUTEKH_BUILD_BENCH` and `SUTEKH_BUILD_EXAMPLES` default ON at
+  top level and OFF in a consumer, so the consumer's `all` and `ctest` list stay its own
+  (a bench or example program that a test runs is built whenever the tests are).
+  `SUTEKH_WERROR` (warnings are errors) also defaults OFF in a consumer, so a newer
+  compiler cannot break the consumer's build on engine code; at top level it is ON and
+  `-DSUTEKH_WERROR=OFF` keeps warnings as warnings.
+- Third-party headers: `python tools/bootstrap_vulkan_headers.py --dest DIR` (likewise
+  `bootstrap_sdl3_headers.py` and `bootstrap_asset_deps.py`) fetches into `DIR` instead of
+  the checkout's `third_party/`; configure with `-DSUTEKH_DEPS_DIR=DIR`. Without the
+  pinned Vulkan headers or `VULKAN_SDK`, system headers (for example a distribution's
+  `vulkan-headers` package in `/usr/include`) are used when they are 1.3.204 or later.
+- Cache entries a consumer sees: `SUTEKH_PYTHON` (the interpreter for Sutekh's Python
+  tests and generators; set it before `add_subdirectory` to choose another),
+  `SUTEKH_VULKAN_INCLUDE_DIR` (the Vulkan header directory the renderer uses, empty when
+  there is none or `SUTEKH_RENDER=OFF`) and `SUTEKH_PUBLIC_TARGETS`.
+- `tests/consumer/` is such a project; `python -I tests/consumer/check_consumer.py`
+  configures it in a temporary directory and checks the above.
 
 **Linux window and input.** `python tools/bootstrap_sdl3_headers.py` (pinned SDL 3.2 headers) enables `su_window`
 (`include/sutekh/window.h`; `-DSUTEKH_WINDOW=AUTO|ON|OFF`): a Wayland or X11 window for the renderer's swapchain
