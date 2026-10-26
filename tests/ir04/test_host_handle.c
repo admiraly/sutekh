@@ -165,7 +165,7 @@ static void scenario(SuHostWorld *w, uint8_t d[32], uint8_t mid[32], uint8_t **s
             ts = 2099u;
         }
         live += at(w, F_LIVE, r);
-        CHECK(at(w, F_LIVE, r) == (ts < LIVE && tg == SU_GEN_FIRST));
+        CHECK(at(w, F_LIVE, r) == (uint32_t)(ts < LIVE && tg == SU_GEN_FIRST));
     }
     CHECK(live > LIVE / 2u && live < LIVE);
     /* Despawn A and B between ticks: the next tick sees them gone. */

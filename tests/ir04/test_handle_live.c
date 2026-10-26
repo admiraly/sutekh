@@ -235,7 +235,7 @@ static uint32_t oracle(const uint8_t *alive, const uint32_t *gens, uint64_t slot
         return 0u;
     }
     stored = gens != NULL ? gens[s] : 1u;
-    return stored == g;
+    return (uint32_t)(stored == g);
 }
 
 static int load_module(SuLirModule *m, const char *prog) {
@@ -310,7 +310,7 @@ static void test_known(void) {
         reset_out(&c, 10u);
         CHECK(invoke(ctx, &c, 0u, 10u, NULL, NULL) == SU_OK);
         for (r = 0; r < 10u; r++) {
-            CHECK(c.o_out[0][r] == (TS[r] < 10u && TG[r] == 1u));
+            CHECK(c.o_out[0][r] == (uint32_t)(TS[r] < 10u && TG[r] == 1u));
             CHECK(c.o_out[1][r] == 1u);
         }
         /* (c) chunks at base_slot != 0 need the table; with it every chunk answers from the whole table. */
@@ -332,7 +332,7 @@ static void test_known(void) {
         for (r = 0; r < 10u; r++) {
             if (ALIVE[r]) {
                 CHECK(c.o_out[0][r] == oracle(ALIVE, GEN, 4u, TS[r], TG[r]));
-                CHECK(c.o_out[1][r] == (r < 4u));
+                CHECK(c.o_out[1][r] == (uint32_t)(r < 4u));
             }
         }
         /* (e) NULL, NULL, 0 clears the table: back to the call's view, which a chunk at 3 cannot use. */
@@ -382,7 +382,7 @@ static void test_diff(void) {
         for (r = 0; r < MAXR; r++) {
             uint32_t pick = rnd(6u);
             gens[r] = pick == 0u ? 1u : pick == 1u ? 2u : pick == 2u ? 0xFFFFFFFEu : pick == 3u ? SU_GEN_RETIRED : 1u + rnd(1000u);
-            alive[r] = gens[r] != SU_GEN_RETIRED && rnd(4u) != 0u;
+            alive[r] = (uint8_t)(gens[r] != SU_GEN_RETIRED && rnd(4u) != 0u);
         }
         memset(&c[0], 0, sizeof c[0]);
         for (r = 0; r < rows; r++) {
@@ -454,7 +454,7 @@ static void test_diff(void) {
                 }
                 if (prog == 1u && alive[r]) {
                     guarded_rows += h;
-                    body_rows += !h;
+                    body_rows += h == 0u ? 1u : 0u;
                 }
             }
         }
