@@ -130,8 +130,12 @@ endif()
 - Third-party headers: `python tools/bootstrap_vulkan_headers.py --dest DIR` (likewise
   `bootstrap_sdl3_headers.py` and `bootstrap_asset_deps.py`) fetches into `DIR` instead of
   the checkout's `third_party/`; configure with `-DSUTEKH_DEPS_DIR=DIR`. Without the
-  pinned Vulkan headers or `VULKAN_SDK`, system headers (for example a distribution's
-  `vulkan-headers` package in `/usr/include`) are used when they are 1.3.204 or later.
+  pinned Vulkan headers or `VULKAN_SDK`, a consumer also uses system headers (for example
+  a distribution's `vulkan-headers` package in `/usr/include`) when they are 1.3.204 or
+  later. `SUTEKH_VULKAN_SYSTEM=AUTO|ON|OFF` controls this; AUTO means only when Sutekh is
+  not the top-level project, so a top-level build finds headers as it always did.
+  `SUTEKH_VULKAN_SYSTEM_INCLUDE` names one include directory to check instead of the
+  system search.
 - Cache entries a consumer sees: `SUTEKH_PYTHON` (the interpreter for Sutekh's Python
   tests and generators; set it before `add_subdirectory` to choose another),
   `SUTEKH_VULKAN_INCLUDE_DIR` (the Vulkan header directory the renderer uses, empty when

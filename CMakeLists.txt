@@ -352,11 +352,16 @@ if(SUTEKH_NATIVE)
     target_link_libraries(su_native PUBLIC su_ir su_vm su_asmjit) # su_vm: the plan builder (identity-row guard)
     target_compile_definitions(su_native PRIVATE SU_NATIVE_ASMJIT_COMMIT="${SU_ASMJIT_COMMIT}")
     set_target_properties(su_native PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-    # Strict C17 set for the C files. The C++ adapter gets -Wall -Wextra -Werror only: the AsmJit
-    # headers rely on compiler extensions that -pedantic rejects.
+    # Strict C17 set for the C files. The C++ adapter gets -Wall -Wextra (-Werror) only: the AsmJit
+    # headers rely on compiler extensions that -pedantic rejects. -Werror follows SUTEKH_WERROR.
+    set(su_native_werror "")
+    if(SUTEKH_WERROR)
+        set(su_native_werror -Werror)
+    endif()
     target_compile_options(su_native PRIVATE
-        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra -Werror -pedantic>
-        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra -Werror>)
+        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra ${su_native_werror} -pedantic>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra ${su_native_werror}>)
+    unset(su_native_werror)
 
     # M1-02b: the engine (supervisor and worker) gets the native artifact registry. The compile
     # definition SU_HAVE_NATIVE gates world.specialize; the default build does not define it.

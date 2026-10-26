@@ -59,6 +59,7 @@ endif()
 # registration (DLL), with another operator_version, constants hash, operator name, flags or scratch size (refused:
 # world identity),
 # and with nothing registered (the record is refused).
+if(SUTEKH_BUILD_TESTS)
 foreach(variant "" "_dll")
     add_executable(test_host_registered${variant} "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/test_host_registered.c")
     if(variant STREQUAL "_dll")
@@ -74,7 +75,7 @@ foreach(variant "" "_dll")
     sutekh_apply_warnings(test_host_registered${variant})
     add_test(NAME host_registered${variant} COMMAND test_host_registered${variant})
 endforeach()
-set(SU_HOST_REGISTERED_DIR "${CMAKE_BINARY_DIR}/host_registered")
+set(SU_HOST_REGISTERED_DIR "${CMAKE_CURRENT_BINARY_DIR}/host_registered")
 file(MAKE_DIRECTORY "${SU_HOST_REGISTERED_DIR}")
 add_test(NAME host_registered_record COMMAND test_host_registered record "${SU_HOST_REGISTERED_DIR}")
 set_tests_properties(host_registered_record PROPERTIES FIXTURES_SETUP host_registered_files)
@@ -90,6 +91,7 @@ foreach(check "dll:same" "static:version" "dll:constants" "static:name" "dll:fla
     add_test(NAME host_registered_verify_${what} COMMAND ${exe} verify "${SU_HOST_REGISTERED_DIR}" ${what})
     set_tests_properties(host_registered_verify_${what} PROPERTIES FIXTURES_REQUIRED host_registered_files)
 endforeach()
+endif() # SUTEKH_BUILD_TESTS
 
 # Embedded space3d example: a game schema of its own with space3d.query bound schema-relatively, run through the DLL.
 # Also driven by the space3d_serve test (cmake/SutekhNumeric3D.cmake).

@@ -5,8 +5,12 @@
 
 Checks (each prints PASS or FAIL; the exit status is 1 when any check fails):
   defaults      in the consumer's cache SUTEKH_BUILD_TESTS, _BENCH, _EXAMPLES and SUTEKH_WERROR are OFF
-  ctest-list    ctest lists exactly the consumer's tests (consumer_host, consumer_public_headers)
-  no-engine-tests  the build produced none of Sutekh's test, bench or example programs
+  ctest-list    ctest lists exactly the consumer's tests (consumer_host, consumer_public_headers): any Sutekh test,
+                registered now or added later, fails it
+  no-engine-tests  (CMake file API) the Sutekh subdirectory defines no executable but the tools sutekh and asset_cook
+                and no target named test_* or bench_*, so no Sutekh test, bench or example program is built
+  build-dir     after the run, the consumer's top-level build directory holds only CMake's, ctest's and the consumer's
+                own files (Sutekh writes only under its sutekh/ subdirectory)
   internal-headers each probe that includes an engine-internal header (src/, src/platform/,
                 profiles/space3d/native/) fails to compile because the header is not found
   system-headers   (GCC and Clang) consumer sources see the Sutekh tree only as -isystem <sutekh>/include (and
@@ -39,9 +43,13 @@ PROBES = {
     "src_platform": "su_platform.h",
     "space3d": "space3d_geom.h",
 }
-# Programs that only Sutekh's tests, bench or examples build (a consumer build must produce none of them).
-ENGINE_ONLY_PROGRAMS = ["test_world", "test_host", "worker_stub", "recovery_worker", "bench_host", "bench_audio_system",
-                        "racer_microcosm", "minimal_host", "arena_host", "space_demo", "test_audio"]
+# The only executables Sutekh defines in a consumer (tools); anything else is a test, bench or example program.
+SUTEKH_TOOLS = {"sutekh", "asset_cook"}
+# What may sit at the top of the consumer's build directory (CMake, the generators, ctest, the consumer itself).
+TOP_LEVEL_ALLOWED = {".cmake", "CMakeFiles", "CMakeCache.txt", "cmake_install.cmake", "CTestTestfile.cmake",
+                     "DartConfiguration.tcl", "Makefile", "build.ninja", ".ninja_deps", ".ninja_log", "rules.ninja",
+                     "compile_commands.json", "Testing", "sutekh", "consumer_facts.txt", "consumer_public_headers.c",
+                     "consumer_public_headers_nonsystem.o"}
 SKIP_TOP = ("build", "out", ".venv", ".cache", ".git")
 
 failures = []
@@ -121,6 +129,9 @@ def main(argv):
     print("sutekh %s\nbuild  %s\ncmake  %s" % (sutekh, build, run([cmake, "--version"])[1].splitlines()[0]))
 
     before = tree_state(sutekh)
+    query = os.path.join(build, ".cmake", "api", "v1", "query")
+    os.makedirs(query, exist_ok=True)
+    open(os.path.join(query, "codemodel-v2"), "w").close()
     rc, out = run([cmake, "-S", HERE, "-B", build, "-DSUTEKH_SOURCE_DIR=" + sutekh, "-DCMAKE_BUILD_TYPE=" + args.config,
                    "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", *extra])
     if rc != 0:
@@ -148,10 +159,23 @@ def main(argv):
     names = sorted(t["name"] for t in json.loads(out)["tests"]) if rc == 0 else []
     report("ctest-list", names == sorted(EXPECTED_TESTS), "listed %s" % (names if rc == 0 else out.strip()))
 
-    sutekh_build = os.path.join(build, "sutekh")
-    present = [p for p in ENGINE_ONLY_PROGRAMS
-               if any(os.path.exists(os.path.join(sutekh_build, p + ext)) for ext in ("", ".exe"))]
-    report("no-engine-tests", not present, "built: %s" % present if present else "")
+    engine_programs = []
+    reply = os.path.join(build, ".cmake", "api", "v1", "reply")
+    index = sorted(f for f in os.listdir(reply) if f.startswith("index-")) if os.path.isdir(reply) else []
+    if index:
+        idx = json.load(open(os.path.join(reply, index[-1]), encoding="utf-8"))
+        cm = next(o for o in idx["objects"] if o["kind"] == "codemodel")
+        model = json.load(open(os.path.join(reply, cm["jsonFile"]), encoding="utf-8"))
+        for t in model["configurations"][0]["targets"]:
+            tj = json.load(open(os.path.join(reply, t["jsonFile"]), encoding="utf-8"))
+            if tj["paths"]["build"] != "sutekh" and not tj["paths"]["build"].startswith("sutekh/"):
+                continue
+            name = tj["name"]
+            if (tj["type"] == "EXECUTABLE" and name not in SUTEKH_TOOLS) or name.startswith(("test_", "bench_")):
+                engine_programs.append(name)
+        report("no-engine-tests", not engine_programs, "defined: %s" % sorted(engine_programs) if engine_programs else "")
+    else:
+        report("no-engine-tests", False, "no CMake file API reply in %s" % reply)
 
     for probe, header in PROBES.items():
         rc, out = run([cmake, "--build", build, "--config", args.config, "--target", "consumer_probe_" + probe])
@@ -194,6 +218,9 @@ def main(argv):
         if "host api" in line or "tests passed" in line or "Failed" in line:
             print("  " + line.split(": ", 1)[-1].strip())
     report("run", rc == 0, "" if rc == 0 else out[-3000:])
+
+    stray = sorted(e for e in os.listdir(build) if e not in TOP_LEVEL_ALLOWED and not e.startswith("consumer_"))
+    report("build-dir", not stray, "unexpected: %s" % stray if stray else "")
 
     after = tree_state(sutekh)
     changed = sorted(set(before) ^ set(after) | {k for k in before if k in after and before[k] != after[k]})
