@@ -16,7 +16,8 @@
  * and optionally a local glTF/GLB file or cooked pack (--model) loaded and cooked on a background thread.
  *
  * Usage (from the repository root):
- *   space_demo                         window, devices, until closed
+ *   space_demo                         window, devices, until closed (Windows: an HWND with Raw Input and
+ *                                      XInput; Linux: a Wayland or X11 window with SDL3 input, sutekh/window.h)
  *   space_demo --frames N | --seconds S   stop after N frames or S seconds
  *   space_demo --script                scripted input instead of devices (unattended runs)
  *   space_demo --offscreen out.ppm     no window: render --frames frames (default 240) at a fixed 60 Hz frame
@@ -37,6 +38,8 @@
  *   --auto-exposure                    stateless automatic exposure (SU_POST_AUTO_EXPOSURE)
  *   --legacy                           draw with the first-slice debug renderer (su_render_frame)
  *   --pipeline-cache FILE              persist the pipeline cache there
+ *   --no-mouse-grab                    Linux: leave relative mouse mode off (by default the window grabs the
+ *                                      pointer for the mouse-stick camera; Escape quits)
  *   options: --no-vsync, --validation, --map file, --width W --height H, --exercise-window (resize, minimize,
  *            restore and resize back during the run, to drive swapchain recreation), --rollback-check (every
  *            8 ticks, so every tick is re-simulated once: restore the state of 8 ticks ago in place, re-push the
@@ -45,10 +48,17 @@
  * Exit status: 0 success, 1 failure, 3 presentation unavailable (the simulation still ran headless). */
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
+#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#else
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L /* clock_gettime, nanosleep */
+#endif
+#include <time.h>
+#endif
 
 #include <math.h>
 #include <stdio.h>
@@ -62,6 +72,9 @@
 #include "sutekh/host.h"
 #include "sutekh/input.h"
 #include "sutekh/render.h"
+#if !defined(_WIN32) && defined(SUTEKH_HAVE_WINDOW)
+#include "sutekh/window.h"
+#endif
 
 #define MAX_SHIPS 12u
 #define TICK_HZ 120u
@@ -95,9 +108,15 @@ typedef struct Demo {
     Ship cur[MAX_SHIPS];
     SuInputMapper mapper;
     SuInputFields fields;
+#if defined(_WIN32)
     SuInputWin32 *input;
-    SuRenderer *r;
     HWND hwnd;
+#elif defined(SUTEKH_HAVE_WINDOW)
+    SuWindow *win;
+    int win_input;            /* devices come from the window (not --script) */
+    int win_wayland;          /* the window is a Wayland surface (no client-side unminimize) */
+#endif
+    SuRenderer *r;
     int quit;
     int free_cam;
     int fixed_cam;            /* --offscreen: a fixed overview camera */
@@ -181,6 +200,7 @@ static uint8_t *slurp(const char *path, size_t *len) {
 }
 
 static double now_s(void) {
+#if defined(_WIN32)
     static LARGE_INTEGER freq;
     LARGE_INTEGER c;
     if (freq.QuadPart == 0) {
@@ -188,6 +208,20 @@ static double now_s(void) {
     }
     QueryPerformanceCounter(&c);
     return (double)c.QuadPart / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+#endif
+}
+
+static void sleep_1ms(void) {
+#if defined(_WIN32)
+    Sleep(1);
+#else
+    struct timespec ts = {0, 1000000L};
+    (void)nanosleep(&ts, NULL);
+#endif
 }
 
 /* Exact Q32.32 of num / den for small integers. */
@@ -462,6 +496,7 @@ static void tick(const SuInputState *s) {
     }
 }
 
+#if defined(_WIN32)
 static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (g.input != NULL) {
         (void)su_input_win32_message(g.input, hwnd, msg, (uintptr_t)wp, (intptr_t)lp);
@@ -498,6 +533,187 @@ static HWND make_window(uint32_t w, uint32_t h) {
     return CreateWindowExW(0, wc.lpszClassName, L"Sutekh presentation demo", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, NULL, NULL,
                            wc.hInstance, NULL);
+}
+#endif
+
+/* ---- the window, per platform: Win32 (HWND, Raw Input, XInput) or sutekh/window.h (Linux, SDL3) ---- */
+
+static int have_window(void) {
+#if defined(_WIN32)
+    return g.hwnd != NULL;
+#elif defined(SUTEKH_HAVE_WINDOW)
+    return g.win != NULL;
+#else
+    return 0;
+#endif
+}
+
+/* Opens the window and fills the renderer descriptor's window fields. 0: no window could be made (message). */
+static int open_window(uint32_t w, uint32_t h, SuRenderDesc *d, char msg[256]) {
+#if defined(_WIN32)
+    g.hwnd = make_window(w, h);
+    if (g.hwnd == NULL) {
+        snprintf(msg, 256, "window creation failed");
+        return 0;
+    }
+    d->hwnd = g.hwnd;
+    return 1;
+#elif defined(SUTEKH_HAVE_WINDOW)
+    SuWindowDesc wd;
+    SuWindowInfo info;
+    uint32_t st;
+    memset(&wd, 0, sizeof wd);
+    wd.struct_size = sizeof wd;
+    wd.flags = SU_WINDOW_RESIZABLE;
+    wd.title = "Sutekh presentation demo";
+    wd.width = w;
+    wd.height = h;
+    st = su_window_create(&wd, &g.win, msg);
+    if (st != SU_OK) {
+        return 0;
+    }
+    (void)su_window_render_desc(g.win, d);
+    (void)su_window_info(g.win, &info);
+    g.win_wayland = info.window_system == SU_RENDER_WINDOW_WAYLAND;
+    printf("window: %s, %s, %ux%u pixels (density %.2f), gamepads %s\n", info.backend, info.video_driver,
+           (unsigned)d->width, (unsigned)d->height, (double)info.pixel_density, info.gamepads ? "on" : "off");
+    return 1;
+#else
+    (void)w;
+    (void)h;
+    (void)d;
+    snprintf(msg, 256, "this build has no window backend (Linux: run tools/bootstrap_sdl3_headers.py)");
+    return 0;
+#endif
+}
+
+static void close_window(void) {
+#if defined(_WIN32)
+    if (g.hwnd != NULL) {
+        DestroyWindow(g.hwnd);
+        g.hwnd = NULL;
+    }
+#elif defined(SUTEKH_HAVE_WINDOW)
+    su_window_destroy(g.win);
+    g.win = NULL;
+#endif
+}
+
+/* Device input from the window. 0: unavailable (the demo then uses scripted input). */
+static int open_input(int grab_mouse) {
+#if defined(_WIN32)
+    (void)grab_mouse;
+    if (su_input_win32_create(g.hwnd, 0, &g.input) != SU_OK) {
+        printf("input: Raw Input registration failed; using scripted input\n");
+        return 0;
+    }
+    return 1;
+#elif defined(SUTEKH_HAVE_WINDOW)
+    g.win_input = 1;
+    if (grab_mouse && su_window_set_relative_mouse(g.win, 1) != SU_OK) {
+        printf("input: relative mouse mode refused; mouse motion is pointer motion\n");
+    }
+    return 1;
+#else
+    (void)grab_mouse;
+    return 0;
+#endif
+}
+
+static int have_input(void) {
+#if defined(_WIN32)
+    return g.input != NULL;
+#elif defined(SUTEKH_HAVE_WINDOW)
+    return g.win_input;
+#else
+    return 0;
+#endif
+}
+
+/* Pumps the window's events: size changes go to the renderer; close and Escape quit. */
+static void pump_window(void) {
+#if defined(_WIN32)
+    MSG m;
+    while (g.hwnd != NULL && PeekMessageW(&m, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
+#elif defined(SUTEKH_HAVE_WINDOW)
+    SuWindowEvents ev;
+    if (g.win == NULL || su_window_poll(g.win, &ev) != SU_OK) {
+        return;
+    }
+    if (ev.close_requested) {
+        g.quit = 1;
+    }
+    if (ev.resized && g.r != NULL) {
+        su_render_resize(g.r, ev.width, ev.height);
+    }
+#endif
+}
+
+static void sample_input(SuInputState *s) {
+#if defined(_WIN32)
+    (void)su_input_win32_sample(g.input, s);
+#elif defined(SUTEKH_HAVE_WINDOW)
+    (void)su_window_sample_input(g.win, s);
+    if (su_input_key_down(s, SU_KEY_ESCAPE)) {
+        g.quit = 1;
+    }
+#else
+    memset(s, 0, sizeof *s);
+#endif
+}
+
+static void close_input(void) {
+#if defined(_WIN32)
+    su_input_win32_destroy(g.input);
+    g.input = NULL;
+#endif
+}
+
+static void set_title(const char *title) {
+#if defined(_WIN32)
+    if (g.hwnd != NULL) {
+        SetWindowTextA(g.hwnd, title);
+    }
+#elif defined(SUTEKH_HAVE_WINDOW)
+    su_window_set_title(g.win, title);
+#else
+    (void)title;
+#endif
+}
+
+/* --exercise-window: resize, minimize, restore and resize back, to drive swapchain recreation. */
+static void exercise_window(uint64_t frames) {
+#if defined(_WIN32)
+    if (frames == 20u) {
+        SetWindowPos(g.hwnd, NULL, 0, 0, 800, 600, SWP_NOMOVE | SWP_NOZORDER);
+    } else if (frames == 40u) {
+        ShowWindow(g.hwnd, SW_MINIMIZE);
+    } else if (frames == 70u) {
+        ShowWindow(g.hwnd, SW_RESTORE);
+    } else if (frames == 90u) {
+        SetWindowPos(g.hwnd, NULL, 0, 0, 1296, 759, SWP_NOMOVE | SWP_NOZORDER);
+    }
+#elif defined(SUTEKH_HAVE_WINDOW)
+    /* Requests. Wayland has no request to unminimize a window, so there the minimize and restore steps are skipped
+     * (the window would stay minimized until the user restores it); tests/window/test_window_swapchain.c covers
+     * the paused path on Wayland. */
+    if (frames == 20u) {
+        (void)su_window_set_size(g.win, 800, 600);
+    } else if (frames == 40u && g.win_wayland) {
+        printf("exercise: minimize/restore skipped on Wayland (no client-side unminimize)\n");
+    } else if (frames == 40u) {
+        (void)su_window_minimize(g.win);
+    } else if (frames == 70u && !g.win_wayland) {
+        (void)su_window_restore(g.win);
+    } else if (frames == 90u) {
+        (void)su_window_set_size(g.win, 1296, 759);
+    }
+#else
+    (void)frames;
+#endif
 }
 
 static uint32_t rgba(float r, float gg, float b) {
@@ -1046,6 +1262,7 @@ int main(int argc, char **argv) {
     int rollback = 0;
     int headless = 0;
     int no_audio = 0;
+    int grab_mouse = 1;
     uint32_t flags = 0;
     uint32_t width = 1280;
     uint32_t height = 720;
@@ -1118,6 +1335,8 @@ int main(int argc, char **argv) {
             g.legacy = 1;
         } else if (strcmp(argv[i], "--pipeline-cache") == 0 && i + 1 < argc) {
             cache_path = argv[++i];
+        } else if (strcmp(argv[i], "--no-mouse-grab") == 0) {
+            grab_mouse = 0;
         } else {
             fprintf(stderr, "unknown option %s (see the comment at the top of space_demo.c)\n", argv[i]);
             return 1;
@@ -1164,39 +1383,39 @@ int main(int argc, char **argv) {
 
     if (!headless) {
         SuRenderDesc d;
-        uint32_t st;
-        if (offscreen == NULL) {
-            g.hwnd = make_window(width, height);
-            if (g.hwnd == NULL) {
-                fprintf(stderr, "window creation failed\n");
-                return 1;
-            }
-        }
+        uint32_t st = SU_OK;
         memset(&d, 0, sizeof d);
         d.struct_size = sizeof d;
         d.flags = flags;
-        d.hwnd = g.hwnd;
         d.width = width;
         d.height = height;
         d.device_index = -1;
         d.pipeline_cache_path = cache_path;
         d.max_draw_instances = MAX_DEBRIS * 2u + 256u;
-        st = su_render_create(&d, &g.r, msg);
+        if (offscreen == NULL && !open_window(width, height, &d, msg)) {
+#if defined(_WIN32)
+            fprintf(stderr, "%s\n", msg);
+            return 1;
+#else
+            /* Linux: no display or no SDL3 is an expected condition, like no Vulkan device (exit 3) */
+            st = SU_E_UNSUPPORTED_METHOD;
+#endif
+        }
+        if (st == SU_OK) {
+            st = su_render_create(&d, &g.r, msg);
+        }
         if (st != SU_OK) {
             printf("presentation unavailable (%s): %s; running the simulation headless\n", su_host_status_name(st), msg);
             presentation = 0;
-            if (g.hwnd != NULL) {
-                DestroyWindow(g.hwnd);
-                g.hwnd = NULL;
-            }
+            close_window();
         } else {
             SuRenderDeviceInfo info;
             SuRenderStats rs;
             (void)su_render_device(g.r, &info);
             (void)su_render_stats(g.r, &rs);
-            printf("renderer: %s, %s target %ux%u, pipelines %.1f ms (cache %u)\n", info.name,
-                   offscreen != NULL ? "offscreen" : "window", (unsigned)width, (unsigned)height, rs.pipeline_create_ms,
-                   (unsigned)rs.pipeline_cache);
+            printf("renderer: %s, %s target %ux%u, present mode %u, pipelines %.1f ms (cache %u)\n", info.name,
+                   offscreen != NULL ? "offscreen" : "window", (unsigned)rs.width, (unsigned)rs.height,
+                   (unsigned)rs.present_mode, rs.pipeline_create_ms, (unsigned)rs.pipeline_cache);
             if (!g.legacy) {
                 setup_content();
                 make_debris(n_debris);
@@ -1216,13 +1435,10 @@ int main(int argc, char **argv) {
         presentation = 0;
     }
     if (!no_audio) {
-        setup_audio(g.hwnd != NULL);
+        setup_audio(have_window());
     }
-    if (g.hwnd != NULL && !script) {
-        if (su_input_win32_create(g.hwnd, 0, &g.input) != SU_OK) {
-            printf("input: Raw Input registration failed; using scripted input\n");
-            script = 1;
-        }
+    if (have_window() && !script && !open_input(grab_mouse)) {
+        script = 1;
     }
     if (!presentation && seconds == 0.0 && max_frames == 0u) {
         seconds = 2.0;
@@ -1243,7 +1459,6 @@ int main(int argc, char **argv) {
     memset(&last_rec, 0, sizeof last_rec);
     t_start = t_prev = t_report = now_s();
     while (!g.quit) {
-        MSG m;
         SuInputState frame_state;
         memset(&frame_state, 0, sizeof frame_state);
         double now;
@@ -1251,24 +1466,21 @@ int main(int argc, char **argv) {
         double alpha = 0.0;
         uint32_t ticks;
         uint32_t k;
-        while (g.hwnd != NULL && PeekMessageW(&m, NULL, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&m);
-            DispatchMessageW(&m);
-        }
+        pump_window();
         now = now_s();
         /* Offscreen runs use a fixed 60 Hz frame time so the image and digest are reproducible. */
         dt = fixed_dt ? 1.0 / 60.0 : now - t_prev;
         t_prev = now;
         g.time_s += dt;
         ticks = su_host_clock_advance(&clock, (uint64_t)(dt * 1e9), &alpha);
-        if (!script && g.input != NULL) {
-            (void)su_input_win32_sample(g.input, &frame_state);
+        if (!script && have_input()) {
+            sample_input(&frame_state);
         }
         for (k = 0; k < ticks; k++) {
             SuInputState s;
             if (script) {
                 scripted_state(su_host_tick(g.w), &s);
-            } else if (g.input != NULL) {
+            } else if (have_input()) {
                 (void)su_input_state_split(&frame_state, ticks, k, &s);
             } else {
                 memset(&s, 0, sizeof s);
@@ -1283,7 +1495,7 @@ int main(int argc, char **argv) {
             SuInputState s;
             if (script) {
                 scripted_state(su_host_tick(g.w), &s);
-            } else if (g.input != NULL) {
+            } else if (have_input()) {
                 s = frame_state;
             } else {
                 memset(&s, 0, sizeof s);
@@ -1296,6 +1508,7 @@ int main(int argc, char **argv) {
         }
         if (presentation) {
             SuRenderStats rs;
+            uint64_t paused_before = g.frames_paused;
             poll_user_model();
             (void)su_render_stats(g.r, &rs);
             draw((float)alpha, dt, &chase, &freec, rs.width != 0u ? rs.width : width, rs.height != 0u ? rs.height : height,
@@ -1303,8 +1516,11 @@ int main(int argc, char **argv) {
             if (frames >= 30u) { /* skip the warm-up (uploads, first frames) */
                 record_times();
             }
+            if (g.frames_paused != paused_before && !fixed_dt) {
+                sleep_1ms(); /* minimized or occluded: nothing was presented, so nothing paced the loop */
+            }
         } else if (!fixed_dt) {
-            Sleep(1);
+            sleep_1ms();
         }
         if (g.mixer != NULL) {
             if (g.adev == NULL) {
@@ -1317,16 +1533,8 @@ int main(int argc, char **argv) {
         }
         frames++;
         /* --exercise-window: resize, minimize, restore and resize back, to drive swapchain recreation. */
-        if (exercise && g.hwnd != NULL) {
-            if (frames == 20u) {
-                SetWindowPos(g.hwnd, NULL, 0, 0, 800, 600, SWP_NOMOVE | SWP_NOZORDER);
-            } else if (frames == 40u) {
-                ShowWindow(g.hwnd, SW_MINIMIZE);
-            } else if (frames == 70u) {
-                ShowWindow(g.hwnd, SW_RESTORE);
-            } else if (frames == 90u) {
-                SetWindowPos(g.hwnd, NULL, 0, 0, 1296, 759, SWP_NOMOVE | SWP_NOZORDER);
-            }
+        if (exercise && have_window()) {
+            exercise_window(frames);
         }
         ticks_report += ticks;
         frames_report++;
@@ -1345,9 +1553,7 @@ int main(int argc, char **argv) {
                      g.step_count ? g.step_ms_sum / (double)g.step_count : 0.0, (unsigned long long)g.gate_events,
                      g.free_cam ? "free camera" : "chase camera");
             printf("%s\n", title + 14);
-            if (g.hwnd != NULL) {
-                SetWindowTextA(g.hwnd, title);
-            }
+            set_title(title);
             frames_report = 0;
             ticks_report = 0;
             t_report = now;
@@ -1397,7 +1603,7 @@ int main(int argc, char **argv) {
                        "median %.3f ms p95 %.3f ms\n",
                        (unsigned)g.t_n, gm, g95, cm, c95);
             }
-            ok = rs.validation_errors == 0u && g.frames_failed == 0u;
+            ok = ok && rs.validation_errors == 0u && g.frames_failed == 0u;
         }
         if (g.rollback) {
             printf("rollback drills: %llu (restore in place, re-push %u records, step %u ticks), %llu differed, "
@@ -1432,7 +1638,7 @@ int main(int argc, char **argv) {
             free(px);
         }
         su_audio_device_close(g.adev);
-        su_input_win32_destroy(g.input);
+        close_input();
         if (g.r != NULL) {
             if (g.user_pak.handles != NULL) {
                 su_render_pak_release(g.r, &g.user_pak);
@@ -1452,9 +1658,7 @@ int main(int argc, char **argv) {
         su_audio_mixer_destroy(g.mixer);
         su_audio_clip_free(g.clip_engine);
         su_audio_clip_free(g.clip_chime);
-        if (g.hwnd != NULL) {
-            DestroyWindow(g.hwnd);
-        }
+        close_window();
         su_host_world_destroy(g.shadow);
         su_host_world_destroy(g.w);
         if (!ok) {

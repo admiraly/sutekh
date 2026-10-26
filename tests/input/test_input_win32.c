@@ -100,6 +100,14 @@ int main(void) {
     CHECK(!su_input_key_down(&s, SU_KEY_LSHIFT) && !su_input_key_down(&s, 0x12A) && !su_input_key_down(&s, SU_KEY_LCTRL));
     CHECK(su_input_key_down(&s, SU_KEY_RIGHT) && !su_input_key_down(&s, SU_KEY_KP_6));
     CHECK(su_input_key_down(&s, SU_KEY_RCTRL));
+    /* NumLock: E0 45 from Raw Input, and 0 + VK_NUMLOCK (MAPVK_VK_TO_VSC_EX gives 0xE045), both land on 0x45 */
+    CHECK(key(c, 0x45, RI_KEY_E0, VK_NUMLOCK) == SU_OK);
+    CHECK(su_input_win32_sample(c, &s) == SU_OK && su_input_key_down(&s, SU_KEY_NUMLOCK) && !su_input_key_down(&s, 0x145));
+    CHECK(key(c, 0x45, RI_KEY_E0 | RI_KEY_BREAK, VK_NUMLOCK) == SU_OK);
+    CHECK(su_input_win32_sample(c, &s) == SU_OK && !su_input_key_down(&s, SU_KEY_NUMLOCK));
+    CHECK(key(c, 0, 0, VK_NUMLOCK) == SU_OK);
+    CHECK(su_input_win32_sample(c, &s) == SU_OK && su_input_key_down(&s, SU_KEY_NUMLOCK) && !su_input_key_down(&s, 0x145));
+    CHECK(key(c, 0, RI_KEY_BREAK, VK_NUMLOCK) == SU_OK);
     /* Mouse: relative motion accumulates until the sample, then resets. */
     CHECK(mouse(c, MOUSE_MOVE_RELATIVE, 5, -3, 0, 0) == SU_OK);
     CHECK(mouse(c, MOUSE_MOVE_RELATIVE, 5, -3, RI_MOUSE_LEFT_BUTTON_DOWN | RI_MOUSE_WHEEL, -120) == SU_OK);

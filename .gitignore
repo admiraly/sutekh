@@ -25,3 +25,5 @@ __pycache__/
 # Single-file libraries fetched by tools/bootstrap_asset_deps.py (third_party/asset-deps.lock.json is tracked)
 /third_party/cgltf/
 /third_party/stb/
+# SDL3 headers fetched by tools/bootstrap_sdl3_headers.py (third_party/sdl3-headers.lock.json is tracked)
+/third_party/sdl3/
