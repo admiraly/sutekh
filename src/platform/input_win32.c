@@ -171,6 +171,11 @@ static void apply_keyboard(SuInputWin32 *c, const RAWKEYBOARD *k, uint64_t t) {
     if (code == 0x12Au || code == 0x136u || code == 0u || code >= SU_INPUT_KEY_COUNT) {
         return; /* E0-prefixed fake shifts sent around navigation keys */
     }
+    if (code == 0x145u) {
+        /* NumLock: Raw Input and MAPVK_VK_TO_VSC_EX can report it E0-prefixed (0xE045); its set 1 position is
+         * 0x45 (SU_KEY_NUMLOCK), as on Linux. Pause, the other key on 0x45, is an E1 sequence and returned above. */
+        code = SU_KEY_NUMLOCK;
+    }
     su_input_set_key(&c->st, code, down);
     c->st.key_ns = t;
 }

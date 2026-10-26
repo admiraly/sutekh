@@ -177,6 +177,7 @@ if(NOT SUTEKH_RENDER STREQUAL "OFF" AND NOT SUTEKH_VULKAN_INCLUDE STREQUAL "")
         # the reason when there is no display, no SDL3 library or no Vulkan device that can present.
         add_executable(test_window_swapchain tests/window/test_window_swapchain.c)
         target_link_libraries(test_window_swapchain PRIVATE su_window su_render su_input)
+        target_include_directories(test_window_swapchain PRIVATE src "${SUTEKH_VULKAN_INCLUDE}")
         sutekh_apply_warnings(test_window_swapchain)
         add_test(NAME window_swapchain COMMAND test_window_swapchain)
         set_tests_properties(window_swapchain PROPERTIES SKIP_RETURN_CODE 77)
@@ -215,6 +216,15 @@ if(NOT SUTEKH_RENDER STREQUAL "OFF" AND NOT SUTEKH_VULKAN_INCLUDE STREQUAL "")
                  --frames 240 --rollback-check --expect-digest ${SUTEKH_DEMO_DIGEST}
                  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(demo_offscreen_rollback PROPERTIES SKIP_RETURN_CODE 3)
+        # A wrong --expect-digest must fail the run, headless and with the renderer (skipped without presentation).
+        add_test(NAME demo_headless_wrong_digest COMMAND "${CMAKE_COMMAND}" -DDEMO=$<TARGET_FILE:space_demo> -DMODE=headless
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/presentation/expect_digest_failure.cmake"
+                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME demo_offscreen_wrong_digest COMMAND "${CMAKE_COMMAND}" -DDEMO=$<TARGET_FILE:space_demo> -DMODE=offscreen
+                 -DOUT=${CMAKE_BINARY_DIR}/space_demo_wrong.ppm
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/presentation/expect_digest_failure.cmake"
+                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(demo_offscreen_wrong_digest PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP: no presentation")
         if(TARGET su_window)
             # Windowed on the session's display with scripted input: resize, minimize, restore, resize back. Exit 3
             # (no display, no SDL3, no Vulkan) skips it.

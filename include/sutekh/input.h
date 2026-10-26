@@ -196,7 +196,8 @@ typedef struct SuInputPad {
 /* Facts about where a state came from (SuInputState.flags). */
 #define SU_INPUT_FLAG_MOUSE_ABSOLUTE 0x1u  /* the mouse reported absolute positions (typical of remote desktop;
                                               on Linux whenever relative mouse mode is off); motion is the
-                                              difference of successive positions, in pixels */
+                                              difference of successive positions, in pixels (Linux: window
+                                              coordinates, which are pixels at pixel density 1) */
 #define SU_INPUT_FLAG_NO_XINPUT 0x2u       /* no XInput library (Linux: no gamepad subsystem): gamepads are never
                                               connected */
 #define SU_INPUT_FLAG_FOCUS_LOST 0x4u      /* focus was lost since the previous sample: keys and buttons were released */

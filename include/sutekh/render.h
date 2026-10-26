@@ -524,8 +524,12 @@ SU_RENDER_API uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **o
 SU_RENDER_API void su_render_destroy(SuRenderer *r);
 SU_RENDER_API uint32_t su_render_device(const SuRenderer *r, SuRenderDeviceInfo *out);
 /* Window resized (also detected from the swapchain), in pixels. A zero width or height pauses presentation: frame
- * calls then return SU_E_RESOURCE_LIMIT without touching the swapchain (the window is minimized, hidden or
- * occluded) until a non-zero size arrives. */
+ * calls then return SU_E_RESOURCE_LIMIT without acquiring a swapchain image (the window is minimized, hidden or
+ * occluded). The pause ends with a non-zero su_render_resize, or by itself when the surface reports a non-zero
+ * extent different from the one it reported when the pause began (a Win32 window restored from a minimize, which
+ * reports 0 x 0 while minimized; an iconified X11 window keeps its extent, so it stays paused until the host
+ * reports a size; Wayland surfaces report no extent). API 12: the pause is explicit; before, a zero size only
+ * waited for the surface extent to become non-zero. */
 SU_RENDER_API void su_render_resize(SuRenderer *r, uint32_t width, uint32_t height);
 
 /* ---- GPU resources: asynchronous upload, generational handles, deferred retirement ----
@@ -1025,8 +1029,10 @@ typedef struct SuRenderStats {
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given
  * view and projection (a standard 0..1 depth projection such as su_mat4f_perspective; the renderer converts it to
- * its reversed-Z depth), no sky, clamp tonemapping. Returns SU_OK, or SU_E_RESOURCE_LIMIT when the window is
- * minimized (nothing drawn), or another status with the reason in su_render_last_error. */
+ * its reversed-Z depth), no sky, clamp tonemapping. Returns SU_OK, or SU_E_RESOURCE_LIMIT when nothing was drawn
+ * (the window is minimized or paused, the swapchain is out of date, or no swapchain image became available within
+ * 100 ms: API 12 never waits for an image without a bound, so a compositor that stops releasing images cannot
+ * stall the host loop), or another status with the reason in su_render_last_error. su_render_frame_ex likewise. */
 SU_RENDER_API uint32_t su_render_frame(SuRenderer *r, const SuRenderView *view, const SuRenderInstance *instances,
                                        uint32_t instance_count, const SuRenderLineVertex *lines, uint32_t line_vertex_count);
 SU_RENDER_API uint32_t su_render_stats(const SuRenderer *r, SuRenderStats *out);

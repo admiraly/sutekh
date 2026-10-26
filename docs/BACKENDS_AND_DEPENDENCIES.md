@@ -70,8 +70,10 @@ failure without a display, and no windowing dependency for headless builds.
   the library, or without a Wayland or X11 display, `su_window_create` returns `SU_E_UNSUPPORTED_METHOD` with a
   reason; offscreen rendering is unaffected. Only the `wayland` and `x11` video drivers are allowed (never a console
   KMS/DRM or dummy driver); `SDL_VIDEO_DRIVER` still overrides.
-- *The renderer owns the surface.* SDL only provides the native handles (`wl_display`/`wl_surface`, or Xlib
-  `Display`/`Window`); `su_render` creates the surface through `VK_KHR_wayland_surface` or `VK_KHR_xlib_surface`
+- *The renderer owns the surface.* SDL provides the native handles (`wl_display`/`wl_surface`, or Xlib
+  `Display`/`Window`); the window is created with `SDL_WINDOW_VULKAN`, as SDL requires, so SDL loads the Vulkan
+  loader too, but it creates no Vulkan objects. `su_window` stops only the SDL subsystems it started
+  (`SDL_QuitSubSystem`), so other SDL use in the host is unaffected. `su_render` creates the surface through `VK_KHR_wayland_surface` or `VK_KHR_xlib_surface`
   (`SuRenderDesc.window_system`, API 12). The renderer does not depend on SDL, and any other windowing layer can
   supply the same handles. The WSI headers need no Wayland or X11 headers (local Xlib typedefs in one translation
   unit).
@@ -87,7 +89,7 @@ failure without a display, and no windowing dependency for headless builds.
   `SUTEKH_WINDOW=AUTO|ON|OFF`; on Windows the library is not built.
 
 **Footprint (measured on the integration machine, Release GCC 16.2).** One translation unit; `libsu_window.a`
-21.5 KB (9.1 KB text). No link-time dependency; headless and `SUTEKH_WINDOW=OFF` builds do not compile it, and a
+23.5 KB (9.7 KB text). No link-time dependency; headless and `SUTEKH_WINDOW=OFF` builds do not compile it, and a
 process that never creates a window never loads SDL. At run time: the system's `libSDL3.so.0` (Fedora 44 SDL 3.4.16:
 3.4 MB), or one a game ships and names with `SUTEKH_SDL3_LIBRARY` (whether a given Steam Linux Runtime provides
 SDL 3 was not checked here). Update policy: bump the pinned headers only to

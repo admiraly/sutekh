@@ -33,7 +33,11 @@ with `su_window_render_desc`; any other windowing layer can pass the same handle
 Size and pausing are the host's report, as on Win32: a Wayland surface does not report its extent, so the
 swapchain takes the size from `SuRenderDesc.width/height` and `su_render_resize` (pixels, clamped to the surface
 limits). `su_render_resize(r, 0, 0)` pauses presentation: frame calls return `SU_E_RESOURCE_LIMIT` without
-acquiring an image until a non-zero size arrives. `su_window_poll` reports a minimized, hidden or occluded window
+acquiring an image until a non-zero size arrives, or until the surface reports a non-zero extent different from
+the one at the pause (a Win32 window restored from a minimize resumes without a resize call; an iconified X11
+window keeps its extent and stays paused). Image acquisition waits at most 100 ms; a timeout skips the frame
+(`SU_E_RESOURCE_LIMIT`), so a compositor that stops releasing images without reporting the window as suspended
+cannot stall the host loop and its simulation ticks. `su_window_poll` reports a minimized, hidden or occluded window
 (including a Wayland window the compositor suspends) as 0 x 0, so the same `resized` forwarding pauses and resumes
 it, and no frame acquires an image of a surface the compositor no longer shows. Wayland has no
 client request to unminimize a window.

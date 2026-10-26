@@ -29,7 +29,7 @@
     X(bool, SDL_SetHint, (const char *name, const char *value))                                              \
     X(bool, SDL_Init, (SDL_InitFlags flags))                                                                 \
     X(bool, SDL_InitSubSystem, (SDL_InitFlags flags))                                                        \
-    X(void, SDL_Quit, (void))                                                                                \
+    X(void, SDL_QuitSubSystem, (SDL_InitFlags flags))                                                        \
     X(const char *, SDL_GetError, (void))                                                                    \
     X(const char *, SDL_GetCurrentVideoDriver, (void))                                                       \
     X(SDL_Window *, SDL_CreateWindow, (const char *title, int w, int h, SDL_WindowFlags flags))              \
@@ -81,14 +81,16 @@ static int load_sdl(char *msg) {
     }
     g_sdl.lib = dlopen(name, RTLD_NOW | RTLD_LOCAL);
     if (g_sdl.lib == NULL) {
-        snprintf(msg, 256, "the SDL3 library (%s) could not be loaded: install SDL 3.2 or later, or set "
-                 "SUTEKH_SDL3_LIBRARY", name);
+        const char *why = dlerror();
+        snprintf(msg, 256, "the SDL3 library could not be loaded (install SDL 3.2 or later, or set "
+                 "SUTEKH_SDL3_LIBRARY): %s", why != NULL ? why : name);
         return 0;
     }
 #define X(ret, fname, args)                                       \
     *(void **)&g_sdl.fname = dlsym(g_sdl.lib, #fname);            \
     if (g_sdl.fname == NULL) {                                    \
-        snprintf(msg, 256, "%s has no entry point %s", name, #fname); \
+        const char *why = dlerror();                              \
+        snprintf(msg, 256, "%s has no entry point %s: %s", name, #fname, why != NULL ? why : ""); \
         dlclose(g_sdl.lib);                                       \
         memset(&g_sdl, 0, sizeof g_sdl);                          \
         return 0;                                                 \
@@ -321,19 +323,20 @@ static uint64_t now_ns(void) {
     return t;
 }
 
+/* Subsystems this backend starts and stops; SDL_Quit would also stop what another part of the host started. */
+#define OUR_SUBSYSTEMS(w) (SDL_INIT_VIDEO | ((w) != NULL && (w)->gamepads ? SDL_INIT_GAMEPAD : 0u))
+
 static uint32_t fail(SuWindow *w, char *msg, const char *fmt, const char *detail) {
     if (msg != NULL) {
         snprintf(msg, 256, fmt, detail != NULL ? detail : "");
     }
-    if (w != NULL) {
-        if (w->win != NULL) {
+    if (g_sdl.lib != NULL) {
+        if (w != NULL && w->win != NULL) {
             g_sdl.SDL_DestroyWindow(w->win);
         }
-        free(w);
+        g_sdl.SDL_QuitSubSystem(OUR_SUBSYSTEMS(w));
     }
-    if (g_sdl.lib != NULL) {
-        g_sdl.SDL_Quit();
-    }
+    free(w);
     return SU_E_UNSUPPORTED_METHOD;
 }
 
@@ -365,14 +368,21 @@ uint32_t su_window_create(const SuWindowDesc *d, SuWindow **out, char message[25
     if (!g_sdl.SDL_Init(SDL_INIT_VIDEO)) {
         const char *wl = getenv("WAYLAND_DISPLAY");
         const char *x = getenv("DISPLAY");
+        const char *err = g_sdl.SDL_GetError();
         char detail[200];
-        snprintf(detail, sizeof detail, "%s (WAYLAND_DISPLAY %s, DISPLAY %s)", g_sdl.SDL_GetError(),
+        snprintf(detail, sizeof detail, "%s (WAYLAND_DISPLAY %s, DISPLAY %s)", err != NULL ? err : "",
                  wl != NULL ? wl : "unset", x != NULL ? x : "unset");
-        return fail(NULL, msg, "no Wayland or X11 display could be opened: %s", detail);
+        /* SDL reports "<drivers> not available" when no driver could connect; anything else is another failure */
+        if (err != NULL && strstr(err, "not available") != NULL) {
+            snprintf(msg, 256, "no Wayland or X11 display could be opened: %s", detail);
+        } else {
+            snprintf(msg, 256, "SDL could not start its video subsystem: %s", detail);
+        }
+        return SU_E_UNSUPPORTED_METHOD; /* SDL_Init failed: nothing to shut down */
     }
     w = calloc(1, sizeof *w);
     if (w == NULL) {
-        g_sdl.SDL_Quit();
+        g_sdl.SDL_QuitSubSystem(SDL_INIT_VIDEO);
         snprintf(msg, 256, "allocation failed");
         return SU_E_RESOURCE_LIMIT;
     }
@@ -440,7 +450,7 @@ void su_window_destroy(SuWindow *w) {
         (void)g_sdl.SDL_SetWindowRelativeMouseMode(w->win, false);
     }
     g_sdl.SDL_DestroyWindow(w->win);
-    g_sdl.SDL_Quit();
+    g_sdl.SDL_QuitSubSystem(OUR_SUBSYSTEMS(w));
     free(w);
     g_window_live = 0;
 }

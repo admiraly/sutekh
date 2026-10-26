@@ -24,6 +24,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "render/su_render_vk_int.h" /* test seam: the renderer's entry-point table (the acquire stub) */
 #include "sutekh/render.h"
 #include "sutekh/window.h"
 
@@ -79,6 +80,30 @@ static void scene(void) {
     g_inst.rot[3] = 1.0f;
     g_inst.color[0] = 1.0f;
     g_inst.color[3] = 1.0f;
+}
+
+/* Acquire seam: record the timeout the renderer passes, or report VK_TIMEOUT (a compositor that keeps every image). */
+static PFN_vkAcquireNextImageKHR g_real_acquire;
+static uint64_t g_seen_timeout;
+static uint32_t g_acquire_calls;
+
+static VKAPI_ATTR VkResult VKAPI_CALL acquire_spy(VkDevice d, VkSwapchainKHR sc, uint64_t timeout, VkSemaphore sem,
+                                                  VkFence fence, uint32_t *index) {
+    g_seen_timeout = timeout;
+    g_acquire_calls++;
+    return g_real_acquire(d, sc, timeout, sem, fence, index);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL acquire_timeout(VkDevice d, VkSwapchainKHR sc, uint64_t timeout, VkSemaphore sem,
+                                                      VkFence fence, uint32_t *index) {
+    (void)d;
+    (void)sc;
+    (void)sem;
+    (void)fence;
+    (void)index;
+    g_seen_timeout = timeout;
+    g_acquire_calls++;
+    return VK_TIMEOUT;
 }
 
 typedef struct Run {
@@ -321,6 +346,58 @@ int main(int argc, char **argv) {
         su_render_resize(run.r, run.ev.width, run.ev.height);
         CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_OK);
         CHECK(su_render_stats(run.r, &rs) == SU_OK && rs.frame == before + 1u);
+    }
+
+    /* acquire never waits forever: the renderer passes a finite timeout, and a timeout skips the frame (paused,
+     * not an error); the next frames present normally */
+    {
+        uint64_t before;
+        g_real_acquire = run.r->f.vkAcquireNextImageKHR;
+        run.r->f.vkAcquireNextImageKHR = acquire_spy;
+        CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_OK);
+        CHECK(g_acquire_calls == 1u && g_seen_timeout == SU_RVK_ACQUIRE_TIMEOUT_NS && g_seen_timeout != UINT64_MAX);
+        CHECK(su_render_stats(run.r, &rs) == SU_OK);
+        before = rs.frame;
+        run.r->f.vkAcquireNextImageKHR = acquire_timeout;
+        for (i = 0; i < 3u; i++) {
+            CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_E_RESOURCE_LIMIT);
+        }
+        CHECK(strstr(su_render_last_error(run.r), "frame skipped") != NULL);
+        CHECK(su_render_stats(run.r, &rs) == SU_OK && rs.frame == before);
+        run.r->f.vkAcquireNextImageKHR = g_real_acquire;
+        for (i = 0; i < 3u; i++) {
+            CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_OK);
+        }
+        CHECK(su_render_stats(run.r, &rs) == SU_OK && rs.frame == before + 3u);
+        printf("acquire: timeout %llu ns passed; a timed-out acquire skipped 3 frames, then presenting resumed\n",
+               (unsigned long long)SU_RVK_ACQUIRE_TIMEOUT_NS);
+    }
+
+    /* X11 reports the surface extent: a pause ends by itself when the extent changes (as a Win32 window restored
+     * from a minimize does), without a su_render_resize call; the same extent keeps it paused (frames above) */
+    if (info.window_system == SU_RENDER_WINDOW_XLIB) {
+        uint32_t want_w = rs.width == 640u ? 720u : 640u;
+        int resumed = 0;
+        su_render_resize(run.r, 0, 0);
+        CHECK(su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_E_RESOURCE_LIMIT);
+        CHECK(su_window_set_size(run.w, want_w, 400) == SU_OK);
+        t0 = now_ms();
+        while (now_ms() - t0 < 3000.0) {
+            CHECK(su_window_poll(run.w, &run.ev) == SU_OK); /* deliberately not forwarded to su_render_resize */
+            if (su_render_frame(run.r, &g_view, &g_inst, 1, NULL, 0) == SU_OK) {
+                resumed = 1;
+                break;
+            }
+            sleep_ms(5);
+        }
+        CHECK(resumed);
+        CHECK(su_render_stats(run.r, &rs) == SU_OK);
+        printf("pause: resumed by a new surface extent %ux%u without su_render_resize: %s\n", rs.width, rs.height,
+               resumed ? "yes" : "no");
+        CHECK(rs.width == want_w && rs.height == 400u);
+        su_render_resize(run.r, run.ev.width, run.ev.height);
+    } else {
+        printf("pause: extent auto-resume not applicable (Wayland surfaces report no extent)\n");
     }
 
     /* minimize and restore (last: Wayland has no request to unminimize, so there the window stays minimized until

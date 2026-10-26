@@ -9,8 +9,10 @@
  * name), so nothing links against SDL and a build or run that never creates a window never loads it. SDL picks
  * Wayland when the session has it, else X11 (also XWayland); SDL_VIDEO_DRIVER=x11 forces X11. Only those two are
  * tried, never a console (KMS/DRM) or dummy driver. The renderer presents to the window's own wl_surface or X11
- * window through VK_KHR_wayland_surface / VK_KHR_xlib_surface (sutekh/render.h, window_system); SDL does not
- * touch Vulkan objects. Decision record: docs/BACKENDS_AND_DEPENDENCIES.md.
+ * window through VK_KHR_wayland_surface / VK_KHR_xlib_surface (sutekh/render.h, window_system) and owns the
+ * instance and the surface. The window is created with SDL_WINDOW_VULKAN, as SDL requires for a window Vulkan
+ * presents to; with it SDL loads the Vulkan loader itself (so window creation also fails without one), but it
+ * creates no Vulkan objects. Decision record: docs/BACKENDS_AND_DEPENDENCIES.md.
  *
  * Input has the Win32 backend's conventions (sutekh/input.h, portable device events): keys by physical position
  * (scan code set 1, from SDL's USB HID scancodes, independent of the keyboard layout), gamepads in the XInput
@@ -19,7 +21,8 @@
  * the wheel in 120ths of a notch. So the same physical input gives the same SuInputState, and the same
  * per-tick records, on Windows and Linux. With relative mouse mode on (the camera case: the pointer is hidden and
  * confined, and motion is the device's unaccelerated motion) motion is device counts like Raw Input; with it off
- * motion is the difference of pointer positions in pixels and SU_INPUT_FLAG_MOUSE_ABSOLUTE is set.
+ * motion is the difference of pointer positions in window coordinates (SDL's logical units: pixels at pixel
+ * density 1, fewer than pixels on a scaled display) and SU_INPUT_FLAG_MOUSE_ABSOLUTE is set.
  *
  * Failure is structured: without the SDL3 library, without a Wayland or X11 display, or when SDL refuses the
  * window, su_window_create returns SU_E_UNSUPPORTED_METHOD with a plain-language message, and nothing else is
@@ -64,8 +67,9 @@ typedef struct SuWindowDesc {
  * neither a Wayland nor an X11 display can be opened, or when SDL refuses the window. message (optional, 256 bytes)
  * says why. A missing gamepad subsystem is not an error (the window works; pads never connect). */
 SU_WINDOW_API uint32_t su_window_create(const SuWindowDesc *desc, SuWindow **out, char message[256]);
-/* Closes the gamepads and the window and shuts SDL down. The renderer presenting to it must be destroyed first.
- * NULL is ignored. */
+/* Closes the gamepads and the window and stops the SDL subsystems su_window_create started (video, gamepad) with
+ * SDL_QuitSubSystem, not SDL_Quit, so other SDL use in the process is unaffected. The renderer presenting to it
+ * must be destroyed first. NULL is ignored. */
 SU_WINDOW_API void su_window_destroy(SuWindow *w);
 
 /* Fills the window fields of a renderer descriptor (struct_size must be sizeof(SuRenderDesc)): window_system,

@@ -1603,7 +1603,7 @@ int main(int argc, char **argv) {
                        "median %.3f ms p95 %.3f ms\n",
                        (unsigned)g.t_n, gm, g95, cm, c95);
             }
-            ok = rs.validation_errors == 0u && g.frames_failed == 0u;
+            ok = ok && rs.validation_errors == 0u && g.frames_failed == 0u;
         }
         if (g.rollback) {
             printf("rollback drills: %llu (restore in place, re-push %u records, step %u ticks), %llu differed, "

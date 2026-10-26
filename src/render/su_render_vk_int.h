@@ -44,6 +44,7 @@
 #define DEFAULT_FX_BATCHES 256u
 #define MAX_DEVICES 16u
 #define HDR_FORMAT VK_FORMAT_R16G16B16A16_SFLOAT
+#define SU_RVK_ACQUIRE_TIMEOUT_NS UINT64_C(100000000) /* 100 ms: vkAcquireNextImageKHR never waits forever */
 
 /* ---------- entry points ---------- */
 
@@ -533,6 +534,7 @@ struct SuRenderer {
     uint32_t want_width, want_height;
     int needs_rebuild;
     int paused;                         /* su_render_resize(0 x 0): no frame touches the swapchain */
+    uint32_t paused_w, paused_h;        /* surface extent when the pause began (0 when unknown) */
     uint32_t flags;
     VkSwapchainKHR swapchain;
     VkPresentModeKHR present_mode;

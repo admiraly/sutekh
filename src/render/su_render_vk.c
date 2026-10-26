@@ -3129,6 +3129,16 @@ void su_render_resize(SuRenderer *r, uint32_t width, uint32_t height) {
          * reporting its extent while iconified, and a hidden Wayland surface may never release images) */
         r->paused = width == 0u || height == 0u;
         r->needs_rebuild = 1;
+        r->paused_w = r->paused_h = 0u;
+        if (r->paused && r->surface != VK_NULL_HANDLE) {
+            /* the extent at the pause: a different non-zero extent later resumes by itself (a restored Win32
+             * window), the same one (an iconified X11 window keeps it) does not */
+            VkSurfaceCapabilitiesKHR caps;
+            if (r->f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(r->pd, r->surface, &caps) == VK_SUCCESS) {
+                r->paused_w = caps.currentExtent.width;
+                r->paused_h = caps.currentExtent.height;
+            }
+        }
     }
 }
 
@@ -3305,6 +3315,17 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
                                (unsigned)in->shadow_size);
         }
     }
+    if (!r->offscreen && r->paused) {
+        VkSurfaceCapabilitiesKHR caps;
+        if (r->f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(r->pd, r->surface, &caps) == VK_SUCCESS &&
+            caps.currentExtent.width != UINT32_MAX && caps.currentExtent.width != 0u && caps.currentExtent.height != 0u &&
+            (caps.currentExtent.width != r->paused_w || caps.currentExtent.height != r->paused_h)) {
+            r->paused = 0; /* the surface reports a new real extent: resume without waiting for su_render_resize */
+            r->want_width = caps.currentExtent.width;
+            r->want_height = caps.currentExtent.height;
+            r->needs_rebuild = 1;
+        }
+    }
     if (!r->offscreen && (r->paused || r->needs_rebuild || r->swapchain == VK_NULL_HANDLE)) {
         int s = r->paused ? -1 : make_swapchain(r);
         if (s < 0) {
@@ -3325,7 +3346,14 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     collect_gpu_time(r, fr);
     if (!su_rvk_particles_prepare(r, fr, in->scene)) return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "particle buffers");
     if (!r->offscreen) {
-        vr = r->f.vkAcquireNextImageKHR(r->dev, r->swapchain, UINT64_MAX, fr->acquired, VK_NULL_HANDLE, &image);
+        /* Finite: a compositor that stops releasing images (a hidden window without a "suspended" report) must not
+         * block the host loop and its simulation ticks; such a frame is skipped like a minimized one. */
+        vr = r->f.vkAcquireNextImageKHR(r->dev, r->swapchain, SU_RVK_ACQUIRE_TIMEOUT_NS, fr->acquired, VK_NULL_HANDLE,
+                                        &image);
+        if (vr == VK_TIMEOUT || vr == VK_NOT_READY) {
+            return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "no swapchain image within %u ms; frame skipped",
+                               (unsigned)(SU_RVK_ACQUIRE_TIMEOUT_NS / 1000000u));
+        }
         if (vr == VK_ERROR_OUT_OF_DATE_KHR) {
             r->needs_rebuild = 1;
             return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "swapchain out of date; recreated on the next frame");

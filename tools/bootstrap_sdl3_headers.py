@@ -51,6 +51,11 @@ def verify():
     rc, head, _ = git(["-C", DEST, "rev-parse", "HEAD"])
     if rc != 0 or head != COMMIT:
         return None, "checkout is not at %s (%s)" % (COMMIT, head or "no git checkout")
+    rc, dirty, err = git(["-C", DEST, "status", "--porcelain", "--untracked-files=all"])
+    if rc != 0:
+        return None, "git status failed: " + err
+    if dirty:
+        return None, "checkout has local modifications: " + dirty.splitlines()[0]
     lic = os.path.join(DEST, LICENSE)
     if not os.path.isfile(lic):
         return None, "license file %s missing" % LICENSE
