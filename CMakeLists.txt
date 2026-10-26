@@ -749,6 +749,22 @@ add_test(NAME host_replay_record COMMAND test_replay record "${CMAKE_CURRENT_BIN
 add_test(NAME host_replay_verify_dll COMMAND test_replay_dll verify "${CMAKE_CURRENT_BINARY_DIR}/host_replay.bin"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 set_tests_properties(host_replay_verify_dll PROPERTIES DEPENDS host_replay_record)
+# Issue 144: schedules of up to 64 systems and declared world schemas (static library and DLL), and the
+# first-release API on worlds without a declared schema (pinned to the values before the change).
+add_executable(test_host_schedule tests/host/test_host_schedule.c)
+target_link_libraries(test_host_schedule PRIVATE su_host)
+target_include_directories(test_host_schedule PRIVATE src)
+target_compile_definitions(test_host_schedule PRIVATE SU_TEST_INTERNAL)
+sutekh_apply_warnings(test_host_schedule)
+add_test(NAME host_schedule COMMAND test_host_schedule WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_executable(test_host_schedule_dll tests/host/test_host_schedule.c)
+target_link_libraries(test_host_schedule_dll PRIVATE sutekh_host)
+sutekh_apply_warnings(test_host_schedule_dll)
+add_test(NAME host_schedule_dll COMMAND test_host_schedule_dll WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_executable(test_host_compat tests/host/test_host_compat.c)
+target_link_libraries(test_host_compat PRIVATE su_host)
+sutekh_apply_warnings(test_host_compat)
+add_test(NAME host_compat COMMAND test_host_compat WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif() # SUTEKH_BUILD_TESTS
 # Example presentation-host loop (examples/host); run as a test so it keeps working.
 if(SUTEKH_BUILD_EXAMPLES OR SUTEKH_BUILD_TESTS)

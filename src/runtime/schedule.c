@@ -57,8 +57,75 @@ void su_sched_free(SuSchedule *s) {
         su_sched_entry_destroy(&s->sys[i]);
     }
     free(s->fields);
+    free(s->declared_fields);
     su_ent_rt_destroy(s->ent);
     memset(s, 0, sizeof *s);
+}
+
+uint32_t su_sched_max_systems(const SuSchedule *s) {
+    return s->max_systems != 0u ? s->max_systems : SU_SCHED_DEFAULT_SYSTEMS;
+}
+
+uint32_t su_sched_set_max_systems(SuSchedule *s, uint32_t max_systems) {
+    if (s == NULL || max_systems == 0u || max_systems > SU_SCHED_MAX_SYSTEMS || max_systems < s->count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    s->max_systems = max_systems;
+    return SU_OK;
+}
+
+static int name_ok(const char *name) {
+    size_t n = 0;
+    if (name == NULL) {
+        return 0;
+    }
+    while (n <= SU_WORLD_NAME_MAX && name[n] != '\0') {
+        n++;
+    }
+    return n >= 1u && n <= SU_WORLD_NAME_MAX;
+}
+
+uint32_t su_sched_declare_schema(SuSchedule *s, const char *schema_id, uint32_t schema_version, uint32_t gen,
+                                 const SuSchedField *lanes, uint32_t n) {
+    SuSchedField *tab;
+    uint32_t i, j;
+    if (s == NULL || s->count != 0u || s->declared || lanes == NULL || n == 0u || n > SU_LIMIT_FIELDS ||
+        !name_ok(schema_id) || schema_version == 0u || gen == 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (i = 0; i < n; i++) {
+        uint32_t vt = lanes[i].value_type;
+        if (lanes[i].type != SU_TYPE_U32 || !name_ok(lanes[i].name) ||
+            (vt != SU_TYPE_U32 && vt != SU_TYPE_I32 && vt != SU_TYPE_I64 && vt != SU_TYPE_Q32)) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        for (j = 0; j < i; j++) {
+            if (lanes[j].id == lanes[i].id || strcmp(lanes[j].name, lanes[i].name) == 0) {
+                return SU_E_INVALID_ARGUMENT;
+            }
+        }
+    }
+    tab = malloc((size_t)n * sizeof *tab);
+    if (tab == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (i = 0; i < n; i++) {
+        SuSchedField key = lanes[i];
+        key.access = 0u;
+        j = i;
+        while (j > 0 && tab[j - 1].id > key.id) {
+            tab[j] = tab[j - 1];
+            j--;
+        }
+        tab[j] = key;
+    }
+    snprintf(s->schema_id, sizeof s->schema_id, "%s", schema_id);
+    s->schema_version = schema_version;
+    s->layout_generation = gen;
+    s->declared = 1u;
+    s->declared_count = n;
+    s->declared_fields = tab;
+    return SU_OK;
 }
 
 uint32_t su_sched_enable_entities(SuSchedule *s, uint64_t max_struct_tick, uint64_t max_events_tick,
@@ -110,10 +177,10 @@ uint32_t su_sched_add(SuSchedule *s, SuLirModule *mod, uint32_t schema_version, 
     if (mod == NULL) {
         return SU_E_INVALID_ARGUMENT;
     }
-    if (s->count >= SU_SCHED_MAX_SYSTEMS) {
+    if (s->count >= su_sched_max_systems(s)) {
         return SU_E_RESOURCE_LIMIT;
     }
-    if (s->count == 0) {
+    if (s->count == 0 && !s->declared) {
         snprintf(s->schema_id, sizeof s->schema_id, "%s", mod->query);
         s->schema_version = schema_version;
         s->layout_generation = gen;
@@ -203,10 +270,10 @@ uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModu
     if (!decl_matches_bound(decl, d, bind)) {
         return SU_E_SCHEMA_MISMATCH;
     }
-    if (s->count >= SU_SCHED_MAX_SYSTEMS) {
+    if (s->count >= su_sched_max_systems(s)) {
         return SU_E_RESOURCE_LIMIT;
     }
-    if (s->count == 0) {
+    if (s->count == 0 && !s->declared) {
         snprintf(s->schema_id, sizeof s->schema_id, "%s", decl->query);
         s->schema_version = schema_version;
         s->layout_generation = gen;
@@ -250,10 +317,10 @@ uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *de
     if (!decl_matches_host(decl, d)) {
         return SU_E_SCHEMA_MISMATCH;
     }
-    if (s->count >= SU_SCHED_MAX_SYSTEMS) {
+    if (s->count >= su_sched_max_systems(s)) {
         return SU_E_RESOURCE_LIMIT;
     }
-    if (s->count == 0) {
+    if (s->count == 0 && !s->declared) {
         snprintf(s->schema_id, sizeof s->schema_id, "%s", d->schema_id);
         s->schema_version = schema_version;
         s->layout_generation = gen;
@@ -280,7 +347,7 @@ uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *de
 }
 
 /* Adds one field to the union table, or checks it against an existing row. */
-static uint32_t union_add(SuSchedField **tab, uint32_t *n, uint32_t *cap, const SuLirField *f) {
+static uint32_t union_add(SuSchedField **tab, uint32_t *n, uint32_t *cap, const SuLirField *f, int closed) {
     uint32_t i;
     for (i = 0; i < *n; i++) {
         SuSchedField *x = &(*tab)[i];
@@ -294,6 +361,9 @@ static uint32_t union_add(SuSchedField **tab, uint32_t *n, uint32_t *cap, const 
         if (strcmp(x->name, f->name) == 0) {
             return SU_E_SCHEMA_MISMATCH;
         }
+    }
+    if (closed) {
+        return SU_E_SCHEMA_MISMATCH; /* a declared schema: systems bind a subset of its lanes */
     }
     if (*n >= *cap) {
         uint32_t nc = *cap == 0 ? 8u : *cap * 2u;
@@ -331,12 +401,61 @@ static int lane_suffix(const char *name) {
     return n > 3u && (strcmp(name + n - 3u, ".lo") == 0 || strcmp(name + n - 3u, ".hi") == 0);
 }
 
+/* A declared schema: the first system field that is not a declared lane, or disagrees with one. */
+static int explain_declared(const SuSchedule *s, char *msg, size_t cap, uint32_t *system) {
+    uint32_t a, i, k;
+    for (a = 0; a < s->count; a++) {
+        const SuLirModule *m = s->sys[a].mod;
+        for (i = 0; i < m->field_count; i++) {
+            const SuLirField *f = &m->fields[i];
+            const SuSchedField *by_id = NULL, *by_name = NULL;
+            for (k = 0; k < s->declared_count; k++) {
+                if (s->declared_fields[k].id == f->id) {
+                    by_id = &s->declared_fields[k];
+                }
+                if (strcmp(s->declared_fields[k].name, f->name) == 0) {
+                    by_name = &s->declared_fields[k];
+                }
+            }
+            if (by_id != NULL && by_id == by_name && by_id->type == f->type &&
+                by_id->value_type == SU_LIR_VALUE_TYPE(f)) {
+                continue;
+            }
+            *system = a;
+            if (by_id == NULL && by_name == NULL) {
+                snprintf(msg, cap, "%s binds field id %u \"%s\" (%s), which the declared world schema does not have",
+                         s->sys[a].system_id, (unsigned)f->id, f->name, vtype_name(SU_LIR_VALUE_TYPE(f)));
+            } else {
+                const SuSchedField *d = by_id != NULL ? by_id : by_name;
+                snprintf(msg, cap,
+                         "field mismatch: the declared world schema has id %u \"%s\" (%s), %s has id %u \"%s\" (%s)%s",
+                         (unsigned)d->id, d->name, vtype_name(d->value_type), s->sys[a].system_id, (unsigned)f->id,
+                         f->name, vtype_name(SU_LIR_VALUE_TYPE(f)),
+                         lane_suffix(d->name) || lane_suffix(f->name)
+                             ? "; a q32/i64 field \"x\" at ID J is lanes \"x.lo\" (J), \"x.hi\" (J+1)"
+                             : "");
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void su_sched_explain_mismatch(const SuSchedule *s, char *msg, size_t cap) {
+    uint32_t system;
+    su_sched_explain_mismatch_ex(s, msg, cap, &system);
+}
+
+void su_sched_explain_mismatch_ex(const SuSchedule *s, char *msg, size_t cap, uint32_t *system) {
     uint32_t a, b, i, j;
+    *system = UINT32_MAX;
     if (msg == NULL || cap == 0u) {
         return;
     }
     msg[0] = '\0';
+    if (s->declared && explain_declared(s, msg, cap, system)) {
+        return;
+    }
     for (a = 0; a < s->count; a++) {
         const SuLirModule *ma = s->sys[a].mod;
         for (b = a; b < s->count; b++) {
@@ -375,10 +494,18 @@ uint32_t su_sched_finalize(SuSchedule *s) {
     uint32_t j;
     uint32_t st = SU_OK;
 
+    if (s->declared) {
+        tab = malloc((size_t)s->declared_count * sizeof *tab);
+        if (tab == NULL) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        memcpy(tab, s->declared_fields, (size_t)s->declared_count * sizeof *tab);
+        n = cap = s->declared_count;
+    }
     for (i = 0; i < s->count && st == SU_OK; i++) {
         const SuLirModule *m = s->sys[i].mod;
         for (j = 0; j < m->field_count && st == SU_OK; j++) {
-            st = union_add(&tab, &n, &cap, &m->fields[j]);
+            st = union_add(&tab, &n, &cap, &m->fields[j], s->declared != 0u);
         }
     }
     if (st != SU_OK) {
