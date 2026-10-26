@@ -81,7 +81,7 @@ Windows legs (CI).
 
 Determinism: `expected_digests.txt` regenerated with GCC 16.2.1 Release, reference tier
 (`det_matrix --fixtures <build>/det_fixtures --tier reference --out ...`); the 191 existing lines are unchanged
-(diff: only the 13 `s3_dense` lines appended), so no existing workload was re-pinned. Every lane above ran every
+(diff: only the 13 `s3_dense` lines appended; after merging main, `handles04` (issue 162) precedes them), so no existing workload was re-pinned. Every lane above ran every
 determinism ctest (reference, planned, mixed, native where built, DLL, play-static) against it and passed. `s3_dense`:
 3 ticks cut, 5,345 flag-4 movers, 2,663,230 entries skipped over 300 ticks.
 

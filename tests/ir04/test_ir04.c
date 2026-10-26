@@ -477,7 +477,7 @@ static void test_table(void) {
             CHECK(o->code >= SU_OP_AND_U32);
         }
     }
-    CHECK(n04 == 17u);
+    CHECK(n04 == 18u);
     CHECK(su_op_min_minor(su_op03_by_name("add_i32", 7)) == 3u);
     CHECK(su_op_min_minor(su_op03_by_name("xor_u32", 7)) == 4u);
 }

@@ -125,6 +125,8 @@ static const SuOp03 OPS04[] = {
     {"gather_q32", SU_OP_GATHER_Q32, Q32, 2, {{"field", SU_O_FGATHER, Q32, SU_S_A}, R("slot", U32, SU_S_B)}},
     {"find_eq_u32", SU_OP_FIND_EQ_U32, U32, 3,
      {{"field", SU_O_FGATHER, U32, SU_S_A}, R("key", U32, SU_S_B), {"span", SU_O_CSPAN, 0, SU_S_C}}},
+    /* entity table read of the entry state (2026-10-26) */
+    {"handle_live", SU_OP_HANDLE_LIVE, BOOL, 2, {R("slot", U32, SU_S_A), R("gen", U32, SU_S_B)}},
 };
 
 #define N03 (sizeof OPS03 / sizeof OPS03[0])

@@ -29,6 +29,11 @@ function(_sutekh_numeric3d_late)
         target_include_directories(test_host04 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
         sutekh_apply_warnings(test_host04)
         add_test(NAME host04 COMMAND test_host04 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        # IR 0.4 handle_live through the entity runtime: despawn, slot reuse, snapshot restore, tiers (issue 162).
+        add_executable(test_host_handle "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir04/test_host_handle.c")
+        target_link_libraries(test_host_handle PRIVATE su_host)
+        sutekh_apply_warnings(test_host_handle)
+        add_test(NAME host_handle_live COMMAND test_host_handle)
     endif()
     # 6dof_racer_microcosm: the engine's schedule executor (su_agent) running two IR 0.3 systems and space3d.query.
     if(TARGET su_agent AND SUTEKH_BUILD_TESTS)
@@ -113,6 +118,15 @@ add_executable(test_ir04 tests/ir04/test_ir04.c)
 target_link_libraries(test_ir04 PRIVATE su_vm su_jobs)
 sutekh_apply_warnings(test_ir04)
 add_test(NAME ir04 COMMAND test_ir04 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# IR 0.4 handle_live: verifier, VM known answers, entity-table wrapper rule, reference/planned differential.
+add_executable(test_handle_live tests/ir04/test_handle_live.c)
+target_link_libraries(test_handle_live PRIVATE su_vm)
+if(SUTEKH_NATIVE)
+    target_link_libraries(test_handle_live PRIVATE su_native)
+    target_compile_definitions(test_handle_live PRIVATE SU_TEST_NATIVE)
+endif()
+sutekh_apply_warnings(test_handle_live)
+add_test(NAME ir04_handle_live COMMAND test_handle_live)
 endif() # SUTEKH_BUILD_TESTS
 
 # space3d (docs/SPACE3D.md): narrow phase, broadphase and the space3d.query host operator.

@@ -67,6 +67,14 @@ struct SuExecContext {
     uint32_t **gather_cols;        /* per table index, filled per invocation (whole-table columns) */
     uint64_t gather_rows;
     uint32_t *filter_copy;         /* writable lane indices copied on a filtered-out row */
+    /* IR 0.4 entity table for handle_live (su_vm_context_set_entity_table), and the one bound per invocation. */
+    int has_ents;
+    const uint8_t *ents_alive;     /* borrowed; NULL = all slots alive */
+    const uint32_t *ents_gen;      /* borrowed; NULL = generation 1 */
+    uint64_t ents_slots;
+    const uint8_t *hl_alive;
+    const uint32_t *hl_gen;
+    uint64_t hl_slots;
 };
 
 /* Process default tier for new contexts: 0 = not set (environment SUTEKH_VM_TIER, else planned). */
@@ -494,6 +502,14 @@ static uint32_t su_exec_insn03(SuExecContext *ctx, const SuInsn *ins, size_t r) 
         } else {
             su_wr_w(ctx, ins->dst, op == SU_OP_GATHER_I64 ? SU_TYPE_I64 : SU_TYPE_Q32, su_i64_from_bits(bits));
         }
+        return SU_OK;
+    }
+    case SU_OP_HANDLE_LIVE: {
+        uint32_t g = 0;
+        if (!su_read_u32(ctx, ins->a, &u) || !su_read_u32(ctx, ins->b, &g)) {
+            return SU_E_INTERNAL;
+        }
+        su_write_reg(ctx, ins->dst, SU_TYPE_BOOL, su_handle_live(ctx->hl_alive, ctx->hl_gen, ctx->hl_slots, u, g));
         return SU_OK;
     }
     case SU_OP_FIND_EQ_U32: {
@@ -978,6 +994,18 @@ uint32_t su_vm_context_set_table_view(SuExecContext *ctx, const SuInvocation *ta
     return SU_OK;
 }
 
+uint32_t su_vm_context_set_entity_table(SuExecContext *ctx, const uint8_t *alive, const uint32_t *generations,
+                                        uint64_t slot_count) {
+    if (ctx == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    ctx->has_ents = !(alive == NULL && generations == NULL && slot_count == 0u);
+    ctx->ents_alive = alive;
+    ctx->ents_gen = generations;
+    ctx->ents_slots = slot_count;
+    return SU_OK;
+}
+
 uint32_t su_vm_context_set_row_limit(SuExecContext *ctx, uint64_t limit) {
     if (ctx == NULL) {
         return SU_E_INVALID_ARGUMENT;
@@ -1190,6 +1218,28 @@ static uint32_t su_bind_table(SuExecContext *ctx, const SuOutputs *out, uint64_t
     return SU_OK;
 }
 
+/* IR 0.4 handle_live: binds the entity table for this invocation. Without su_vm_context_set_entity_table the
+ * call's entity view is the table, which is only meaningful when it starts at slot 0 (else SU_E_INVALID_ARGUMENT,
+ * so a chunk cannot silently answer from its own slots). */
+static uint32_t su_bind_ents(SuExecContext *ctx, uint64_t rows) {
+    if (!ctx->module->uses_handle_live) {
+        return SU_OK;
+    }
+    if (ctx->has_ents) {
+        ctx->hl_alive = ctx->ents_alive;
+        ctx->hl_gen = ctx->ents_gen;
+        ctx->hl_slots = ctx->ents_slots;
+        return SU_OK;
+    }
+    if (ctx->base_slot != 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    ctx->hl_alive = ctx->alive;
+    ctx->hl_gen = ctx->generations;
+    ctx->hl_slots = rows;
+    return SU_OK;
+}
+
 /* ---- execution -------------------------------------------------------- */
 
 /* Executes one instruction for row r. Returns SU_OK or SU_E_INTERNAL. */
@@ -1321,6 +1371,9 @@ static int su_exec_rows_planned(SuExecContext *ctx, uint64_t rows, SuOutputs *ou
     run.emits = ctx->needs_emitter;
     run.gather_cols = ctx->gather_cols;
     run.gather_rows = ctx->gather_rows;
+    run.ents_alive = ctx->hl_alive;
+    run.ents_gen = ctx->hl_gen;
+    run.ents_slots = ctx->hl_slots;
     if (ctx->module->has_row_filter) {
         run.filter_col = ctx->in_cols[ctx->module->row_filter_field];
         run.filter_mask = ctx->module->row_filter_mask;
@@ -1464,6 +1517,9 @@ uint32_t su_vm_invoke_v1(SuExecContext *ctx, const SuInvocation *input, SuOutput
         }
     }
     st = su_bind_table(ctx, out, rows);
+    if (st == SU_OK) {
+        st = su_bind_ents(ctx, rows);
+    }
     if (st != SU_OK) {
         return fail_out(ctx, out, st);
     }
