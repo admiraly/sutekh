@@ -337,6 +337,21 @@ Validation:
   mutation results stand.
 - CI on the PR head: see the PR (all 8 jobs required).
 
+### Merge of main after PR #152 (issue 144)
+
+`origin/main` `e5dd571` was merged in without a force-push. The only conflicts were the two adjacent appended
+sections, in `include/sutekh/host.h` (operator state, then declared world schemas) and
+`docs/IMPLEMENTATION_STATUS.md`; both sections were kept. `SuHostWorld.opstate[]` follows `SU_SCHED_MAX_SYSTEMS`,
+now 64.
+
+After the merge:
+- GCC Debug **148/148** and GCC Release **148/148** (skip: `audio_device`);
+- GCC native **165/165** (skips: `native_unwind`, `audio_device`);
+- 0 warnings;
+- ASan+UBSan on `host_opstate*` and `host_registered*`: 19/19, 0 diagnostics;
+- `tests/consumer/check_consumer.py`: passed;
+- `host_opstate` 3,040 checks, `host_opstate_dll` 3,030.
+
 ## Unrun checks and limitations
 
 - **Not run:** Windows (MSVC, clang-cl), macOS, renderer-on, ThreadSanitizer, the full ASan suite, ILP32 (only the
