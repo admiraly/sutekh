@@ -18,6 +18,30 @@ Use Vulkan with a tested baseline capability profile; Vulkan 1.3 is a candidate 
 
 Do not promise that every unit type collapses into one draw. Material state, mesh variants, skinning, visibility, shadows, transparency, and rendering passes determine batching. The engine should reduce per-object CPU work while measuring actual GPU and CPU cost.
 
+### Presentation targets: Win32, Wayland, X11, offscreen
+
+`SuRenderDesc` selects the target (API 12): an `hwnd` (Windows, `VK_KHR_win32_surface`); a `window_system` with
+native handles (Linux: `SU_RENDER_WINDOW_WAYLAND` with `wl_display`/`wl_surface` through `VK_KHR_wayland_surface`,
+or `SU_RENDER_WINDOW_XLIB` with `Display`/`Window` through `VK_KHR_xlib_surface`, which also covers XWayland); or
+neither, for the offscreen target with readback. The renderer enables only the instance extensions of the chosen
+target, creates and destroys the surface itself, and needs no Wayland or X11 headers or libraries (the loader
+provides the entry points). `include/sutekh/window.h` (`su_window`, SDL 3 opened at run time; decision in
+[BACKENDS_AND_DEPENDENCIES.md](BACKENDS_AND_DEPENDENCIES.md) section 8) creates such a window and fills the fields
+with `su_window_render_desc`; any other windowing layer can pass the same handles. An API 11 descriptor
+(`SU_RENDER_DESC_V2_SIZE`) still works.
+
+Size and pausing are the host's report, as on Win32: a Wayland surface does not report its extent, so the
+swapchain takes the size from `SuRenderDesc.width/height` and `su_render_resize` (pixels, clamped to the surface
+limits). `su_render_resize(r, 0, 0)` pauses presentation: frame calls return `SU_E_RESOURCE_LIMIT` without
+acquiring an image until a non-zero size arrives. `su_window_poll` reports a minimized, hidden or occluded window
+(including a Wayland window the compositor suspends) as 0 x 0, so the same `resized` forwarding pauses and resumes
+it, and no frame acquires an image of a surface the compositor no longer shows. Wayland has no
+client request to unminimize a window.
+
+Observed on the integration machine (KDE Plasma Wayland, Intel Arc A770, Mesa 26.2.4): FIFO on Wayland and on
+XWayland, swapchain recreation on resize; under bare Xvfb (no DRI3) the hardware drivers cannot present, the
+renderer picks lavapipe/llvmpipe, which presents through the X11 software path (`window_swapchain_xvfb`).
+
 ### 2.1 HDR scene, tonemap, bloom and exposure
 
 The scene (sky, opaque, masked and blended meshes, debug items, additive effects) renders into an `R16G16B16A16_SFLOAT` target; a final output pass applies exposure and the ACES-fitted tonemap (or a clamp) and writes the sRGB swapchain or offscreen image. The HDR format is part of the baseline: a device that cannot render to and sample it does not meet the baseline (`su_render_enumerate`, `why_not`). Bloom additionally needs linear filtering of that format (`SuRenderDeviceInfo.bloom`); without it `SuRenderPost` requests are ignored and the frame is tonemapped plain.

@@ -1,0 +1,38 @@
+{
+  "issue": 138,
+  "branch": "feat/issue-138-linux-window",
+  "base_revision": "07d06de",
+  "state": "locally_verified",
+  "render_api_version": 12,
+  "input_api_version": 2,
+  "window_api_version": 1,
+  "dependency": {
+    "name": "SDL 3",
+    "license": "Zlib",
+    "use": "opened at run time (libSDL3.so.0 >= 3.2.0); headers pinned at build time",
+    "headers_tag": "release-3.2.30",
+    "headers_commit": "f5e5f6588921eed3d7d048ce43d9eb1ff0da0ffc",
+    "decision": "docs/BACKENDS_AND_DEPENDENCIES.md section 8"
+  },
+  "local_build": "passed_gcc16_debug_and_release_werror",
+  "local_tests": {
+    "debug_total": 145,
+    "release_total": 145,
+    "failures": 0,
+    "skips": ["audio_device"],
+    "headless_total": 127,
+    "window_wayland": "passed",
+    "window_xwayland": "passed",
+    "window_xvfb": "passed_llvmpipe",
+    "ci_image_reproduction": "passed_sdl_3_2_10_xvfb_llvmpipe",
+    "sanitizers": "passed_clang_asan_ubsan_new_tests"
+  },
+  "validation_layer": "not_installed_locally",
+  "windows_native": "not_run",
+  "gamepad_hardware": "not_run",
+  "steam_deck": "not_run",
+  "ci": "not_waited_for",
+  "integration": "pending",
+  "blockers": [],
+  "next": "Review and CI; Windows-native demo run; gamepad and Steam Deck run; decide how release builds locate libSDL3.so.0."
+}

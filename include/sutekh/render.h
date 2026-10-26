@@ -10,7 +10,7 @@
  *     a chase camera and a free camera, interpolation, procedural meshes (box, sphere, arrow ship), and a
  *     debug-line builder (lines, vectors, planes, ellipses, boxes, axes).
  *   - The renderer: Vulkan 1.2 or later, loaded at run time (no link-time dependency on a Vulkan library), a
- *     Win32 window swapchain or an offscreen target with readback, instanced meshes, depth, debug lines, and CPU
+ *     window swapchain (a Win32 HWND, or a Wayland or X11 (Xlib) window on Linux) or an offscreen target with readback, instanced meshes, depth, debug lines, and CPU
  *     and GPU frame times (timestamp queries when the queue supports them). Without Vulkan every call fails with
  *     a status and a plain-language reason; nothing crashes.
  *
@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 11u
+#define SU_RENDER_API_VERSION 12u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -477,14 +477,15 @@ SU_RENDER_API uint32_t su_render_enumerate(SuRenderDeviceInfo *out, uint32_t cap
 #define SU_RENDER_FLAG_NO_VSYNC 0x2u     /* prefer MAILBOX, then IMMEDIATE, over FIFO */
 
 typedef struct SuRenderDesc {
-    uint32_t struct_size;          /* sizeof(SuRenderDesc), or SU_RENDER_DESC_V1_SIZE for the first-slice fields */
+    uint32_t struct_size;          /* sizeof(SuRenderDesc), SU_RENDER_DESC_V2_SIZE (API 11 and earlier: no
+                                    * window_system fields) or SU_RENDER_DESC_V1_SIZE (first-slice fields only) */
     uint32_t flags;                /* SU_RENDER_FLAG_* */
-    void *hwnd;                    /* Windows HWND to present to, or NULL for an offscreen target */
-    uint32_t width, height;        /* offscreen size, or the initial window size */
+    void *hwnd;                    /* Windows HWND to present to, or NULL (offscreen, or window_system below) */
+    uint32_t width, height;        /* offscreen size, or the initial window size in pixels */
     uint32_t max_instances;        /* debug instances per frame; 0 = 16384 */
     uint32_t max_line_vertices;    /* per frame; 0 = 131072 */
     int32_t device_index;          /* index from su_render_enumerate, or -1 for the best device */
-    /* ---- fields after this line need struct_size == sizeof(SuRenderDesc) ---- */
+    /* ---- fields after this line need struct_size >= SU_RENDER_DESC_V2_SIZE ---- */
     const char *pipeline_cache_path; /* load at create and save at destroy (NULL: no persistence) */
     uint32_t upload_budget_bytes;  /* staging bytes copied per frame (each frame slot owns this much); 0 = 16 MiB */
     uint32_t max_resources;        /* meshes + textures + materials + models alive at once; 0 = 16384 */
@@ -493,17 +494,38 @@ typedef struct SuRenderDesc {
     uint32_t max_hud_vertices;     /* per frame; 0 = 49152 */
     uint32_t max_fx_tex_vertices;  /* textured fx per frame; 0 = 98304 */
     uint32_t max_fx_batches;       /* textured fx batches per frame; 0 = 256 */
+    /* ---- API 12: a native window other than a Win32 HWND (hwnd stays NULL). Fields after this line need
+     * struct_size == sizeof(SuRenderDesc); SU_RENDER_DESC_V2_SIZE is the size of API 11 and earlier. ---- */
+    uint32_t window_system;        /* SU_RENDER_WINDOW_*; NONE: hwnd, or offscreen when hwnd is NULL */
+    void *window_display;          /* WAYLAND: struct wl_display *; XLIB: Display * */
+    void *window_surface;          /* WAYLAND: struct wl_surface *; XLIB: unused (NULL) */
+    uint64_t window_id;            /* XLIB: the Window (an X11 XID); WAYLAND: unused (0) */
 } SuRenderDesc;
 #define SU_RENDER_DESC_V1_SIZE ((uint32_t)offsetof(SuRenderDesc, pipeline_cache_path))
+/* sizeof the API 11 descriptor: window_system starts in its tail padding, rounded to its pointer alignment. */
+#define SU_RENDER_DESC_V2_SIZE \
+    ((uint32_t)((offsetof(SuRenderDesc, window_system) + sizeof(void *) - 1u) / sizeof(void *) * sizeof(void *)))
 
-/* Creates the renderer. SU_E_UNSUPPORTED_METHOD without a usable Vulkan device (message says why), SU_E_IO for
- * a surface or swapchain the platform refuses, SU_E_RESOURCE_LIMIT for out-of-memory. Every pipeline is created
- * here (through the pipeline cache when one is configured), never during a frame. */
+/* Native window systems of SuRenderDesc.window_system (Linux and other non-Windows builds; on Windows only NONE).
+ * The window stays owned by the caller and must outlive the renderer. sutekh/window.h creates one and fills these
+ * fields (su_window_render_desc). With a window whose surface does not report its size (Wayland), the size comes
+ * from SuRenderDesc.width/height and later su_render_resize calls, in pixels. */
+#define SU_RENDER_WINDOW_NONE 0u
+#define SU_RENDER_WINDOW_WAYLAND 1u        /* VK_KHR_wayland_surface */
+#define SU_RENDER_WINDOW_XLIB 2u           /* VK_KHR_xlib_surface (also XWayland) */
+
+/* Creates the renderer. SU_E_UNSUPPORTED_METHOD without a usable Vulkan device (message says why), or for a window
+ * system this build or the Vulkan loader does not support (for example an HWND outside Windows, or no
+ * VK_KHR_wayland_surface); SU_E_IO for a surface or swapchain the platform refuses; SU_E_RESOURCE_LIMIT for
+ * out-of-memory; SU_E_INVALID_ARGUMENT for an hwnd together with a window_system, or missing window handles.
+ * Every pipeline is created here (through the pipeline cache when one is configured), never during a frame. */
 SU_RENDER_API uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char message[256]);
 /* Waits for the device, saves the pipeline cache (when configured) and frees everything. */
 SU_RENDER_API void su_render_destroy(SuRenderer *r);
 SU_RENDER_API uint32_t su_render_device(const SuRenderer *r, SuRenderDeviceInfo *out);
-/* Window resized (also detected from the swapchain). A zero size pauses presentation. */
+/* Window resized (also detected from the swapchain), in pixels. A zero width or height pauses presentation: frame
+ * calls then return SU_E_RESOURCE_LIMIT without touching the swapchain (the window is minimized, hidden or
+ * occluded) until a non-zero size arrives. */
 SU_RENDER_API void su_render_resize(SuRenderer *r, uint32_t width, uint32_t height);
 
 /* ---- GPU resources: asynchronous upload, generational handles, deferred retirement ----

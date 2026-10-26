@@ -468,3 +468,14 @@ Owner-authorized downstream work outside the milestone order (`planning/amendmen
 ## Assets, PBR-lite rendering, large scenes, effects, HUD, audio (18 October 2026)
 
 Owner-authorized downstream work (second extension of `planning/amendments/2026-10-18-downstream-host-work.md`; M3 gates unchanged; M5 is not closed). Implemented and tested: `include/sutekh/asset.h` (cooked SUAPAK v1 packs: content SHA-256 address, stable name-derived ids, per-payload hashes, full validation on open, writer, background loader; a glTF 2.0/GLB importer and cook step on cgltf 1.15 and stb_image 2.30 fetched and pinned by `tools/bootstrap_asset_deps.py`, with KTX2 RGBA8/BCn); `include/sutekh/render.h` API version 2 (generational GPU resources with budgeted asynchronous upload and deferred retirement, `su_render_frame_ex` with Q32.32 camera-relative positions, reversed-Z infinite projection, per-object and per-node culling, distance LOD, instanced batching, metallic-roughness PBR-lite with sun, sky IBL-lite, normal maps and emissive, HDR with ACES tonemapping, additive effects, HUD text with a project-authored font, persistent pipeline cache); `include/sutekh/audio.h` (lock-free voice mixer with panning, attenuation and Doppler, WAV/Ogg and PS-ADPCM (raw frames and VAGp), WASAPI, an event cursor that does not replay re-emitted events). Windows clang ctest 92 passed, 2 skipped (POSIX-only) of 94; Linux CI renders the asset test on Mesa lavapipe. On the Quadro P600 over RDP: pixel-exact asset rendering checks, 0 validation errors or warnings (also with synchronization validation) over the tests, the demo offscreen with rollback drills, window resize/minimize with a model upload in flight and MAILBOX; 1920x1080 offscreen GPU median 1.4 to 2.4 ms for 3,000 to 20,000 instanced asteroids (observations). Evidence: `planning/evidence/presentation-assets/`. Handoff with unrun items: `planning/handoffs/2026-10-18-presentation-assets.md`.
+
+## Linux windowed presentation and native input (26 October 2026)
+
+Issue 138. Implemented and tested: `include/sutekh/window.h` (`su_window`: SDL 3 opened at run time, Wayland or X11
+window, native handles for the renderer, keyboard/mouse/gamepad input), `include/sutekh/render.h` API 12
+(`window_system`: Wayland and Xlib surfaces created by the renderer; `su_render_resize(0, 0)` pauses presentation;
+API 11 descriptors still accepted), `include/sutekh/input.h` API 2 (portable device events: HID usages to scan code
+set 1, XInput ranges), and `space_demo` building and running windowed on Linux. Linux GCC 16.2 Debug and Release
+`-Werror`: 145 tests, 0 failures, 1 skip (`audio_device`), window and swapchain tests on the session's Wayland
+display, under XWayland, and under Xvfb (llvmpipe). Decision record: `docs/BACKENDS_AND_DEPENDENCIES.md` section 8.
+Evidence: `planning/evidence/linux-window/`. Handoff with unrun items: `planning/handoffs/2026-10-26-linux-window.md`.

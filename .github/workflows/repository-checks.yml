@@ -60,10 +60,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Install build tools, Python and a CPU Vulkan driver
+      # SDL 3 (opened at run time by su_window) and Xvfb: the window and swapchain tests run on an X server with
+      # lavapipe presenting through VK_KHR_xlib_surface.
+      - name: Install build tools, Python, a CPU Vulkan driver, SDL 3 and Xvfb
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends python3 python3-venv mesa-vulkan-drivers libvulkan1 git
+          apt-get install -y --no-install-recommends python3 python3-venv mesa-vulkan-drivers libvulkan1 git libsdl3-0 xvfb xauth
           python3 -m venv /opt/venv
           /opt/venv/bin/python -m pip install -r tools/requirements-dev.txt
           gcc --version
@@ -72,6 +74,7 @@ jobs:
           export PATH=/opt/venv/bin:$PATH
           python tools/bootstrap_vulkan_headers.py
           python tools/bootstrap_asset_deps.py
+          python tools/bootstrap_sdl3_headers.py
           cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=OFF -DSUTEKH_RENDER=ON -DSUTEKH_ASSET_IMPORT=ON
           # -k 0: report every file that fails, not just the first
           cmake --build build -j 2 -- -k 0
@@ -95,6 +98,7 @@ jobs:
         run: |
           python tools/bootstrap_vulkan_headers.py
           python tools/bootstrap_asset_deps.py
+          python tools/bootstrap_sdl3_headers.py
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 vulkan-validationlayers
       - name: Configure checked reference runtime

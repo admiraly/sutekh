@@ -3,8 +3,8 @@
 # presentation-input stream (planning/amendments/2026-10-18-downstream-host-work.md, extension): native input
 # (include/sutekh/input.h) and the first presentation slice. Included from CMakeLists.txt after the host block.
 
-# ---- native input: portable mapping, plus Raw Input / XInput on Windows ----
-add_library(su_input STATIC src/input/su_input_map.c src/input/su_input_json.c)
+# ---- native input: portable mapping and device events, plus Raw Input / XInput on Windows ----
+add_library(su_input STATIC src/input/su_input_map.c src/input/su_input_json.c src/input/su_input_events.c)
 target_include_directories(su_input PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
 target_link_libraries(su_input PRIVATE su_ir)
 if(WIN32)
@@ -17,6 +17,11 @@ add_executable(test_input tests/input/test_input.c)
 target_link_libraries(test_input PRIVATE su_input su_host)
 sutekh_apply_warnings(test_input)
 add_test(NAME input_map COMMAND test_input WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# Portable device events (HID usages, XInput ranges) give the same records as the equivalent Win32 state.
+add_executable(test_input_events tests/input/test_input_events.c)
+target_link_libraries(test_input_events PRIVATE su_input)
+sutekh_apply_warnings(test_input_events)
+add_test(NAME input_events COMMAND test_input_events WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 if(WIN32)
     add_executable(test_input_win32 tests/input/test_input_win32.c)
     target_link_libraries(test_input_win32 PRIVATE su_input user32)
@@ -26,6 +31,43 @@ if(WIN32)
     add_executable(input_probe examples/input/input_probe.c)
     target_link_libraries(input_probe PRIVATE su_input user32)
     sutekh_apply_warnings(input_probe)
+endif()
+
+# ---- Linux window and input (sutekh/window.h): SDL3 opened at run time, built against the pinned headers ----
+# tools/bootstrap_sdl3_headers.py fetches the SDL 3.2 headers into third_party/sdl3 (SUTEKH_SDL3_INCLUDE_DIR
+# overrides). Nothing links against SDL; su_window is a separate library that neither the core nor a headless
+# target uses. Windows hosts use an HWND and su_input_win32 instead. SUTEKH_WINDOW=OFF skips it.
+set(SUTEKH_WINDOW "AUTO" CACHE STRING "Build the Linux window backend su_window: AUTO (when SDL3 headers are found), ON, OFF")
+set(SUTEKH_SDL3_INCLUDE_DIR "" CACHE PATH "SDL 3.2+ include directory (default: third_party/sdl3/include)")
+set(SUTEKH_SDL3_INCLUDE "")
+if(NOT WIN32 AND NOT SUTEKH_WINDOW STREQUAL "OFF")
+    foreach(cand "${SUTEKH_SDL3_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sdl3/include")
+        if(SUTEKH_SDL3_INCLUDE STREQUAL "" AND NOT cand STREQUAL "" AND EXISTS "${cand}/SDL3/SDL_version.h")
+            set(SUTEKH_SDL3_INCLUDE "${cand}")
+        endif()
+    endforeach()
+endif()
+if(SUTEKH_WINDOW STREQUAL "ON" AND SUTEKH_SDL3_INCLUDE STREQUAL "")
+    message(FATAL_ERROR "SUTEKH_WINDOW=ON needs a non-Windows target and the SDL3 headers: run tools/bootstrap_sdl3_headers.py")
+endif()
+if(NOT SUTEKH_SDL3_INCLUDE STREQUAL "")
+    message(STATUS "Sutekh window: SDL3 headers ${SUTEKH_SDL3_INCLUDE} (library opened at run time)")
+    add_library(su_window STATIC src/platform/window_sdl3.c)
+    target_include_directories(su_window PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
+    target_include_directories(su_window SYSTEM PRIVATE "${SUTEKH_SDL3_INCLUDE}")
+    target_link_libraries(su_window PUBLIC su_input PRIVATE su_platform ${CMAKE_DL_LIBS} m)
+    sutekh_apply_warnings(su_window)
+    # SDL event translation from synthetic SDL events (headers only; no library, no display).
+    add_executable(test_window_events tests/window/test_window_events.c)
+    target_include_directories(test_window_events PRIVATE src)
+    target_include_directories(test_window_events SYSTEM PRIVATE "${SUTEKH_SDL3_INCLUDE}")
+    target_link_libraries(test_window_events PRIVATE su_window su_input m)
+    sutekh_apply_warnings(test_window_events)
+    add_test(NAME window_events COMMAND test_window_events WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+elseif(NOT WIN32 AND SUTEKH_WINDOW STREQUAL "OFF")
+    message(STATUS "Sutekh window: skipped (SUTEKH_WINDOW=OFF)")
+elseif(NOT WIN32)
+    message(STATUS "Sutekh window: skipped (no SDL3 headers; run tools/bootstrap_sdl3_headers.py)")
 endif()
 
 # ---- presentation (M5 first slice): portable helpers always, the Vulkan backend when headers exist ----
@@ -130,9 +172,38 @@ if(NOT SUTEKH_RENDER STREQUAL "OFF" AND NOT SUTEKH_VULKAN_INCLUDE STREQUAL "")
     sutekh_apply_warnings(test_render_paint)
     add_test(NAME render_paint COMMAND test_render_paint)
     set_tests_properties(render_paint PROPERTIES SKIP_RETURN_CODE 77)
-    if(WIN32)
+    if(TARGET su_window)
+        # Window and swapchain on the session's display, and under Xvfb when it is installed; skipped (77) with
+        # the reason when there is no display, no SDL3 library or no Vulkan device that can present.
+        add_executable(test_window_swapchain tests/window/test_window_swapchain.c)
+        target_link_libraries(test_window_swapchain PRIVATE su_window su_render su_input)
+        sutekh_apply_warnings(test_window_swapchain)
+        add_test(NAME window_swapchain COMMAND test_window_swapchain)
+        set_tests_properties(window_swapchain PROPERTIES SKIP_RETURN_CODE 77)
+        # No display at all: su_window_create fails with a structured error and offscreen rendering still works.
+        add_test(NAME window_no_display COMMAND test_window_swapchain --no-display)
+        set_tests_properties(window_no_display PROPERTIES SKIP_RETURN_CODE 77)
+        find_program(SUTEKH_XVFB_RUN xvfb-run)
+        if(SUTEKH_XVFB_RUN)
+            add_test(NAME window_swapchain_xvfb COMMAND "${SUTEKH_XVFB_RUN}" -a -s "-screen 0 1280x800x24"
+                     env -u WAYLAND_DISPLAY SDL_VIDEO_DRIVER=x11 $<TARGET_FILE:test_window_swapchain> --x11)
+            set_tests_properties(window_swapchain_xvfb PROPERTIES SKIP_RETURN_CODE 77)
+        else()
+            message(STATUS "Sutekh window: xvfb-run not found; window_swapchain_xvfb not registered")
+        endif()
+    endif()
+    if(WIN32 OR UNIX)
         add_executable(space_demo examples/presentation/space_demo.c examples/presentation/demo_content.c)
-        target_link_libraries(space_demo PRIVATE su_render su_input su_host su_asset_import su_audio user32)
+        target_link_libraries(space_demo PRIVATE su_render su_input su_host su_asset_import su_audio)
+        if(WIN32)
+            target_link_libraries(space_demo PRIVATE user32)
+        elseif(TARGET su_window)
+            target_link_libraries(space_demo PRIVATE su_window)
+            target_compile_definitions(space_demo PRIVATE SUTEKH_HAVE_WINDOW=1)
+        endif()
+        if(UNIX)
+            target_link_libraries(space_demo PRIVATE m)
+        endif()
         sutekh_apply_warnings(space_demo)
         # The demo's world, scripted input and rollback drills, headless and offscreen: both runs must reach the
         # same pinned digest (480 ticks of IR 0.3 at a fixed 60 Hz frame time). Exit 3 (no Vulkan) skips the
@@ -144,6 +215,13 @@ if(NOT SUTEKH_RENDER STREQUAL "OFF" AND NOT SUTEKH_VULKAN_INCLUDE STREQUAL "")
                  --frames 240 --rollback-check --expect-digest ${SUTEKH_DEMO_DIGEST}
                  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(demo_offscreen_rollback PROPERTIES SKIP_RETURN_CODE 3)
+        if(TARGET su_window)
+            # Windowed on the session's display with scripted input: resize, minimize, restore, resize back. Exit 3
+            # (no display, no SDL3, no Vulkan) skips it.
+            add_test(NAME demo_window_exercise COMMAND space_demo --script --frames 150 --exercise-window --no-audio
+                     --debris 500 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+            set_tests_properties(demo_window_exercise PROPERTIES SKIP_RETURN_CODE 3)
+        endif()
     endif()
 else()
     message(STATUS "Sutekh renderer: skipped (no Vulkan headers; run tools/bootstrap_vulkan_headers.py)")

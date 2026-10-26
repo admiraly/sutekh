@@ -103,6 +103,12 @@ header directory the renderer uses, empty when there is none or
 `Sutekh::vulkan_headers`. Warnings are errors by default; `-DSUTEKH_WERROR=OFF`
 keeps them as warnings (for a compiler newer than the ones CI checks).
 
+**Linux window and input.** `python tools/bootstrap_sdl3_headers.py` (pinned SDL 3.2 headers) enables `su_window`
+(`include/sutekh/window.h`; `-DSUTEKH_WINDOW=AUTO|ON|OFF`): a Wayland or X11 window for the renderer's swapchain
+and keyboard, mouse and gamepad input in the `sutekh/input.h` model. The SDL 3 library (3.2.0 or later) is opened
+at run time, so nothing links against it; without it or without a display, window creation fails with a reason
+and offscreen rendering still works.
+
 ### Licensing and commercial use
 
 Copyright (c) 2026 **admiraly**, the current project owner. Sutekh is

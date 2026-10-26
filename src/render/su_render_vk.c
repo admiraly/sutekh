@@ -14,6 +14,17 @@
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #include "render/su_render_vk_int.h"
 
+#if !defined(_WIN32)
+/* The Xlib types VK_KHR_xlib_surface names, declared here so that building needs no X11 headers (identical to
+ * Xlib's own typedefs; repeating an identical typedef is valid C11). VK_KHR_wayland_surface only names incomplete
+ * struct wl_display / wl_surface pointers. Only this translation unit sees these names. */
+typedef struct _XDisplay Display;
+typedef unsigned long Window;
+typedef unsigned long VisualID;
+#include <vulkan/vulkan_wayland.h>
+#include <vulkan/vulkan_xlib.h>
+#endif
+
 #include "ir/su_sha256.h"
 #include "render/su_render_shaders.h"
 #include "render/su_render_haze.h"
@@ -77,6 +88,10 @@ static void load_instance_fns(VkFns *f, VkInstance inst) {
     X(vkCreateWin32SurfaceKHR)
 #endif
 #undef X
+#if !defined(_WIN32)
+    f->vkCreateWaylandSurfaceKHR = f->vkGetInstanceProcAddr(inst, "vkCreateWaylandSurfaceKHR");
+    f->vkCreateXlibSurfaceKHR = f->vkGetInstanceProcAddr(inst, "vkCreateXlibSurfaceKHR");
+#endif
 }
 
 /* Swapchain entry points exist only on devices created with VK_KHR_swapchain (not offscreen). */
@@ -182,8 +197,8 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBi
     return VK_FALSE;
 }
 
-/* Creates a Vulkan 1.2 instance. surface: also enable the surface extensions. */
-static int make_instance(VkFns *f, int surface, int validation, Validation *vstate, VkInstance *inst,
+/* Creates a Vulkan 1.2 instance. surface_ext: also enable VK_KHR_surface and this window-system extension. */
+static int make_instance(VkFns *f, const char *surface_ext, int validation, Validation *vstate, VkInstance *inst,
                          VkDebugUtilsMessengerEXT *messenger, char *msg) {
     const char *exts[5];
     const char *layers[1];
@@ -205,19 +220,17 @@ static int make_instance(VkFns *f, int surface, int validation, Validation *vsta
                 VK_API_VERSION_MINOR(version));
         return 0;
     }
-    if (surface) {
+    if (surface_ext != NULL) {
         if (!has_instance_ext(f, VK_KHR_SURFACE_EXTENSION_NAME)) {
             set_msg(msg, "VK_KHR_surface is not available");
             return 0;
         }
         exts[next++] = VK_KHR_SURFACE_EXTENSION_NAME;
-#if defined(_WIN32)
-        if (!has_instance_ext(f, VK_KHR_WIN32_SURFACE_EXTENSION_NAME)) {
-            set_msg(msg, "VK_KHR_win32_surface is not available");
+        if (!has_instance_ext(f, surface_ext)) {
+            set_msg(msg, "%s is not available from the Vulkan loader", surface_ext);
             return 0;
         }
-        exts[next++] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
-#endif
+        exts[next++] = surface_ext;
     }
     if (validation && has_layer(f, "VK_LAYER_KHRONOS_validation") &&
         has_instance_ext(f, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
@@ -429,7 +442,7 @@ uint32_t su_render_enumerate(SuRenderDeviceInfo *out, uint32_t cap, uint32_t *co
         unload_loader(&f);
         return SU_E_UNSUPPORTED_METHOD;
     }
-    if (!make_instance(&f, 0, 0, &v, &inst, &mess, message)) {
+    if (!make_instance(&f, NULL, 0, &v, &inst, &mess, message)) {
         unload_loader(&f);
         return SU_E_UNSUPPORTED_METHOD;
     }
@@ -2442,8 +2455,11 @@ static int make_swapchain(SuRenderer *r) {
         r->width = caps.currentExtent.width;
         r->height = caps.currentExtent.height;
     } else {
-        r->width = r->want_width;
-        r->height = r->want_height;
+        /* the surface takes the swapchain's size (Wayland): the host's pixel size, within the surface limits */
+        r->width = r->want_width < caps.minImageExtent.width ? caps.minImageExtent.width : r->want_width;
+        r->height = r->want_height < caps.minImageExtent.height ? caps.minImageExtent.height : r->want_height;
+        r->width = r->width > caps.maxImageExtent.width ? caps.maxImageExtent.width : r->width;
+        r->height = r->height > caps.maxImageExtent.height ? caps.maxImageExtent.height : r->height;
     }
     if (r->width == 0u || r->height == 0u) {
         return -1;
@@ -2774,7 +2790,57 @@ static int score(const SuRenderDeviceInfo *i) {
     return i->meets_baseline ? 10 + by_type[i->type <= SU_RENDER_DEVICE_CPU ? i->type : 0] : 0;
 }
 
-#define DESC_FIELD(d, field, dflt) ((d)->struct_size == sizeof(SuRenderDesc) && (d)->field != 0u ? (d)->field : (dflt))
+#define DESC_FIELD(d, field, dflt) ((d)->struct_size >= SU_RENDER_DESC_V2_SIZE && (d)->field != 0u ? (d)->field : (dflt))
+/* The API 11 descriptor (no window_system fields) keeps working: its size on LP64/LLP64 targets. */
+_Static_assert(sizeof(void *) != 8u || SU_RENDER_DESC_V2_SIZE == 80u, "SU_RENDER_DESC_V2_SIZE is not the API 11 size");
+
+/* The window-system extension a descriptor needs (NULL offscreen), or "" when this build cannot present to it. */
+static const char *surface_extension(const SuRenderDesc *d, uint32_t ws) {
+    if (d->hwnd != NULL) {
+#if defined(_WIN32)
+        return VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+#else
+        return "";
+#endif
+    }
+#if !defined(_WIN32)
+    if (ws == SU_RENDER_WINDOW_WAYLAND) {
+        return VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME;
+    }
+    if (ws == SU_RENDER_WINDOW_XLIB) {
+        return VK_KHR_XLIB_SURFACE_EXTENSION_NAME;
+    }
+#endif
+    return ws == SU_RENDER_WINDOW_NONE ? NULL : "";
+}
+
+#if !defined(_WIN32)
+static VkResult create_native_surface(SuRenderer *r, const SuRenderDesc *d) {
+    if (r->window_system == SU_RENDER_WINDOW_WAYLAND) {
+        VkWaylandSurfaceCreateInfoKHR si;
+        PFN_vkCreateWaylandSurfaceKHR fn = (PFN_vkCreateWaylandSurfaceKHR)r->f.vkCreateWaylandSurfaceKHR;
+        if (fn == NULL) {
+            return VK_ERROR_EXTENSION_NOT_PRESENT;
+        }
+        memset(&si, 0, sizeof si);
+        si.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
+        si.display = (struct wl_display *)d->window_display;
+        si.surface = (struct wl_surface *)d->window_surface;
+        return fn(r->inst, &si, NULL, &r->surface);
+    } else {
+        VkXlibSurfaceCreateInfoKHR si;
+        PFN_vkCreateXlibSurfaceKHR fn = (PFN_vkCreateXlibSurfaceKHR)r->f.vkCreateXlibSurfaceKHR;
+        if (fn == NULL) {
+            return VK_ERROR_EXTENSION_NOT_PRESENT;
+        }
+        memset(&si, 0, sizeof si);
+        si.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+        si.dpy = (Display *)d->window_display;
+        si.window = (Window)d->window_id;
+        return fn(r->inst, &si, NULL, &r->surface);
+    }
+}
+#endif
 
 uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char message[256]) {
     SuRenderer *r;
@@ -2795,34 +2861,49 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
     VkPipelineCacheCreateInfo cci;
     uint8_t *cache_data = NULL;
     uint32_t max_res;
+    uint32_t ws;
+    const char *surface_ext;
     VkResult vr;
 
     if (message != NULL) {
         message[0] = '\0';
     }
-    if (out == NULL || desc == NULL || (desc->struct_size != sizeof *desc && desc->struct_size != SU_RENDER_DESC_V1_SIZE) ||
-        (desc->flags & ~(SU_RENDER_FLAG_VALIDATION | SU_RENDER_FLAG_NO_VSYNC)) != 0u ||
-        (desc->hwnd == NULL && (desc->width == 0u || desc->height == 0u || desc->width > 16384u || desc->height > 16384u))) {
+    if (out == NULL || desc == NULL ||
+        (desc->struct_size != sizeof *desc && desc->struct_size != SU_RENDER_DESC_V2_SIZE &&
+         desc->struct_size != SU_RENDER_DESC_V1_SIZE) ||
+        (desc->flags & ~(SU_RENDER_FLAG_VALIDATION | SU_RENDER_FLAG_NO_VSYNC)) != 0u) {
         if (message != NULL) {
             snprintf(message, 256, "invalid descriptor");
         }
         return SU_E_INVALID_ARGUMENT;
     }
-    *out = NULL;
-#if !defined(_WIN32)
-    if (desc->hwnd != NULL) {
+    ws = desc->struct_size == sizeof *desc ? desc->window_system : SU_RENDER_WINDOW_NONE;
+    if ((ws != SU_RENDER_WINDOW_NONE && desc->hwnd != NULL) || ws > SU_RENDER_WINDOW_XLIB ||
+        (ws == SU_RENDER_WINDOW_WAYLAND && (desc->window_display == NULL || desc->window_surface == NULL)) ||
+        (ws == SU_RENDER_WINDOW_XLIB && (desc->window_display == NULL || desc->window_id == 0u)) ||
+        (desc->hwnd == NULL && (desc->width == 0u || desc->height == 0u || desc->width > 16384u || desc->height > 16384u))) {
         if (message != NULL) {
-            snprintf(message, 256, "window presentation is implemented for Windows only; use offscreen");
+            snprintf(message, 256, "invalid descriptor (window handles or size)");
+        }
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    surface_ext = surface_extension(desc, ws);
+    if (surface_ext != NULL && surface_ext[0] == '\0') {
+        if (message != NULL) {
+            snprintf(message, 256, "%s",
+                     desc->hwnd != NULL ? "an HWND is a Windows window; this build presents to Wayland or X11 (window_system)"
+                                        : "window_system is not supported on this platform; use an HWND or offscreen");
         }
         return SU_E_UNSUPPORTED_METHOD;
     }
-#endif
     r = calloc(1, sizeof *r);
     if (r == NULL) {
         return SU_E_RESOURCE_LIMIT;
     }
-    r->offscreen = desc->hwnd == NULL;
+    r->offscreen = surface_ext == NULL;
     r->hwnd = desc->hwnd;
+    r->window_system = ws;
     r->flags = desc->flags;
     r->want_width = r->width = desc->width;
     r->want_height = r->height = desc->height;
@@ -2856,7 +2937,7 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
     if (!load_loader(&r->f, message)) {
         return create_fail(r, SU_E_UNSUPPORTED_METHOD, NULL, "");
     }
-    if (!make_instance(&r->f, !r->offscreen, (desc->flags & SU_RENDER_FLAG_VALIDATION) != 0u, &r->validation, &r->inst,
+    if (!make_instance(&r->f, surface_ext, (desc->flags & SU_RENDER_FLAG_VALIDATION) != 0u, &r->validation, &r->inst,
                        &r->messenger, message)) {
         return create_fail(r, SU_E_UNSUPPORTED_METHOD, NULL, "");
     }
@@ -2871,6 +2952,11 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
             (vr = r->f.vkCreateWin32SurfaceKHR(r->inst, &si, NULL, &r->surface)) != VK_SUCCESS) {
             return create_fail(r, SU_E_IO, message, "the window surface could not be created");
         }
+    }
+#else
+    if (!r->offscreen && (vr = create_native_surface(r, desc)) != VK_SUCCESS) {
+        return create_fail(r, SU_E_IO, message, "the %s window surface could not be created (VkResult %d)",
+                           r->window_system == SU_RENDER_WINDOW_WAYLAND ? "Wayland" : "X11", (int)vr);
     }
 #endif
     if (r->f.vkEnumeratePhysicalDevices(r->inst, &n, pds) < 0 || n == 0u) {
@@ -3039,6 +3125,9 @@ void su_render_resize(SuRenderer *r, uint32_t width, uint32_t height) {
     if (r != NULL && !r->offscreen) {
         r->want_width = width;
         r->want_height = height;
+        /* zero: minimized, hidden or occluded; frames are refused until a real size arrives (an X11 surface keeps
+         * reporting its extent while iconified, and a hidden Wayland surface may never release images) */
+        r->paused = width == 0u || height == 0u;
         r->needs_rebuild = 1;
     }
 }
@@ -3216,8 +3305,8 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
                                (unsigned)in->shadow_size);
         }
     }
-    if (!r->offscreen && (r->needs_rebuild || r->swapchain == VK_NULL_HANDLE)) {
-        int s = make_swapchain(r);
+    if (!r->offscreen && (r->paused || r->needs_rebuild || r->swapchain == VK_NULL_HANDLE)) {
+        int s = r->paused ? -1 : make_swapchain(r);
         if (s < 0) {
             return SU_E_RESOURCE_LIMIT;
         }

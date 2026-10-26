@@ -170,6 +170,12 @@ typedef struct VkFns {
     X(vkCreateWin32SurfaceKHR)
 #endif
 #undef X
+#if !defined(_WIN32)
+    /* PFN_vkCreateWaylandSurfaceKHR / PFN_vkCreateXlibSurfaceKHR: their headers are included by su_render_vk.c
+     * only (with local Xlib typedefs), so the other translation units never see window-system names. */
+    PFN_vkVoidFunction vkCreateWaylandSurfaceKHR;
+    PFN_vkVoidFunction vkCreateXlibSurfaceKHR;
+#endif
 } VkFns;
 
 typedef struct Validation {
@@ -522,9 +528,11 @@ struct SuRenderer {
     /* targets */
     int offscreen;
     void *hwnd;
+    uint32_t window_system;             /* SU_RENDER_WINDOW_* (NONE for an HWND or offscreen) */
     uint32_t width, height;
     uint32_t want_width, want_height;
     int needs_rebuild;
+    int paused;                         /* su_render_resize(0 x 0): no frame touches the swapchain */
     uint32_t flags;
     VkSwapchainKHR swapchain;
     VkPresentModeKHR present_mode;
