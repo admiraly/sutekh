@@ -17,15 +17,19 @@ the world's capacity, an optional operator-data parser (`su_host_set_operator_da
 then on the operator is checked and run exactly as a built-in one: the record must equal the descriptor (operator
 name, version, constants hash, every lane; or a schema-relative binding of it, section 2), the schedule's union table
 and the effect analysis use its declaration, and it runs in capsule order, so an IR system with an `after` edge to it
-consumes its results in the same tick. The engine enforces the declaration at run time: `run` sees only its
-declared lanes (no world pointer); its read lanes are re-hashed after the call and a change fails the tick with
-`SU_E_UNDECLARED_WRITE`; write-only lanes are zero-filled and read-write lanes start from their input, so every
-declared write is defined for every row; scratch, column views and alive/generation views are allocated at world
-creation and the scratch is zeroed before each call, so the tick allocates nothing and keeps no hidden state. The
-record's semantic hash also covers the operator name, and is part of the world identity, so snapshots and replays
-only load into a world whose process registered the same operator. Registering an ID twice, an ID built into the
-library, or one with a reserved prefix (`rts.`, `space3d.`, `sutekh.`) is `SU_E_DUPLICATE_KEY`; a record whose operator
-is neither built in nor registered stays `SU_E_CAPABILITY_DENIED`. A process that registers nothing behaves exactly as
+consumes its results in the same tick. At run time `run` sees only its declared lanes (no world pointer); its
+read lanes are re-hashed after the call and a change fails the tick with `SU_E_UNDECLARED_WRITE` (unless the
+descriptor sets `SU_HOST_OPERATOR_TRUST_INPUTS`); write lanes are pre-filled (zero for write-only lanes, the input
+value for read-write lanes), so every row is defined; the scratch is zeroed before every call, always (it is not in
+snapshots); scratch, column views and alive/generation views are allocated at world creation, so the tick allocates
+nothing. Names (system, schema, operator, lanes) are identifiers (`[A-Za-z0-9_.-]`). The system's semantic hash
+covers the operator name, version, constants hash, lanes, binding, the descriptor flags and the scratch size for the
+world's capacity, and is part of the world identity, so snapshots and replays only load into a world whose process
+registered the same operator the same way. Registering an ID twice, an ID built into the library, an ID with a
+reserved prefix (`rts.`, `space3d.`, `sutekh.`, any letter case) or a reserved operator name (`rts_ops*`,
+`space3d_ops*`, `sutekh*`) is `SU_E_DUPLICATE_KEY`; a record whose operator is neither built in nor registered stays
+`SU_E_CAPABILITY_DENIED`. The static library and the DLL each have their own registry.
+A process that registers nothing behaves exactly as
 before (records, identities and digests unchanged). Registration is in-process `host.h` only: `sutekh serve`, the
 worker and `world.create` do not see registered operators (their records are refused there as unknown); a game that
 needs one in a worker would have to build its own worker, which is not provided. Contract and limits: `host.h`,

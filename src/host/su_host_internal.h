@@ -40,6 +40,9 @@ typedef struct HostOperator {
      * run ("" when none; NULL callback for built-in operators). */
     const HostRegOp *reg;
     const char *(*last_error)(const void *inst);
+    /* Registered operators: folds the world-specific part of the identity (flags, scratch size for the world's
+     * capacity) into the entry's semantic hash at world creation. NULL for built-in operators. */
+    void (*identity)(const void *inst, uint8_t semantic[32]);
     /* SuHostOpDesc.operator_name override for the record check and the semantic hash: NULL for built-in operators
      * (their name is derived from the descriptor, host_decl.h), operator_name for registered ones. */
     const char *record_name;

@@ -350,25 +350,31 @@ SU_HOST_API uint32_t su_host_set_operator_data(SuHostWorld *w, const char *syste
  * process that registers nothing: records, identities, snapshots and digests are those of earlier releases (only
  * the text of that refusal now says "built into or registered with this library").
  *
- * Contract of run (the built-in operators' contract, enforced by the engine):
+ * Contract of run (the built-in operators' contract; what the engine guarantees or checks is said so):
  *   - run sees only the lanes its descriptor declares (run->columns, descriptor order, under the descriptor's IDs
  *     even when the record binds them to other game IDs). It receives no world pointer and no other column.
  *   - Reads are frozen: `in` is the working value at entry (the committed tick plus the writes of systems earlier
  *     in the schedule) and must not be written. After run the engine re-hashes every column the operator may read
- *     (XXH64 before and after the call, rows x readable lanes per tick) and fails the tick with
- *     SU_E_UNDECLARED_WRITE, naming the lane in err->message, if one changed (unless
- *     SU_HOST_OPERATOR_TRUST_INPUTS). A change that keeps the 64-bit hash (probability about 2^-64) is missed.
- *     This covers writes through the views run is given; in-process native code can still write anywhere in the
- *     process (ENGINE_CONSTITUTION C07: native code in a process is trusted by that process).
- *   - Writes go to `out`, which the engine pre-fills: a read-write lane with its `in` values, a write-only lane
- *     with zeros (so a write-only lane leaks no undeclared read). Every row of every declared write is therefore
- *     defined and committed, also the rows run does not store; dead rows are zeroed by the world at publish.
- *   - run returns SU_OK, or any SU_E_* code: the tick then fails in this system (err->index, err->tick), nothing
- *     of the tick is committed, and its input record stays queued. Its results are committed only on SU_OK.
+ *     (XXH64 before and after the call) and fails the tick with SU_E_UNDECLARED_WRITE, naming the lane in
+ *     err->message, if one changed (unless SU_HOST_OPERATOR_TRUST_INPUTS). A change that keeps the 64-bit hash
+ *     (probability about 2^-64) is missed. This covers writes through the views run is given; in-process native
+ *     code can still write anywhere in the process (ENGINE_CONSTITUTION C07: native code in a process is trusted
+ *     by that process).
+ *     Cost (observations, ENGINE_CONSTITUTION C10; i7-14700K, one core, Release, 2026-10-26; not a budget): with a
+ *     world stepping, about 0.55-0.62 ms per tick at 100,000 rows x 10 read lanes and about 34 us at 10,000 x 10
+ *     (independent review measurement); the two hash passes alone, isolated, about 0.37 ms and 37 us (median).
+ *     Method and samples: planning/handoffs/2026-10-26-registered-operators.md. SU_HOST_OPERATOR_TRUST_INPUTS
+ *     removes the cost and the protection.
+ *   - Write lanes are pre-filled before run: a read-write lane with its `in` values, a write-only lane with zeros
+ *     (so a write-only lane leaks no undeclared read). Every row of every declared write is therefore defined and
+ *     committed, also the rows run does not store; dead rows are zeroed by the world at publish.
+ *   - run returns SU_OK, or any SU_E_* code: the tick then fails in this system (err->index, err->tick; the
+ *     message names the code and, if run wrote one, its reason, see SuHostOperatorRun.reason), nothing of the
+ *     tick is committed, and its input record stays queued.
  *   - Determinism: the results must be a function of the columns, alive, generation, tick and operator data alone
  *     (no clock, no thread timing, no state kept across calls), so that a restore and re-simulation reproduces
- *     them. Scratch is zero-filled before every call (unless SU_HOST_OPERATOR_KEEP_SCRATCH), so leftovers of an
- *     earlier tick cannot leak into results.
+ *     them. The engine zero-fills the scratch before every call (always; scratch is not world state and is not in
+ *     snapshots, so nothing may survive in it from one tick to the next).
  *   - No allocation in the tick (ENGINE_CONSTITUTION C11): the scratch (scratch_size(capacity) bytes), the
  *     column table and the alive/generation views are allocated once at world creation. run must not allocate.
  *   - run is called serially, once per tick, from the thread that steps the world, with the whole row range
@@ -376,36 +382,50 @@ SU_HOST_API uint32_t su_host_set_operator_data(SuHostWorld *w, const char *syste
  *     threads at once, so run and parse_data must be reentrant across worlds (user is shared). Use only
  *     run->scratch for temporary memory (never a global): it is private to the call.
  *
- * Extension (forward compatibility): SuHostOperatorDesc and SuHostOperatorRun carry struct_size and only grow at
- * the end; a later library accepts every earlier descriptor size, and an operator reads only the run fields its
- * struct_size covers. Unknown flag bits are refused, so a descriptor asking for a mode this library lacks fails
- * registration instead of running differently. A future parallel mode (deterministic multithreaded tick) is
- * meant to be one such opt-in flag: only an operator that sets it would be called once per row chunk
- * ([row_begin, row_end), chunk_index of chunk_count, storing only its rows' writes) with one scratch per worker;
- * every operator without the flag keeps exactly the serial whole-range call described here.
- *
  * State and identity: the operator's results are ordinary columns (in snapshots, su_host_digest, the fast digest,
- * in-place restore and replays). The record's semantic hash covers system ID, schema, operator_name,
- * operator_version, constants_hash, the field table and any binding, and is part of su_host_world_identity, so
- * snapshots and replays of the world only load into a world whose process registered the same operator (same
- * name, version, constants hash and fields) with the same record. constants_hash identifies the operator's code
+ * in-place restore and replays). The system's semantic hash (su_host_system_info) covers system ID, schema,
+ * operator_name, operator_version, constants_hash, the field table, any binding, the descriptor flags and the
+ * scratch size scratch_size returned for the world's capacity; it is part of su_host_world_identity, so snapshots
+ * and replays of the world only load into a world whose process registered the same operator the same way.
+ * Names are identifiers (below), so the hashed text is unambiguous. constants_hash identifies the operator's code
  * and constants: change it (or operator_version) whenever results can change. Operator data works as for engine
  * operators (su_host_set_operator_data; the data's hash joins the identity).
  *
- * Registry: process-wide, append-only, at most SU_HOST_MAX_REGISTERED_OPERATORS entries for the life of the
- * process; there is no unregister. Registration and lookups are serialized by a lock, so registering on one thread
- * while worlds are created on others is safe; a world keeps using the entry it was created with. Registration
- * copies the descriptor (strings and field table); the callbacks and user must stay valid for the life of the
- * process. A registered operator is in-process only: the out-of-process control plane (`sutekh serve`, the
- * worker, world.create) does not see it and refuses its record with SU_E_CAPABILITY_DENIED as before. A game that
- * needs it in a worker must build it into a worker of its own (not provided). */
+ * Registry: process-wide (one per copy of the library: the static library su_host and the DLL sutekh_host each
+ * have their own, so register with the copy that creates the worlds), append-only, at most
+ * SU_HOST_MAX_REGISTERED_OPERATORS entries for the life of the process; there is no unregister. Registration and
+ * lookups are serialized by a lock, so registering on one thread while worlds are created on others is safe; a
+ * world keeps using the entry it was created with. Registration copies the descriptor (strings and field table);
+ * the callbacks and user must stay valid for the life of the process. A registered operator is in-process only:
+ * the out-of-process control plane (`sutekh serve`, the worker, world.create) does not see it and refuses its
+ * record with SU_E_CAPABILITY_DENIED as before. A game that needs it in a worker must build it into a worker of its
+ * own (not provided).
+ *
+ * Versioning: SuHostOperatorDesc.struct_size may be any size from SU_HOST_OPERATOR_DESC_V1_SIZE up; fields beyond
+ * the library's own sizeof(SuHostOperatorDesc) must be zero (a nonzero unknown field is refused, so a request this
+ * library cannot honour fails instead of being ignored), and only struct_size bytes are read. The library fills
+ * SuHostOperatorRun.struct_size; an operator reads only the fields that size covers. Fields are only ever appended.
+ * SuHostOperatorColumn stays as it is (no stride, no growth): per-lane additions arrive as new trailing
+ * SuHostOperatorRun fields (parallel arrays indexed like columns). Unknown flag bits are refused.
+ *
+ * Extension plan for a deterministic multithreaded tick (issue 142; not implemented): everything below is opt-in by
+ * a new descriptor flag (and new trailing descriptor fields), and every operator without it keeps exactly the serial
+ * whole-range call described above.
+ *   - Chunked runs: run called once per canonical row chunk ([row_begin, row_end), chunk_index of chunk_count; the
+ *     chunking depends only on the row count, as for chunked IR systems), storing only its rows' writes. Reads stay
+ *     frozen for the whole tick.
+ *   - Per-worker scratch: a new trailing callback scratch_size_ex(capacity, workers, chunk_rows, ...) sizes one
+ *     scratch per worker; run->scratch is that worker's. scratch_size stays the serial path.
+ *   - Writes to other rows (scatter: for example damage applied to target rows): each chunk writes into its own
+ *     output buffer (declared lanes, per-chunk, engine-allocated at creation), then a declared merge/reduce
+ *     callback combines the buffers in canonical chunk order (0, 1, ..., chunk_count - 1) into the staging columns,
+ *     so the result does not depend on thread timing. The merge is part of the identity like run. */
 
 #define SU_HOST_MAX_REGISTERED_OPERATORS 64u
-#define SU_HOST_OPERATOR_TRUST_INPUTS UINT32_C(1) /* skip the post-run input re-hash (undeclared writes then go
-                                                   * undetected; for measured hot operators only) */
-#define SU_HOST_OPERATOR_KEEP_SCRATCH UINT32_C(2) /* do not zero scratch before each call (zeroed once at creation;
-                                                   * run must then not depend on its contents at entry) */
-/* Every other bit is reserved and refused (SU_E_INVALID_ARGUMENT) by this version. */
+#define SU_HOST_OPERATOR_TRUST_INPUTS UINT32_C(1) /* skip the post-run input re-hash: saves its cost (above), but an
+                                                   * operator that writes a read lane then corrupts the world
+                                                   * undetected. Part of the identity. */
+/* Every other bit is reserved and refused (SU_E_INVALID_ARGUMENT) by this version. Bit 2 was never released. */
 
 /* One declared lane. type: SU_TYPE_U32, SU_TYPE_I32, SU_TYPE_I64 or SU_TYPE_Q32 (sutekh/ir.h); every lane is one
  * 32-bit cell, and an i64/q32 field is two adjacent entries id I ("<name>.lo") and I + 1 ("<name>.hi") with the
@@ -415,10 +435,10 @@ typedef struct SuHostOperatorField {
     uint32_t type;
     uint32_t access;
     uint32_t reserved; /* 0 */
-    const char *name;  /* 1..255 bytes, unique */
+    const char *name;  /* identifier: 1..255 bytes of [A-Za-z0-9_.-], unique */
 } SuHostOperatorField;
 
-/* A declared lane as run sees it. */
+/* A declared lane as run sees it. Fixed layout (see "Versioning"). */
 typedef struct SuHostOperatorColumn {
     uint32_t field_id;   /* the descriptor's ID */
     uint32_t access;     /* as declared */
@@ -433,31 +453,36 @@ typedef struct SuHostOperatorRun {
     uint64_t rows;                        /* the world's capacity (every column has rows cells) */
     uint64_t row_begin;                   /* rows whose writes this call stores: always 0 .. rows in this version */
     uint64_t row_end;
-    uint32_t chunk_index;                 /* always 0 of 1 in this version (see "Extension") */
+    uint32_t chunk_index;                 /* always 0 of 1 in this version (see the extension plan) */
     uint32_t chunk_count;
     uint64_t tick;                        /* committed tick this step advances from (T for the step T -> T + 1) */
     const uint8_t *alive;                 /* rows entries: 1 alive, 0 dead (working entity table) */
     const uint32_t *generation;           /* rows entries: slot generations (handle = slot | generation << 32) */
-    void *scratch;                        /* scratch_size(capacity) bytes (malloc alignment), or NULL when 0;
-                                           * private to this call */
+    void *scratch;                        /* scratch_size(capacity) bytes (malloc alignment), zero at entry, or NULL
+                                           * when 0; private to this call */
     size_t scratch_bytes;
     const void *data;                     /* parse_data's result for this world, or NULL when it has none */
+    char *reason;                         /* reason_cap bytes, "" at entry: on failure run may write a NUL-terminated
+                                           * reason, appended to the step's err->message */
+    size_t reason_cap;
 } SuHostOperatorRun;
 
 typedef struct SuHostOperatorDesc {
-    uint32_t struct_size;                 /* sizeof(SuHostOperatorDesc) of the header compiled against */
+    uint32_t struct_size;                 /* >= SU_HOST_OPERATOR_DESC_V1_SIZE; normally sizeof(SuHostOperatorDesc) */
     uint32_t flags;                       /* SU_HOST_OPERATOR_* above, or 0 */
-    const char *system_id;                /* 1..127 bytes of [A-Za-z0-9_.-]; the prefixes "rts.", "space3d." and
-                                           * "sutekh." are reserved for engine operators */
-    const char *schema_id;                /* the operator's own schema ID (1..255 bytes; records may bind it) */
-    const char *operator_name;            /* host.operator of the record, 1..255 bytes of [A-Za-z0-9_.-] */
+    const char *system_id;                /* identifier, 1..127 bytes; the prefixes "rts.", "space3d." and "sutekh."
+                                           * (any letter case) are reserved for engine operators */
+    const char *schema_id;                /* identifier: the operator's own schema ID, 1..255 bytes (records may
+                                           * bind it to another schema) */
+    const char *operator_name;            /* identifier: host.operator of the record, 1..255 bytes; names beginning
+                                           * with "rts_ops", "space3d_ops" or "sutekh" (any case) are reserved */
     uint32_t operator_version;            /* >= 1 */
     uint32_t field_count;                 /* 1..1024 */
     const SuHostOperatorField *fields;
     uint8_t constants_hash[32];           /* SHA-256 identifying the operator's semantics (code and constants) */
-    /* Scratch for a world of capacity rows: *bytes (0 = none). Called once per world at creation; a non-SU_OK
-     * return (for example SU_E_RESOURCE_LIMIT for a capacity the operator does not support) refuses the world.
-     * NULL: no scratch. */
+    /* Scratch for a world of capacity rows: *bytes (0 = none). Called once per world at creation; the size is part
+     * of the system's semantic hash. A non-SU_OK return (for example SU_E_RESOURCE_LIMIT for a capacity the
+     * operator does not support) refuses the world. NULL: no scratch. */
     uint32_t (*scratch_size)(uint64_t capacity, size_t *bytes, void *user);
     /* The tick body; see the contract above. Required. */
     uint32_t (*run)(const SuHostOperatorRun *run, void *user);
@@ -471,10 +496,15 @@ typedef struct SuHostOperatorDesc {
     void *user;                           /* passed to every callback */
 } SuHostOperatorDesc;
 
-/* Registers an operator for this process. Failures (nothing is registered): SU_E_INVALID_ARGUMENT for a malformed
- * descriptor (struct_size, NULL run/strings, unknown flags, bad names, field table rules above; err->index = the
- * offending field when there is one), SU_E_DUPLICATE_KEY when system_id is already registered, names an operator
- * built into this library or uses a reserved prefix, SU_E_RESOURCE_LIMIT when the registry is full or memory runs
+/* Size of the first released SuHostOperatorDesc (through user). */
+#define SU_HOST_OPERATOR_DESC_V1_SIZE (offsetof(SuHostOperatorDesc, user) + sizeof(void *))
+
+/* Identifiers: 1..max bytes of [A-Za-z0-9_.-] (ASCII; no quote, space, control character or other byte).
+ * Registers an operator for this process. Failures (nothing is registered): SU_E_INVALID_ARGUMENT for a malformed
+ * descriptor (struct_size, a nonzero field this library does not know, NULL run/strings, unknown flags, a name
+ * that is not an identifier, field table rules above; err->index = the offending field when there is one),
+ * SU_E_DUPLICATE_KEY when system_id is already registered, names an operator built into this library or uses a
+ * reserved prefix, or operator_name is reserved, SU_E_RESOURCE_LIMIT when the registry is full or memory runs
  * out. */
 SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, SuHostError *err);
 

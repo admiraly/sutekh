@@ -444,9 +444,10 @@ Downstream request work outside the milestone order (M3 gates unchanged). Implem
 Downstream request work outside the milestone order (issue 137; M3 gates unchanged). Implemented and tested:
 `su_host_register_operator` (`include/sutekh/host.h`, "registered host operators"): a game defines a host operator in
 its own code and registers it before creating a world; the record, schedule union table, effect analysis, capsule
-order, snapshots, digests, in-place restore, replays and world identity treat it as a built-in operator. Run-time
-enforcement: declared lanes only, read lanes re-hashed after each call (`SU_E_UNDECLARED_WRITE`), write-only lanes
-zero-filled, scratch zeroed per call, nothing allocated in the tick. In-process only (not in `sutekh serve` or the
+order, snapshots, digests, in-place restore, replays and world identity treat it as a built-in operator (the
+identity also covers its flags and scratch size). At run time: declared lanes only, read lanes re-hashed after each
+call (`SU_E_UNDECLARED_WRITE`), write lanes pre-filled (zero or the input value) so every row is defined, scratch
+zeroed before every call, nothing allocated in the tick. In-process only (not in `sutekh serve` or the
 worker). Evidence: `tests/host/test_host_registered.c` (static and DLL; cross-process identity checks), handoff
 `planning/handoffs/2026-10-26-registered-operators.md`.
 

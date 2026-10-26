@@ -56,7 +56,8 @@ endif()
 # the test translation unit, outside the engine library, registered at run time. Static and DLL builds; the static
 # Linux build also counts malloc/calloc/realloc during ticks (-Wl,--wrap) to show the tick allocates nothing.
 # Cross-process: record (static) a snapshot and replay, then verify them in other processes with the same
-# registration (DLL), with another operator_version, constants hash or operator name (refused: world identity),
+# registration (DLL), with another operator_version, constants hash, operator name, flags or scratch size (refused:
+# world identity),
 # and with nothing registered (the record is refused).
 foreach(variant "" "_dll")
     add_executable(test_host_registered${variant} "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/test_host_registered.c")
@@ -77,7 +78,7 @@ set(SU_HOST_REGISTERED_DIR "${CMAKE_BINARY_DIR}/host_registered")
 file(MAKE_DIRECTORY "${SU_HOST_REGISTERED_DIR}")
 add_test(NAME host_registered_record COMMAND test_host_registered record "${SU_HOST_REGISTERED_DIR}")
 set_tests_properties(host_registered_record PROPERTIES FIXTURES_SETUP host_registered_files)
-foreach(check "dll:same" "static:version" "dll:constants" "static:name" "dll:none")
+foreach(check "dll:same" "static:version" "dll:constants" "static:name" "dll:flags" "static:scratch" "dll:none")
     string(REPLACE ":" ";" parts "${check}")
     list(GET parts 0 build)
     list(GET parts 1 what)

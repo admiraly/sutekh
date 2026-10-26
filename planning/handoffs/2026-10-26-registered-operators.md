@@ -38,14 +38,27 @@ Enforcement, all in `src/host/su_host_registered.c` `reg_run` (no allocation; ev
   world pointer: other columns are unreachable through the API.
 - Read lanes are hashed (XXH64) before and after `run`; a change fails the tick with `SU_E_UNDECLARED_WRITE` and
   `err->message` names the lane. Opt-out: `SU_HOST_OPERATOR_TRUST_INPUTS`.
-- Write-only lanes are zero-filled before `run` (no undeclared read through staging), read-write lanes start from
-  their input (done by `schedule.c run_host`), so every declared write is defined for every row.
-- Scratch is zeroed before each call (opt-out `SU_HOST_OPERATOR_KEEP_SCRATCH`), so no state survives a call.
+- Write lanes are pre-filled before `run` (zero for write-only lanes, so staging leaks no undeclared read; the input
+  value for read-write lanes, done by `schedule.c run_host`), so every row is defined. The engine does not check that
+  `run` stored a row; a row it skips keeps the pre-filled value.
+- Scratch is zeroed before every call, always: scratch is not in snapshots, so state kept in it across ticks would
+  break rollback and lockstep silently. (A scratch-keeping flag existed in the first revision of this PR and was
+  removed in the review round; bit 2 is refused.)
 - Identity: `host_semantic_digest` adds `"operator":"<name>"` for named (registered) operators only; built-in digests
-  are byte-identical (name NULL). The semantic hash is part of `su_host_world_identity`.
-- Errors: malformed descriptor `SU_E_INVALID_ARGUMENT` (with field index), duplicate / built-in ID / reserved prefix
-  (`rts.`, `space3d.`, `sutekh.`) `SU_E_DUPLICATE_KEY`, full registry (64) or no memory `SU_E_RESOURCE_LIMIT`; an
-  unknown record stays `SU_E_CAPABILITY_DENIED`.
+  are byte-identical (name NULL). At world creation `reg_identity` then folds the descriptor flags and the scratch
+  size returned for the world's capacity into the system's semantic hash:
+  `SHA-256("sutekh.host.registered.v1\0" || record semantic hash || u32 flags || u64 scratch bytes)`, little-endian.
+  That hash is what `su_host_system_info`, `su_host_world_identity` and replay headers carry.
+- Names: system ID, schema ID, operator name and every lane name must be identifiers (`[A-Za-z0-9_.-]`), so the
+  canonical JSON text hashed by `host_semantic_digest` (which writes names without escaping) is unambiguous. The
+  review built two different declarations with one semantic hash through quotes in names; such names are refused now.
+- Errors: malformed descriptor `SU_E_INVALID_ARGUMENT` (with field index); duplicate ID, built-in ID, a reserved prefix
+  (`rts.`, `space3d.`, `sutekh.`, compared ignoring letter case) or a reserved operator name (`rts_ops*`,
+  `space3d_ops*`, `sutekh*`, any case; this covers every built-in operator name) `SU_E_DUPLICATE_KEY`; full registry
+  (64) or no memory `SU_E_RESOURCE_LIMIT`; an unknown record stays `SU_E_CAPABILITY_DENIED`.
+- Failing runs: `err->message` names the code with `su_host_status_name` and appends the operator's own reason
+  (`SuHostOperatorRun.reason`, 128 bytes, "" at entry), for example `operator run returned SU_E_RESOURCE_LIMIT:
+  magazine empty in row 2`.
 
 ## Design decisions
 
@@ -61,15 +74,31 @@ Enforcement, all in `src/host/su_host_registered.c` `reg_run` (no allocation; ev
   tick, scratch and parsed data.
 - **Registry:** process-wide, append-only, lock-protected (static `pthread_mutex`/SRWLOCK), no unregister: an entry
   can never disappear under a live world. Listing (`su_host_operator_count/info`) shows built-ins first, then
-  registered operators in registration order.
+  registered operators in registration order. The static library and the DLL are separate copies with separate
+  registries (documented in `host.h`).
+- **`SU_HOST_OPERATOR_TRUST_INPUTS` kept:** for an operator that honours the contract it changes cost only (the
+  results are the same). For one that writes a read lane, it turns a failed tick into silent corruption. It is part of
+  the identity, so worlds with and without it never exchange snapshots or replays (tested: `verify flags`).
 - **Operator data:** the existing `su_host_set_operator_data` path; one parse per call, refcounted per world, released
   with the last instance. The family check now also requires the same registration (registered operators share one
   callback but not one parser).
-- **Forward compatibility for issue 142 (deterministic multithreaded tick):** `struct_size` on the descriptor and on
-  `SuHostOperatorRun` (append-only growth; later libraries accept earlier descriptor sizes), unknown flag bits refused,
-  and `SuHostOperatorRun` already carries `row_begin`/`row_end` and `chunk_index`/`chunk_count` (always 0..rows and
-  0 of 1 here). Issue 142 would add an opt-in flag; only operators that set it would be called per chunk with one
-  scratch per worker. No threading is implemented here.
+- **Versioning:** `struct_size` may be anything from `SU_HOST_OPERATOR_DESC_V1_SIZE` (the size of this release's
+  descriptor, through `user`) up. Registration copies at most `struct_size` bytes into a zeroed local descriptor, and
+  bytes beyond the library's `sizeof` must be zero: an unknown nonzero field is refused, never ignored. The library
+  fills `SuHostOperatorRun.struct_size`. `SuHostOperatorColumn` keeps its layout (no stride field); per-lane additions
+  will be new trailing `SuHostOperatorRun` fields (parallel arrays indexed like `columns`).
+- **Extension plan for issue 142 (deterministic multithreaded tick), not implemented.** It is also in `host.h`. Every
+  part is opt-in by a new descriptor flag plus new trailing descriptor fields. Operators without the flag keep exactly
+  the serial whole-range call.
+  1. Chunked runs: `run` is called once per canonical row chunk (`row_begin/row_end`, `chunk_index/chunk_count`, which
+     already exist and are 0..rows, 0 of 1 today). The chunking depends only on the row count, as for chunked IR
+     systems. Each call stores only its rows' writes, and reads stay frozen for the tick.
+  2. Per-worker scratch: a new trailing `scratch_size_ex(capacity, workers, chunk_rows, ...)` sizes one scratch per
+     worker, and `run->scratch` is the calling worker's. The sizes join the identity as `scratch_size`'s does.
+  3. Scatter writes to other rows (for example damage applied to target rows): each chunk writes into its own
+     engine-allocated output buffers (declared lanes, allocated at creation). A declared merge/reduce callback then
+     combines the buffers in canonical chunk order (0 .. chunk_count - 1) into staging, so the result does not depend
+     on thread timing. The merge is part of the operator's identity.
 
 ## Local validation
 
@@ -91,14 +120,21 @@ cmake --build <dir> -j 6 && (cd <dir> && ctest -j 6 --output-on-failure)
 
 | Configuration | Build | ctest |
 |---|---|---|
-| GCC Debug | 0 warnings | **133/133 passed**, 1 skipped (`audio_device`: no audio backend on Linux) |
-| GCC Release | 0 warnings | **133/133 passed**, same skip |
-| GCC Debug `SUTEKH_NATIVE=ON` | 0 warnings | **150/150 passed**, 2 skipped (`native_unwind` Windows only, `audio_device`) |
-| Clang Debug ASan+UBSan | 0 warnings | 21 of 133 failed, 1 skipped: **the identical set fails on the baseline** (below) |
+| GCC Debug | 0 warnings | **135/135 passed**, 1 skipped (`audio_device`: no audio backend on Linux) |
+| GCC Release | 0 warnings | **135/135 passed**, same skip |
+| GCC Debug `SUTEKH_NATIVE=ON` | 0 warnings | **152/152 passed**, 2 skipped (`native_unwind` Windows only, `audio_device`) |
+| Clang Debug ASan+UBSan | 0 warnings | 21 of 135 failed, 1 skipped: **the identical set fails on the baseline** (below) |
 
-The 8 new tests pass in every configuration, including ASan+UBSan: `host_registered` (551 checks, static),
-`host_registered_dll` (547 checks; the allocation counter is static-only), `host_registered_record`, and
-`host_registered_verify_{same,version,constants,name,none}`.
+(Review round; the first revision had 133 / 133 / 150 / 133 tests. Two cross-process tests were added.)
+
+The 10 new tests pass in every configuration, including ASan+UBSan: `host_registered` (559 checks, static),
+`host_registered_dll` (555 checks; the allocation counter is static-only), `host_registered_record`, and
+`host_registered_verify_{same,version,constants,name,flags,scratch,none}`. `flags` and `scratch` register the same
+operator with `SU_HOST_OPERATOR_TRUST_INPUTS` or a 64-byte larger scratch: the snapshot and the replay of the
+recording process are refused (`SU_E_SCHEMA_MISMATCH`). The in-process tests also cover names with quotes, control
+characters and non-ASCII bytes in every name slot, reserved prefixes in upper and mixed case, reserved operator
+names, the former bit 2, descriptors of the v1 size, larger with a zero tail, larger with a nonzero tail (refused) and
+below the v1 size (refused), and a failing run's reason text.
 
 ASan+UBSan baseline: `origin/main` 07d06de extracted with `git archive` to `/tmp/wt-137-base-src` and built with the
 same flags: 125 tests, the same 21 failures and the same skip (failure sets compared with `diff`: identical). The
@@ -114,44 +150,69 @@ digest-producing commands on the baseline Release build and on this branch's Rel
 --rollback-check` with and without `--respond` (final digests `3b1f7e1d...` and `fab7f110...`), the SHA-256 of the
 canonical replay file written by `test_replay record` (`232e8f2a5ccf4613...`), every `racer_microcosm --n 8 --ticks 720
 --digest-every 120` state digest, and the `minimal_host` digest lines. Output files identical; SHA-256 of both
-`02c978ede2dc7baac17b44ba151d27f979962e27e810df63907a8395191ec702`. Run on the final sources too.
+`02c978ede2dc7baac17b44ba151d27f979962e27e810df63907a8395191ec702`. Rerun on the review-round sources: identical.
 
 **Mutation check** (scratch script, not committed; each mutant built and run, then the source restored and
-`cmp`-verified): 8 engine mutants, 8 killed. Removed input re-hash (5 failures); no zero prefill of write-only lanes
-(contract check); no scratch zeroing; a `malloc` in the tick (50 allocations counted); operator name not in the
-semantic hash (killed only by the cross-process `verify name`, as intended); record name not checked; duplicate ID not
-refused; `run->tick` off by one (440 cells differ from the model).
+`cmp`-verified; rerun in the review round): 12 engine mutants, 12 killed.
+- Removed input re-hash (5 failures).
+- No zero prefill of write-only lanes (contract check).
+- No scratch zeroing.
+- Flags and scratch size not folded into the identity (killed by `verify flags` and `verify scratch`).
+- Lane names not checked as identifiers.
+- Reserved prefixes compared case-sensitively.
+- A nonzero descriptor tail ignored.
+- A `malloc` in the tick (50 allocations counted).
+- Operator name not in the semantic hash (killed only by the cross-process `verify name`, as intended).
+- Record name not checked.
+- Duplicate ID not refused.
+- `run->tick` off by one (440 cells differ from the model).
 
 Repository checks: `python3 tools/validate_pack.py --check-report` passed; `python3 tools/check_repository_license.py`
 passed; `git diff --check` clean.
 
+## Input-check cost (observations, C10)
+
+Not budgets. Same machine (i7-14700K), Release, single core.
+- **Independent review:** with a world stepping, about 0.55-0.62 ms per tick at 100,000 rows x 10 read lanes, about
+  34 us at 10,000 x 10. The method is the reviewer's and is not reproduced here.
+- **Ours:** a scratch microbenchmark (`hashcost.c`, not committed, SHA-256
+  `5de8318e90fc05a1092fd7e88826239d3abf8759c833310f6083442b82959f44`; `gcc -O2`, pinned with `taskset -c 3`). It times
+  the two XXH64 passes alone over 10 lanes, 400 ticks after 40 warm-up ticks, 3 runs.
+  - 10,000 rows: median 36.7 us, p95 37.2-38.8 us.
+  - 100,000 rows: median 365.1-366.1 us, p95 367.4-373.4 us.
+- **Reading:** the isolated hash accounts for about 0.37 ms of the reviewer's 0.55-0.62 ms at 100,000 rows. The rest
+  is not attributed here (likely cache effects alongside the tick's other work), and no breakdown was measured.
+  `SU_HOST_OPERATOR_TRUST_INPUTS` removes the cost and the protection.
+
 ## SHA-256 evidence (final sources)
 
-- `include/sutekh/host.h` `75256325cdc1d930922a7a604ede84fb1660e984dbee0fb13b269aebbeaa3609`
-- `src/host/su_host_registered.c` `05f48674e44968b8b3a5fe6e75a178888cb3eac96d77e5732156a7d0229b81b1`
-- `src/host/su_host.c` `8508ad53b1fb1392c086e6db3ba69051742d9be8ce9da0679f0339c8b93354d9`
-- `src/host/su_host_internal.h` `9b452d3eae274a5994684bc5d0bbd6e1c896ab2bb6d443cbdf22978071011f92`
-- `src/host/su_host_operators.c` `4580d401a5916cb788806db01604648b0e008c14c9d590d70e082be1275af682`
+- `include/sutekh/host.h` `5cb7614162d34d12d709d36fe722efe97aa0f2e4b72e36f2e6b6d9e9717060db`
+- `src/host/su_host_registered.c` `2fc144002da5a85f73eed4b9d8a67893efebd365091610be07b1ed7a20176f3d`
+- `src/host/su_host.c` `94e6cea01a1a04154f7631bc47a69d4fbbbfc881c8d67b06b763895e1e9ca15a`
+- `src/host/su_host_internal.h` `62f5c405da95f3f20acd37a359cea3b3966886ad94085299038b16f1c23c0828`
+- `src/host/su_host_operators.c` `08b2d5b982bffcd178833a0c7dc6c969de79160b5efd830a8511408a282144b7`
 - `src/runtime/rts/host_decl.c` `868cb8354ccb8174811c0e6c99116f84376bc849272fcaa56ac78a62e37fec04`
 - `src/runtime/rts/host_decl.h` `d76db14df94c423c305ddf7a5d121a71571f3a9a454257f9d2c6afd7df07e3cb`
-- `tests/host/test_host_registered.c` `b16ea506c82bab01db42a7d5c20856a92bfc1cca71fcecbb257249ae2b485074`
-- `cmake/SutekhHostOps.cmake` `0362848ca601cc8affcc7449b8e29588a1950d40afcec1378978f6931567301a`
-- Release `libsutekh_host.so` `24596b6506c5cc323447216d82159a36e655a770ba243792718e387470d5dbe8`
-- Release `test_host_registered` `90f0007ae5c8d1656b37e0575c713d8384e29b361601f9d602ccd89285450cb8`
+- `tests/host/test_host_registered.c` `22c8ae685660c200222bb06569efbd241c8b4c775380a76b12738e0e6e471685`
+- `cmake/SutekhHostOps.cmake` `dec6ff1754ef21c93c33b4183957f3d901b070ea8feb58ce9ed2b722a11f0b76`
+- Release `libsutekh_host.so` `50ba67d42eb25f73034c80ffb223c07cd0fa19771e7e0c4e5dc1f894ac60dd9a`
+- Release `test_host_registered` `638bb4e0664fa2bd9aab7541ecdfcc480f5db34634035297540bb2f17483f47c`
 
 ## Unrun checks and limitations
 
 - Not run: Windows (MSVC `/W4 /WX`, clang-cl), macOS, the renderer-on configuration, ThreadSanitizer (the
   concurrent-registration test ran without it), CI. No CI result is claimed.
-- No timing measured: the cost of the input re-hash (XXH64 over rows x readable lanes per tick) and of the scratch
-  zeroing is not quantified; both have documented opt-outs. No performance claim is made.
+- Timing: only the input-check observations above. The cost of the per-call scratch zeroing (always on) was not
+  measured; it is a memset of `scratch_size(capacity)` bytes per tick.
 - Detection limits: the input check is a 64-bit hash (a collision, about 2^-64, is missed) and covers writes through
   the views `run` receives; in-process native code can still write anywhere (C07). With `TRUST_INPUTS` an undeclared
   write is not detected (tested as such).
 - The tick allocates nothing: proven by counting `malloc/calloc/realloc` (`-Wl,--wrap`) on the static Linux build
   only; the DLL and Windows builds are not counted.
-- Not in scope: operator-owned variable-size state in snapshots (separate request), parallel execution (issue 142),
-  unregistering, registered operators in a worker.
+- Not in scope: operator-owned variable-size state in snapshots (separate request), parallel execution (issue 142,
+  plan above), unregistering, registered operators in a worker. `su_host_step` allocates when an input record applies
+  (pre-existing, outside the operator path; filed separately by the coordinator). The allocation test steps without
+  inputs.
 - `SU_E_CAPABILITY_DENIED` text for an unknown host record changed ("built into or registered with this library");
   code, index and behaviour are unchanged.
 

@@ -14,8 +14,9 @@
  * An independent reference model computed here checks every lane of every row after every tick.
  *
  * In-process checks (no arguments):
- *   1. registration refusals (one per rule), unregistered record (SU_E_CAPABILITY_DENIED), duplicate and built-in
- *      or reserved IDs (SU_E_DUPLICATE_KEY), listing;
+ *   1. registration refusals (one per rule; names with quotes, control characters or non-ASCII bytes), unregistered
+ *      record (SU_E_CAPABILITY_DENIED), duplicate, built-in or reserved IDs in any letter case and reserved operator
+ *      names (SU_E_DUPLICATE_KEY), listing;
  *   2. schedule order and same-tick consumption against the reference model, the run contract (columns, prefill,
  *      tick, scratch zeroed, row range), write-only lanes leak no input;
  *   3. snapshots, digests (SHA-256 and fast), allocating and in-place restore + re-simulation, bit-identical;
@@ -27,14 +28,16 @@
  *      run, a refused scratch size;
  *   7. operator data: refusals, identity, effect on results;
  *   8. no allocation in the tick (static Linux build: malloc/calloc/realloc wrapped and counted);
- *   9. two worlds stepped on two threads equal the serial run.
+ *   9. two worlds stepped on two threads equal the serial run;
+ *  10. descriptor versioning (v1 size, a larger descriptor with a zero or nonzero tail), concurrent registration,
+ *      the registry limit; a failing run's reason buffer (in 6).
  *
  * Cross-process modes (ctest runs record, then verify in other processes, partly through the DLL):
  *   record <dir>             writes a snapshot at tick 20, a replay of 60 ticks and the digests;
  *   verify <dir> same        same registration: the snapshot restores, the replay verifies, digests equal;
- *   verify <dir> version|constants|name   the operator registered with another operator_version, constants hash or
- *                            operator name (and a record matching it): snapshot and replay refused
- *                            (SU_E_SCHEMA_MISMATCH, world identity);
+ *   verify <dir> version|constants|name|flags|scratch   the operator registered with another operator_version,
+ *                            constants hash, operator name, flags (TRUST_INPUTS) or scratch size (and a record
+ *                            matching it): snapshot and replay refused (SU_E_SCHEMA_MISMATCH, world identity);
  *   verify <dir> none        nothing registered: the record is refused (SU_E_CAPABILITY_DENIED). */
 #include <stdarg.h>
 #include <stdint.h>
@@ -147,6 +150,13 @@ static uint32_t target_scratch(uint64_t capacity, size_t *bytes, void *user) {
     return SU_OK;
 }
 
+/* The V_SCRATCH variant: same results, a larger scratch (the identity must still differ). */
+static uint32_t target_scratch_big(uint64_t capacity, size_t *bytes, void *user) {
+    (void)user;
+    *bytes = (size_t)capacity * sizeof(uint32_t) + 64u;
+    return SU_OK;
+}
+
 static int64_t abs64(int64_t v) {
     return v < 0 ? -v : v;
 }
@@ -162,7 +172,7 @@ static uint32_t target_run(const SuHostOperatorRun *r, void *user) {
     g_stats.last_tick = r->tick;
     if (r->struct_size != sizeof *r || r->column_count != C_COUNT || r->row_begin != 0u || r->row_end != r->rows ||
         r->chunk_index != 0u || r->chunk_count != 1u || r->scratch == NULL ||
-        r->scratch_bytes != (size_t)r->rows * sizeof(uint32_t)) {
+        r->scratch_bytes < (size_t)r->rows * sizeof(uint32_t) || r->reason == NULL || r->reason[0] != '\0') {
         g_stats.contract_bad++;
         return SU_E_INTERNAL;
     }
@@ -271,7 +281,7 @@ static void target_release(void *parsed, void *user) {
 }
 
 /* Variants of the registration (cross-process identity checks). */
-enum { V_SAME, V_VERSION, V_CONSTANTS, V_NAME };
+enum { V_SAME, V_VERSION, V_CONSTANTS, V_NAME, V_FLAGS, V_SCRATCH };
 
 static void fleet_desc(SuHostOperatorDesc *d, int variant) {
     uint32_t i;
@@ -286,7 +296,8 @@ static void fleet_desc(SuHostOperatorDesc *d, int variant) {
     for (i = 0; i < 32u; i++) {
         d->constants_hash[i] = (uint8_t)(i * 7u + (variant == V_CONSTANTS ? 3u : 1u));
     }
-    d->scratch_size = target_scratch;
+    d->flags = variant == V_FLAGS ? SU_HOST_OPERATOR_TRUST_INPUTS : 0u;
+    d->scratch_size = variant == V_SCRATCH ? target_scratch_big : target_scratch;
     d->run = target_run;
     d->parse_data = target_parse;
     d->release_data = target_release;
@@ -723,6 +734,18 @@ static void test_registration(const Game *g) {
     } while (0)
     REFUSE(SU_E_INVALID_ARGUMENT, bad.struct_size = 8u, "struct_size");
     REFUSE(SU_E_INVALID_ARGUMENT, bad.flags = 0x100u, "unknown flag");
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.flags = 0x2u, "bit 2 (a scratch-keeping mode was never released)");
+    /* Identifiers only: quotes, control characters and non-ASCII bytes would make the hashed text ambiguous. */
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.system_id = "game.\"t\"", "system_id with a quote");
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.schema_id = "game.fleet\",\"x", "schema_id with a quote");
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.schema_id = "game.fl\teet", "schema_id with a control character");
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.schema_id = "game.fl\xC3\xA9" "et", "schema_id with non-ASCII bytes");
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.operator_name = "fleet\"ops", "operator_name with a quote");
+    REFUSE(SU_E_INVALID_ARGUMENT, bad.operator_name = "fleet\x01ops", "operator_name with a control character");
+    REFUSE(SU_E_INVALID_ARGUMENT, f[0].name = "x\",\"type\":\"u32", "field name with quotes");
+    check(err.index == 0u, "field name error names field 0 (%u)", (unsigned)err.index);
+    REFUSE(SU_E_INVALID_ARGUMENT, f[1].name = "te\nam", "field name with a newline");
+    REFUSE(SU_E_INVALID_ARGUMENT, f[2].name = "arm\xE2\x82\xAC" "ed", "field name with non-ASCII bytes");
     REFUSE(SU_E_INVALID_ARGUMENT, bad.run = NULL, "NULL run");
     REFUSE(SU_E_INVALID_ARGUMENT, bad.parse_data = NULL, "release_data without parse_data");
     REFUSE(SU_E_INVALID_ARGUMENT, bad.system_id = "game target", "system_id with a space");
@@ -745,6 +768,10 @@ static void test_registration(const Game *g) {
     REFUSE(SU_E_DUPLICATE_KEY, bad.system_id = "rts.spatial", "reserved rts prefix (engine operator of the worker)");
     REFUSE(SU_E_DUPLICATE_KEY, bad.system_id = "space3d.future", "reserved space3d prefix");
     REFUSE(SU_E_DUPLICATE_KEY, bad.system_id = "sutekh.x", "reserved sutekh prefix");
+    REFUSE(SU_E_DUPLICATE_KEY, bad.system_id = "RTS.spatial", "reserved prefix in upper case");
+    REFUSE(SU_E_DUPLICATE_KEY, bad.system_id = "Space3D.query", "reserved prefix in mixed case");
+    REFUSE(SU_E_DUPLICATE_KEY, bad.operator_name = "space3d_ops_v1", "a built-in operator name");
+    REFUSE(SU_E_DUPLICATE_KEY, bad.operator_name = "RTS_OPS_v1", "a reserved operator family name");
 #undef REFUSE
     check(su_host_operator_count() == base, "refusals register nothing");
 
@@ -997,7 +1024,11 @@ static uint32_t bad_run(const SuHostOperatorRun *r, void *user) {
     } else if (g_bad_mode == 2) {
         ((uint32_t *)r->columns[1].in)[0] += 5u; /* the input view of read-write lane seen */
     } else if (g_bad_mode == 3) {
-        return SU_E_RESOURCE_LIMIT; /* the operator's own failure */
+        if (r->reason == NULL || r->reason_cap < 16u || r->reason[0] != '\0') {
+            return SU_E_INTERNAL;
+        }
+        snprintf(r->reason, r->reason_cap, "magazine empty in row %u", 2u);
+        return SU_E_RESOURCE_LIMIT; /* the operator's own failure, with a reason */
     }
     return SU_OK;
 }
@@ -1137,7 +1168,8 @@ static void test_negative(const Game *g, const SuHostOperatorDesc *d) {
                           strstr(err.message, mode == 1 ? "lane x" : "lane seen") != NULL,
                       "undeclared write (mode %d) detected: %s (%s)", mode, su_host_status_name(st), err.message);
             } else {
-                check(st == SU_E_RESOURCE_LIMIT && err.index == 1u && strstr(err.message, "returned code") != NULL,
+                check(st == SU_E_RESOURCE_LIMIT && err.index == 1u && strstr(err.message, "SU_E_RESOURCE_LIMIT") != NULL &&
+                          strstr(err.message, "magazine empty in row 2") != NULL,
                       "failing run: %s (%s)", su_host_status_name(st), err.message);
             }
             check(strcmp(before, after) == 0 && su_host_tick(w) == (uint64_t)mode, "failed tick commits nothing");
@@ -1337,65 +1369,37 @@ static void test_threads(const Game *g) {
           "two worlds on two threads equal the serial run");
 }
 
-/* ---------- 10. scratch kept on request, concurrent registration, registry limit ---------- */
+/* ---------- 10. descriptor versioning, concurrent registration, registry limit ---------- */
 
-static uint32_t g_keep_seen[4];
-static unsigned g_keep_calls;
-
-static uint32_t keep_scratch(uint64_t capacity, size_t *bytes, void *user) {
-    (void)capacity;
-    (void)user;
-    *bytes = sizeof(uint32_t);
-    return SU_OK;
-}
-
-/* Reads the scratch word at entry (to observe the flag), then overwrites it. Stores every declared write. */
-static uint32_t keep_run(const SuHostOperatorRun *r, void *user) {
-    uint32_t *word = (uint32_t *)r->scratch;
-    uint64_t i;
-    (void)user;
-    if (g_keep_calls < 4u) {
-        g_keep_seen[g_keep_calls] = *word;
-    }
-    g_keep_calls++;
-    *word = 0x5000u + g_keep_calls;
-    for (i = 0; i < r->rows; i++) {
-        r->columns[1].out[i] = r->columns[1].in[i];
-    }
-    return SU_OK;
-}
-
-static void test_keep_scratch(const Game *g) {
-    SuHostOperatorDesc k, z;
+/* struct_size: the v1 size; a larger descriptor whose unknown tail is zero; a nonzero tail is refused. */
+static void test_desc_versions(void) {
+    struct {
+        SuHostOperatorDesc d;
+        uint8_t tail[40];
+    } big;
+    SuHostOperatorDesc d;
     SuHostError err;
-    SuHostWorld *w;
-    unsigned t;
-    bad_desc(&k, "game.keep", SU_HOST_OPERATOR_KEEP_SCRATCH);
-    k.scratch_size = keep_scratch;
-    k.run = keep_run;
-    check(su_host_register_operator(&k, &err) == SU_OK, "register game.keep: %s", err.message);
-    w = bad_world(g, &k);
-    g_keep_calls = 0;
-    for (t = 0; w != NULL && t < 3u; t++) {
-        step1(w);
-    }
-    check(g_keep_calls == 3u && g_keep_seen[0] == 0u && g_keep_seen[1] == 0x5001u && g_keep_seen[2] == 0x5002u,
-          "SU_HOST_OPERATOR_KEEP_SCRATCH: zero at creation, then kept between calls (%x %x %x)",
-          (unsigned)g_keep_seen[0], (unsigned)g_keep_seen[1], (unsigned)g_keep_seen[2]);
-    su_host_world_destroy(w);
-    /* The same operator without the flag sees zero every call. */
-    z = k;
-    z.system_id = "game.keep_off";
-    z.flags = 0u;
-    check(su_host_register_operator(&z, &err) == SU_OK, "register game.keep_off: %s", err.message);
-    w = bad_world(g, &z);
-    g_keep_calls = 0;
-    for (t = 0; w != NULL && t < 3u; t++) {
-        step1(w);
-    }
-    check(g_keep_calls == 3u && g_keep_seen[0] == 0u && g_keep_seen[1] == 0u && g_keep_seen[2] == 0u,
-          "without the flag the scratch is zero at every call");
-    su_host_world_destroy(w);
+    uint32_t st;
+    check(SU_HOST_OPERATOR_DESC_V1_SIZE <= sizeof(SuHostOperatorDesc), "v1 size within the descriptor");
+    bad_desc(&d, "game.v1size", 0u);
+    d.struct_size = (uint32_t)SU_HOST_OPERATOR_DESC_V1_SIZE;
+    st = su_host_register_operator(&d, &err);
+    check(st == SU_OK, "v1-sized descriptor accepted: %s (%s)", su_host_status_name(st), err.message);
+    memset(&big, 0, sizeof big);
+    bad_desc(&big.d, "game.bigdesc", 0u);
+    big.d.struct_size = (uint32_t)sizeof big;
+    st = su_host_register_operator(&big.d, &err);
+    check(st == SU_OK, "larger descriptor with a zero tail accepted: %s (%s)", su_host_status_name(st), err.message);
+    bad_desc(&big.d, "game.bigdesc_nonzero", 0u);
+    big.d.struct_size = (uint32_t)sizeof big;
+    big.tail[17] = 1u;
+    st = su_host_register_operator(&big.d, &err);
+    check(st == SU_E_INVALID_ARGUMENT && strstr(err.message, "does not know") != NULL,
+          "larger descriptor with a nonzero unknown field refused: %s (%s)", su_host_status_name(st), err.message);
+    bad_desc(&d, "game.small", 0u);
+    d.struct_size = (uint32_t)SU_HOST_OPERATOR_DESC_V1_SIZE - 8u;
+    st = su_host_register_operator(&d, &err);
+    check(st == SU_E_INVALID_ARGUMENT, "descriptor below the v1 size refused: %s", su_host_status_name(st));
 }
 
 #define REG_THREAD_OPS 8u
@@ -1572,6 +1576,8 @@ static int mode_verify(const char *dir, const char *variant) {
     int v = strcmp(variant, "version") == 0     ? V_VERSION
             : strcmp(variant, "constants") == 0 ? V_CONSTANTS
             : strcmp(variant, "name") == 0      ? V_NAME
+            : strcmp(variant, "flags") == 0     ? V_FLAGS
+            : strcmp(variant, "scratch") == 0   ? V_SCRATCH
                                                 : V_SAME;
     int none = strcmp(variant, "none") == 0;
     uint32_t st;
@@ -1646,7 +1652,7 @@ int main(int argc, char **argv) {
         test_data(&g);
         test_no_alloc(&g);
         test_threads(&g);
-        test_keep_scratch(&g);
+        test_desc_versions();
         test_registry_limits(); /* last: it fills the registry */
         game_free(&g);
     }

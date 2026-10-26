@@ -14,13 +14,16 @@
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #include "host/su_host_internal.h"
 
+#include <ctype.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "host/su_xxh64.h"
 #include "ir/su_lir.h"
+#include "ir/su_sha256.h"
 #include "platform/su_thread.h"
 #include "runtime/rts/host_decl.h"
 #include "sutekh/abi.h"
@@ -56,7 +59,8 @@ typedef struct RegInst {
     void *scratch;
     size_t scratch_bytes;
     RegData *data;
-    char why[192];                /* reason of the last failed run, "" otherwise */
+    char reason[128];             /* SuHostOperatorRun.reason, "" at every call */
+    char why[256];                /* reason of the last failed run, "" otherwise */
 } RegInst;
 
 /* POSIX: a statically initialized pthread mutex; Windows: a zeroed SRWLOCK is SRWLOCK_INIT. */
@@ -69,6 +73,19 @@ static HostRegOp *g_reg[SU_HOST_MAX_REGISTERED_OPERATORS];
 static uint32_t g_reg_count;
 
 static const char *const k_reserved_prefixes[] = {"rts.", "space3d.", "sutekh."};
+/* Operator names of the engine's families (rts_ops_v<N>, space3d_ops_v<N>) and the engine's own namespace. */
+static const char *const k_reserved_names[] = {"rts_ops", "space3d_ops", "sutekh"};
+
+/* 1 when s begins with prefix, ignoring ASCII letter case. */
+static int has_prefix_ci(const char *s, const char *prefix) {
+    size_t i;
+    for (i = 0; prefix[i] != '\0'; i++) {
+        if (s[i] == '\0' || tolower((unsigned char)s[i]) != tolower((unsigned char)prefix[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
 
 static uint32_t reg_err(SuHostError *err, uint32_t code, uint32_t index, const char *fmt, ...) {
     if (err != NULL) {
@@ -261,9 +278,10 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
     if (st != SU_OK) {
         return SU_E_INTERNAL;
     }
-    if (ri->scratch != NULL && (r->pub.flags & SU_HOST_OPERATOR_KEEP_SCRATCH) == 0u) {
-        memset(ri->scratch, 0, ri->scratch_bytes);
+    if (ri->scratch != NULL) {
+        memset(ri->scratch, 0, ri->scratch_bytes); /* always: scratch is not state */
     }
+    ri->reason[0] = '\0';
     memset(&run, 0, sizeof run);
     run.struct_size = (uint32_t)sizeof run;
     run.column_count = r->desc.field_count;
@@ -279,9 +297,13 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
     run.scratch = ri->scratch;
     run.scratch_bytes = ri->scratch_bytes;
     run.data = ri->data != NULL ? ri->data->parsed : NULL;
+    run.reason = ri->reason;
+    run.reason_cap = sizeof ri->reason;
     st = r->pub.run(&run, r->pub.user);
     if (st != SU_OK) {
-        snprintf(ri->why, sizeof ri->why, "operator run returned code %u", (unsigned)st);
+        ri->reason[sizeof ri->reason - 1u] = '\0';
+        snprintf(ri->why, sizeof ri->why, "operator run returned %s%s%s", su_host_status_name(st),
+                 ri->reason[0] != '\0' ? ": " : "", ri->reason);
         return st;
     }
     if (check_inputs) {
@@ -294,6 +316,28 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
         }
     }
     return SU_OK;
+}
+
+/* The world-specific part of a registered system's semantic hash: the descriptor flags and the scratch size for
+ * this world's capacity. SHA-256("sutekh.host.registered.v1\0" || record semantic hash || u32 flags LE ||
+ * u64 scratch bytes LE). */
+static void reg_identity(const void *inst, uint8_t semantic[32]) {
+    const RegInst *ri = (const RegInst *)inst;
+    SuSha256 c;
+    uint8_t b[12];
+    uint64_t sb = (uint64_t)ri->scratch_bytes;
+    uint32_t i, f = ri->reg->pub.flags;
+    for (i = 0; i < 4u; i++) {
+        b[i] = (uint8_t)(f >> (8u * i));
+    }
+    for (i = 0; i < 8u; i++) {
+        b[4u + i] = (uint8_t)(sb >> (8u * i));
+    }
+    su_sha256_init(&c);
+    su_sha256_update(&c, (const uint8_t *)"sutekh.host.registered.v1", 26u);
+    su_sha256_update(&c, semantic, 32u);
+    su_sha256_update(&c, b, sizeof b);
+    su_sha256_final(&c, semantic);
 }
 
 static const char *reg_last_error(const void *inst) {
@@ -382,9 +426,9 @@ static uint32_t check_fields(const SuHostOperatorDesc *d, SuHostError *err) {
     for (i = 0; i < d->field_count; i++) {
         const SuHostOperatorField *f = &d->fields[i];
         uint32_t t = f->type;
-        if (f->name == NULL || strlen(f->name) == 0u || strlen(f->name) > SU_WORLD_NAME_MAX) {
-            return reg_err(err, SU_E_INVALID_ARGUMENT, i, "field %u: name must be 1..%u bytes", (unsigned)i,
-                           (unsigned)SU_WORLD_NAME_MAX);
+        if (!ident_ok(f->name, SU_WORLD_NAME_MAX)) {
+            return reg_err(err, SU_E_INVALID_ARGUMENT, i, "field %u: name must be 1..%u bytes of [A-Za-z0-9_.-]",
+                           (unsigned)i, (unsigned)SU_WORLD_NAME_MAX);
         }
         if (f->id == 0u || f->id >= SU_OPERAND_NONE || (i > 0u && f->id <= d->fields[i - 1u].id)) {
             return reg_err(err, SU_E_INVALID_ARGUMENT, i, "field %u (%s): ids must be nonzero and strictly ascending",
@@ -432,8 +476,10 @@ static uint32_t check_fields(const SuHostOperatorDesc *d, SuHostError *err) {
     return SU_OK;
 }
 
-uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, SuHostError *err) {
+uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError *err) {
     HostRegOp *r;
+    SuHostOperatorDesc local;
+    const SuHostOperatorDesc *desc = &local;
     uint32_t i, st;
     size_t k;
 
@@ -442,13 +488,24 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, SuHostError *
         err->index = UINT32_MAX;
         err->tick = UINT64_MAX;
     }
-    if (desc == NULL || desc->struct_size != sizeof *desc) {
-        return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "descriptor is NULL or struct_size is not %u",
-                       (unsigned)sizeof *desc);
+    /* Versioning (host.h): any struct_size from the v1 size up; read only struct_size bytes; bytes beyond this
+     * library's descriptor must be zero (fields it does not know). */
+    if (caller == NULL || caller->struct_size < SU_HOST_OPERATOR_DESC_V1_SIZE) {
+        return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "descriptor is NULL or struct_size is below %u",
+                       (unsigned)SU_HOST_OPERATOR_DESC_V1_SIZE);
     }
-    if ((desc->flags & ~(SU_HOST_OPERATOR_TRUST_INPUTS | SU_HOST_OPERATOR_KEEP_SCRATCH)) != 0u) {
+    memset(&local, 0, sizeof local);
+    memcpy(&local, caller, caller->struct_size < sizeof local ? caller->struct_size : sizeof local);
+    for (k = sizeof local; k < caller->struct_size; k++) {
+        if (((const unsigned char *)caller)[k] != 0u) {
+            return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX,
+                           "descriptor byte %u is a field this library does not know and is not zero", (unsigned)k);
+        }
+    }
+    local.struct_size = (uint32_t)sizeof local;
+    if ((desc->flags & ~SU_HOST_OPERATOR_TRUST_INPUTS) != 0u) {
         return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "unknown flags 0x%x",
-                       (unsigned)(desc->flags & ~(SU_HOST_OPERATOR_TRUST_INPUTS | SU_HOST_OPERATOR_KEEP_SCRATCH)));
+                       (unsigned)(desc->flags & ~SU_HOST_OPERATOR_TRUST_INPUTS));
     }
     if (desc->run == NULL) {
         return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "run is NULL");
@@ -460,8 +517,8 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, SuHostError *
         return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "system_id must be 1..%u bytes of [A-Za-z0-9_.-]",
                        (unsigned)(SU_DIAG_SYSTEM_BYTES - 1u));
     }
-    if (desc->schema_id == NULL || strlen(desc->schema_id) == 0u || strlen(desc->schema_id) > SU_WORLD_NAME_MAX) {
-        return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "schema_id must be 1..%u bytes",
+    if (!ident_ok(desc->schema_id, SU_WORLD_NAME_MAX)) {
+        return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "schema_id must be 1..%u bytes of [A-Za-z0-9_.-]",
                        (unsigned)SU_WORLD_NAME_MAX);
     }
     if (!ident_ok(desc->operator_name, SU_WORLD_NAME_MAX)) {
@@ -484,11 +541,25 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, SuHostError *
                        desc->system_id);
     }
     for (k = 0; k < sizeof k_reserved_prefixes / sizeof k_reserved_prefixes[0]; k++) {
-        if (strncmp(desc->system_id, k_reserved_prefixes[k], strlen(k_reserved_prefixes[k])) == 0) {
+        if (has_prefix_ci(desc->system_id, k_reserved_prefixes[k])) {
             return reg_err(err, SU_E_DUPLICATE_KEY, UINT32_MAX,
                            "system_id %s uses the prefix %s, which is reserved for engine operators (built in or in "
                            "the worker)",
                            desc->system_id, k_reserved_prefixes[k]);
+        }
+    }
+    for (k = 0; k < sizeof k_reserved_names / sizeof k_reserved_names[0]; k++) {
+        if (has_prefix_ci(desc->operator_name, k_reserved_names[k])) {
+            return reg_err(err, SU_E_DUPLICATE_KEY, UINT32_MAX,
+                           "operator_name %s begins with %s, which is reserved for engine operators",
+                           desc->operator_name, k_reserved_names[k]);
+        }
+    }
+    for (i = 0; i < su_host_builtin_count(); i++) {
+        const char *bn = NULL;
+        if (su_host_operator_info(i, NULL, &bn) == SU_OK && bn != NULL && strcmp(bn, desc->operator_name) == 0) {
+            return reg_err(err, SU_E_DUPLICATE_KEY, UINT32_MAX, "operator_name %s is a built-in operator's name",
+                           desc->operator_name);
         }
     }
 
@@ -545,6 +616,7 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, SuHostError *
     r->op.data_release = desc->parse_data != NULL ? reg_data_release : NULL;
     r->op.reg = r;
     r->op.last_error = reg_last_error;
+    r->op.identity = reg_identity;
     r->op.record_name = r->operator_name;
 
     su_mutex_lock(&g_lock);

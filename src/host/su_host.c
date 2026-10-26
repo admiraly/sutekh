@@ -565,6 +565,14 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
                 op->destroy(inst);
             }
         }
+        if (st == SU_OK && op->identity != NULL) {
+            /* Registered operators: flags and this world's scratch size join the system's semantic hash (and so
+             * su_host_system_info, the world identity and replay headers). */
+            SuSysEntry *e = &hw->sched.sys[i];
+            op->identity(e->host_inst, e->mod->semantic_hash);
+            su_sha256_hex(e->mod->semantic_hash, e->mod->semantic_hash_hex);
+            snprintf(e->semantic_hash, sizeof e->semantic_hash, "%s", e->mod->semantic_hash_hex);
+        }
         if (st != SU_OK) {
             set_err(err, st, i, UINT64_MAX, "host operator %s: no scratch for %llu rows%s", hw->sched.sys[i].system_id,
                     (unsigned long long)su_world_row_count(hw->w),
