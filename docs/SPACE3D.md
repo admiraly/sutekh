@@ -8,6 +8,30 @@ Status: implemented and tested (2026-10-18; amendment `planning/amendments/2026-
 
 Swept collision and gate crossing need cross-row reads, which IR 0.x does not have. They are therefore a **host operator** (the M3 mechanism used by `rts.spatial`): a phase system compiled into the engine whose effects are a declared field table. The declaration is checked twice: the host capsule record (`profiles/space3d/space3d_query.capsule.json`) must equal the descriptor exactly (operator `space3d_ops_v1`, constants hash, every lane's ID, name, type and access; `su_host_load`), and the schedule's union table requires every IR system that binds one of those lanes to agree on its ID, name, storage type and **value type** (`q32` lanes are q32 for every system). Capsules consume the results as ordinary declared reads in a later system; the operator never writes a field it did not declare and stores every declared write for every row.
 
+**Registered operators (2026-10-26, issue 137).** A host operator does not have to be compiled into the engine. A
+game that embeds Sutekh through `include/sutekh/host.h` can define one in its own code (for example a cross-entity
+damage or targeting pass) and add it with `su_host_register_operator(const SuHostOperatorDesc *, SuHostError *)`
+before it creates a world that lists the operator's record. The descriptor gives the system ID, schema ID, operator
+name and version, constants hash, the field table (IDs, names, value types, access), a scratch size as a function of
+the world's capacity, an optional operator-data parser (`su_host_set_operator_data`) and the `run` callback. From
+then on the operator is checked and run exactly as a built-in one: the record must equal the descriptor (operator
+name, version, constants hash, every lane; or a schema-relative binding of it, section 2), the schedule's union table
+and the effect analysis use its declaration, and it runs in capsule order, so an IR system with an `after` edge to it
+consumes its results in the same tick. The engine enforces the declaration at run time: `run` sees only its
+declared lanes (no world pointer); its read lanes are re-hashed after the call and a change fails the tick with
+`SU_E_UNDECLARED_WRITE`; write-only lanes are zero-filled and read-write lanes start from their input, so every
+declared write is defined for every row; scratch, column views and alive/generation views are allocated at world
+creation and the scratch is zeroed before each call, so the tick allocates nothing and keeps no hidden state. The
+record's semantic hash also covers the operator name, and is part of the world identity, so snapshots and replays
+only load into a world whose process registered the same operator. Registering an ID twice, an ID built into the
+library, or one with a reserved prefix (`rts.`, `space3d.`, `sutekh.`) is `SU_E_DUPLICATE_KEY`; a record whose operator
+is neither built in nor registered stays `SU_E_CAPABILITY_DENIED`. A process that registers nothing behaves exactly as
+before (records, identities and digests unchanged). Registration is in-process `host.h` only: `sutekh serve`, the
+worker and `world.create` do not see registered operators (their records are refused there as unknown); a game that
+needs one in a worker would have to build its own worker, which is not provided. Contract and limits: `host.h`,
+"registered host operators". Evidence: `host_registered`, `host_registered_dll` and the cross-process
+`host_registered_record` / `host_registered_verify_*` tests (`tests/host/test_host_registered.c`).
+
 Typed host lanes: `SuHostField.type` holds the lane's value type (`SU_TYPE_U32`, or `SU_TYPE_I32`/`I64`/`Q32` for a typed lane; a 64-bit field is two adjacent entries `I`, `I+1` named `<field>.lo`, `<field>.hi`). A descriptor with typed lanes has numeric profile `fixed_q32_v1` and operator family `<schema_id>_ops`. Descriptors with only u32 lanes (the RTS operators and their tests) keep `rts_ops_v<N>`, `u32_mod_v1`, and byte-identical declaration digests.
 
 ## 2. Schema `space3d` (profile `profiles/space3d`)

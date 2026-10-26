@@ -4,7 +4,8 @@
 # "execution tiers"; planning/amendments/2026-10-18-sim-runtime.md). Included right after the host block of
 # CMakeLists.txt, when su_host, sutekh_host and su_space3d exist.
 foreach(host_lib su_host sutekh_host)
-    target_sources(${host_lib} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/host/su_host_operators.c")
+    target_sources(${host_lib} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/host/su_host_operators.c"
+                                       "${CMAKE_CURRENT_SOURCE_DIR}/src/host/su_host_registered.c")
 endforeach()
 target_link_libraries(su_host PUBLIC su_space3d)
 target_link_libraries(sutekh_host PRIVATE su_space3d)
@@ -50,6 +51,44 @@ if(TARGET su_agent)
         set_tests_properties(host_ops${variant} PROPERTIES FIXTURES_REQUIRED host_ops_fixture TIMEOUT 300)
     endforeach()
 endif()
+
+# Registered host operators (include/sutekh/host.h, "registered host operators"; issue 137): an operator defined in
+# the test translation unit, outside the engine library, registered at run time. Static and DLL builds; the static
+# Linux build also counts malloc/calloc/realloc during ticks (-Wl,--wrap) to show the tick allocates nothing.
+# Cross-process: record (static) a snapshot and replay, then verify them in other processes with the same
+# registration (DLL), with another operator_version, constants hash or operator name (refused: world identity),
+# and with nothing registered (the record is refused).
+foreach(variant "" "_dll")
+    add_executable(test_host_registered${variant} "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/test_host_registered.c")
+    if(variant STREQUAL "_dll")
+        target_link_libraries(test_host_registered${variant} PRIVATE sutekh_host Threads::Threads)
+    else()
+        target_link_libraries(test_host_registered${variant} PRIVATE su_host Threads::Threads)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_compile_definitions(test_host_registered${variant} PRIVATE SU_TEST_WRAP_ALLOC)
+            target_link_options(test_host_registered${variant} PRIVATE
+                                "LINKER:--wrap=malloc,--wrap=calloc,--wrap=realloc")
+        endif()
+    endif()
+    sutekh_apply_warnings(test_host_registered${variant})
+    add_test(NAME host_registered${variant} COMMAND test_host_registered${variant})
+endforeach()
+set(SU_HOST_REGISTERED_DIR "${CMAKE_BINARY_DIR}/host_registered")
+file(MAKE_DIRECTORY "${SU_HOST_REGISTERED_DIR}")
+add_test(NAME host_registered_record COMMAND test_host_registered record "${SU_HOST_REGISTERED_DIR}")
+set_tests_properties(host_registered_record PROPERTIES FIXTURES_SETUP host_registered_files)
+foreach(check "dll:same" "static:version" "dll:constants" "static:name" "dll:none")
+    string(REPLACE ":" ";" parts "${check}")
+    list(GET parts 0 build)
+    list(GET parts 1 what)
+    if(build STREQUAL "dll")
+        set(exe test_host_registered_dll)
+    else()
+        set(exe test_host_registered)
+    endif()
+    add_test(NAME host_registered_verify_${what} COMMAND ${exe} verify "${SU_HOST_REGISTERED_DIR}" ${what})
+    set_tests_properties(host_registered_verify_${what} PROPERTIES FIXTURES_REQUIRED host_registered_files)
+endforeach()
 
 # Embedded space3d example: a game schema of its own with space3d.query bound schema-relatively, run through the DLL.
 add_executable(arena_host "${CMAKE_CURRENT_SOURCE_DIR}/examples/host_space3d/arena_host.c")

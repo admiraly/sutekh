@@ -71,7 +71,7 @@ typedef struct SuHostWorld SuHostWorld;
 
 /* One capsule: the exact bytes of the capsule JSON and of its .lir.json (as for su_lir_verify).
  * Host operators (additive, see "host operators" below): lir_json NULL and lir_len 0 make capsule_json a host
- * operator record instead, for an operator compiled into this library. */
+ * operator record instead, for an operator compiled into this library or registered with it. */
 typedef struct SuHostCapsule {
     const uint8_t *capsule_json;
     size_t capsule_len;
@@ -304,8 +304,8 @@ SU_HOST_API uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint6
  * operator name, version and constants hash equal the built-in descriptor's, and its field table is either the
  * operator's own schema exactly, or a schema-relative binding of every operator lane to a lane of the game's
  * schema ("binds"; the game's IDs, names and schema ID; see docs/SPACE3D.md section 2). Failures:
- * SU_E_CAPABILITY_DENIED when no operator of the record's system_id is built into this library (err->index =
- * capsule index), else the loader's code (SU_E_SCHEMA_MISMATCH, SU_E_TYPE, SU_E_INVALID_ARGUMENT, SU_E_PARSE)
+ * SU_E_CAPABILITY_DENIED when no operator of the record's system_id is built into this library or registered
+ * with it (su_host_register_operator, below; err->index = capsule index), else the loader's code (SU_E_SCHEMA_MISMATCH, SU_E_TYPE, SU_E_INVALID_ARGUMENT, SU_E_PARSE)
  * with its reason in err->message. The operator then runs in schedule order like any system.
  *
  * State: an operator's results are ordinary columns of the world (its declared writes), stored for every row
@@ -315,8 +315,10 @@ SU_HOST_API uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint6
  * the world identity. Each world owns its operator's scratch (allocated at creation for the world's capacity,
  * never in a tick), so distinct worlds stay independent. */
 
-/* Operators built into this library, by index (0..count-1): system id (for example "space3d.query") and
- * operator name (for example "space3d_ops_v1"). */
+/* Operators of this library, by index (0..count-1): system id (for example "space3d.query") and operator name (for
+ * example "space3d_ops_v1"). The operators built into the library come first; operators registered with
+ * su_host_register_operator (see "registered host operators") follow in registration order, so an index never
+ * changes once assigned and count only grows. */
 SU_HOST_API uint32_t su_host_operator_count(void);
 SU_HOST_API uint32_t su_host_operator_info(uint32_t index, const char **system_id, const char **operator_name);
 /* Operator data (additive, API version 1; 2026-10-20): immutable bytes an operator reads at run time, for example
@@ -332,6 +334,149 @@ SU_HOST_API uint32_t su_host_operator_info(uint32_t index, const char **system_i
  * data), else the operator's parse status (SU_E_PARSE, SU_E_RESOURCE_LIMIT) with its reason in err->message. */
 SU_HOST_API uint32_t su_host_set_operator_data(SuHostWorld *w, const char *system_id, const uint8_t *data,
                                                size_t len, SuHostError *err);
+
+/* ---- registered host operators (additive, API version 1; 2026-10-26) ----
+ *
+ * A game can add host operators of its own (native cross-row systems that IR cannot express) without building
+ * them into this library: it fills an SuHostOperatorDesc and calls su_host_register_operator before it creates a
+ * world that lists the operator's record. From then on the operator is an operator of this library for that
+ * process: su_host_world_create checks its record exactly as it checks an engine operator's (host.operator equals
+ * desc->operator_name, operator_version and constants_hash equal the descriptor's, numeric_profile is
+ * fixed_q32_v1 when any lane is i32/i64/q32 else u32_mod_v1, and host.fields is the descriptor's field table
+ * exactly or a schema-relative binding of it, docs/SPACE3D.md section 2; refusals SU_E_SCHEMA_MISMATCH or SU_E_TYPE
+ * with the reason), the schedule's union table checks every IR system that binds one of its lanes (ID, name,
+ * storage and value type), the effect analysis uses its declared access, and it runs in schedule order. A record
+ * whose system_id is neither built in nor registered is still SU_E_CAPABILITY_DENIED. Nothing changes for a
+ * process that registers nothing: records, identities, snapshots and digests are those of earlier releases (only
+ * the text of that refusal now says "built into or registered with this library").
+ *
+ * Contract of run (the built-in operators' contract, enforced by the engine):
+ *   - run sees only the lanes its descriptor declares (run->columns, descriptor order, under the descriptor's IDs
+ *     even when the record binds them to other game IDs). It receives no world pointer and no other column.
+ *   - Reads are frozen: `in` is the working value at entry (the committed tick plus the writes of systems earlier
+ *     in the schedule) and must not be written. After run the engine re-hashes every column the operator may read
+ *     (XXH64 before and after the call, rows x readable lanes per tick) and fails the tick with
+ *     SU_E_UNDECLARED_WRITE, naming the lane in err->message, if one changed (unless
+ *     SU_HOST_OPERATOR_TRUST_INPUTS). A change that keeps the 64-bit hash (probability about 2^-64) is missed.
+ *     This covers writes through the views run is given; in-process native code can still write anywhere in the
+ *     process (ENGINE_CONSTITUTION C07: native code in a process is trusted by that process).
+ *   - Writes go to `out`, which the engine pre-fills: a read-write lane with its `in` values, a write-only lane
+ *     with zeros (so a write-only lane leaks no undeclared read). Every row of every declared write is therefore
+ *     defined and committed, also the rows run does not store; dead rows are zeroed by the world at publish.
+ *   - run returns SU_OK, or any SU_E_* code: the tick then fails in this system (err->index, err->tick), nothing
+ *     of the tick is committed, and its input record stays queued. Its results are committed only on SU_OK.
+ *   - Determinism: the results must be a function of the columns, alive, generation, tick and operator data alone
+ *     (no clock, no thread timing, no state kept across calls), so that a restore and re-simulation reproduces
+ *     them. Scratch is zero-filled before every call (unless SU_HOST_OPERATOR_KEEP_SCRATCH), so leftovers of an
+ *     earlier tick cannot leak into results.
+ *   - No allocation in the tick (ENGINE_CONSTITUTION C11): the scratch (scratch_size(capacity) bytes), the
+ *     column table and the alive/generation views are allocated once at world creation. run must not allocate.
+ *   - run is called serially, once per tick, from the thread that steps the world, with the whole row range
+ *     (row_begin 0, row_end rows, chunk 0 of 1). Distinct worlds have distinct scratch and may step on different
+ *     threads at once, so run and parse_data must be reentrant across worlds (user is shared). Use only
+ *     run->scratch for temporary memory (never a global): it is private to the call.
+ *
+ * Extension (forward compatibility): SuHostOperatorDesc and SuHostOperatorRun carry struct_size and only grow at
+ * the end; a later library accepts every earlier descriptor size, and an operator reads only the run fields its
+ * struct_size covers. Unknown flag bits are refused, so a descriptor asking for a mode this library lacks fails
+ * registration instead of running differently. A future parallel mode (deterministic multithreaded tick) is
+ * meant to be one such opt-in flag: only an operator that sets it would be called once per row chunk
+ * ([row_begin, row_end), chunk_index of chunk_count, storing only its rows' writes) with one scratch per worker;
+ * every operator without the flag keeps exactly the serial whole-range call described here.
+ *
+ * State and identity: the operator's results are ordinary columns (in snapshots, su_host_digest, the fast digest,
+ * in-place restore and replays). The record's semantic hash covers system ID, schema, operator_name,
+ * operator_version, constants_hash, the field table and any binding, and is part of su_host_world_identity, so
+ * snapshots and replays of the world only load into a world whose process registered the same operator (same
+ * name, version, constants hash and fields) with the same record. constants_hash identifies the operator's code
+ * and constants: change it (or operator_version) whenever results can change. Operator data works as for engine
+ * operators (su_host_set_operator_data; the data's hash joins the identity).
+ *
+ * Registry: process-wide, append-only, at most SU_HOST_MAX_REGISTERED_OPERATORS entries for the life of the
+ * process; there is no unregister. Registration and lookups are serialized by a lock, so registering on one thread
+ * while worlds are created on others is safe; a world keeps using the entry it was created with. Registration
+ * copies the descriptor (strings and field table); the callbacks and user must stay valid for the life of the
+ * process. A registered operator is in-process only: the out-of-process control plane (`sutekh serve`, the
+ * worker, world.create) does not see it and refuses its record with SU_E_CAPABILITY_DENIED as before. A game that
+ * needs it in a worker must build it into a worker of its own (not provided). */
+
+#define SU_HOST_MAX_REGISTERED_OPERATORS 64u
+#define SU_HOST_OPERATOR_TRUST_INPUTS UINT32_C(1) /* skip the post-run input re-hash (undeclared writes then go
+                                                   * undetected; for measured hot operators only) */
+#define SU_HOST_OPERATOR_KEEP_SCRATCH UINT32_C(2) /* do not zero scratch before each call (zeroed once at creation;
+                                                   * run must then not depend on its contents at entry) */
+/* Every other bit is reserved and refused (SU_E_INVALID_ARGUMENT) by this version. */
+
+/* One declared lane. type: SU_TYPE_U32, SU_TYPE_I32, SU_TYPE_I64 or SU_TYPE_Q32 (sutekh/ir.h); every lane is one
+ * 32-bit cell, and an i64/q32 field is two adjacent entries id I ("<name>.lo") and I + 1 ("<name>.hi") with the
+ * same type and access. access: SU_ACCESS_READ, SU_ACCESS_WRITE or both (sutekh/abi.h). */
+typedef struct SuHostOperatorField {
+    uint32_t id;       /* nonzero, strictly ascending across the table */
+    uint32_t type;
+    uint32_t access;
+    uint32_t reserved; /* 0 */
+    const char *name;  /* 1..255 bytes, unique */
+} SuHostOperatorField;
+
+/* A declared lane as run sees it. */
+typedef struct SuHostOperatorColumn {
+    uint32_t field_id;   /* the descriptor's ID */
+    uint32_t access;     /* as declared */
+    const uint32_t *in;  /* rows cells, frozen working values; NULL for a write-only lane */
+    uint32_t *out;       /* rows cells, pre-filled (see the contract); NULL for a read-only lane */
+} SuHostOperatorColumn;
+
+typedef struct SuHostOperatorRun {
+    uint32_t struct_size;                 /* sizeof(SuHostOperatorRun) of the library */
+    uint32_t column_count;                /* the descriptor's field_count */
+    const SuHostOperatorColumn *columns;  /* descriptor order */
+    uint64_t rows;                        /* the world's capacity (every column has rows cells) */
+    uint64_t row_begin;                   /* rows whose writes this call stores: always 0 .. rows in this version */
+    uint64_t row_end;
+    uint32_t chunk_index;                 /* always 0 of 1 in this version (see "Extension") */
+    uint32_t chunk_count;
+    uint64_t tick;                        /* committed tick this step advances from (T for the step T -> T + 1) */
+    const uint8_t *alive;                 /* rows entries: 1 alive, 0 dead (working entity table) */
+    const uint32_t *generation;           /* rows entries: slot generations (handle = slot | generation << 32) */
+    void *scratch;                        /* scratch_size(capacity) bytes (malloc alignment), or NULL when 0;
+                                           * private to this call */
+    size_t scratch_bytes;
+    const void *data;                     /* parse_data's result for this world, or NULL when it has none */
+} SuHostOperatorRun;
+
+typedef struct SuHostOperatorDesc {
+    uint32_t struct_size;                 /* sizeof(SuHostOperatorDesc) of the header compiled against */
+    uint32_t flags;                       /* SU_HOST_OPERATOR_* above, or 0 */
+    const char *system_id;                /* 1..127 bytes of [A-Za-z0-9_.-]; the prefixes "rts.", "space3d." and
+                                           * "sutekh." are reserved for engine operators */
+    const char *schema_id;                /* the operator's own schema ID (1..255 bytes; records may bind it) */
+    const char *operator_name;            /* host.operator of the record, 1..255 bytes of [A-Za-z0-9_.-] */
+    uint32_t operator_version;            /* >= 1 */
+    uint32_t field_count;                 /* 1..1024 */
+    const SuHostOperatorField *fields;
+    uint8_t constants_hash[32];           /* SHA-256 identifying the operator's semantics (code and constants) */
+    /* Scratch for a world of capacity rows: *bytes (0 = none). Called once per world at creation; a non-SU_OK
+     * return (for example SU_E_RESOURCE_LIMIT for a capacity the operator does not support) refuses the world.
+     * NULL: no scratch. */
+    uint32_t (*scratch_size)(uint64_t capacity, size_t *bytes, void *user);
+    /* The tick body; see the contract above. Required. */
+    uint32_t (*run)(const SuHostOperatorRun *run, void *user);
+    /* Operator data (su_host_set_operator_data). parse_data validates and converts the bytes (borrowed for the
+     * call) into *parsed, which run receives as run->data; on failure it returns SU_E_PARSE or
+     * SU_E_RESOURCE_LIMIT (any non-SU_OK code is passed through) and may write a reason into why. One parse is
+     * shared by the world's entries of one call; release_data (may be NULL) frees it when the last of them is
+     * destroyed. NULL parse_data: the operator takes no data. */
+    uint32_t (*parse_data)(const uint8_t *data, size_t len, void **parsed, char *why, size_t why_cap, void *user);
+    void (*release_data)(void *parsed, void *user);
+    void *user;                           /* passed to every callback */
+} SuHostOperatorDesc;
+
+/* Registers an operator for this process. Failures (nothing is registered): SU_E_INVALID_ARGUMENT for a malformed
+ * descriptor (struct_size, NULL run/strings, unknown flags, bad names, field table rules above; err->index = the
+ * offending field when there is one), SU_E_DUPLICATE_KEY when system_id is already registered, names an operator
+ * built into this library or uses a reserved prefix, SU_E_RESOURCE_LIMIT when the registry is full or memory runs
+ * out. */
+SU_HOST_API uint32_t su_host_register_operator(const SuHostOperatorDesc *desc, SuHostError *err);
 
 /* ---- execution tiers (additive, API version 1; 2026-10-18) ----
  * Every tier gives bit-identical results (states, events, digests): the tiers are differential-tested against

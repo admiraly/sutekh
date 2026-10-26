@@ -439,6 +439,17 @@ Owner-authorized downstream work outside the milestone order (extension of `plan
 
 Downstream request work outside the milestone order (M3 gates unchanged). Implemented and tested: `SU_LIMIT_FIELDS` raised from 256 to 1,024 lanes (no persisted format stores it); IR 0.4 (`LIVE_IR_SPEC.md` "IR 0.4", artifact format 4) with u32 `and/or/xor/not/shl/shr/div/rem`, i64 `and/or/xor/not`, a capsule-level `row_filter` (masked u32 equality; filtered rows keep their values and run nothing), `gather_u32/_i32/_i64/_q32` (a field of another row by slot, entry state) and `find_eq_u32` (lowest slot whose field equals a key: first claimant by slot order), with a whole-table view for chunked runs (`su_vm_context_set_table_view`). Both VM tiers implement every operation; the native scalar lowering covers the bit operations and the row filter and refuses cross-row reads (`ir_0_4_gather_not_lowered`). Tests: `ir04`, `host04`, `ir04_diff`, `ir04_native_diff`. Not done: a discard binding for host-operator output lanes, native cross-row reads, reductions other than `find_eq_u32`.
 
+## Registered host operators (26 October 2026)
+
+Downstream request work outside the milestone order (issue 137; M3 gates unchanged). Implemented and tested:
+`su_host_register_operator` (`include/sutekh/host.h`, "registered host operators"): a game defines a host operator in
+its own code and registers it before creating a world; the record, schedule union table, effect analysis, capsule
+order, snapshots, digests, in-place restore, replays and world identity treat it as a built-in operator. Run-time
+enforcement: declared lanes only, read lanes re-hashed after each call (`SU_E_UNDECLARED_WRITE`), write-only lanes
+zero-filled, scratch zeroed per call, nothing allocated in the tick. In-process only (not in `sutekh serve` or the
+worker). Evidence: `tests/host/test_host_registered.c` (static and DLL; cross-process identity checks), handoff
+`planning/handoffs/2026-10-26-registered-operators.md`.
+
 ## space3d compound movers (20 October 2026)
 
 Downstream request work outside the milestone order (M3 gates unchanged). Implemented and tested: a fourth space3d

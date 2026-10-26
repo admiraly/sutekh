@@ -19,21 +19,41 @@ typedef struct HostRecord {
     SuHostInput *writes;
 } HostRecord;
 
-/* A host operator the in-process API can run (su_host_operators.c): its static descriptor, the record's operator
- * name, and the per-world scratch constructor and destructor (rows = the world's capacity). */
+typedef struct HostRegOp HostRegOp; /* a registered operator (su_host_registered.c) */
+
+/* A host operator the in-process API can run: built in (su_host_operators.c) or registered
+ * (su_host_registered.c, su_host_register_operator). Its descriptor, the record's operator name, and the
+ * per-world scratch constructor and destructor (rows = the world's capacity). Every callback receives the operator
+ * it belongs to (registered operators share one set of callbacks). */
 typedef struct HostOperator {
     const SuHostOpDesc *desc;
     const char *operator_name;
-    uint32_t (*create)(uint64_t rows, void **inst);
+    uint32_t (*create)(const struct HostOperator *op, uint64_t rows, void **inst);
     void (*destroy)(void *inst);
     /* Operator data (su_host_set_operator_data; NULL: the operator takes none). *shared is NULL for the first
      * instance of one call and keeps whatever that call parsed for the next ones (released by data_release after
      * the call); why receives a reason on failure. */
-    uint32_t (*set_data)(void *inst, const uint8_t *data, size_t len, void **shared, char *why, size_t why_cap);
+    uint32_t (*set_data)(const struct HostOperator *op, void *inst, const uint8_t *data, size_t len, void **shared,
+                         char *why, size_t why_cap);
     void (*data_release)(void *shared);
+    /* Registered operators: the entry (NULL for built-in operators), and the reason of the instance's last failed
+     * run ("" when none; NULL callback for built-in operators). */
+    const HostRegOp *reg;
+    const char *(*last_error)(const void *inst);
+    /* SuHostOpDesc.operator_name override for the record check and the semantic hash: NULL for built-in operators
+     * (their name is derived from the descriptor, host_decl.h), operator_name for registered ones. */
+    const char *record_name;
 } HostOperator;
 
+/* Built-in operators first, then registered ones. NULL when system_id names neither. */
 const HostOperator *su_host_operator_find(const char *system_id);
+/* Built-in operators only (su_host_operators.c). */
+const HostOperator *su_host_builtin_find(const char *system_id);
+uint32_t su_host_builtin_count(void);
+/* Registered operators (su_host_registered.c): lookup by system ID, count, and entry by registration index. */
+const HostOperator *su_host_registered_find(const char *system_id);
+uint32_t su_host_registered_count(void);
+const HostOperator *su_host_registered_at(uint32_t index);
 
 struct SuHostWorld {
     SuSchedule sched;              /* owns the modules, VM contexts and the entity runtime */
