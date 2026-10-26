@@ -348,7 +348,13 @@ static void test_inplace_equivalence(void) {
         churn(a, 7, &x);
         churn(b, 7, &y);
     }
-    CHECK(same_bytes(snap(a), snap(b)));
+    {
+        Bytes sa = snap(a);
+        Bytes sb = snap(b);
+        CHECK(same_bytes(sa, sb));
+        free(sa.data);
+        free(sb.data);
+    }
     /* Restore every saved state, in a scrambled order, through both paths: identical results. */
     for (k = 0; k < 12; k++) {
         uint32_t i = (k * 5u + 3u) % 6u;
