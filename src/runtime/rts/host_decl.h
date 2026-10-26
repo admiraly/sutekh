@@ -45,6 +45,10 @@ uint32_t su_host_desc_validate(const SuHostOpDesc *d);
  * su_lir_module_free. Returns SU_OK, SU_E_INVALID_ARGUMENT (bad descriptor) or SU_E_RESOURCE_LIMIT. On
  * failure out holds nothing that must be freed. */
 uint32_t su_host_decl_build(const SuHostOpDesc *d, SuLirModule *out);
+/* As su_host_decl_build for an operator with an explicit operator name (a registered operator, host.h
+ * su_host_register_operator, 2026-10-26): the semantic hash also covers operator_name. NULL is exactly
+ * su_host_decl_build. */
+uint32_t su_host_decl_build_named(const SuHostOpDesc *d, const char *operator_name, SuLirModule *out);
 
 /* Frees a declaration module returned by su_host_load (heap) and its members. NULL-safe. */
 void su_host_decl_free(SuLirModule *m);
@@ -91,6 +95,14 @@ uint32_t su_host_load_bound_bytes(const uint8_t *bytes, size_t len, const char *
                                   const SuHostOpDesc *d, SuLirModule **out, uint32_t *schema_version,
                                   uint32_t *layout_generation, uint32_t bind[SU_LIMIT_FIELDS], int *bound, char *msg,
                                   size_t msg_cap);
+
+/* As su_host_load_bound_bytes for an operator with an explicit operator name (registered operators, 2026-10-26):
+ * host.operator must equal operator_name instead of the derived rts_ops_v<N> / <schema_id>_ops_v<N>, and the
+ * declaration is built by su_host_decl_build_named. operator_name NULL is exactly su_host_load_bound_bytes. */
+uint32_t su_host_load_bound_bytes_named(const uint8_t *bytes, size_t len, const char *expect_capsule_hash,
+                                        const SuHostOpDesc *d, const char *operator_name, SuLirModule **out,
+                                        uint32_t *schema_version, uint32_t *layout_generation,
+                                        uint32_t bind[SU_LIMIT_FIELDS], int *bound, char *msg, size_t msg_cap);
 
 /* 1 when the file at path is strict JSON with a host object (a host capsule record), else 0. Used to refuse
  * a candidate or an admission that names a host system before any reload (contract 3.1, r4). */

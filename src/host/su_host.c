@@ -398,9 +398,10 @@ static void compute_identity(SuHostWorld *hw) {
     su_sha256_final(&c, hw->identity);
 }
 
-/* Capsule index i is a host operator record (lir_json NULL): find the built-in operator its system_id names,
- * check the record against it (su_host_load_bound_bytes: exact or schema-relative binding) and append the
- * host entry. */
+/* Capsule index i is a host operator record (lir_json NULL): find the operator its system_id names (built in, or
+ * registered with su_host_register_operator), check the record against it (su_host_load_bound_bytes_named: exact
+ * or schema-relative binding; a registered operator's record names its operator_name) and append the host
+ * entry. */
 static uint32_t add_host_record(SuHostWorld *hw, const SuHostCapsule *c, const CapsuleFacts *f, uint32_t i,
                                 SuHostError *err) {
     const SuJsonValue *sid = member(f->doc.root, "system_id");
@@ -416,12 +417,13 @@ static uint32_t add_host_record(SuHostWorld *hw, const SuHostCapsule *c, const C
 
     if (op == NULL) {
         return set_err(err, SU_E_CAPABILITY_DENIED, i, UINT64_MAX,
-                       "capsule %u: no host operator for system %s is built into this library", (unsigned)i,
+                       "capsule %u: no host operator for system %s is built into or registered with this library",
+                       (unsigned)i,
                        sid != NULL && sid->type == SU_JSON_STRING ? sid->u.string.data : "(none)");
     }
     msg[0] = '\0';
-    st = su_host_load_bound_bytes(c->capsule_json, c->capsule_len, NULL, op->desc, &decl, &sv, &gen, bind, &bound,
-                                  msg, sizeof msg);
+    st = su_host_load_bound_bytes_named(c->capsule_json, c->capsule_len, NULL, op->desc, op->record_name, &decl, &sv,
+                                        &gen, bind, &bound, msg, sizeof msg);
     if (st != SU_OK) {
         return set_err(err, st, i, UINT64_MAX, "capsule %u: host record refused: %s", (unsigned)i, msg);
     }
@@ -556,12 +558,23 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc, SuHostWorld **out, Su
             continue;
         }
         op = su_host_operator_find(hw->sched.sys[i].system_id);
-        st = op != NULL ? op->create(su_world_row_count(hw->w), &inst) : SU_E_INTERNAL;
+        st = op != NULL ? op->create(op, su_world_row_count(hw->w), &inst) : SU_E_INTERNAL;
         if (st == SU_OK) {
             st = su_sched_set_host_instance(&hw->sched, i, inst, op->destroy);
             if (st != SU_OK) {
                 op->destroy(inst);
             }
+        }
+        if (st == SU_OK) {
+            hw->ops[i] = op;
+        }
+        if (st == SU_OK && op->identity != NULL) {
+            /* Registered operators: flags and this world's scratch size join the system's semantic hash (and so
+             * su_host_system_info, the world identity and replay headers). */
+            SuSysEntry *e = &hw->sched.sys[i];
+            op->identity(e->host_inst, e->mod->semantic_hash);
+            su_sha256_hex(e->mod->semantic_hash, e->mod->semantic_hash_hex);
+            snprintf(e->semantic_hash, sizeof e->semantic_hash, "%s", e->mod->semantic_hash_hex);
         }
         if (st != SU_OK) {
             set_err(err, st, i, UINT64_MAX, "host operator %s: no scratch for %llu rows%s", hw->sched.sys[i].system_id,
@@ -747,7 +760,9 @@ uint32_t su_host_set_operator_data(SuHostWorld *w, const char *system_id, const 
             return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX, "host operator %s already has data",
                            e->system_id);
         }
-        if (first_op != NULL && op->set_data != first_op->set_data) {
+        /* One family per call: the same data callback, and for registered operators the same registration (they
+         * share one callback but not one parser). */
+        if (first_op != NULL && (op->set_data != first_op->set_data || op->reg != first_op->reg)) {
             return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
                            "operators of different families in one call; name the system");
         }
@@ -762,7 +777,7 @@ uint32_t su_host_set_operator_data(SuHostWorld *w, const char *system_id, const 
     why[0] = '\0';
     for (i = 0; i < w->sched.count && st == SU_OK; i++) {
         if ((mask >> i) & 1u) {
-            st = first_op->set_data(w->sched.sys[i].host_inst, data, len, &shared, why, sizeof why);
+            st = first_op->set_data(first_op, w->sched.sys[i].host_inst, data, len, &shared, why, sizeof why);
             if (st != SU_OK) {
                 set_err(err, st, i, UINT64_MAX, "operator data refused by %s: %s", w->sched.sys[i].system_id,
                         why[0] != '\0' ? why : su_host_status_name(st));
@@ -1219,6 +1234,15 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
         uint64_t one = 0;
         uint32_t failed = UINT32_MAX;
 
+        /* A registered operator's failure reason belongs to one tick attempt. */
+        {
+            uint32_t k;
+            for (k = 0; k < w->sched.count; k++) {
+                if (w->ops[k] != NULL && w->ops[k]->clear_error != NULL) {
+                    w->ops[k]->clear_error(w->sched.sys[k].host_inst);
+                }
+            }
+        }
         /* Records for ticks already behind the world can no longer apply. */
         while (w->rec_count > 0u && w->recs[0].tick < t) {
             drop_record(w, &w->recs[0]);
@@ -1239,9 +1263,21 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
             if (st == SU_OK) {
                 st = SU_E_INTERNAL;
             }
-            set_err(err, st, failed, t, "tick %llu failed%s%s; committed state unchanged", (unsigned long long)t,
-                    failed != UINT32_MAX ? " in system " : "",
-                    failed != UINT32_MAX ? w->sched.sys[failed].system_id : "");
+            {
+                /* A registered operator says why its run failed (an undeclared write, its own code). */
+                const char *detail = "";
+                if (failed != UINT32_MAX && failed < SU_SCHED_MAX_SYSTEMS &&
+                    w->sched.sys[failed].kind == SU_SYS_KIND_HOST) {
+                    const HostOperator *op = w->ops[failed];
+                    if (op != NULL && op->last_error != NULL) {
+                        detail = op->last_error(w->sched.sys[failed].host_inst);
+                    }
+                }
+                set_err(err, st, failed, t, "tick %llu failed%s%s; committed state unchanged%s%s",
+                        (unsigned long long)t, failed != UINT32_MAX ? " in system " : "",
+                        failed != UINT32_MAX ? w->sched.sys[failed].system_id : "", detail[0] != '\0' ? ": " : "",
+                        detail);
+            }
             break;
         }
         free(undo);
