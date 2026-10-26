@@ -1,0 +1,109 @@
+<!-- SPDX-FileCopyrightText: 2026 admiraly -->
+<!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
+# Issue 162: IR check whether a stored entity handle is alive and current
+
+## State and scope
+
+Implemented on `feat/issue-162-handle-live`, based on `origin/main` `66e2e75` (merge of PR #154). Local suites
+pass (see Validation). CI results go in the PR. Not merged.
+
+## The operation
+
+`handle_live` (IR 0.4, code 246): `{"op":"handle_live","dst":D,"slot":S,"gen":G}`. S and G are u32 registers and D
+is a bool. D is true exactly when all of these hold:
+
+- `G != 0`;
+- `S` is below the entity table's slot count (the world capacity);
+- the slot is alive;
+- its stored generation equals `G`.
+
+The table is the system's entry state. For the entity table that is the tick-start state, because despawns (IR or
+host) apply only at the tick boundary. So:
+
+- a despawned entity's handle is false;
+- after the slot is reused, the old handle stays false and the new occupant's handle is true;
+- retired slots, generation 0, and out-of-range slots (`0xFFFFFFFF` included) are false.
+
+Specified in `LIVE_IR_SPEC.md`, IR 0.4: the op table row, the "Entity handles" paragraph, the Native and Evidence
+sections, and the Status line. Also in `include/sutekh/ir.h`.
+
+## What changed
+
+- **Op table and verifier.**
+  - `include/sutekh/ir.h`: adds `SU_OP_HANDLE_LIVE`.
+  - `src/ir/su_ops03.c`: the 0.4 row (`slot`, `gen` u32 registers, bool result). The table-driven checks give the
+    verifier rules. Below 0.4 the op is `SU_E_UNKNOWN_OPCODE`.
+  - `src/ir/su_lir.c` and `.h`: add `SuLirModule.uses_handle_live`, and set `uses_entity_ops`. A schedule that uses
+    the op therefore runs through the entity runtime, which supplies the real table.
+  - The op needs no capability or per-row cap, and it adds no field read to the effects. The hash is unchanged in
+    form (register operands).
+  - `schemas/lir.schema.json`: adds the instruction shape.
+- **VM.**
+  - `src/ir/su_ops03.h`: `su_handle_live`, shared by both tiers.
+  - `src/vm/su_vm.c` and `.h`: `su_vm_context_set_entity_table(ctx, alive, generations, slot_count)`. A NULL
+    `alive` means all slots are alive, a NULL `generations` means generation 1, and NULL, NULL, 0 clears the table.
+  - Without a table, the call's entity view is the table. This works only at `base_slot` 0; anywhere else the call
+    fails with `SU_E_INVALID_ARGUMENT`, which is the same rule as the gather table view.
+  - `src/vm/su_vm_plan.c` and `.h`: the planned tier never hoists the op (it is classed with the gathers). It can
+    appear in an identity-row guard slice, which evaluates it per row. That case is tested.
+- **Runtimes.**
+  - `src/runtime/entity_tick.c`: modules that use the op get one whole-table alive/generation copy per system per
+    tick, set on every chunk.
+  - `src/runtime/jobs/su_jobs.c`: chunked runs (which have no entity view) get an all-alive, generation-1 table over
+    the whole row range.
+- **Native.**
+  - `backends/native/su_native.c`: refuses the op with `SU_E_CAPABILITY_DENIED`, reason
+    `ir_0_4_handle_live_not_lowered`. This check runs before the IR 0.2 entity-op refusal. The op is not lowered
+    because the kernel ABI carries no entity table (the same gap as gathers, sutekh#164).
+  - The host already refuses native tiers for entity-op systems.
+- **Tests.**
+  - `tests/ir04/test_handle_live.c` (ctest `ir04_handle_live`):
+    - verifier negatives with exact codes and pointers: unknown in 0.3, wrong slot/gen types, bool stored as u32,
+      undefined and duplicate registers, missing, unknown and non-string keys;
+    - module flags, and a hash that changes when the operands are swapped;
+    - known answers on both tiers: despawned (dead) slot, reused slot (old and new generation), last generation,
+      retired, generation 0, and out-of-range slots `10` and `0xFFFFFFFF`;
+    - the defaults, the base_slot rule, chunks answering against the whole table, a table smaller than the call, and
+      clearing the table;
+    - a differential of reference vs planned vs an independent oracle: 400 seeded tables, random chunking, and a
+      guarded program (the guard is built, with 1,627 live-handle and 6,663 stale rows);
+    - with native, the refusal reason.
+  - `tests/ir04/test_host_handle.c` (ctest `host_handle_live`), through the host API on 2,500 slots (three chunks,
+    cross-chunk targets):
+    - despawn gives false on the next tick;
+    - reusing slot 5 gives generation 2: the old handle is false and the new one true;
+    - snapshot, then in-place restore and restore into a fresh world on the other tier: the continuation reproduces
+      the answers and the end digest;
+    - the reference and planned digests are equal;
+    - a native request is refused.
+  - `tests/ir04/test_ir04.c`: the 0.4 row count is now 18.
+- **Determinism matrix.**
+  - New workload `handles04` (`det.handle04`, files generated by `tests/determinism/gen_workloads.py`):
+    `handle04.capsule.json` and `.lir.json`, with the workload added to `det_matrix.c`.
+  - `check_op_coverage.py`: 111 of 111 ops.
+  - `expected_digests.txt`: adds 15 lines. These are new lines only; no existing digest changed. They were recorded
+    with GCC 16.2.1 Release, reference tier. Planned, native and mixed gave identical manifests.
+  - `expected_tiers.txt`: adds 5 lines.
+  - `run_mutants.py`: new mutant `handle_live_ignores_generation`, caught by `handles04` at tick 60.
+  - `docs/DETERMINISM_MATRIX.md`: updated.
+
+## Validation (local, 2026-10-26)
+
+- Release, GCC 16.2.1, `SUTEKH_NATIVE=ON`, headless: `ctest -j 6`. 181 tests, 0 failed, 2 skipped (`native_unwind`
+  runs on Windows only; `audio_device` has no device).
+- Debug, GCC, `SUTEKH_NATIVE=OFF`, headless: 163 tests, 0 failed, 1 skipped (`audio_device`).
+- Clang Debug with `SUTEKH_SANITIZE=address,undefined` and `SUTEKH_NATIVE=ON` (the CI sanitizer configuration;
+  reduced matrix of 120 ticks): 181 tests, 0 failed, 2 skipped. The test log has no `runtime error` and no
+  AddressSanitizer report.
+- `python3 -I tests/determinism/run_mutants.py --build <rel> --only handle_live_ignores_generation`: caught.
+- `det_matrix --only handles04` on reference, planned, native and mixed: identical manifests, and the rollback
+  check passed on each.
+- `jsonschema` validation of `handle04.lir.json` and `gather04.lir.json` against the updated `lir.schema.json`:
+  valid.
+- Not run locally: the render-enabled builds, MSVC/Windows, and macOS. CI covers them.
+
+## Not done / next
+
+- Native lowering of `handle_live`. It needs the entity table in the kernel ABI, like gathers (sutekh#164).
+- `tests/ir03/ir03_diff.py` does not generate `handle_live`: its driver has no entity table. The C differential in
+  `test_handle_live.c` covers both tiers instead.

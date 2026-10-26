@@ -440,6 +440,12 @@ uint32_t su_native_compile(const SuLirModule *m, uint32_t layout_generation, uin
         diag_set(diag, SU_E_INVALID_ARGUMENT, SU_NATIVE_NO_FAILED_INSN, "module is NULL");
         return SU_E_INVALID_ARGUMENT;
     }
+    /* IR 0.4 handle_live reads the whole entity table, which the kernel ABI does not carry (like gathers). Checked
+     * before the 0.2 rule so the reason names it. */
+    if (m->uses_handle_live != 0u) {
+        diag_set(diag, SU_E_CAPABILITY_DENIED, SU_NATIVE_NO_FAILED_INSN, "ir_0_4_handle_live_not_lowered");
+        return SU_E_CAPABILITY_DENIED;
+    }
     /* IR 0.2 (M2-00c2): entity ops run on the reference VM only (M2 contract section 3); a 0.3 module that uses
      * them is refused for the same reason. */
     if (m->uses_entity_ops != 0u || m->ir_version_minor == 2u) {

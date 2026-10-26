@@ -59,6 +59,15 @@ uint32_t su_vm_context_set_entity_view(SuExecContext *ctx, const uint8_t *alive,
  * worker count. Returns SU_E_INVALID_ARGUMENT on NULL ctx. */
 uint32_t su_vm_context_set_table_view(SuExecContext *ctx, const SuInvocation *table);
 
+/* IR 0.4 (2026-10-26). Whole entity table for handle_live, used by the NEXT invocations until replaced: alive (one
+ * byte per slot, nonzero = alive; NULL = all alive) and generations (one u32 per slot; NULL = 1) of slots
+ * [0, slot_count), indexed by slot. Pass the system's entry state (the tick-start entity table); the arrays are
+ * borrowed. NULL, NULL, 0 clears it. Without a table the call's entity view (su_vm_context_set_entity_view) over
+ * the call's rows is the table, which requires base_slot 0 (otherwise a module with handle_live fails with
+ * SU_E_INVALID_ARGUMENT). Returns SU_E_INVALID_ARGUMENT on NULL ctx. */
+uint32_t su_vm_context_set_entity_table(SuExecContext *ctx, const uint8_t *alive, const uint32_t *generations,
+                                        uint64_t slot_count);
+
 /* Row limit used by the wrapper (default SU_LIMIT_ROWS). Returns
  * SU_E_INVALID_ARGUMENT on NULL ctx. */
 uint32_t su_vm_context_set_row_limit(SuExecContext *ctx, uint64_t limit);

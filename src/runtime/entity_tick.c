@@ -41,6 +41,8 @@ typedef struct EntSys {
     SuExecContext **ctx;        /* wk */
     uint8_t **alive;            /* wk buffers of SU_CHUNK_SLOTS bytes */
     uint32_t **gen;             /* wk buffers of SU_CHUNK_SLOTS u32 */
+    uint8_t *all_alive;         /* IR 0.4 handle_live: whole-table alive bytes and generations, filled per tick */
+    uint32_t *all_gen;
     EntEmit *emit;              /* wk */
     SuVmEmitter *vem;           /* wk */
     uint32_t *status;           /* one per chunk of this run */
@@ -318,6 +320,15 @@ static void ent_chunk(uint32_t chunk, uint32_t worker, void *argp) {
             return;
         }
     }
+    if (e->mod->uses_handle_live) {
+        /* IR 0.4 handle_live answers from the whole entity table of the tick start (structural changes apply only
+         * at the boundary), never just this chunk. */
+        st = su_vm_context_set_entity_table(e->ctx[worker], e->all_alive, e->all_gen, e->rows);
+        if (st != SU_OK) {
+            e->status[chunk] = st;
+            return;
+        }
+    }
     e->status[chunk] = su_vm_invoke_v1(e->ctx[worker], &inv, &outs);
 }
 
@@ -341,6 +352,8 @@ static void ent_sys_free(EntSys *e) {
     free(e->ctx);
     free(e->alive);
     free(e->gen);
+    free(e->all_alive);
+    free(e->all_gen);
     free(e->emit);
     free(e->vem);
     free(e->base_in);
@@ -381,6 +394,13 @@ static uint32_t ent_sys_create(EntSys *e, const SuSchedule *s, uint32_t i, SuWor
         e->scr_out == NULL || e->ctx == NULL || e->alive == NULL || e->gen == NULL || e->emit == NULL ||
         e->vem == NULL) {
         goto fail;
+    }
+    if (m->uses_handle_live) {
+        e->all_alive = malloc(rows > 0u ? (size_t)rows : 1u);
+        e->all_gen = malloc((rows > 0u ? (size_t)rows : 1u) * sizeof(uint32_t));
+        if (e->all_alive == NULL || e->all_gen == NULL) {
+            goto fail;
+        }
     }
     for (k = 0; k < wk; k++) {
         e->alive[k] = malloc(SU_CHUNK_SLOTS);
@@ -453,6 +473,12 @@ static uint32_t ent_sys_run(EntSys *e, SuJobPool *pool, uint64_t chunks, const u
     uint64_t c;
 
     st = ent_sys_bind(e);
+    if (st == SU_OK && e->mod->uses_handle_live) {
+        st = su_world_alive_view(e->w, 0u, (uint32_t)e->rows, e->all_alive);
+        if (st == SU_OK) {
+            st = su_world_generation_view(e->w, 0u, (uint32_t)e->rows, e->all_gen);
+        }
+    }
     if (st != SU_OK) {
         return st;
     }

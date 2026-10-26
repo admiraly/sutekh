@@ -71,6 +71,17 @@ static inline uint32_t su_u32_rem(uint32_t a, uint32_t b) {
     return b == 0u ? a : a % b;
 }
 
+/* IR 0.4 handle_live (2026-10-26), shared by the VM tiers: slot is a slot of an entity table of `slots` slots,
+ * alive, and holds generation gen; generation 0 is never live. alive NULL = every slot alive, generations NULL =
+ * every slot at generation 1 (the VM's defaults without an entity view). */
+static inline uint32_t su_handle_live(const uint8_t *alive, const uint32_t *generations, uint64_t slots,
+                                      uint32_t slot, uint32_t gen) {
+    if (gen == 0u || (uint64_t)slot >= slots || (alive != NULL && alive[slot] == 0u)) {
+        return 0u;
+    }
+    return (generations != NULL ? generations[slot] : 1u) == gen ? 1u : 0u;
+}
+
 /* Storage lanes of a field value type: 1 for u32 and i32, 2 for i64 and q32, 0 otherwise. */
 uint32_t su_type_lanes(uint32_t value_type);
 /* "u32", "bool", "i32", "i64", "q32", "v3", "quat" or "?". */

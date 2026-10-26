@@ -14,6 +14,7 @@ reference s3_prox det.s3move=reference,space3d.query_prox=operator
 reference s3_shape det.s3move=reference,space3d.query_shape=operator
 reference s3_compound det.s3move_c=reference,space3d.query_compound=operator
 reference probe04 det.bits04=reference,det.gather04=reference
+reference handles04 det.handle04=reference
 planned rts_duel16 rts.damage=planned,rts.goal=planned,rts.combat=planned,rts.move=planned
 planned rts_mixed1024 rts.damage=planned,rts.goal=planned,rts.combat=planned,rts.move=planned
 planned racer16 racer.race=planned,racer.move=planned,space3d.query=operator
@@ -25,6 +26,7 @@ planned s3_prox det.s3move=planned,space3d.query_prox=operator
 planned s3_shape det.s3move=planned,space3d.query_shape=operator
 planned s3_compound det.s3move_c=planned,space3d.query_compound=operator
 planned probe04 det.bits04=planned,det.gather04=planned
+planned handles04 det.handle04=planned
 native rts_duel16 rts.damage=planned,rts.goal=native,rts.combat=native,rts.move=native
 native rts_mixed1024 rts.damage=planned,rts.goal=native,rts.combat=native,rts.move=native
 native racer16 racer.race=planned,racer.move=native,space3d.query=operator
@@ -36,6 +38,7 @@ native s3_prox det.s3move=native,space3d.query_prox=operator
 native s3_shape det.s3move=native,space3d.query_shape=operator
 native s3_compound det.s3move_c=native,space3d.query_compound=operator
 native probe04 det.bits04=native,det.gather04=planned
+native handles04 det.handle04=planned
 mixed rts_duel16 rts.damage=planned,rts.goal=reference,rts.combat=planned,rts.move=native
 mixed rts_mixed1024 rts.damage=planned,rts.goal=reference,rts.combat=planned,rts.move=native
 mixed racer16 racer.race=planned,racer.move=reference,space3d.query=operator
@@ -47,6 +50,7 @@ mixed s3_prox det.s3move=native,space3d.query_prox=operator
 mixed s3_shape det.s3move=native,space3d.query_shape=operator
 mixed s3_compound det.s3move_c=native,space3d.query_compound=operator
 mixed probe04 det.bits04=native,det.gather04=reference
+mixed handles04 det.handle04=planned
 mixed_vm rts_duel16 rts.damage=reference,rts.goal=planned,rts.combat=reference,rts.move=planned
 mixed_vm rts_mixed1024 rts.damage=reference,rts.goal=planned,rts.combat=reference,rts.move=planned
 mixed_vm racer16 racer.race=reference,racer.move=planned,space3d.query=operator
@@ -58,3 +62,4 @@ mixed_vm s3_prox det.s3move=reference,space3d.query_prox=operator
 mixed_vm s3_shape det.s3move=reference,space3d.query_shape=operator
 mixed_vm s3_compound det.s3move_c=reference,space3d.query_compound=operator
 mixed_vm probe04 det.bits04=reference,det.gather04=planned
+mixed_vm handles04 det.handle04=reference

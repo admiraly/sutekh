@@ -20,6 +20,10 @@
  *   churn                      entity churn: IR despawn_self/emit_event, host spawns and despawns between ticks, slot
  *                              reuse, generation growth, event ring eviction (per-tick digests; host spawns are not
  *                              part of the replay command stream, so this workload is not replayed)
+ *   probe04                    IR 0.4 probes: det.bits04 and det.gather04 on edge operands (replayed)
+ *   handles04                  IR 0.4 handle_live: rows hold target handles (current, stale, future, generation 0,
+ *                              dead and out-of-range slots) while the host despawns and respawns into freed slots
+ *                              between ticks (not replayed, like churn)
  *
  * Usage (from the repository root):
  *   det_matrix --fixtures DIR --tier reference|planned|native [--out FILE] [--expect FILE] [--replay-dir DIR]
@@ -269,7 +273,7 @@ struct Ctx {
     TBlob s3_mesh, s3_compound;
     uint64_t s3_contacts, s3_two, s3_gates, s3_prox, s3_sub, s3_trunc; /* operator activity (manifest line) */
     /* IR 0.4 probes */
-    Bytes bits_cap, bits_lir, gather_cap, gather_lir;
+    Bytes bits_cap, bits_lir, gather_cap, gather_lir, handle_cap, handle_lir;
 };
 
 static SuHostWorld *create_world(const SuHostCapsule *caps, uint32_t n, const Bytes *fx, uint64_t capacity,
@@ -1105,6 +1109,91 @@ static void probe_inputs(Ctx *c, SuHostWorld *w, uint64_t tick) {
     b_push(&c->batch, w, tick);
 }
 
+/* ---- IR 0.4 handle_live: det.handle04 (VM only) ----
+ * Every tick a third of the rows get a new target handle. The kinds are derived from the current entity table only
+ * (no host memory, so a rollback re-derives them): the current handle of a slot (live), the previous generation of an
+ * occupied slot whose generation is above 1 (its earlier occupant was despawned: stale), the next generation, the
+ * generation 0, generation 1 of a free slot, and out-of-range slots. Between ticks the host despawns and spawns into
+ * the lowest free slots, so stored handles go stale and slots are reused with a new generation. */
+
+#define HANDLE_CAP 64u
+
+static void handle_spawn(SuHostWorld *w) {
+    uint64_t ent = 0;
+    SuHostError e;
+    uint32_t st = su_host_spawn(w, NULL, 0, 0, &ent, &e);
+    if (st != SU_OK && st != SU_E_RESOURCE_LIMIT) {
+        fail("handle spawn", st, &e);
+    }
+}
+
+static SuHostWorld *handle_create(Ctx *c) {
+    SuHostCapsule cap = ir_capsule(&c->handle_cap, &c->handle_lir);
+    SuHostWorld *w = create_world(&cap, 1, NULL, HANDLE_CAP, 60, 0, 0, 64, 43u);
+    uint32_t s;
+    if (w == NULL) {
+        return NULL;
+    }
+    for (s = 0; s < 48u; s++) {
+        handle_spawn(w);
+    }
+    return w;
+}
+
+static void handle_inputs(Ctx *c, SuHostWorld *w, uint64_t tick) {
+    static const uint32_t far[] = {HANDLE_CAP, HANDLE_CAP + 1u, 0x7FFFFFFFu, 0xFFFFFFFFu};
+    uint32_t ts = field(w, "t_slot"), tg = field(w, "t_gen");
+    uint32_t s;
+    for (s = 0; s < HANDLE_CAP; s++) {
+        uint64_t e = 0, t = 0;
+        uint32_t slot = rng_below(&c->rng, HANDLE_CAP), gen, kind;
+        if (su_host_entity_at(w, s, &e) != SU_OK || rng_below(&c->rng, 3u) != 0u) {
+            continue;
+        }
+        kind = rng_below(&c->rng, 8u);
+        if (su_host_entity_at(w, slot, &t) != SU_OK) {
+            gen = 1u; /* a free slot */
+        } else if (kind < 3u) {
+            gen = (uint32_t)(t >> 32); /* current */
+        } else if (kind == 3u) {
+            gen = (uint32_t)(t >> 32) - 1u; /* the previous occupant (generation 0 when the slot is at 1) */
+        } else if (kind == 4u) {
+            gen = (uint32_t)(t >> 32) + 1u; /* not issued yet */
+        } else if (kind == 5u) {
+            gen = 0u;
+        } else {
+            gen = (uint32_t)(t >> 32);
+            slot = far[rng_below(&c->rng, 4u)];
+        }
+        b_put(&c->batch, e, ts, slot);
+        b_put(&c->batch, e, tg, gen);
+    }
+    b_push(&c->batch, w, tick);
+}
+
+/* Between ticks: despawn 0..2 random live entities, then spawn 0..2 into the lowest free slots (reuse). */
+static void handle_between(Ctx *c, SuHostWorld *w) {
+    uint32_t k = rng_below(&c->rng, 3u), i;
+    for (i = 0; i < k; i++) {
+        uint32_t start = rng_below(&c->rng, HANDLE_CAP), s;
+        for (s = 0; s < HANDLE_CAP; s++) {
+            uint64_t e = 0;
+            if (su_host_entity_at(w, (start + s) % HANDLE_CAP, &e) == SU_OK) {
+                SuHostError err;
+                uint32_t st = su_host_despawn(w, e, &err);
+                if (st != SU_OK) {
+                    fail("handle despawn", st, &err);
+                }
+                break;
+            }
+        }
+    }
+    k = rng_below(&c->rng, 3u);
+    for (i = 0; i < k; i++) {
+        handle_spawn(w);
+    }
+}
+
 /* ---------- the runner ---------- */
 
 /* The compiler that built this driver (the library is built by the same toolchain in every CI leg). */
@@ -1650,6 +1739,7 @@ int main(int argc, char **argv) {
         {"s3_shape", 600, 60, 1, s3_stats, s3_create, s3_inputs, NULL, 2},
         {"s3_compound", 600, 60, 1, s3_stats, s3_create, s3_inputs, NULL, 3},
         {"probe04", 600, 60, 1, NULL, probe_create, probe_inputs, NULL, 0},
+        {"handles04", 600, 60, 0, NULL, handle_create, handle_inputs, handle_between, 0},
     };
     const uint32_t nwl = (uint32_t)(sizeof wls / sizeof wls[0]);
 
@@ -1735,7 +1825,9 @@ int main(int argc, char **argv) {
             !slurp("tests/determinism/bits04.capsule.json", &c.bits_cap) ||
             !slurp("tests/determinism/bits04.lir.json", &c.bits_lir) ||
             !slurp("tests/determinism/gather04.capsule.json", &c.gather_cap) ||
-            !slurp("tests/determinism/gather04.lir.json", &c.gather_lir)) {
+            !slurp("tests/determinism/gather04.lir.json", &c.gather_lir) ||
+            !slurp("tests/determinism/handle04.capsule.json", &c.handle_cap) ||
+            !slurp("tests/determinism/handle04.lir.json", &c.handle_lir)) {
             return 2;
         }
         s3_blobs(&c);

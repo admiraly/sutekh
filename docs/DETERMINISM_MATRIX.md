@@ -34,13 +34,13 @@ bit-identical committed state at every tick: columns, entity table, event log an
 - **Native tier: which systems.** A system that the native backend lowers runs natively: `rts.goal`, `rts.combat`,
   `rts.move`, `racer.move`, `det.sixdof`, `det.s3move`, `det.s3move_c`, `det.bits04`. Systems with entity
   operations or cross-row reads stay on the VM tiers (the backend refuses them): `rts.damage`, `racer.race`,
-  `det.churn`, `det.gather04`.
+  `det.churn`, `det.gather04`, `det.handle04`.
 - **Linkage.** Both linkages: static `su_host` and shared `sutekh_host`.
-- **IR.** Every operation of the IR 0.3/0.4 table (`src/ir/su_ops03.c`, 110 operations) runs in a matrix workload
+- **IR.** Every operation of the IR 0.3/0.4 table (`src/ir/su_ops03.c`, 111 operations since `handle_live`, 2026-10-26) runs in a matrix workload
   with edge operands, and its result reaches state. `determinism_op_coverage` fails when an operation in the table
   has no such use. That covers:
-  - IR 0.3 (`fixed_q32_v1`) and IR 0.4: bit operations, `div_u32`/`rem_u32`, the row filter, and `gather_*` /
-    `find_eq_u32`.
+  - IR 0.3 (`fixed_q32_v1`) and IR 0.4: bit operations, `div_u32`/`rem_u32`, the row filter, `gather_*` /
+    `find_eq_u32`, and `handle_live`.
   - The IR 0.1/0.2 u32 and entity operations used by the RTS, racer and churn workloads.
 
   IR 0.4 is implemented, and qualified here on the VM tiers and on the native tier for modules without cross-row
@@ -134,6 +134,7 @@ are this workload's.
 | `racer16` | `racer.race`, `racer.move` (IR 0.3), `space3d.query` | 720 | 16 racers on the 41 km course (committed fixture `tests/determinism/fixtures/racer16.json`, equal to `racer_microcosm --dump-fixture`); top-speed commands |
 | `sixdof` | `det.sixdof` (IR 0.3) | 1,200 | 48 rigid bodies plus a probe block, see below |
 | `probe04` | `det.bits04` (IR 0.4), `det.gather04` (IR 0.4, row filter) | 600 | every family operation of i32/i64/q32, every bit operation, conversion and vector operation the other workloads do not use, gathers, `find_eq_u32`; new edge operands for every row every tick |
+| `handles04` | `det.handle04` (IR 0.4, `handle_live`) | 600 | 64 slots, 48 entities at the start; every tick a third of the live rows get a new target handle (current, previous generation, next generation, generation 0, a free slot, or an out-of-range slot up to `0xFFFFFFFF`), derived from the current entity table only; between ticks the host despawns 0..2 and spawns 0..2 into the lowest free slots, so stored handles go stale and slots are reused. Not replayed (host spawns are not commands), like `churn` |
 | `churn` | `det.churn` (IR 0.3 with `despawn_self`, `emit_event`) | 900 | entity churn in 96 slots (one chunk), see below |
 | `churn3k` | as `churn` | 300 | the same in 3,072 slots (three chunks): about 2,800 live entities, up to 47 host spawns per tick, 32 host despawns every 5th tick, IR deaths and events |
 | `s3_query`, `s3_prox`, `s3_shape`, `s3_compound` | `det.s3move` (`det.s3move_c` for compound), then the named space3d operator | 600 each | see below |
@@ -225,6 +226,7 @@ restores the source. Results on 2026-10-26 (GCC 16.2.1 Release), every mutant ca
 | round half up in the reference library `su_num.c` (reference tier) | `sixdof`, `probe04` (tick 60) |
 | x86 shift-count masking in `su_u32_shl` | `probe04` (tick 60) |
 | `find_eq_u32` returns the last match (reference tier) | `probe04` (tick 60) |
+| `handle_live` ignores the generation (added 2026-10-26 with `handles04`) | `handles04` (tick 60) |
 | command/event merge in reverse canonical order (`su_cmdq.c`) | `churn3k` (tick 60). `churn` is not affected: with one chunk there is nothing to merge |
 
 The first mutant is the one an earlier review found undetected: only `racer16` ran `space3d.query`, which made
