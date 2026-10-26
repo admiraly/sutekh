@@ -20,6 +20,7 @@ option(SUTEKH_BUILD_EXAMPLES "Build Sutekh's example programs (examples/)" ${PRO
 
 include(cmake/SutekhWarnings.cmake)
 include(cmake/SutekhPlatform.cmake)
+include(cmake/SutekhSanitizers.cmake)
 
 # Frozen contract headers (single owner: M0-00). Consumed read-only.
 set(SUTEKH_CONTRACT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -772,3 +773,6 @@ endif()
 include(cmake/SutekhHostOps.cmake)
 include(cmake/SutekhPresentation.cmake)
 include(cmake/SutekhPublic.cmake)
+# Sanitizer builds only: the documented worker environment (cmake/SutekhSanitizers.cmake). Deferred so it runs
+# after every test, including those registered by earlier deferred calls (cmake/SutekhNumeric3D.cmake).
+cmake_language(DEFER CALL sutekh_sanitizer_test_environment)
