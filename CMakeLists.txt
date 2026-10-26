@@ -1,4 +1,6 @@
-cmake_minimum_required(VERSION 3.20)
+# 3.21 is the oldest release tested (3.21.4 with GCC 16 and Clang 22): 3.20 cannot enable C17 for compilers that
+# default to C23 ("does not know the compile flags"), and PROJECT_IS_TOP_LEVEL is new in 3.21.
+cmake_minimum_required(VERSION 3.21)
 
 project(sutekh
     VERSION 0.1.0
@@ -8,6 +10,13 @@ project(sutekh
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+
+# Built when Sutekh is the top-level project; off when a consumer includes it with add_subdirectory, so the
+# consumer's `all` and ctest list stay its own. A bench or example program that a test runs is also built whenever
+# SUTEKH_BUILD_TESTS is on. Public libraries: Sutekh::* aliases (cmake/SutekhPublic.cmake).
+option(SUTEKH_BUILD_TESTS "Build Sutekh's tests and register them with ctest" ${PROJECT_IS_TOP_LEVEL})
+option(SUTEKH_BUILD_BENCH "Build Sutekh's bench programs (bench/)" ${PROJECT_IS_TOP_LEVEL})
+option(SUTEKH_BUILD_EXAMPLES "Build Sutekh's example programs (examples/)" ${PROJECT_IS_TOP_LEVEL})
 
 include(cmake/SutekhWarnings.cmake)
 include(cmake/SutekhPlatform.cmake)
@@ -32,27 +41,34 @@ target_compile_definitions(sutekh PRIVATE
     SUTEKH_C_COMPILER_VERSION="${CMAKE_C_COMPILER_VERSION}")
 sutekh_apply_warnings(sutekh)
 
-enable_testing()
+if(SUTEKH_BUILD_TESTS)
+    enable_testing()
+endif()
 
 add_library(su_world STATIC src/world/su_world.c)
 target_include_directories(su_world PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 sutekh_apply_warnings(su_world)
 
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_world tests/world/test_world.c)
 target_link_libraries(test_world PRIVATE su_world)
 sutekh_apply_warnings(test_world)
 add_test(NAME world COMMAND test_world)
+endif() # SUTEKH_BUILD_TESTS
 
 # ---- BEGIN M2-00a generational entity table (su_ents; contract r2) ----
 add_library(su_ents STATIC src/world/entities/su_ents.c)
 target_include_directories(su_ents PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 sutekh_apply_warnings(su_ents)
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_entities tests/entities/test_entities.c)
 target_link_libraries(test_entities PRIVATE su_ents)
 sutekh_apply_warnings(test_entities)
 add_test(NAME entities COMMAND test_entities)
+endif() # SUTEKH_BUILD_TESTS
 # ---- END M2-00a generational entity table ----
 
+if(SUTEKH_BUILD_TESTS)
 # ---- BEGIN M3-08a exact accounting (test only; sources compiled with the counting seam) ----
 add_library(su_world_acct_objs OBJECT src/world/su_world.c src/world/entities/su_ents.c
     src/world/entities/su_cmdq.c)
@@ -64,22 +80,26 @@ target_include_directories(test_world_acct PRIVATE src "${SUTEKH_CONTRACT_INCLUD
 target_link_libraries(test_world_acct PRIVATE su_ir)
 sutekh_apply_warnings(test_world_acct)
 add_test(NAME world_acct COMMAND test_world_acct)
+endif() # SUTEKH_BUILD_TESTS
 # ---- END M3-08a exact accounting ----
 
 add_library(su_ir STATIC src/ir/su_sha256.c src/ir/su_json.c src/ir/su_lir.c)
 target_include_directories(su_ir PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 sutekh_apply_warnings(su_ir)
 
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_ir tests/ir/test_ir.c)
 target_link_libraries(test_ir PRIVATE su_ir su_vm)
 sutekh_apply_warnings(test_ir)
 add_test(NAME ir COMMAND test_ir WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif() # SUTEKH_BUILD_TESTS
 
 add_library(su_vm STATIC src/vm/su_vm.c src/vm/su_vm_plan.c)
 target_include_directories(su_vm PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 target_link_libraries(su_vm PUBLIC su_world su_ir)
 sutekh_apply_warnings(su_vm)
 
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_vm tests/vm/test_vm.c)
 target_link_libraries(test_vm PRIVATE su_vm)
 sutekh_apply_warnings(test_vm)
@@ -89,9 +109,11 @@ add_executable(test_vm_tiers tests/vm/test_vm_tiers.c)
 target_link_libraries(test_vm_tiers PRIVATE su_vm)
 sutekh_apply_warnings(test_vm_tiers)
 add_test(NAME vm_tiers COMMAND test_vm_tiers WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif() # SUTEKH_BUILD_TESTS
 if(UNIX)
     target_link_libraries(su_ir PUBLIC m) # sqrt: the estimate of src/ir/su_num_fast.h (su_vm, su_space3d)
 endif()
+if(SUTEKH_BUILD_TESTS)
 # su_num_fast.h (planned VM tier) against the reference su_num.c, with and without compiler intrinsics.
 add_executable(test_num_fast tests/num/test_num_fast.c)
 target_link_libraries(test_num_fast PRIVATE su_vm)
@@ -102,6 +124,7 @@ target_compile_definitions(test_num_fast_portable PRIVATE SU_NUM_FAST_PORTABLE)
 target_link_libraries(test_num_fast_portable PRIVATE su_vm)
 sutekh_apply_warnings(test_num_fast_portable)
 add_test(NAME num_fast_portable COMMAND test_num_fast_portable 100000 2)
+endif() # SUTEKH_BUILD_TESTS
 # numeric-3d stream (IR 0.3, fixed_q32_v1, space3d): every target lives in the included file.
 include(cmake/SutekhNumeric3D.cmake)
 
@@ -123,6 +146,7 @@ target_link_libraries(su_agent PUBLIC su_vm su_world su_ir su_platform su_snapsh
 target_compile_definitions(su_agent PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(su_agent)
 
+if(SUTEKH_BUILD_TESTS)
 add_executable(worker_stub tests/control/worker_stub.c)
 target_link_libraries(worker_stub PRIVATE su_agent)
 target_compile_definitions(worker_stub PRIVATE _POSIX_C_SOURCE=200809L)
@@ -133,16 +157,19 @@ target_link_libraries(test_control PRIVATE su_agent)
 target_compile_definitions(test_control PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_control)
 add_test(NAME control COMMAND test_control $<TARGET_FILE:worker_stub> WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif() # SUTEKH_BUILD_TESTS
 
 add_library(su_snapshot STATIC src/world/snapshot.c src/runtime/checkpoint.c)
 target_include_directories(su_snapshot PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 target_link_libraries(su_snapshot PUBLIC su_world su_ir su_platform)
 sutekh_apply_warnings(su_snapshot)
 
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_snapshot tests/snapshot/test_snapshot.c)
 target_link_libraries(test_snapshot PRIVATE su_snapshot)
 sutekh_apply_warnings(test_snapshot)
 add_test(NAME snapshot COMMAND test_snapshot WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif() # SUTEKH_BUILD_TESTS
 
 find_package(Threads REQUIRED)
 add_library(su_jobs STATIC src/runtime/jobs/su_jobs.c src/runtime/jobs/su_effects.c)
@@ -151,6 +178,7 @@ target_compile_definitions(su_jobs PRIVATE _POSIX_C_SOURCE=200809L)
 target_link_libraries(su_jobs PUBLIC su_vm su_world su_ir su_platform Threads::Threads)
 sutekh_apply_warnings(su_jobs)
 
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_scheduler tests/scheduler/test_scheduler.c)
 target_link_libraries(test_scheduler PRIVATE su_jobs)
 target_compile_definitions(test_scheduler PRIVATE _POSIX_C_SOURCE=200809L)
@@ -170,21 +198,21 @@ target_link_libraries(test_host_entry PRIVATE su_agent)
 target_include_directories(test_host_entry PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/host")
 target_compile_definitions(test_host_entry PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_host_entry)
-add_test(NAME host_entry COMMAND test_host_entry "${CMAKE_BINARY_DIR}/host_entry_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME host_entry COMMAND test_host_entry "${CMAKE_CURRENT_BINARY_DIR}/host_entry_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # M3-04a T-HOST-11: restore and the world.create host branch against the real worker.c static functions.
 add_executable(test_host_restore tests/rts/host/test_host_restore.c tests/rts/host/host_test_ops.c)
 target_link_libraries(test_host_restore PRIVATE su_agent)
 target_include_directories(test_host_restore PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/host")
 target_compile_definitions(test_host_restore PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_host_restore)
-add_test(NAME host_restore COMMAND test_host_restore "${CMAKE_BINARY_DIR}/host_restore_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME host_restore COMMAND test_host_restore "${CMAKE_CURRENT_BINARY_DIR}/host_restore_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # M3-04: RTS host operators, known answers (10.1 SPATIAL, GATHER, SCATTER), store set, fault seams, records (T-HOST-05).
 add_executable(test_rts_ops tests/rts/native/test_rts_ops.c)
 target_link_libraries(test_rts_ops PRIVATE su_agent)
 target_include_directories(test_rts_ops PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(test_rts_ops PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_rts_ops)
-add_test(NAME rts_native_ops COMMAND test_rts_ops "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME rts_native_ops COMMAND test_rts_ops "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # M3-04 T-HOST-05: production descriptors against the committed M3-04a records (see test_rts_records.c; the
 # committed constants_hash check is a known blocker and fails until the owner resolves it).
 add_executable(test_rts_records tests/rts/native/test_rts_records.c)
@@ -192,7 +220,7 @@ target_link_libraries(test_rts_records PRIVATE su_agent)
 target_include_directories(test_rts_records PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(test_rts_records PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_rts_records)
-add_test(NAME rts_native_records COMMAND test_rts_records "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME rts_native_records COMMAND test_rts_records "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # M3-04: differential driver (C operators on scenes from bench/rts/gen against the bench/rts/ref model).
 add_executable(test_rts_diff tests/rts/native/test_rts_diff.c)
 target_link_libraries(test_rts_diff PRIVATE su_agent)
@@ -200,7 +228,7 @@ target_include_directories(test_rts_diff PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(test_rts_diff PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_rts_diff)
 add_test(NAME rts_native_diff COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/native/diff_driver.py"
-         --driver "$<TARGET_FILE:test_rts_diff>" --work "${CMAKE_BINARY_DIR}/rts_native_diff_scratch"
+         --driver "$<TARGET_FILE:test_rts_diff>" --work "${CMAKE_CURRENT_BINARY_DIR}/rts_native_diff_scratch"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # M3-04/M3-05 detectors for contract mutants M3-M20, M3-M30, M3-M35 (Python reference; M3-M18 and M3-M26 are skipped).
 add_test(NAME rts_ref_m3_mutants COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/ref/m3_control_mutants.py")
@@ -273,6 +301,7 @@ target_include_directories(test_path_fifo PRIVATE include src)
 target_link_libraries(test_path_fifo PRIVATE su_platform)
 add_test(NAME path_fifo COMMAND test_path_fifo)
 endif()
+endif() # SUTEKH_BUILD_TESTS
 
 # ---- BEGIN M1-01 optional native scalar backend (SUTEKH_NATIVE; default OFF) ----
 # Enable with: cmake -DSUTEKH_NATIVE=ON -S . -B <build>   (the default build is unchanged)
@@ -280,7 +309,9 @@ option(SUTEKH_NATIVE "Build the M1 AsmJit native scalar backend and its tests" O
 if(SUTEKH_NATIVE)
     # The agent reports runtime_mode dev_native for this build (ARCHITECTURE section 7); see su_agent.c.
     target_compile_definitions(su_agent PRIVATE SUTEKH_NATIVE_BUILD=1)
-    target_compile_definitions(test_control PRIVATE SUTEKH_NATIVE_BUILD=1)
+    if(SUTEKH_BUILD_TESTS)
+        target_compile_definitions(test_control PRIVATE SUTEKH_NATIVE_BUILD=1)
+    endif()
     enable_language(CXX)
     set(CMAKE_CXX_STANDARD 20)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -321,11 +352,16 @@ if(SUTEKH_NATIVE)
     target_link_libraries(su_native PUBLIC su_ir su_vm su_asmjit) # su_vm: the plan builder (identity-row guard)
     target_compile_definitions(su_native PRIVATE SU_NATIVE_ASMJIT_COMMIT="${SU_ASMJIT_COMMIT}")
     set_target_properties(su_native PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-    # Strict C17 set for the C files. The C++ adapter gets -Wall -Wextra -Werror only: the AsmJit
-    # headers rely on compiler extensions that -pedantic rejects.
+    # Strict C17 set for the C files. The C++ adapter gets -Wall -Wextra (-Werror) only: the AsmJit
+    # headers rely on compiler extensions that -pedantic rejects. -Werror follows SUTEKH_WERROR.
+    set(su_native_werror "")
+    if(SUTEKH_WERROR)
+        set(su_native_werror -Werror)
+    endif()
     target_compile_options(su_native PRIVATE
-        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra -Werror -pedantic>
-        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra -Werror>)
+        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra ${su_native_werror} -pedantic>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-Wall -Wextra ${su_native_werror}>)
+    unset(su_native_werror)
 
     # M1-02b: the engine (supervisor and worker) gets the native artifact registry. The compile
     # definition SU_HAVE_NATIVE gates world.specialize; the default build does not define it.
@@ -333,11 +369,12 @@ if(SUTEKH_NATIVE)
     target_compile_definitions(su_agent PUBLIC SU_HAVE_NATIVE)
     target_link_libraries(su_agent PUBLIC su_native)
 
+    if(SUTEKH_BUILD_TESTS)
     add_executable(test_native_scalar tests/native/scalar/test_native_scalar.c)
     target_link_libraries(test_native_scalar PRIVATE su_native su_vm su_world su_ir)
     sutekh_apply_warnings(test_native_scalar)
 
-    set(SU_NATIVE_CORPUS_DIR "${CMAKE_BINARY_DIR}/native_scalar_corpus")
+    set(SU_NATIVE_CORPUS_DIR "${CMAKE_CURRENT_BINARY_DIR}/native_scalar_corpus")
     add_test(NAME native_scalar_corpus_gen
              COMMAND ${SUTEKH_PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/scalar/gen/gen_corpus.py"
                      --out "${SU_NATIVE_CORPUS_DIR}"
@@ -352,7 +389,7 @@ if(SUTEKH_NATIVE)
     target_link_libraries(test_native_avx2 PRIVATE su_native su_vm su_world su_ir)
     sutekh_apply_warnings(test_native_avx2)
 
-    set(SU_NATIVE_AVX2_CORPUS_DIR "${CMAKE_BINARY_DIR}/native_avx2_corpus")
+    set(SU_NATIVE_AVX2_CORPUS_DIR "${CMAKE_CURRENT_BINARY_DIR}/native_avx2_corpus")
     add_test(NAME native_avx2_corpus_gen
              COMMAND ${SUTEKH_PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/scalar/gen/gen_corpus.py"
                      --out "${SU_NATIVE_AVX2_CORPUS_DIR}"
@@ -381,7 +418,7 @@ if(SUTEKH_NATIVE)
     sutekh_apply_warnings(test_specialize_admission)
     add_dependencies(test_specialize_admission native_test_worker)
     add_test(NAME specialize_admission COMMAND test_specialize_admission $<TARGET_FILE:native_test_worker>
-             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/specialize_admission_scratch"
+             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/specialize_admission_scratch"
              WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     # The production engine binary must carry none of the fault seams.
     # M1-02c-2: native kernel crash, quarantine and respecialization (test worker only).
@@ -390,7 +427,7 @@ if(SUTEKH_NATIVE)
     sutekh_apply_warnings(test_native_fault)
     add_dependencies(test_native_fault native_test_worker)
     add_test(NAME native_fault COMMAND test_native_fault $<TARGET_FILE:native_test_worker>
-             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/native_fault_scratch"
+             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/native_fault_scratch"
              WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     # M1-02c-3: test supervisor = the agent library compiled with the test seams (SU_TEST_INTERLEAVE).
     # Only the test links it; sutekh is built from su_agent without SU_TEST_FAULT_HOOKS.
@@ -420,7 +457,7 @@ if(SUTEKH_NATIVE)
     sutekh_apply_warnings(test_specialize_inflight)
     add_dependencies(test_specialize_inflight native_test_worker)
     add_test(NAME specialize_inflight COMMAND test_specialize_inflight $<TARGET_FILE:native_test_worker>
-             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/specialize_inflight_scratch"
+             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/specialize_inflight_scratch"
              WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     # M1-02c-3: 1000 specialize cycles and revision swaps on one agent (production supervisor).
     add_executable(test_specialize_churn tests/native/qualification/test_specialize_churn.c)
@@ -428,7 +465,7 @@ if(SUTEKH_NATIVE)
     sutekh_apply_warnings(test_specialize_churn)
     add_dependencies(test_specialize_churn native_test_worker)
     add_test(NAME specialize_churn COMMAND test_specialize_churn $<TARGET_FILE:native_test_worker>
-             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/specialize_churn_scratch"
+             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/specialize_churn_scratch"
              WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     # Under AddressSanitizer the allocator quarantine (256 MB by default) inflates RSS for reasons
     # unrelated to the engine, and the churn test's 16 MB RSS bound would fail. Cap the quarantine for
@@ -442,11 +479,13 @@ if(SUTEKH_NATIVE)
     add_test(NAME release_seams COMMAND ${SUTEKH_PYTHON}
              "${CMAKE_CURRENT_SOURCE_DIR}/tests/native/qualification/check_release_seams.py"
              $<TARGET_FILE:sutekh>)
+    endif() # SUTEKH_BUILD_TESTS
 endif()
 # ---- END M1-01 optional native scalar backend ----
 
+if(SUTEKH_BUILD_TESTS)
 # M1-02a: worker crash recovery tests (crash seam only in the test worker, never in sutekh)
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/recovery_scratch")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/recovery_scratch")
 add_executable(recovery_worker tests/recovery/recovery_worker.c src/runtime/worker.c)
 target_link_libraries(recovery_worker PRIVATE su_agent)
 target_compile_definitions(recovery_worker PRIVATE _POSIX_C_SOURCE=200809L SU_TEST_FAULT_HOOKS)
@@ -456,19 +495,19 @@ target_link_libraries(test_recovery PRIVATE su_agent)
 target_compile_definitions(test_recovery PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_recovery)
 add_test(NAME recovery COMMAND test_recovery $<TARGET_FILE:recovery_worker> "${CMAKE_CURRENT_SOURCE_DIR}"
-         "${CMAKE_BINARY_DIR}/recovery_scratch" $<TARGET_FILE:sutekh>
+         "${CMAKE_CURRENT_BINARY_DIR}/recovery_scratch" $<TARGET_FILE:sutekh>
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # M1 closure C: C07 containment observed from inside the child (rlimits, seccomp network denial,
 # RLIMIT_FSIZE and RLIMIT_NOFILE). The probe method exists only in test workers (SU_TEST_FAULT_HOOKS).
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/containment_scratch")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/containment_scratch")
 if(WIN32)
     sutekh_unsupported_test(containment "rlimits, seccomp, Landlock, io_uring and /proc are Linux; see containment_win")
     # Windows counterpart: job object (process creation, commit limit), low integrity writes, crash reporting.
     add_executable(test_containment_win tests/recovery/test_containment_win.c)
     target_link_libraries(test_containment_win PRIVATE su_agent)
     sutekh_apply_warnings(test_containment_win)
-    add_test(NAME containment_win COMMAND test_containment_win "${CMAKE_BINARY_DIR}/containment_scratch")
+    add_test(NAME containment_win COMMAND test_containment_win "${CMAKE_CURRENT_BINARY_DIR}/containment_scratch")
 else()
 add_executable(test_containment tests/recovery/test_containment.c)
 target_link_libraries(test_containment PRIVATE su_agent)
@@ -476,18 +515,19 @@ target_compile_definitions(test_containment PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_containment)
 add_dependencies(test_containment recovery_worker)
 add_test(NAME containment COMMAND test_containment $<TARGET_FILE:recovery_worker>
-         "${CMAKE_BINARY_DIR}/containment_scratch" "${CMAKE_CURRENT_SOURCE_DIR}"
+         "${CMAKE_CURRENT_BINARY_DIR}/containment_scratch" "${CMAKE_CURRENT_SOURCE_DIR}"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 # M1 closure D: digest field comparison and spool directory mode (unit checks, no worker).
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/hardening_scratch")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/hardening_scratch")
 add_executable(test_hardening tests/recovery/test_hardening.c)
 target_link_libraries(test_hardening PRIVATE su_agent)
 target_compile_definitions(test_hardening PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_hardening)
-add_test(NAME hardening COMMAND test_hardening "${CMAKE_BINARY_DIR}/hardening_scratch"
+add_test(NAME hardening COMMAND test_hardening "${CMAKE_CURRENT_BINARY_DIR}/hardening_scratch"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif() # SUTEKH_BUILD_TESTS
 
 # M2-00b: bounded structural/event queues with canonical merge
 add_library(su_cmdq STATIC src/world/entities/su_cmdq.c)
@@ -495,6 +535,7 @@ target_include_directories(su_cmdq PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 target_compile_definitions(su_cmdq PRIVATE _POSIX_C_SOURCE=200809L)
 target_link_libraries(su_cmdq PUBLIC su_platform Threads::Threads)
 sutekh_apply_warnings(su_cmdq)
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_cmdq tests/entities/test_cmdq.c)
 target_link_libraries(test_cmdq PRIVATE su_cmdq Threads::Threads)
 target_compile_definitions(test_cmdq PRIVATE _POSIX_C_SOURCE=200809L)
@@ -512,24 +553,26 @@ target_include_directories(test_cmdq_admission PRIVATE src "${SUTEKH_CONTRACT_IN
 target_link_libraries(test_cmdq_admission PRIVATE Threads::Threads)
 sutekh_apply_warnings(test_cmdq_admission)
 add_test(NAME cmdq_admission COMMAND test_cmdq_admission)
+endif() # SUTEKH_BUILD_TESTS
 
 # M3-05: control-plane domains (contract 2.2). Pure checks, no world state.
 add_library(su_rts_control STATIC src/runtime/rts/control_domains.c)
 target_include_directories(su_rts_control PUBLIC src include)
+if(SUTEKH_BUILD_TESTS)
 # M3-05 world.set_fields (contract 2.2): the worker handler against an RTS world built by world.create.
 add_executable(test_world_set_fields tests/rts/control/test_world_set_fields.c)
 target_link_libraries(test_world_set_fields PRIVATE su_agent)
 target_include_directories(test_world_set_fields PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/host")
 target_compile_definitions(test_world_set_fields PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_world_set_fields)
-add_test(NAME rts_world_set_fields COMMAND test_world_set_fields "${CMAKE_BINARY_DIR}/rts_world_set_fields_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME rts_world_set_fields COMMAND test_world_set_fields "${CMAKE_CURRENT_BINARY_DIR}/rts_world_set_fields_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # M3-05 world.spawn_batch and the RTS spawn rules (contract 2.2 D1, D3, OD-3b) against an RTS world.
 add_executable(test_world_spawn_batch tests/rts/control/test_world_spawn_batch.c)
 target_link_libraries(test_world_spawn_batch PRIVATE su_agent)
 target_include_directories(test_world_spawn_batch PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/rts/host")
 target_compile_definitions(test_world_spawn_batch PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_world_spawn_batch)
-add_test(NAME rts_world_spawn_batch COMMAND test_world_spawn_batch "${CMAKE_BINARY_DIR}/rts_world_spawn_batch_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME rts_world_spawn_batch COMMAND test_world_spawn_batch "${CMAKE_CURRENT_BINARY_DIR}/rts_world_spawn_batch_scratch" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 add_executable(test_control_domains tests/rts/control/test_control_domains.c)
 target_link_libraries(test_control_domains PRIVATE su_rts_control)
 add_test(NAME rts_control_domains COMMAND test_control_domains WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -556,9 +599,11 @@ target_link_libraries(test_rts_churn PRIVATE su_agent)
 sutekh_apply_warnings(test_rts_churn)
 add_test(NAME rts_churn COMMAND test_rts_churn)
 set_tests_properties(rts_churn PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+endif() # SUTEKH_BUILD_TESTS
 
 # ---- BEGIN M2-00c1 world integration (entity table in su_world; snapshot 0.2) ----
 target_link_libraries(su_world PUBLIC su_ents su_ir)
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_world_ents tests/entities/test_world_ents.c)
 target_link_libraries(test_world_ents PRIVATE su_world)
 sutekh_apply_warnings(test_world_ents)
@@ -577,6 +622,7 @@ add_executable(test_entity_tick tests/entities/test_entity_tick.c)
 target_link_libraries(test_entity_tick PRIVATE su_agent su_world su_cmdq su_ents)
 sutekh_apply_warnings(test_entity_tick)
 add_test(NAME entity_tick COMMAND test_entity_tick WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif() # SUTEKH_BUILD_TESTS
 # ---- END M2-00c3 entity tick integration ----
 
 # ---- BEGIN M2-01a migration engine (schema migrations; contract M2_MIGRATION_CONTRACT.md) ----
@@ -584,18 +630,19 @@ add_library(su_migrate STATIC src/world/migration/su_migrate.c)
 target_include_directories(su_migrate PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
 target_link_libraries(su_migrate PUBLIC su_world su_vm su_ir su_ents su_snapshot)
 sutekh_apply_warnings(su_migrate)
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_migrate tests/migration/test_migrate.c)
 target_link_libraries(test_migrate PRIVATE su_migrate)
 sutekh_apply_warnings(test_migrate)
 add_test(NAME migration_model COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/migration/model.py"
-    --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures" --out "${CMAKE_BINARY_DIR}/migration_expected.json")
+    --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures" --out "${CMAKE_CURRENT_BINARY_DIR}/migration_expected.json")
 add_test(NAME migration COMMAND test_migrate "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
-    "${CMAKE_BINARY_DIR}/migration_expected.json" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_BINARY_DIR}/migration_expected.json" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 set_tests_properties(migration PROPERTIES DEPENDS migration_model)
 # ---- END M2-01a migration engine ----
 
 # ---- BEGIN M2-01b migration runtime (commit, rollback, recovery, crash stages; contract sections 3-6) ----
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/migration_runtime_scratch")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/migration_runtime_scratch")
 # The supervisor under test is built with the test seams (post-commit no-room); sutekh itself is not.
 add_library(su_agent_hooks STATIC ${SU_AGENT_SOURCES})
 target_include_directories(su_agent_hooks PUBLIC src "${SUTEKH_CONTRACT_INCLUDE}")
@@ -608,7 +655,7 @@ target_compile_definitions(test_migrate_runtime PRIVATE _POSIX_C_SOURCE=200809L)
 sutekh_apply_warnings(test_migrate_runtime)
 add_dependencies(test_migrate_runtime recovery_worker)
 add_test(NAME migration_runtime COMMAND test_migrate_runtime $<TARGET_FILE:recovery_worker>
-         "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/migration_runtime_scratch"
+         "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/migration_runtime_scratch"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 # M2-01 fixes2 (N2): every allocation of the migration engine goes through the counted wrappers.
 add_test(NAME migration_alloc_points COMMAND ${SUTEKH_PYTHON} -I
@@ -634,13 +681,14 @@ set_tests_properties(rts_e2e_edges rts_projectile_mutant PROPERTIES TIMEOUT 120)
 # M3-07 independently authored hidden phase fixtures and full-schedule candidate installs.
 foreach(behavior b3 b2 b1)
   add_test(NAME rts_${behavior}_hidden COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CURRENT_SOURCE_DIR}/bench/rts/agent_experiments/evaluate_${behavior}_hidden.py"
-           --binary $<TARGET_FILE:sutekh> --out "${CMAKE_BINARY_DIR}/${behavior}-hidden-results.json")
+           --binary $<TARGET_FILE:sutekh> --out "${CMAKE_CURRENT_BINARY_DIR}/${behavior}-hidden-results.json")
   add_test(NAME rts_${behavior}_install COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CURRENT_SOURCE_DIR}/bench/rts/agent_experiments/install_${behavior}_live.py"
-           --binary $<TARGET_FILE:sutekh> --out "${CMAKE_BINARY_DIR}/${behavior}-install-results.json")
+           --binary $<TARGET_FILE:sutekh> --out "${CMAKE_CURRENT_BINARY_DIR}/${behavior}-install-results.json")
   set_tests_properties(rts_${behavior}_hidden rts_${behavior}_install PROPERTIES TIMEOUT 120)
 endforeach()
 
 add_test(NAME rts_behavior_regeneration COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CURRENT_SOURCE_DIR}/bench/rts/agent_experiments/check_regeneration.py")
+endif() # SUTEKH_BUILD_TESTS
 
 # ---- BEGIN in-process host API (include/sutekh/host.h; planning/amendments/2026-10-18-downstream-host-work.md) ----
 # The schedule, entity tick and host-operator declaration sources are compiled into the host library in their
@@ -648,7 +696,9 @@ add_test(NAME rts_behavior_regeneration COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CUR
 set(SU_HOST_SOURCES src/host/su_host.c src/host/su_host_clock.c src/host/su_replay.c src/host/su_xxh64.c src/runtime/schedule.c src/runtime/entity_tick.c src/runtime/rts/host_decl.c)
 add_library(su_host STATIC ${SU_HOST_SOURCES})
 target_include_directories(su_host PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
-target_link_libraries(su_host PUBLIC su_vm su_world su_ents su_ir su_jobs su_cmdq su_platform)
+# The internal libraries are PRIVATE (linked, but their include directories and definitions do not reach users of
+# su_host): the public usage requirement is include/ only.
+target_link_libraries(su_host PRIVATE su_vm su_world su_ents su_ir su_jobs su_cmdq su_platform)
 target_compile_definitions(su_host PRIVATE SUTEKH_VERSION_STRING="${PROJECT_VERSION}")
 sutekh_apply_warnings(su_host)
 # The same API as a shared library (sutekh_host.dll / libsutekh_host.so). Users define SUTEKH_HOST_DLL.
@@ -660,6 +710,7 @@ target_link_libraries(sutekh_host PRIVATE su_vm su_world su_ents su_ir su_jobs s
 set_target_properties(sutekh_host PROPERTIES C_VISIBILITY_PRESET hidden)
 set_target_properties(su_vm su_world su_ents su_ir su_jobs su_cmdq su_platform PROPERTIES POSITION_INDEPENDENT_CODE ON)
 sutekh_apply_warnings(sutekh_host)
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_host tests/host/test_host.c)
 target_link_libraries(test_host PRIVATE su_host)
 sutekh_apply_warnings(test_host)
@@ -693,21 +744,29 @@ add_test(NAME host_replay COMMAND test_replay WORKING_DIRECTORY "${CMAKE_CURRENT
 add_executable(test_replay_dll tests/host/test_replay.c)
 target_link_libraries(test_replay_dll PRIVATE sutekh_host)
 sutekh_apply_warnings(test_replay_dll)
-add_test(NAME host_replay_record COMMAND test_replay record "${CMAKE_BINARY_DIR}/host_replay.bin"
+add_test(NAME host_replay_record COMMAND test_replay record "${CMAKE_CURRENT_BINARY_DIR}/host_replay.bin"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-add_test(NAME host_replay_verify_dll COMMAND test_replay_dll verify "${CMAKE_BINARY_DIR}/host_replay.bin"
+add_test(NAME host_replay_verify_dll COMMAND test_replay_dll verify "${CMAKE_CURRENT_BINARY_DIR}/host_replay.bin"
          WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 set_tests_properties(host_replay_verify_dll PROPERTIES DEPENDS host_replay_record)
+endif() # SUTEKH_BUILD_TESTS
 # Example presentation-host loop (examples/host); run as a test so it keeps working.
-add_executable(minimal_host examples/host/minimal_host.c)
-target_link_libraries(minimal_host PRIVATE sutekh_host)
-sutekh_apply_warnings(minimal_host)
-add_test(NAME example_minimal_host COMMAND minimal_host WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+if(SUTEKH_BUILD_EXAMPLES OR SUTEKH_BUILD_TESTS)
+    add_executable(minimal_host examples/host/minimal_host.c)
+    target_link_libraries(minimal_host PRIVATE sutekh_host)
+    sutekh_apply_warnings(minimal_host)
+endif()
+if(SUTEKH_BUILD_TESTS)
+    add_test(NAME example_minimal_host COMMAND minimal_host WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
 # Observation bench (not a test): bench/host/bench_host.c, run by hand from the repository root.
-add_executable(bench_host bench/host/bench_host.c)
-target_include_directories(bench_host PRIVATE src)
-target_link_libraries(bench_host PRIVATE su_host)
-sutekh_apply_warnings(bench_host)
+if(SUTEKH_BUILD_BENCH)
+    add_executable(bench_host bench/host/bench_host.c)
+    target_include_directories(bench_host PRIVATE src)
+    target_link_libraries(bench_host PRIVATE su_host)
+    sutekh_apply_warnings(bench_host)
+endif()
 # ---- END in-process host API ----
 include(cmake/SutekhHostOps.cmake)
 include(cmake/SutekhPresentation.cmake)
+include(cmake/SutekhPublic.cmake)
