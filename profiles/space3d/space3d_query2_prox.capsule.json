@@ -1,0 +1,411 @@
+{
+  "capsule_format": "0.1",
+  "system_id": "space3d.query2_prox",
+  "system_rev": 1,
+  "capabilities": [],
+  "schema": {
+    "id": "space3d",
+    "version": 1,
+    "layout_generation": 1
+  },
+  "numeric_profile": "fixed_q32_v1",
+  "host": {
+    "operator": "space3d_ops_v2",
+    "operator_version": 2,
+    "constants_hash": "00f4b264cab431d87c970c609a27831f564016e3f22205893c1b50b6d769aed8",
+    "fields": [
+      {
+        "id": 1,
+        "name": "kind",
+        "type": "u32",
+        "access": "read"
+      },
+      {
+        "id": 2,
+        "name": "next_gate",
+        "type": "u32",
+        "access": "read"
+      },
+      {
+        "id": 3,
+        "name": "gate_index",
+        "type": "u32",
+        "access": "read"
+      },
+      {
+        "id": 10,
+        "name": "pos_x.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 11,
+        "name": "pos_x.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 12,
+        "name": "pos_y.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 13,
+        "name": "pos_y.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 14,
+        "name": "pos_z.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 15,
+        "name": "pos_z.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 16,
+        "name": "prev_x.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 17,
+        "name": "prev_x.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 18,
+        "name": "prev_y.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 19,
+        "name": "prev_y.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 20,
+        "name": "prev_z.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 21,
+        "name": "prev_z.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 22,
+        "name": "rot_w.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 23,
+        "name": "rot_w.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 24,
+        "name": "rot_x.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 25,
+        "name": "rot_x.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 26,
+        "name": "rot_y.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 27,
+        "name": "rot_y.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 28,
+        "name": "rot_z.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 29,
+        "name": "rot_z.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 30,
+        "name": "radius.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 31,
+        "name": "radius.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 32,
+        "name": "half_x.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 33,
+        "name": "half_x.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 34,
+        "name": "half_y.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 35,
+        "name": "half_y.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 36,
+        "name": "half_z.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 37,
+        "name": "half_z.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 40,
+        "name": "hit_count",
+        "type": "u32",
+        "access": "write"
+      },
+      {
+        "id": 41,
+        "name": "hit_flags",
+        "type": "u32",
+        "access": "write"
+      },
+      {
+        "id": 42,
+        "name": "c0_slot",
+        "type": "u32",
+        "access": "write"
+      },
+      {
+        "id": 43,
+        "name": "c0_gen",
+        "type": "u32",
+        "access": "write"
+      },
+      {
+        "id": 44,
+        "name": "c0_toi.lo",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 45,
+        "name": "c0_toi.hi",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 46,
+        "name": "c0_nx.lo",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 47,
+        "name": "c0_nx.hi",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 48,
+        "name": "c0_ny.lo",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 49,
+        "name": "c0_ny.hi",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 50,
+        "name": "c0_nz.lo",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 51,
+        "name": "c0_nz.hi",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 52,
+        "name": "c1_slot",
+        "type": "u32",
+        "access": "write"
+      },
+      {
+        "id": 53,
+        "name": "c1_gen",
+        "type": "u32",
+        "access": "write"
+      },
+      {
+        "id": 54,
+        "name": "c1_toi.lo",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 55,
+        "name": "c1_toi.hi",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 56,
+        "name": "c1_nx.lo",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 57,
+        "name": "c1_nx.hi",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 58,
+        "name": "c1_ny.lo",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 59,
+        "name": "c1_ny.hi",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 60,
+        "name": "c1_nz.lo",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 61,
+        "name": "c1_nz.hi",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 62,
+        "name": "gate_dir",
+        "type": "u32",
+        "access": "write"
+      },
+      {
+        "id": 63,
+        "name": "gate_slot",
+        "type": "u32",
+        "access": "write"
+      },
+      {
+        "id": 64,
+        "name": "gate_toi.lo",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 65,
+        "name": "gate_toi.hi",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 66,
+        "name": "prox_margin.lo",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 67,
+        "name": "prox_margin.hi",
+        "type": "q32",
+        "access": "read"
+      },
+      {
+        "id": 68,
+        "name": "prox_slot",
+        "type": "u32",
+        "access": "write"
+      },
+      {
+        "id": 69,
+        "name": "prox_gen",
+        "type": "u32",
+        "access": "write"
+      },
+      {
+        "id": 70,
+        "name": "prox_dist.lo",
+        "type": "q32",
+        "access": "write"
+      },
+      {
+        "id": 71,
+        "name": "prox_dist.hi",
+        "type": "q32",
+        "access": "write"
+      }
+    ]
+  },
+  "schedule": {
+    "phase": "query",
+    "after": [],
+    "before": [],
+    "parallel": "serial"
+  },
+  "limits": {
+    "max_instructions": 1,
+    "max_rows": 65536,
+    "allocation": "forbidden"
+  },
+  "tests": [
+    "tests/space3d/test_space3d_ops.c"
+  ]
+}

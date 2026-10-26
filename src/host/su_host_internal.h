@@ -51,6 +51,9 @@ typedef struct HostOperator {
     /* Registered operators: the instance's operator state (issue 139; NULL when it declares none). NULL callback for
      * built-in operators, which have no state. */
     SuHostState *(*state)(void *inst);
+    /* Built-in operators with counters (the space3d family, issue 163; NULL otherwise): fills *out (struct_size and
+     * reserved already checked) from the instance. */
+    void (*counters)(const void *inst, SuHostOperatorCounters *out);
 } HostOperator;
 
 /* Built-in operators first, then registered ones. NULL when system_id names neither. */

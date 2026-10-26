@@ -525,3 +525,13 @@ set 1, XInput ranges), and `space_demo` building and running windowed on Linux. 
 `-Werror`: 145 tests, 0 failures, 1 skip (`audio_device`), window and swapchain tests on the session's Wayland
 display, under XWayland, and under Xvfb (llvmpipe). Decision record: `docs/BACKENDS_AND_DEPENDENCIES.md` section 8.
 Evidence: `planning/evidence/linux-window/`. Handoff with unrun items: `planning/handoffs/2026-10-26-linux-window.md`.
+
+## space3d broadphase v2 and local pair budget (26 October 2026)
+
+Issue 163. Implemented and tested: the `space3d_ops_v2` descriptors `space3d.query2`, `space3d.query2_prox`,
+`space3d.query2_shape` and `space3d.query2_compound` (records `profiles/space3d/space3d_query2*.capsule.json`; v1
+descriptors, hashes and digests unchanged). Every mover keeps the 32 best overlapping collidables (larger bodies first,
+then nearest), found by the sweep or, in dense scenes, a hierarchical grid; the pair budget max(2^22, 1024 x capacity)
+is part of the constants and cuts only the most crowded rows (flag 4). `su_host_operator_counters` reports truncation
+and budget counters for both families. Evidence: `docs/SPACE3D.md` section 3 "Broadphase v2" (`space3d_ops`,
+`space3d_dense`, determinism workload `s3_dense`). Handoff: `planning/handoffs/2026-10-26-pair-budget.md`.

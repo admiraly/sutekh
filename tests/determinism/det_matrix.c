@@ -269,9 +269,10 @@ struct Ctx {
     uint32_t arg;  /* the running workload's variant */
     uint32_t ccap; /* churn capacity */
     /* space3d operator variants and the motion systems */
-    Bytes s3_rec[4], s3_move_cap, s3_move_lir, s3_movec_cap, s3_movec_lir;
+    Bytes s3_rec[5], s3_move_cap, s3_move_lir, s3_movec_cap, s3_movec_lir;
     TBlob s3_mesh, s3_compound;
     uint64_t s3_contacts, s3_two, s3_gates, s3_prox, s3_sub, s3_trunc; /* operator activity (manifest line) */
+    uint64_t s3_cut_ticks, s3_flag4, s3_skipped;                       /* s3_dense budget line (issue 163) */
     /* IR 0.4 probes */
     Bytes bits_cap, bits_lir, gather_cap, gather_lir, handle_cap, handle_lir;
 };
@@ -771,10 +772,11 @@ static void churn_between(Ctx *c, SuHostWorld *w) {
 #define S3_ROWS 224u
 #define S3_MOVERS 96u
 
-static const char *const k_s3_rec[4] = {"profiles/space3d/space3d_query.capsule.json",
+static const char *const k_s3_rec[5] = {"profiles/space3d/space3d_query.capsule.json",
                                         "profiles/space3d/space3d_query_prox.capsule.json",
                                         "profiles/space3d/space3d_query_shape.capsule.json",
-                                        "profiles/space3d/space3d_query_compound.capsule.json"};
+                                        "profiles/space3d/space3d_query_compound.capsule.json",
+                                        "profiles/space3d/space3d_query2.capsule.json"};
 
 static void s3_blobs(Ctx *c) {
     SuV3 v[16];
@@ -1003,6 +1005,128 @@ static void s3_inputs(Ctx *c, SuHostWorld *w, uint64_t tick) {
     }
     /* A command: a velocity kick (up to 40 m/s per axis) for every 4th mover, from a random phase. */
     for (s = rng_below(&c->rng, 4u); s < S3_MOVERS; s += 4u) {
+        uint64_t e = 0;
+        uint32_t ax;
+        if (su_host_entity_at(w, s, &e) != SU_OK) {
+            continue;
+        }
+        for (ax = 0; ax < 3u; ax++) {
+            b_put64(&c->batch, e, vx + 2u * ax, rng_q32(&c->rng, 80u, -40, 1u << 31));
+        }
+    }
+    b_push(&c->batch, w, tick);
+}
+
+/* ---- space3d_ops_v2 under load (issue 163) ----
+ * space3d.query2 with det.s3move before it. 2,800 movers start in a 1 m ball at the centre, so every pair of them
+ * overlaps: the sweep's pair count is over its limit, the grid's counts are over the 2^22 pair budget, and the
+ * first ticks cut the piled movers (flag 4). 400 more converge on four 6 m spheres. They spread, bounce on contacts
+ * and the arena wall and every 16th gets a kick every 30 ticks, so later ticks run the sweep. Scene values are
+ * integers (no floating point on the host side). The budget line sums, per tick, the operator's last-run counters
+ * (su_host_operator_counters): ticks with a cut, movers with flag 4 and grid entries skipped. */
+#define S3D_PILE 2800u
+#define S3D_SHELL 400u
+#define S3D_ROWS (S3D_PILE + S3D_SHELL + 4u)
+
+/* A random integer vector of length in [lo, hi] (thousandths). */
+static void s3d_dir(Rng *r, int64_t lo, int64_t hi, int64_t d[3]) {
+    for (;;) {
+        int64_t l2;
+        d[0] = (int64_t)rng_below(r, 2001u) - 1000;
+        d[1] = (int64_t)rng_below(r, 2001u) - 1000;
+        d[2] = (int64_t)rng_below(r, 2001u) - 1000;
+        l2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+        if (l2 >= lo * lo && l2 <= hi * hi) {
+            return;
+        }
+    }
+}
+
+static void s3d_spawn(SuHostWorld *w, uint32_t kind, const int64_t p[3], const int64_t vel[3], int64_t radius,
+                      uint32_t slot) {
+    static const char *const pn[3] = {"pos_x", "pos_y", "pos_z"}, *const qn[3] = {"prev_x", "prev_y", "prev_z"},
+                             *const vn[3] = {"vel_x", "vel_y", "vel_z"};
+    SuHostValue v[48];
+    uint32_t n = 0, a, st;
+    uint64_t ent = 0;
+    SuHostError e;
+    s3_put(w, v, &n, "kind", kind, 0);
+    for (a = 0; a < 3u; a++) {
+        s3_put(w, v, &n, pn[a], p[a], 1);
+        s3_put(w, v, &n, qn[a], p[a], 1);
+        s3_put(w, v, &n, vn[a], vel[a], 1);
+    }
+    s3_put(w, v, &n, "rot_w", ONE_RAW, 1);
+    s3_put(w, v, &n, "radius", radius, 1);
+    st = su_host_spawn(w, v, n, slot, &ent, &e);
+    if (st != SU_OK) {
+        fail("space3d spawn", st, &e);
+    }
+}
+
+static SuHostWorld *s3d_create(Ctx *c) {
+    static const int64_t ctr[4][3] = {{-9, 0, -9}, {9, 0, -9}, {-9, 0, 9}, {9, 0, 9}};
+    SuHostCapsule caps[2];
+    SuHostWorld *w;
+    uint32_t i, a, s = 0;
+    caps[0] = ir_capsule(&c->s3_move_cap, &c->s3_move_lir);
+    caps[1] = ir_capsule(&c->s3_rec[4], NULL);
+    w = create_world(caps, 2, NULL, S3D_ROWS, 60, 1, 4u * S3D_ROWS, 4096, 31u);
+    if (w == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < S3D_PILE; i++) { /* within 1 m of the centre, 6..15 m/s outward */
+        int64_t d[3], p[3], vel[3];
+        s3d_dir(&c->rng, 0, 1000, d);
+        for (a = 0; a < 3u; a++) {
+            p[a] = d[a] * (ONE_RAW / 1000);
+        }
+        s3d_dir(&c->rng, 400, 1000, d);
+        for (a = 0; a < 3u; a++) {
+            vel[a] = d[a] * (15 * ONE_RAW / 1000);
+        }
+        s3d_spawn(w, 1u, p, vel, ONE_RAW / 4, s++);
+    }
+    for (i = 0; i < S3D_SHELL; i++) { /* 6.3..8.5 m from a sphere's centre, 20 m/s at the centre */
+        int64_t d[3], p[3], vel[3];
+        const int64_t *k = ctr[i % 4u];
+        s3d_dir(&c->rng, 740, 1000, d);
+        for (a = 0; a < 3u; a++) {
+            p[a] = k[a] * ONE_RAW + d[a] * (17 * ONE_RAW / 2000);
+            vel[a] = -d[a] * (20 * ONE_RAW / 1000);
+        }
+        s3d_spawn(w, 1u, p, vel, ONE_RAW / 4, s++);
+    }
+    for (i = 0; i < 4u; i++) {
+        int64_t p[3], z[3] = {0, 0, 0};
+        for (a = 0; a < 3u; a++) {
+            p[a] = ctr[i][a] * ONE_RAW;
+        }
+        s3d_spawn(w, 2u, p, z, 6 * ONE_RAW, s++);
+    }
+    return w;
+}
+
+static void s3d_stats(Ctx *c, const SuHostWorld *w) {
+    SuHostOperatorCounters k;
+    s3_stats(c, w);
+    memset(&k, 0, sizeof k);
+    k.struct_size = sizeof k;
+    if (su_host_operator_counters(w, 1, &k) != SU_OK) {
+        g_failed = 1;
+        return;
+    }
+    c->s3_cut_ticks += k.budget_hit;
+    c->s3_flag4 += k.rows_budget;
+    c->s3_skipped += k.pairs_skipped;
+}
+
+static void s3d_inputs(Ctx *c, SuHostWorld *w, uint64_t tick) {
+    uint32_t vx = field(w, "vel_x"), s;
+    if (tick % 30u != 15u) {
+        return;
+    }
+    for (s = rng_below(&c->rng, 16u); s < S3D_PILE + S3D_SHELL; s += 16u) {
         uint64_t e = 0;
         uint32_t ax;
         if (su_host_entity_at(w, s, &e) != SU_OK) {
@@ -1401,6 +1525,7 @@ static void run_workload(const Workload *wl, Ctx *c, const Opts *o, Manifest *m,
     c->batch.dropped = 0;
     c->arg = wl->arg;
     c->s3_contacts = c->s3_two = c->s3_gates = c->s3_prox = c->s3_sub = c->s3_trunc = 0;
+    c->s3_cut_ticks = c->s3_flag4 = c->s3_skipped = 0;
     w = wl->create(c);
     if (w == NULL) {
         g_failed = 1;
@@ -1484,6 +1609,12 @@ static void run_workload(const Workload *wl, Ctx *c, const Opts *o, Manifest *m,
                      (unsigned long long)c->s3_gates, (unsigned long long)c->s3_prox,
                      (unsigned long long)c->s3_sub, (unsigned long long)c->s3_trunc);
             mf_add(m, "%s activity %llu %s", wl->name, su_host_tick(w), act);
+            if (wl->stats == s3d_stats) {
+                snprintf(act, sizeof act, "cut_ticks=%llu,flag4=%llu,skipped=%llu",
+                         (unsigned long long)c->s3_cut_ticks, (unsigned long long)c->s3_flag4,
+                         (unsigned long long)c->s3_skipped);
+                mf_add(m, "%s budget %llu %s", wl->name, su_host_tick(w), act);
+            }
         }
     }
     if (rw != NULL) {
@@ -1740,6 +1871,7 @@ int main(int argc, char **argv) {
         {"s3_compound", 600, 60, 1, s3_stats, s3_create, s3_inputs, NULL, 3},
         {"probe04", 600, 60, 1, NULL, probe_create, probe_inputs, NULL, 0},
         {"handles04", 600, 60, 0, NULL, handle_create, handle_inputs, handle_between, 0},
+        {"s3_dense", 300, 60, 1, s3d_stats, s3d_create, s3d_inputs, NULL, 4},
     };
     const uint32_t nwl = (uint32_t)(sizeof wls / sizeof wls[0]);
 
@@ -1813,7 +1945,7 @@ int main(int argc, char **argv) {
     {
         const char *path = "tests/determinism/fixtures/racer16.json";
         uint32_t v;
-        for (v = 0; v < 4u; v++) {
+        for (v = 0; v < 5u; v++) {
             if (!slurp(k_s3_rec[v], &c.s3_rec[v])) {
                 return 2;
             }

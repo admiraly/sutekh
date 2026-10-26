@@ -87,12 +87,16 @@ static const SuHostField k_fields[] = {
 #define S3_NFIELDS (S3_NFIELDS_PROX - 6u)
 
 static Space3dScratch g_scratch;
-static Space3dCtx g_ctx = {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, &g_scratch, NULL};
+static Space3dCtx g_ctx = {{0}, {0}, 0, &g_scratch, NULL};
 
 static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 static uint32_t query_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 static uint32_t query_run_shape(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 static uint32_t query_run_compound(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
+static uint32_t query2_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
+static uint32_t query2_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
+static uint32_t query2_run_shape(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
+static uint32_t query2_run_compound(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 
 /* Literal: SHA-256 of space3d_constants_text() (checked by test_space3d_ops). */
 const SuHostOpDesc g_space3d_query_desc = {
@@ -144,6 +148,56 @@ const SuHostOpDesc g_space3d_query_compound_desc = {
     (uint32_t)S3_NFIELDS_COMPOUND,
     k_fields,
     query_run_compound,
+    &g_ctx,
+};
+
+/* space3d_ops_v2 (issue 163). Literals: SHA-256 of space3d2_*constants_text() (checked by test_space3d_ops). They
+ * share the static context with the v1 descriptors. */
+const SuHostOpDesc g_space3d_query2_desc = {
+    "space3d.query2",
+    SPACE3D_SCHEMA_ID,
+    SPACE3D_OPS_VERSION2,
+    {0x31, 0xc9, 0xf9, 0x73, 0x2d, 0xa5, 0x2a, 0xad, 0x32, 0x8a, 0x33, 0xe5, 0x15, 0xe8, 0x5f, 0xf8,
+     0x29, 0x15, 0xb0, 0xfc, 0xca, 0x1f, 0x04, 0xae, 0x59, 0xc8, 0xee, 0xb9, 0x1d, 0x48, 0xc4, 0xbd},
+    (uint32_t)S3_NFIELDS,
+    k_fields,
+    query2_run,
+    &g_ctx,
+};
+
+const SuHostOpDesc g_space3d_query2_prox_desc = {
+    "space3d.query2_prox",
+    SPACE3D_SCHEMA_ID,
+    SPACE3D_OPS_VERSION2,
+    {0x00, 0xf4, 0xb2, 0x64, 0xca, 0xb4, 0x31, 0xd8, 0x7c, 0x97, 0x0c, 0x60, 0x9a, 0x27, 0x83, 0x1f,
+     0x56, 0x40, 0x16, 0xe3, 0xf2, 0x22, 0x05, 0x89, 0x3c, 0x1b, 0x50, 0xb6, 0xd7, 0x69, 0xae, 0xd8},
+    (uint32_t)S3_NFIELDS_PROX,
+    k_fields,
+    query2_run_prox,
+    &g_ctx,
+};
+
+const SuHostOpDesc g_space3d_query2_shape_desc = {
+    "space3d.query2_shape",
+    SPACE3D_SCHEMA_ID,
+    SPACE3D_OPS_VERSION2,
+    {0x1c, 0x42, 0x39, 0xb5, 0xbe, 0x9b, 0xaa, 0x39, 0x2a, 0x22, 0x5a, 0xaa, 0x2d, 0x69, 0x58, 0x52,
+     0x0d, 0xd6, 0x49, 0x4f, 0x3e, 0xd8, 0x1e, 0x0c, 0x94, 0x83, 0xa1, 0x42, 0xf7, 0x78, 0x62, 0x18},
+    (uint32_t)S3_NFIELDS_SHAPE,
+    k_fields,
+    query2_run_shape,
+    &g_ctx,
+};
+
+const SuHostOpDesc g_space3d_query2_compound_desc = {
+    "space3d.query2_compound",
+    SPACE3D_SCHEMA_ID,
+    SPACE3D_OPS_VERSION2,
+    {0xcb, 0x2d, 0x61, 0x63, 0xcb, 0x6b, 0xfd, 0x28, 0xc1, 0x94, 0xa1, 0xd7, 0x8d, 0xe3, 0x45, 0x60,
+     0xf3, 0xd6, 0x38, 0x48, 0xa9, 0x05, 0x99, 0xb1, 0x2b, 0xb0, 0xa2, 0x6b, 0xd5, 0x84, 0x38, 0xfc},
+    (uint32_t)S3_NFIELDS_COMPOUND,
+    k_fields,
+    query2_run_compound,
     &g_ctx,
 };
 
@@ -210,6 +264,78 @@ const char *space3d_compound_constants_text(void) {
            "none=4294967295\n";
 }
 
+/* v2 (issue 163): each variant's text is the full text of the variant below it plus its own lines, so a change in
+ * any layer changes the hash of every variant built on it. The proximity, capsule and compound lines are the v1
+ * variants' lines. */
+#define S3_V2_BASE \
+    "space3d_ops_v2\n" \
+    "numeric_profile=fixed_q32_v1\n" \
+    "max_rows=65536\n" \
+    "cand_max=32\n" \
+    "contacts=2\n" \
+    "bounds_slack_raw=4096\n" \
+    "bounds_empty=lo_gt_hi_on_any_axis,not_collidable\n" \
+    "broadphase=sweep_then_hierarchical_grid\n" \
+    "sweep=axis_largest_centre_spread_ties_x_y_z,order_lo_slot,when_interval_pairs_le_512_per_entry\n" \
+    "grid_level=smallest_l_with_max_extent_le_2^l_raw,max_63\n" \
+    "grid_cell=(raw_xor_2^63)_shr_l,entry_at_cell_of_lo_corner\n" \
+    "grid_key=splitmix64_finalizer_of_weighted_sum_level_x_y_z,sorted_key_slot,exact_cell_check\n" \
+    "grid_query=cells_of_lo_minus_level_axis_max_extent_to_hi,movers_own_and_coarser_levels,statics_coarser_mover_levels\n" \
+    "grid_pair=overlap_on_3_axes,at_least_one_mover,coarser_found_both_sides\n" \
+    "pair_budget=grid_entries_visited,max_4194304_1024_per_row,only_after_sweep_limit\n" \
+    "budget_cut=max_t_sum_min_count_t_le_budget,centre_cell_first_then_z_y_x,slot_order,flag_4\n" \
+    "cand_keep=min_rank_then_slot,rank_(63_minus_level)_shl_58_or_min(l1_bounds_centre_to_bounds,2^58-1),flag_1\n" \
+    "contact_order=toi,slot\n" \
+    "gate_lookup=gate_index_equals_next_gate,lowest_slot\n" \
+    "gate_side=front_ge_0\n" \
+    "gate_shapes=rect,disc,ellipse_q32_div\n" \
+    "none=4294967295\n"
+#define S3_V2_PROX \
+    "variant=space3d.query2_prox\n" \
+    "prox_margin=per_mover_q32_lane,le_0_off\n" \
+    "prox_bounds=mover_bounds_widened_by_margin\n" \
+    "prox_set=kept_candidates,other_than_self\n" \
+    "prox_distance=end_positions,centre_to_shape_minus_radii,clamp_ge_0\n" \
+    "prox_keep=distance_le_margin,min_distance,ties_lowest_slot\n"
+#define S3_V2_SHAPE \
+    "variant=space3d.query2_shape\n" \
+    "mover_shape=capsule_segment_local_z_z0_z1,rot_lanes,radius\n" \
+    "mover_shape_off=z0_eq_0_and_z1_eq_0,sphere_path_bit_exact\n" \
+    "rotation=end_of_tick_orientation,held_constant,translation_only_sweep\n" \
+    "capsule_sweep=rounded_parallelogram,face_then_edges,min_s_earlier_feature\n" \
+    "capsule_box=end_spheres_then_12_edges,start_crossing_toi_0_chord_mid_normal\n" \
+    "capsule_bounds=union_end_spheres_at_prev_and_pos\n" \
+    "gate=reference_point_segment\n"
+#define S3_V2_COMPOUND \
+    "variant=space3d.query2_compound\n" \
+    "compound=u32_lane_index_into_s3mesh02_compounds,none_4294967295\n" \
+    "compound_subshapes=1_to_8_capsules_local_frame,rot_lanes,radius_z0_z1_unused\n" \
+    "compound_contact=min_toi_then_mover_sub_then_other_sub\n" \
+    "contact_sub=low16_mover_sub,high16_other_mover_sub,none_65535,no_contact_4294967295\n" \
+    "turn=rot0_lanes_start_orientation,all_zero_off\n" \
+    "turn_pad=2_reach_sin_half_angle,sin_plus_2^-20,mul_plus_1_raw,sweep_and_bounds_only\n" \
+    "compound_bounds=union_subshape_end_spheres_at_prev_and_pos\n" \
+    "compound_prox=radius_z0_z1_shape_as_query_shape,compound_not_used\n" \
+    "compound_bounds_prox=plus_radius_z0_z1_shape_at_prev_and_pos\n" \
+    "compound_off=compound_none_and_rot0_zero,query_shape_bit_exact\n" \
+    "gate=reference_point_segment\n"
+
+const char *space3d2_constants_text(void) {
+    return S3_V2_BASE;
+}
+
+const char *space3d2_prox_constants_text(void) {
+    return S3_V2_BASE S3_V2_PROX;
+}
+
+const char *space3d2_shape_constants_text(void) {
+    return S3_V2_BASE S3_V2_PROX S3_V2_SHAPE;
+}
+
+const char *space3d2_compound_constants_text(void) {
+    return S3_V2_BASE S3_V2_PROX S3_V2_SHAPE S3_V2_COMPOUND;
+}
+
 /* ---------- scratch (no allocation in the tick) ----------
  * The static context's scratch lives in these arrays (wired up on first use); an instance allocates the same
  * arrays for its own row capacity at creation. */
@@ -228,6 +354,17 @@ static uint32_t g_gate_slot[SPACE3D_MAX_ROWS];
  * from the previous call. When the next call has the same set and axis, its sort starts from that order. */
 static uint32_t g_prev_coll[SPACE3D_MAX_ROWS];
 static uint32_t g_prev_order[SPACE3D_MAX_ROWS];
+/* v2 grid (issue 163). */
+static uint64_t g_gkey[SPACE3D_MAX_ROWS];
+static uint64_t g_gctr[3][SPACE3D_MAX_ROWS];
+static uint64_t g_gworst[SPACE3D_MAX_ROWS];
+static uint32_t g_gcount[SPACE3D_MAX_ROWS];
+static uint8_t g_glevel[SPACE3D_MAX_ROWS];
+static Space3dSlot g_htab[2u * SPACE3D_MAX_ROWS];
+static uint8_t g_hcut[2u * SPACE3D_MAX_ROWS];
+static uint64_t g_ebox[6u * SPACE3D_MAX_ROWS];
+static uint32_t g_eidx[SPACE3D_MAX_ROWS];
+static uint8_t g_eflag[SPACE3D_MAX_ROWS];
 
 static Space3dScratch *static_scratch(void) {
     Space3dScratch *s = &g_scratch;
@@ -250,13 +387,25 @@ static Space3dScratch *static_scratch(void) {
         s->prev_order = g_prev_order;
         s->prev_n = 0u;
         s->prev_axis = 3u;
+        s->gkey = g_gkey;
+        for (a = 0; a < 3u; a++) {
+            s->gctr[a] = g_gctr[a];
+        }
+        s->gworst = g_gworst;
+        s->gcount = g_gcount;
+        s->glevel = g_glevel;
+        s->htab = g_htab;
+        s->hcut = g_hcut;
+        s->ebox = g_ebox;
+        s->eidx = g_eidx;
+        s->eflag = g_eflag;
     }
     return s;
 }
 
 /* One allocation per instance: the context, its scratch header and every array, each array 8-byte aligned. */
 uint32_t space3d_query_instance_create(uint32_t max_rows, Space3dCtx **out) {
-    size_t n, off, total;
+    size_t n, off, total, hn;
     uint8_t *base;
     Space3dCtx *ctx;
     Space3dScratch *s;
@@ -271,7 +420,17 @@ uint32_t space3d_query_instance_create(uint32_t max_rows, Space3dCtx **out) {
     n = max_rows;
 #define S3_ALIGN8(x) (((x) + 7u) & ~(size_t)7u)
     off = S3_ALIGN8(sizeof(Space3dCtx)) + S3_ALIGN8(sizeof(Space3dScratch));
-    total = off + S3_ALIGN8(n)                     /* alive */
+    hn = 8u;
+    while (hn < 2u * n) {
+        hn *= 2u;
+    }
+    total = off + 11u * n * 8u                     /* gkey, gctr, gworst, elo, ehi (v2) */
+            + hn * sizeof(Space3dSlot) + hn        /* htab, hcut (v2; hn a power of two >= 8) */
+            + S3_ALIGN8(n)                         /* eflag (v2) */
+            + S3_ALIGN8(n * 4u)                    /* eidx (v2) */
+            + S3_ALIGN8(n * 4u)                    /* gcount (v2) */
+            + S3_ALIGN8(n)                         /* glevel (v2) */
+            + S3_ALIGN8(n)                         /* alive */
             + S3_ALIGN8(n * 4u)                    /* gen */
             + 6u * n * 8u                          /* lo, hi */
             + 2u * S3_ALIGN8(n * 4u)               /* coll, tmp */
@@ -287,6 +446,28 @@ uint32_t space3d_query_instance_create(uint32_t max_rows, Space3dCtx **out) {
     ctx->scratch = s;
     s->max_rows = max_rows;
     s->prev_axis = 3u;
+    s->gkey = (uint64_t *)(void *)(base + off);
+    off += n * 8u;
+    for (a = 0; a < 3u; a++) {
+        s->gctr[a] = (uint64_t *)(void *)(base + off);
+        off += n * 8u;
+    }
+    s->gworst = (uint64_t *)(void *)(base + off);
+    off += n * 8u;
+    s->htab = (Space3dSlot *)(void *)(base + off);
+    off += hn * sizeof(Space3dSlot);
+    s->hcut = base + off;
+    off += hn;
+    s->ebox = (uint64_t *)(void *)(base + off);
+    off += 6u * n * 8u;
+    s->eflag = base + off;
+    off += S3_ALIGN8(n);
+    s->eidx = (uint32_t *)(void *)(base + off);
+    off += S3_ALIGN8(n * 4u);
+    s->gcount = (uint32_t *)(void *)(base + off);
+    off += S3_ALIGN8(n * 4u);
+    s->glevel = base + off;
+    off += S3_ALIGN8(n);
     s->alive = base + off;
     off += S3_ALIGN8(n);
     s->gen = (uint32_t *)(void *)(base + off);
@@ -853,6 +1034,525 @@ static void add_cand(Space3dScratch *s, uint32_t m, uint32_t o) {
     }
 }
 
+/* ---------- v2 broadphase: sweep or hierarchical grid, with a local pair budget (issue 163) ----------
+ * Result: every mover keeps the SPACE3D_CAND_MAX best of the collidables whose bounds overlap its own on all three
+ * axes, by (rank, slot) (s3_rank_b: coarser grid levels, that is larger bodies, first, then nearest), whatever
+ * method found them. Two methods, chosen by a deterministic count:
+ *   - sort and sweep (s3_sweep) when its interval-overlap pairs are at most SPACE3D_SWEEP_TRY_PER_ROW per entry
+ *     (counted before sweeping): cheap where bounds are sparse; it finds every overlapping pair;
+ *   - otherwise the grid below, which finds every overlapping pair unless its budget cuts.
+ *
+ * Grid. Coordinates are mapped to unsigned by flipping the sign bit (raw ^ 2^63: monotone, defined for every
+ * value), so cells are plain unsigned shifts. A row of level l (the smallest l with every bounds extent <= 2^l raw)
+ * has one entry, at the cell of its lower corner; an entry of level l overlapping a query box lies in cells
+ * [cell(lo - ext_l), cell(hi)] on every axis, ext_l the largest extent of level l on that axis (<= 2^l), so at most
+ * 3 cells per axis for a query box of level l or finer.
+ * Entries are sorted by (cell hash, slot) with a copy of their bounds in that order; a cell's run is found through
+ * an open-addressing table and every entry's exact cell is re-checked, so hash collisions cost time only.
+ *
+ * Queries: a mover visits its own level and every coarser level that holds entries; a static row visits only the
+ * coarser levels that hold movers. A pair of one level is found by each of its movers' own queries; a pair across
+ * levels only by the finer row's query, which gives it to both sides. Order of one query: levels from coarsest to
+ * own, in each the cell of the row's bounds centre first, then the others by (z, y, x), entries in slot order.
+ *
+ * Budget: every row's query visits at most `cut` entries, the largest value with sum(min(count, cut)) <= budget over
+ * all rows (no cut when the counts fit), so only the most crowded rows are cut. A cut mover gets flag 4. Cells of
+ * coarser levels that a cut query did not finish are marked, and every mover with an entry in a marked cell gets
+ * flag 4 too (it may have lost a pair that only the cut query would have given it). */
+
+#define S3_SIGN UINT64_C(0x8000000000000000)
+#define S3_GRID_NONE 0xFFu /* glevel of a row without an entry */
+
+static uint64_t s3_u(int64_t v) {
+    return (uint64_t)v ^ S3_SIGN;
+}
+
+static uint64_t s3_cell(int64_t v, uint32_t l) {
+    return s3_u(v) >> l;
+}
+
+static uint64_t s3_mix(uint64_t z) {
+    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
+    return z ^ (z >> 31);
+}
+
+static uint64_t g_hash_mask = UINT64_MAX; /* test seam (space3d_test_hash_mask): forces key collisions */
+
+void space3d_test_hash_mask(uint64_t mask) {
+    g_hash_mask = mask;
+}
+
+static uint64_t s3_cell_hash(uint32_t l, uint64_t x, uint64_t y, uint64_t z) {
+    return s3_mix((uint64_t)l * UINT64_C(0x9E3779B97F4A7C15) + x * UINT64_C(0xC2B2AE3D27D4EB4F) +
+                  y * UINT64_C(0x165667B19E3779F9) + z * UINT64_C(0xD6E8FEB86659FD93)) &
+           g_hash_mask;
+}
+
+/* A run whose entries all share one cell (not mixed) belongs to the queried cell (l, cell) only when its first entry
+ * does: a queried cell whose key collides with another cell's run is empty (neither counted nor visited). A mixed
+ * run is counted and visited, each entry checked (s3_visit). */
+static int s3_run_is(const Space3dScratch *s, uint32_t h, uint32_t l, const uint64_t cell[3]) {
+    uint32_t b = s->htab[h].beg;
+    const uint64_t *ob = s->ebox + 6u * (size_t)b;
+    return (s->hcut[h] & 2u) != 0u || ((s->eflag[b] & 0x3Fu) == l && (ob[0] >> l) == cell[0] &&
+                                       (ob[1] >> l) == cell[1] && (ob[2] >> l) == cell[2]);
+}
+
+/* Level of row r, or S3_GRID_NONE when its bounds are empty on some axis (lo > hi: such a row has no entry). */
+static uint32_t s3_level(const Space3dScratch *s, uint32_t r) {
+    uint64_t ext = 0;
+    uint32_t a, l = 0;
+    for (a = 0; a < 3u; a++) {
+        uint64_t lo = s3_u(s->lo[a][r]), hi = s3_u(s->hi[a][r]);
+        if (lo > hi) {
+            return S3_GRID_NONE;
+        }
+        ext = hi - lo > ext ? hi - lo : ext;
+    }
+    if (ext <= 1u) {
+        return 0u;
+    }
+    for (ext -= 1u; ext != 0u; ext >>= 1) {
+        l++;
+    }
+    return l > 63u ? 63u : l;
+}
+
+/* Stable bottom-up merge sort of idx[0..n) by (key[slot], slot). */
+static void sort_by_key64(Space3dScratch *s, uint32_t *idx, uint32_t n, const uint64_t *key) {
+    uint32_t width, i;
+    uint32_t *src = idx, *dst = s->tmp;
+    for (width = 1; width < n; width *= 2u) {
+        for (i = 0; i < n; i += 2u * width) {
+            uint32_t lo = i, mid = i + width < n ? i + width : n, hi = i + 2u * width < n ? i + 2u * width : n;
+            uint32_t a = lo, b = mid, k = lo;
+            while (a < mid && b < hi) {
+                uint64_t ka = key[src[a]], kb = key[src[b]];
+                if (ka < kb || (ka == kb && src[a] < src[b])) {
+                    dst[k++] = src[a++];
+                } else {
+                    dst[k++] = src[b++];
+                }
+            }
+            while (a < mid) {
+                dst[k++] = src[a++];
+            }
+            while (b < hi) {
+                dst[k++] = src[b++];
+            }
+        }
+        {
+            uint32_t *t = src;
+            src = dst;
+            dst = t;
+        }
+    }
+    if (src != idx) {
+        memcpy(idx, src, (size_t)n * sizeof *idx);
+    }
+}
+
+/* Bucket table: open addressing (linear probing) over hmask + 1 slots, a power of two >= 2 entries; a slot holds a
+ * key, its run [beg, end) of the sorted entries (end == 0: empty, as every run is nonempty) and its cut mark.
+ * Only lookups use the layout, so it never affects results. */
+static void s3_table_build(Space3dScratch *s, uint32_t n) {
+    uint32_t size = 2u, i = 0;
+    while (size < 2u * n) {
+        size *= 2u;
+    }
+    s->hmask = size - 1u;
+    memset(s->htab, 0, (size_t)size * sizeof *s->htab);
+    memset(s->hcut, 0, (size_t)size);
+    while (i < n) {
+        uint64_t k = s->gkey[s->coll[i]];
+        uint32_t j = i + 1u, h = (uint32_t)k & s->hmask;
+        uint8_t mixed = 0;
+        while (j < n && s->gkey[s->coll[j]] == k) {
+            uint32_t a, l = s->eflag[j] & 0x3Fu;
+            mixed |= (uint8_t)(l != (s->eflag[i] & 0x3Fu));
+            for (a = 0; a < 3u; a++) {
+                mixed |= (uint8_t)((s->ebox[6u * (size_t)j + a] >> l) != (s->ebox[6u * (size_t)i + a] >> l));
+            }
+            j++;
+        }
+        while (s->htab[h].end != 0u) {
+            h = (h + 1u) & s->hmask;
+        }
+        s->htab[h].key = k;
+        s->htab[h].beg = i;
+        s->htab[h].end = j;
+        s->hcut[h] = (uint8_t)(mixed ? 2u : 0u);
+        i = j;
+    }
+}
+
+/* Table slot of key k, or UINT32_MAX when no entry has it. */
+static uint32_t s3_bucket(const Space3dScratch *s, uint64_t k) {
+    uint32_t h = (uint32_t)k & s->hmask;
+    while (s->htab[h].end != 0u) {
+        if (s->htab[h].key == k) {
+            return h;
+        }
+        h = (h + 1u) & s->hmask;
+    }
+    return UINT32_MAX;
+}
+
+#define S3_RANK_DIST_MAX ((UINT64_C(1) << 58) - 1u)
+
+/* Candidate rank of the entry with bounds box (lo xyz, hi xyz; unsigned) and level l for mover m: coarser levels
+ * (larger bodies) first, (63 - l) in the top 6 bits; then the L1 distance from the centre of m's bounds
+ * (lo + (hi - lo) / 2) to the box, saturated at 2^58 - 1. */
+static uint64_t s3_rank_b(const Space3dScratch *s, uint32_t m, const uint64_t *box, uint32_t l) {
+    uint64_t d = 0;
+    uint32_t a;
+    for (a = 0; a < 3u; a++) {
+        uint64_t c = s->gctr[a][m], lo = box[a], hi = box[3 + a];
+        uint64_t x = (c < lo ? lo - c : 0u) | (c > hi ? c - hi : 0u); /* at most one is nonzero (lo <= hi) */
+        d += x > S3_RANK_DIST_MAX ? S3_RANK_DIST_MAX : x;
+    }
+    d = d > S3_RANK_DIST_MAX ? S3_RANK_DIST_MAX : d;
+    return ((uint64_t)(63u - l) << 58) | d;
+}
+
+static uint64_t s3_rank(const Space3dScratch *s, uint32_t m, uint32_t o) {
+    uint64_t box[6];
+    uint32_t a;
+    for (a = 0; a < 3u; a++) {
+        box[a] = s3_u(s->lo[a][o]);
+        box[3u + a] = s3_u(s->hi[a][o]);
+    }
+    return s3_rank_b(s, m, box, s->glevel[o]);
+}
+
+/* Offers candidate o (rank d for m) to mover m: m keeps the SPACE3D_CAND_MAX smallest (rank, slot), whatever the
+ * order of offers; flag 1 when one is dropped. */
+static void s3_offer(Space3dScratch *s, uint32_t m, uint32_t o, uint64_t d) {
+    uint32_t n = s->ncand[m], j;
+    if (n == SPACE3D_CAND_MAX) {
+        uint32_t w = s->cand[m][n - 1u];
+        s->flags[m] |= SPACE3D_FLAG_CAND_TRUNCATED;
+        if (d > s->gworst[m] || (d == s->gworst[m] && o > w)) {
+            return;
+        }
+        n--;
+    } else {
+        s->ncand[m]++;
+    }
+    {
+        /* binary search for the first kept candidate after (d, o), then shift the tail */
+        uint32_t lo = 0, hi = n;
+        while (lo < hi) {
+            uint32_t mid = lo + (hi - lo) / 2u, p = s->cand[m][mid];
+            uint64_t dp = s3_rank(s, m, p);
+            if (dp < d || (dp == d && p < o)) {
+                lo = mid + 1u;
+            } else {
+                hi = mid;
+            }
+        }
+        for (j = n; j > lo; j--) {
+            s->cand[m][j] = s->cand[m][j - 1u];
+        }
+        s->cand[m][j] = o;
+    }
+    if (s->ncand[m] == SPACE3D_CAND_MAX) {
+        s->gworst[m] = j == SPACE3D_CAND_MAX - 1u ? d : s3_rank(s, m, s->cand[m][SPACE3D_CAND_MAX - 1u]);
+    }
+}
+
+typedef struct S3Grid {
+    Space3dScratch *s;
+    const Cols *c;
+    uint64_t all, movers; /* level masks: levels holding entries, levels holding movers */
+    uint64_t ext[64][3];  /* per level and axis: the largest bounds extent of its entries (<= 2^level) */
+    uint64_t visited;     /* entries visited */
+    uint64_t cross;       /* of which at coarser levels */
+} S3Grid;
+
+/* Visits the run of table slot h (cell (l, x, y, z)) for row q; with left != NULL, at most *left entries (counted
+ * down). Returns 0 when the allowance ran out before the run's end. */
+static int s3_visit(S3Grid *g, uint32_t q, uint32_t h, uint32_t l, const uint64_t cell[3], int own, uint32_t *left) {
+    Space3dScratch *s = g->s;
+    uint32_t i, b = s->htab[h].beg, e = s->htab[h].end, qi = s->eidx[q], ql = s->eflag[qi] & 0x3Fu;
+    int qm = g->c->kind[q] == SPACE3D_KIND_MOVER, done = 1, mixed = (s->hcut[h] & 2u) != 0u;
+    const uint64_t *qb = s->ebox + 6u * (size_t)qi;
+    if (e - b > *left) {
+        e = b + *left;
+        done = 0;
+    }
+    *left -= e - b;
+    g->visited += e - b;
+    g->cross += own ? 0u : e - b;
+    for (i = b; i < e; i++) {
+        uint32_t o = s->coll[i];
+        const uint64_t *ob = s->ebox + 6u * (size_t)i;
+        int om;
+        /* overlap on three axes, evaluated without early exits (the outcome is hard to predict) */
+        if (((ob[0] <= qb[3]) & (qb[0] <= ob[3]) & (ob[1] <= qb[4]) & (qb[1] <= ob[4]) & (ob[2] <= qb[5]) &
+             (qb[2] <= ob[5]) & (o != q)) == 0) {
+            continue;
+        }
+        if (mixed && ((s->eflag[i] & 0x3Fu) != l || (ob[0] >> l) != cell[0] || (ob[1] >> l) != cell[1] ||
+                      (ob[2] >> l) != cell[2])) {
+            continue; /* another cell with the same hash (rare) */
+        }
+        om = (s->eflag[i] & 0x40u) != 0u;
+        if (qm) { /* (a static q visits coarser levels only: om is then what matters) */
+            s3_offer(s, q, o, s3_rank_b(s, q, ob, l));
+        }
+        if (om && !own) {
+            s3_offer(s, o, q, s3_rank_b(s, o, qb, ql)); /* o is coarser: it never visits q's level */
+        }
+    }
+    return done;
+}
+
+/* One query of row q in canonical order (see above). count != NULL: only adds up the entries of every visited run.
+ * Otherwise visits them, at most `cut` in all, and marks the coarser-level cells it did not finish. */
+static void s3_query(S3Grid *g, uint32_t q, uint32_t *count, uint32_t cut) {
+    Space3dScratch *s = g->s;
+    uint32_t own = s->glevel[q], l, a, left = cut, cutting = 0;
+    int qm = g->c->kind[q] == SPACE3D_KIND_MOVER;
+    uint64_t mask = qm ? g->all : g->movers & ~((UINT64_C(2) << own) - 1u);
+    for (l = 63u; l + 1u > own; l--) {
+        uint64_t c0[3], n[3], cm[3], cell[3], k;
+        if (((mask >> l) & 1u) == 0u) {
+            continue;
+        }
+        for (a = 0; a < 3u; a++) {
+            /* an entry of level l overlapping q has lo >= lo(q) - ext[l][a] */
+            uint64_t lo = s3_u(s->lo[a][q]);
+            c0[a] = (lo > g->ext[l][a] ? lo - g->ext[l][a] : 0u) >> l;
+            n[a] = s3_cell(s->hi[a][q], l) - c0[a] + 1u; /* 1..3 */
+            cm[a] = s->gctr[a][q] >> l;
+        }
+        /* k = 0: the centre cell; k = 1..: the range by (z, y, x), skipping the centre. */
+        for (k = 0; k <= n[0] * n[1] * n[2]; k++) {
+            uint32_t h;
+            if (k == 0u) {
+                cell[0] = cm[0];
+                cell[1] = cm[1];
+                cell[2] = cm[2];
+            } else {
+                uint64_t m = k - 1u;
+                cell[0] = c0[0] + m % n[0];
+                cell[1] = c0[1] + m / n[0] % n[1];
+                cell[2] = c0[2] + m / n[0] / n[1];
+                if (cell[0] == cm[0] && cell[1] == cm[1] && cell[2] == cm[2]) {
+                    continue;
+                }
+            }
+            h = s3_bucket(s, s3_cell_hash(l, cell[0], cell[1], cell[2]));
+            if (h == UINT32_MAX || !s3_run_is(s, h, l, cell)) {
+                continue;
+            }
+            if (count != NULL) {
+                *count += s->htab[h].end - s->htab[h].beg;
+            } else if (cutting) {
+                s->hcut[h] |= (uint8_t)(l != own);
+            } else if (!s3_visit(g, q, h, l, cell, l == own, &left)) {
+                cutting = 1;
+                s->hcut[h] |= (uint8_t)(l != own);
+            }
+        }
+        if (l == 0u) {
+            break;
+        }
+    }
+}
+
+static int g_force_grid; /* test seam (space3d_test_force_grid) */
+
+void space3d_test_force_grid(int on) {
+    g_force_grid = on;
+}
+
+/* Sort and sweep over the entries coll[0..n) on the axis of largest centre spread (ties x, y, z), order (lo on that
+ * axis, slot), every pair with overlapping intervals on the sweep axis examined; it gives every overlapping pair
+ * with a mover to its movers. The number of such pairs is counted first (a binary search per entry): when it
+ * exceeds `limit`, nothing is offered and 0 is returned (the grid runs instead). */
+static int s3_sweep(Space3dScratch *s, const Cols *c, uint32_t n, uint64_t limit, Space3dStats *st) {
+    uint32_t *ord = s->eidx; /* free until the grid is built */
+    uint32_t i, a, axis = 0;
+    uint64_t pairs = 0;
+    int64_t best = -1;
+    for (a = 0; a < 3u; a++) {
+        int64_t mn = INT64_MAX, mx = INT64_MIN, spread;
+        for (i = 0; i < n; i++) {
+            int64_t cen = su_q32_addf(s->lo[a][s->coll[i]], s->hi[a][s->coll[i]]);
+            mn = cen < mn ? cen : mn;
+            mx = cen > mx ? cen : mx;
+        }
+        spread = su_q32_subf(mx, mn);
+        if (spread > best) {
+            best = spread;
+            axis = a;
+        }
+    }
+    memcpy(ord, s->coll, (size_t)n * sizeof *ord);
+    sort_by_min(s, ord, n, axis);
+    st->sweep_axis = axis;
+    {
+        int64_t *key = (int64_t *)(void *)s->gworst; /* free until the first offer */
+        for (i = 0; i < n; i++) {
+            key[i] = s->lo[axis][ord[i]];
+        }
+        for (i = 0; i < n && pairs <= limit; i++) {
+            uint32_t lo = i + 1u, hi = n;
+            int64_t h = s->hi[axis][ord[i]];
+            while (lo < hi) {
+                uint32_t mid = lo + (hi - lo) / 2u;
+                if (key[mid] <= h) {
+                    lo = mid + 1u;
+                } else {
+                    hi = mid;
+                }
+            }
+            pairs += lo - i - 1u;
+        }
+        if (pairs > limit) {
+            st->sweep_pairs = pairs; /* at least */
+            return 0;
+        }
+        pairs = 0;
+    }
+    for (i = 0; i < n; i++) {
+        uint32_t p = ord[i], j, a1 = (axis + 1u) % 3u, a2 = (axis + 2u) % 3u;
+        int pm = c->kind[p] == SPACE3D_KIND_MOVER;
+        for (j = i + 1u; j < n; j++) {
+            uint32_t q = ord[j];
+            int qm;
+            if (s->lo[axis][q] > s->hi[axis][p]) {
+                break;
+            }
+            pairs++;
+            qm = c->kind[q] == SPACE3D_KIND_MOVER;
+            if ((!pm && !qm) || s->lo[a1][p] > s->hi[a1][q] || s->lo[a1][q] > s->hi[a1][p] ||
+                s->lo[a2][p] > s->hi[a2][q] || s->lo[a2][q] > s->hi[a2][p]) {
+                continue;
+            }
+            if (pm) {
+                s3_offer(s, p, q, s3_rank(s, p, q));
+            }
+            if (qm) {
+                s3_offer(s, q, p, s3_rank(s, q, p));
+            }
+        }
+    }
+    st->sweep_pairs = pairs;
+    return 1;
+}
+
+/* The v2 broadphase over coll[0..ncoll) (ascending slot; reordered here). Fills cand/ncand/flags and the stats. */
+static void v2_broadphase(Space3dScratch *s, const Cols *c, uint32_t ncoll, uint64_t rows, Space3dStats *st) {
+    S3Grid g;
+    uint64_t total = 0, budget;
+    uint32_t i, a, n = 0, cut = UINT32_MAX, maxc = 0;
+    budget = (uint64_t)SPACE3D_PAIR_BUDGET_PER_ROW * rows;
+    budget = budget > SPACE3D_PAIR_BUDGET_MIN ? budget : SPACE3D_PAIR_BUDGET_MIN;
+    st->pair_budget = budget;
+    g.s = s;
+    g.c = c;
+    g.all = g.movers = 0;
+    g.visited = g.cross = 0;
+    memset(g.ext, 0, sizeof g.ext);
+    /* Entries: rows with nonempty bounds, keyed by the cell of their lower corner at their level. */
+    for (i = 0; i < ncoll; i++) {
+        uint32_t r = s->coll[i], l = s3_level(s, r);
+        s->glevel[r] = (uint8_t)l;
+        if (l == S3_GRID_NONE) {
+            continue;
+        }
+        s->gkey[r] = s3_cell_hash(l, s3_cell(s->lo[0][r], l), s3_cell(s->lo[1][r], l), s3_cell(s->lo[2][r], l));
+        for (a = 0; a < 3u; a++) {
+            uint64_t lo = s3_u(s->lo[a][r]);
+            s->gctr[a][r] = lo + (s3_u(s->hi[a][r]) - lo) / 2u;
+        }
+        g.all |= UINT64_C(1) << l;
+        for (a = 0; a < 3u; a++) {
+            uint64_t e = s3_u(s->hi[a][r]) - s3_u(s->lo[a][r]);
+            g.ext[l][a] = e > g.ext[l][a] ? e : g.ext[l][a];
+        }
+        if (c->kind[r] == SPACE3D_KIND_MOVER) {
+            g.movers |= UINT64_C(1) << l;
+        }
+        s->coll[n++] = r;
+    }
+    /* The sweep first: cheap where bounds are sparse. When it finishes within its limit, every overlapping pair
+     * was found and the result is final; else the grid (whose result is the same unless it cuts). */
+    if (!g_force_grid && s3_sweep(s, c, n, (uint64_t)SPACE3D_SWEEP_TRY_PER_ROW * n, st)) {
+        st->budget_cut = UINT32_MAX;
+        return;
+    }
+    st->grid = 1;
+    sort_by_key64(s, s->coll, n, s->gkey);
+    for (i = 0; i < n; i++) {
+        uint32_t r = s->coll[i];
+        for (a = 0; a < 3u; a++) {
+            s->ebox[6u * (size_t)i + a] = s3_u(s->lo[a][r]);
+            s->ebox[6u * (size_t)i + 3u + a] = s3_u(s->hi[a][r]);
+        }
+        s->eidx[r] = i;
+        s->eflag[i] = (uint8_t)(s->glevel[r] | (c->kind[r] == SPACE3D_KIND_MOVER ? 0x40u : 0u));
+    }
+    s3_table_build(s, n);
+    /* Budget: every row's entry count; when the sum exceeds the budget, the cut. */
+    for (i = 0; i < n; i++) {
+        uint32_t r = s->coll[i], k = 0;
+        s3_query(&g, r, &k, 0);
+        s->gcount[r] = k;
+        total += k;
+        maxc = k > maxc ? k : maxc;
+    }
+    if (total > budget) {
+        uint32_t lo = 0, hi = maxc;
+        while (lo < hi) {
+            uint32_t mid = lo + (hi - lo + 1u) / 2u;
+            uint64_t sum = 0;
+            for (i = 0; i < n && sum <= budget; i++) {
+                uint32_t k = s->gcount[s->coll[i]];
+                sum += k < mid ? k : mid;
+            }
+            if (sum <= budget) {
+                lo = mid;
+            } else {
+                hi = mid - 1u;
+            }
+        }
+        cut = lo;
+        st->budget_hit = 1;
+    }
+    st->budget_cut = cut;
+    for (i = 0; i < n; i++) {
+        uint32_t r = s->coll[i];
+        if (s->gcount[r] > cut) {
+            st->pairs_skipped += s->gcount[r] - cut;
+            if (c->kind[r] == SPACE3D_KIND_MOVER) {
+                s->flags[r] |= SPACE3D_FLAG_SWEEP_BUDGET;
+            }
+        }
+        s3_query(&g, r, NULL, cut);
+    }
+    /* Movers in cells a cut query left unfinished. */
+    if (st->budget_hit) {
+        for (i = 0; i <= s->hmask; i++) {
+            uint32_t j;
+            if ((s->hcut[i] & 1u) == 0u) {
+                continue;
+            }
+            for (j = s->htab[i].beg; j < s->htab[i].end; j++) {
+                if (s->eflag[j] & 0x40u) {
+                    s->flags[s->coll[j]] |= SPACE3D_FLAG_SWEEP_BUDGET;
+                }
+            }
+        }
+    }
+    st->sweep_pairs = g.visited;
+    st->cross_entries = g.cross;
+}
+
 typedef struct Contact {
     uint32_t slot;
     int64_t toi;
@@ -1021,7 +1721,7 @@ static void sort_gates(uint32_t *gate_slot, const Cols *c, uint32_t ng) {
 }
 
 static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx, int prox,
-                           int shape, int compound) {
+                           int shape, int compound, int v2) {
     Space3dCtx *ctx = host_ctx != NULL ? (Space3dCtx *)host_ctx : &g_ctx;
     Space3dScratch *s = ctx->scratch == &g_scratch ? static_scratch() : ctx->scratch;
     Cols c;
@@ -1029,6 +1729,7 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
     uint32_t rows, r, ncoll = 0, ngate = 0, axis = 0, i;
     uint64_t pairs = 0;
     int budget_hit = 0;
+    uint32_t any_trunc = 0;
     Space3dStats st;
     S3MeshStats mst;
 
@@ -1087,6 +1788,8 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
     if (ctx != NULL && ctx->brute_force) {
         /* Test seam: no broadphase; the narrow phase below takes every other collidable (s->coll stays in
          * ascending slot order) with no candidate cap and no budget. */
+    } else if (v2) {
+        v2_broadphase(s, &c, ncoll, rows64, &st);
     } else if (ncoll > 1u) {
         /* Sweep axis: largest spread of bound centres (lo + hi, saturating), ties to the lower axis. */
         int64_t best = -1;
@@ -1139,8 +1842,12 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
             pairs = SPACE3D_SWEEP_BUDGET;
         }
     }
-    st.sweep_axis = axis;
-    st.sweep_pairs = pairs;
+    if (!v2) {
+        st.sweep_axis = axis;
+        st.sweep_pairs = pairs;
+        st.pair_budget = SPACE3D_SWEEP_BUDGET;
+        st.budget_hit = (uint32_t)budget_hit;
+    }
 
     /* Per row: narrow phase for movers, zeros for every other row. */
     for (r = 0; r < rows; r++) {
@@ -1251,6 +1958,12 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
         }
         c.hit_count[r] = nbest;
         c.hit_flags[r] = mover ? flags : 0u;
+        if (mover) {
+            st.rows_cand_truncated += (flags & SPACE3D_FLAG_CAND_TRUNCATED) != 0u;
+            st.rows_contact_truncated += (flags & SPACE3D_FLAG_CONTACT_TRUNCATED) != 0u;
+            st.rows_budget += (flags & SPACE3D_FLAG_SWEEP_BUDGET) != 0u;
+            any_trunc += flags != 0u;
+        }
         for (k = 0; k < SPACE3D_CONTACTS; k++) {
             int have = k < nbest;
             c.c_slot[k][r] = have ? best[k].slot : S3_NONE;
@@ -1274,24 +1987,47 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
     }
     st.mesh_nodes = mst.nodes;
     st.mesh_tri_tests = mst.tri_tests;
+    st.rows_truncated = any_trunc;
     if (ctx != NULL) {
         ctx->last = st;
+        ctx->total.runs++;
+        ctx->total.runs_truncated += any_trunc != 0u;
+        ctx->total.runs_budget += st.budget_hit != 0u;
+        ctx->total.rows_truncated += any_trunc;
+        ctx->total.rows_budget += st.rows_budget;
+        ctx->total.pairs_skipped += st.pairs_skipped;
     }
     return SU_OK;
 }
 
 static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 0, 0, 0);
+    return query_core(w, in, out, host_ctx, 0, 0, 0, 0);
 }
 
 static uint32_t query_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 1, 0, 0);
+    return query_core(w, in, out, host_ctx, 1, 0, 0, 0);
 }
 
 static uint32_t query_run_shape(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 1, 1, 0);
+    return query_core(w, in, out, host_ctx, 1, 1, 0, 0);
 }
 
 static uint32_t query_run_compound(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 1, 1, 1);
+    return query_core(w, in, out, host_ctx, 1, 1, 1, 0);
+}
+
+static uint32_t query2_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
+    return query_core(w, in, out, host_ctx, 0, 0, 0, 1);
+}
+
+static uint32_t query2_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
+    return query_core(w, in, out, host_ctx, 1, 0, 0, 1);
+}
+
+static uint32_t query2_run_shape(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
+    return query_core(w, in, out, host_ctx, 1, 1, 0, 1);
+}
+
+static uint32_t query2_run_compound(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
+    return query_core(w, in, out, host_ctx, 1, 1, 1, 1);
 }

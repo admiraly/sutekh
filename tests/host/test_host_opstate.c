@@ -856,6 +856,14 @@ static void test_basics(const Game *g, const Game *plain) {
     check(su_host_state_get(s, 1u, 2u, &data, &dlen) == SU_OK && data == NULL && dlen == 0u, "get of a missing key");
     check(su_host_operator_state(w, 1u, &none) == SU_E_INVALID_ARGUMENT && none == NULL, "IR system has no state");
     check(su_host_operator_state(p, 0u, &none) == SU_E_INVALID_ARGUMENT, "operator without state has none");
+    {
+        /* su_host_operator_counters (issue 163) is for built-in query operators only. */
+        SuHostOperatorCounters k;
+        memset(&k, 0, sizeof k);
+        k.struct_size = sizeof k;
+        check(su_host_operator_counters(w, 0u, &k) == SU_E_UNSUPPORTED_METHOD, "registered operator has no counters");
+        check(su_host_operator_counters(w, 1u, &k) == SU_E_INVALID_ARGUMENT, "IR system has no counters");
+    }
     snap = snapshot(w, &len);
     check(rd32(snap + 8) == 2u && memcmp(snap + opstate_len_at(snap) + 8u, "SUOPSTAT", 9u) == 0,
           "a world with state writes version 2 with the section");

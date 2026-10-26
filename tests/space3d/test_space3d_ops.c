@@ -44,6 +44,19 @@ static int g_failures = 0;
 #define NONE 0xFFFFFFFFu
 
 static const SuHostOpDesc *D = &g_space3d_query_desc;
+/* The second pass (issue 163) reruns every scene test on the space3d_ops_v2 descriptors (space3d.query2*): their
+ * results must equal v1's and the brute force wherever no truncation flag is set. */
+static int g_v2 = 0;
+static const SuHostOpDesc *fam(const SuHostOpDesc *d) {
+    if (!g_v2) {
+        return d;
+    }
+    return d == &g_space3d_query_desc        ? &g_space3d_query2_desc
+           : d == &g_space3d_query_prox_desc  ? &g_space3d_query2_prox_desc
+           : d == &g_space3d_query_shape_desc ? &g_space3d_query2_shape_desc
+                                              : &g_space3d_query2_compound_desc;
+}
+#define FAM(d) fam(d)
 static Space3dCtx *g_inst = NULL; /* when set, run_scene runs the operator on this instance (static meshes) */
 
 /* ---------- scene: column arrays for every declared lane ---------- */
@@ -333,6 +346,60 @@ static void test_descriptor(void) {
     }
 }
 
+/* space3d_ops_v2 descriptors (issue 163): valid, constants hashes pinned, their committed records load, and the
+ * v1 descriptors are unchanged (same hash literals as before the change, checked by test_descriptor). */
+static void test_descriptor_v2(void) {
+    static const struct {
+        const SuHostOpDesc *d;
+        const char *(*text)(void);
+        const char *record;
+        const SuHostOpDesc *v1;
+    } k[] = {
+        {&g_space3d_query2_desc, space3d2_constants_text, "profiles/space3d/space3d_query2.capsule.json",
+         &g_space3d_query_desc},
+        {&g_space3d_query2_prox_desc, space3d2_prox_constants_text, "profiles/space3d/space3d_query2_prox.capsule.json",
+         &g_space3d_query_prox_desc},
+        {&g_space3d_query2_shape_desc, space3d2_shape_constants_text,
+         "profiles/space3d/space3d_query2_shape.capsule.json", &g_space3d_query_shape_desc},
+        {&g_space3d_query2_compound_desc, space3d2_compound_constants_text,
+         "profiles/space3d/space3d_query2_compound.capsule.json", &g_space3d_query_compound_desc},
+    };
+    size_t i;
+    for (i = 0; i < sizeof k / sizeof k[0]; i++) {
+        SuSha256 c;
+        uint8_t h[32];
+        char hex[65], msg[256];
+        uint32_t sv = 0, gen = 0, f;
+        SuLirModule *decl = NULL;
+        SuLirModule m;
+        CHECK(su_host_desc_validate(k[i].d) == SU_OK);
+        CHECK(k[i].d->operator_version == SPACE3D_OPS_VERSION2);
+        CHECK(k[i].d->field_count == k[i].v1->field_count && k[i].d->fields == k[i].v1->fields);
+        su_sha256_init(&c);
+        su_sha256_update(&c, k[i].text(), strlen(k[i].text()));
+        su_sha256_final(&c, h);
+        su_sha256_hex(h, hex);
+        CHECK(memcmp(h, k[i].d->constants_hash, 32) == 0);
+        CHECK(memcmp(h, k[i].v1->constants_hash, 32) != 0);
+        printf("%s constants_hash %s\n", k[i].d->system_id, hex);
+        CHECK(su_host_decl_build(k[i].d, &m) == SU_OK);
+        for (f = 0; f < m.field_count; f++) {
+            CHECK(m.fields[f].value_type == k[i].d->fields[f].type);
+        }
+        su_lir_module_free(&m);
+        CHECK(su_host_load(k[i].record, NULL, k[i].d, &decl, &sv, &gen, msg, sizeof msg) == SU_OK);
+        if (decl == NULL) {
+            fprintf(stderr, "host record %s: %s\n", k[i].record, msg);
+        } else {
+            su_host_decl_free(decl);
+            decl = NULL;
+        }
+        /* A v1 record is not a v2 record. */
+        CHECK(su_host_load("profiles/space3d/space3d_query.capsule.json", NULL, k[i].d, &decl, &sv, &gen, msg,
+                           sizeof msg) != SU_OK && decl == NULL);
+    }
+}
+
 /* ---------- hand-built scenes ---------- */
 
 static void test_known(void) {
@@ -604,7 +671,7 @@ static uint32_t write_lanes(void) {
 
 static void test_prox(void) {
     static uint32_t a[32 * MAXR], b[32 * MAXR], c[32 * MAXR];
-    const SuHostOpDesc *base = &g_space3d_query_desc;
+    const SuHostOpDesc *base = FAM(&g_space3d_query_desc);
     SuSha256 sh;
     uint8_t h[32];
     char msg[256];
@@ -613,7 +680,7 @@ static void test_prox(void) {
     Scene s;
     SuWorld *w = NULL;
 
-    D = &g_space3d_query_prox_desc;
+    D = FAM(&g_space3d_query_prox_desc);
     /* Descriptor: the base table followed by the proximity lanes; own constants hash; record loads only here. */
     CHECK(su_host_desc_validate(D) == SU_OK);
     CHECK(D->field_count == base->field_count + 6u);
@@ -624,9 +691,9 @@ static void test_prox(void) {
     su_sha256_init(&sh);
     su_sha256_update(&sh, space3d_prox_constants_text(), strlen(space3d_prox_constants_text()));
     su_sha256_final(&sh, h);
-    CHECK(memcmp(h, D->constants_hash, 32) == 0);
+    CHECK(g_v2 || memcmp(h, D->constants_hash, 32) == 0); /* v2: test_descriptor_v2 */
     CHECK(memcmp(h, base->constants_hash, 32) != 0);
-    CHECK(su_host_load("profiles/space3d/space3d_query_prox.capsule.json", NULL, D, &decl, &sv, &gen, msg,
+    CHECK(g_v2 || su_host_load("profiles/space3d/space3d_query_prox.capsule.json", NULL, D, &decl, &sv, &gen, msg,
                        sizeof msg) == SU_OK);
     su_host_decl_free(decl);
     decl = NULL;
@@ -712,7 +779,7 @@ static void test_prox(void) {
             su_world_destroy(w1);
             w1 = NULL;
         }
-        D = &g_space3d_query_prox_desc;
+        D = FAM(&g_space3d_query_prox_desc);
         CHECK(run_scene(&s, &w1) == SU_OK);
         if (w1 != NULL) {
             snapshot_out(w1, rows, b);
@@ -778,7 +845,7 @@ static int near64(int64_t a, int64_t b, int64_t tol) {
 
 static void test_shape(void) {
     static uint32_t a[40 * MAXR], b[40 * MAXR], c[40 * MAXR];
-    const SuHostOpDesc *prox = &g_space3d_query_prox_desc;
+    const SuHostOpDesc *prox = FAM(&g_space3d_query_prox_desc);
     SuSha256 sh;
     uint8_t h[32];
     char msg[256];
@@ -793,7 +860,7 @@ static void test_shape(void) {
     qy.y = qy.w;
     qy.z = 0;
 
-    D = &g_space3d_query_shape_desc;
+    D = FAM(&g_space3d_query_shape_desc);
     CHECK(su_host_desc_validate(D) == SU_OK);
     CHECK(D->field_count == prox->field_count + 4u);
     for (i = 0; i < prox->field_count; i++) {
@@ -803,8 +870,8 @@ static void test_shape(void) {
     su_sha256_init(&sh);
     su_sha256_update(&sh, space3d_shape_constants_text(), strlen(space3d_shape_constants_text()));
     su_sha256_final(&sh, h);
-    CHECK(memcmp(h, D->constants_hash, 32) == 0);
-    CHECK(su_host_load("profiles/space3d/space3d_query_shape.capsule.json", NULL, D, &decl, &sv, &gen, msg,
+    CHECK(g_v2 || memcmp(h, D->constants_hash, 32) == 0); /* v2: test_descriptor_v2 */
+    CHECK(g_v2 || su_host_load("profiles/space3d/space3d_query_shape.capsule.json", NULL, D, &decl, &sv, &gen, msg,
                        sizeof msg) == SU_OK);
     su_host_decl_free(decl);
     decl = NULL;
@@ -905,7 +972,7 @@ static void test_shape(void) {
             su_world_destroy(w1);
             w1 = NULL;
         }
-        D = &g_space3d_query_shape_desc;
+        D = FAM(&g_space3d_query_shape_desc);
         CHECK(run_scene(&s, &w1) == SU_OK);
         if (w1 != NULL) {
             snapshot_out(w1, rows, b);
@@ -954,7 +1021,7 @@ static void test_shape(void) {
     printf("space3d shape: %u capsule scenes equal to brute force, %u truncated (repeat-only), %u contacts%c",
            compared, flagged, contacts, 10);
     CHECK(compared >= 20u && contacts > 100u);
-    D = &g_space3d_query_desc;
+    D = FAM(&g_space3d_query_desc);
 }
 
 /* ---------- static meshes (2026-10-20) ---------- */
@@ -1020,7 +1087,7 @@ static void test_mesh(void) {
     s3mesh_set_release(set2);
     s3mesh_set_release(set); /* the instance keeps its reference */
 
-    D = &g_space3d_query_shape_desc;
+    D = FAM(&g_space3d_query_shape_desc);
     /* Known: sphere mover r 1 from (-30, 0, 0) by +40 hits the box face x = -5 at x = -6: toi 0.6, normal -x.
      * Capsule mover (z -4..4, r 1) from (10, 0, 20) by -30 in z hits the triangle mesh (row 2, at (10, 0, 0),
      * 40 m wide) with its lower end at z = 1: toi (20 - 4 - 1) / 30 = 0.5, normal +z. Proximity: a sphere mover
@@ -1167,7 +1234,7 @@ static void test_mesh(void) {
     CHECK(compared >= 16u && mesh_contacts > 50u);
     g_inst = NULL;
     space3d_query_instance_destroy(inst);
-    D = &g_space3d_query_desc;
+    D = FAM(&g_space3d_query_desc);
 }
 
 /* ---------- compound movers and turning: space3d.query_compound (2026-10-20) ---------- */
@@ -1392,7 +1459,7 @@ static SuQuat turn_q(SuQuat q, double amax) {
 
 static void test_compound(void) {
     static uint32_t a[48 * MAXR], b[48 * MAXR], c[48 * MAXR];
-    const SuHostOpDesc *shape = &g_space3d_query_shape_desc;
+    const SuHostOpDesc *shape = FAM(&g_space3d_query_shape_desc);
     SuSha256 sh;
     uint8_t h[32];
     char msg[256], why[200];
@@ -1410,7 +1477,7 @@ static void test_compound(void) {
     S3MeshSet *set = NULL;
     Space3dCtx *inst = NULL;
 
-    D = &g_space3d_query_compound_desc;
+    D = FAM(&g_space3d_query_compound_desc);
     CHECK(su_host_desc_validate(D) == SU_OK);
     CHECK(D->field_count == shape->field_count + 11u);
     for (i = 0; i < shape->field_count; i++) {
@@ -1420,8 +1487,8 @@ static void test_compound(void) {
     su_sha256_init(&sh);
     su_sha256_update(&sh, space3d_compound_constants_text(), strlen(space3d_compound_constants_text()));
     su_sha256_final(&sh, h);
-    CHECK(memcmp(h, D->constants_hash, 32) == 0);
-    CHECK(su_host_load("profiles/space3d/space3d_query_compound.capsule.json", NULL, D, &decl, &sv, &gen, msg,
+    CHECK(g_v2 || memcmp(h, D->constants_hash, 32) == 0); /* v2: test_descriptor_v2 */
+    CHECK(g_v2 || su_host_load("profiles/space3d/space3d_query_compound.capsule.json", NULL, D, &decl, &sv, &gen, msg,
                        sizeof msg) == SU_OK);
     su_host_decl_free(decl);
     decl = NULL;
@@ -1629,12 +1696,12 @@ static void test_compound(void) {
         D = shape;
         ns = write_lanes();
         CHECK(run_scene(&s, &w) == SU_OK);
-        D = &g_space3d_query_compound_desc;
+        D = FAM(&g_space3d_query_compound_desc);
         CHECK(run_scene(&s, &w2) == SU_OK);
         if (w != NULL && w2 != NULL) {
             D = shape;
             snapshot_out(w, rows, a);
-            D = &g_space3d_query_compound_desc;
+            D = FAM(&g_space3d_query_compound_desc);
             snapshot_out(w2, rows, b);
             same = memcmp(a, b, sizeof(uint32_t) * ns * rows) == 0;
             if (!same) {
@@ -1875,11 +1942,90 @@ static void test_compound(void) {
     }
     g_inst = NULL;
     space3d_query_instance_destroy(inst);
-    D = &g_space3d_query_desc;
+    D = FAM(&g_space3d_query_desc);
 }
 
-int main(void) {
-    test_descriptor();
+/* Grid cell keys forced to collide (issue 163, v2grid only): an empty queried cell whose key equals an occupied cell's
+ * (mask 0: every key is 0) must stay empty, and mixed runs are checked entry by entry, so results equal the brute force.
+ * Without the per-run check, two co-located movers (one non-mixed run) were visited from every queried cell. */
+static void test_collisions(void) {
+    static uint32_t a[32 * MAXR], b[32 * MAXR];
+    uint32_t n = write_lanes(), seed, compared = 0;
+    int pass;
+    for (pass = 0; pass < 2; pass++) {
+        Scene s;
+        SuWorld *w1 = NULL, *w2 = NULL;
+        scene_init(&s, 3);
+        mover(0, V(0, 0, 0), V(ONE / 4, 0, 0), ONE / 2, 0);
+        mover(1, V(ONE / 8, 0, 0), V(0, 0, 0), ONE / 2, 0);
+        if (pass == 1) {
+            sphere(2, V(Q(40), 0, 0), Q(2)); /* another cell: the single run is mixed */
+        }
+        space3d_test_hash_mask(0);
+        CHECK(run_scene(&s, &w1) == SU_OK);
+        space3d_test_hash_mask(UINT64_MAX);
+        space3d_query_ctx()->brute_force = 1;
+        CHECK(run_scene(&s, &w2) == SU_OK);
+        space3d_query_ctx()->brute_force = 0;
+        if (w1 != NULL && w2 != NULL) {
+            snapshot_out(w1, 3, a);
+            snapshot_out(w2, 3, b);
+            CHECK(memcmp(a, b, sizeof(uint32_t) * n * 3u) == 0);
+            CHECK(rd32(w1, SPACE3D_F_HIT_COUNT, 0) == 1u && cslot(w1, 0, 0) == 1u);
+        }
+        su_world_destroy(w1);
+        su_world_destroy(w2);
+    }
+    for (seed = 1; seed <= 8; seed++) {
+        Scene s;
+        SuWorld *w1 = NULL, *w2 = NULL;
+        uint32_t rows = 64u + (seed * 97u) % 400u, r;
+        int flagged = 0;
+        g_rng = seed * UINT64_C(104729);
+        random_scene(&s, rows, 20 + (int64_t)(seed % 3u) * 30);
+        space3d_test_hash_mask(3); /* four keys in all: runs are mixed and empty cells collide */
+        CHECK(run_scene(&s, &w1) == SU_OK);
+        space3d_test_hash_mask(UINT64_MAX);
+        space3d_query_ctx()->brute_force = 1;
+        CHECK(run_scene(&s, &w2) == SU_OK);
+        space3d_query_ctx()->brute_force = 0;
+        if (w1 != NULL && w2 != NULL) {
+            for (r = 0; r < rows; r++) {
+                flagged |= (rd32(w1, SPACE3D_F_HIT_FLAGS, r) & (SPACE3D_FLAG_CAND_TRUNCATED | SPACE3D_FLAG_SWEEP_BUDGET)) != 0u;
+            }
+            if (!flagged) {
+                snapshot_out(w1, rows, a);
+                snapshot_out(w2, rows, b);
+                CHECK(memcmp(a, b, sizeof(uint32_t) * n * rows) == 0);
+                compared++;
+            }
+        }
+        su_world_destroy(w1);
+        su_world_destroy(w2);
+    }
+    printf("space3d grid key collisions: %u random scenes equal to brute force\n", compared);
+    CHECK(compared >= 5u);
+}
+
+/* Usage: test_space3d_ops [v2 | v2grid]. No argument: the v1 descriptors (ctest space3d_ops); v2: their
+ * descriptors and every scene test on space3d_ops_v2 (space3d_ops_v2); v2grid: the same with the grid forced
+ * (space3d_ops_v2_grid). Separate processes, so each stays within the sanitizer lane's test timeout. */
+int main(int argc, char **argv) {
+    const char *mode = argc > 1 ? argv[1] : "";
+    if (strcmp(mode, "v2") == 0 || strcmp(mode, "v2grid") == 0) {
+        test_descriptor_v2();
+        g_v2 = 1;
+        D = FAM(&g_space3d_query_desc);
+        if (strcmp(mode, "v2grid") == 0) {
+            space3d_test_force_grid(1); /* the sweep path runs in "v2" wherever it fits its limit: same contract */
+        }
+        printf("space3d_ops_v2 pass%s:\n", strcmp(mode, "v2grid") == 0 ? ", grid forced" : "");
+    } else if (mode[0] != '\0') {
+        fprintf(stderr, "usage: test_space3d_ops [v2 | v2grid]\n");
+        return 2;
+    } else {
+        test_descriptor();
+    }
     test_known();
     test_random();
     test_limits();
@@ -1887,6 +2033,10 @@ int main(void) {
     test_shape();
     test_mesh();
     test_compound();
-    printf("test_space3d_ops: %d checks, %d failures\n", g_checks, g_failures);
+    if (strcmp(mode, "v2grid") == 0) {
+        test_collisions();
+    }
+    space3d_test_force_grid(0);
+    printf("test_space3d_ops%s%s: %d checks, %d failures\n", mode[0] ? " " : "", mode, g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

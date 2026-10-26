@@ -159,4 +159,7 @@ if(UNIX)
 endif()
 sutekh_apply_warnings(test_space3d_ops)
 add_test(NAME space3d_ops COMMAND test_space3d_ops WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+# The same scene tests on the space3d_ops_v2 descriptors, then with the v2 grid forced (issue 163).
+add_test(NAME space3d_ops_v2 COMMAND test_space3d_ops v2 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME space3d_ops_v2_grid COMMAND test_space3d_ops v2grid WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif() # SUTEKH_BUILD_TESTS
