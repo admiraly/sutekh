@@ -1,0 +1,247 @@
+{
+ "ir_version": "0.3",
+ "system_id": "det.churn",
+ "numeric_profile": "fixed_q32_v1",
+ "query": "det.churn",
+ "instructions": [
+  {
+   "op": "const_q32",
+   "dst": "r1",
+   "num": 1,
+   "den": 60
+  },
+  {
+   "op": "const_q32",
+   "dst": "r2",
+   "num": 255,
+   "den": 256
+  },
+  {
+   "op": "const_q32",
+   "dst": "r3",
+   "num": 0,
+   "den": 1
+  },
+  {
+   "op": "load_u32",
+   "dst": "r4",
+   "field": "life"
+  },
+  {
+   "op": "load_q32",
+   "dst": "r5",
+   "field": "energy"
+  },
+  {
+   "op": "load_q32",
+   "dst": "r6",
+   "field": "drain"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r7",
+   "x": "pos_x",
+   "y": "pos_y",
+   "z": "pos_z"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r8",
+   "x": "vel_x",
+   "y": "vel_y",
+   "z": "vel_z"
+  },
+  {
+   "op": "load_i64",
+   "dst": "r9",
+   "field": "score"
+  },
+  {
+   "op": "sub_q32",
+   "dst": "r10",
+   "a": "r5",
+   "b": "r6"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r11",
+   "value": 1
+  },
+  {
+   "op": "sub_u32",
+   "dst": "r12",
+   "a": "r4",
+   "b": "r11"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r13",
+   "v": "r8",
+   "s": "r1"
+  },
+  {
+   "op": "v3_add",
+   "dst": "r14",
+   "a": "r7",
+   "b": "r13"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r15",
+   "v": "r8",
+   "s": "r2"
+  },
+  {
+   "op": "v3_len",
+   "dst": "r16",
+   "a": "r14"
+  },
+  {
+   "op": "q32_to_i64_floor",
+   "dst": "r17",
+   "a": "r16"
+  },
+  {
+   "op": "add_i64",
+   "dst": "r18",
+   "a": "r9",
+   "b": "r17"
+  },
+  {
+   "op": "le_q32",
+   "dst": "r19",
+   "a": "r10",
+   "b": "r3"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r20",
+   "value": 0
+  },
+  {
+   "op": "eq_u32",
+   "dst": "r21",
+   "a": "r4",
+   "b": "r20"
+  },
+  {
+   "op": "or_bool",
+   "dst": "r22",
+   "a": "r19",
+   "b": "r21"
+  },
+  {
+   "op": "slot_u32",
+   "dst": "r23"
+  },
+  {
+   "op": "tick_u32",
+   "dst": "r24"
+  },
+  {
+   "op": "gen_u32",
+   "dst": "r25"
+  },
+  {
+   "op": "v3_len",
+   "dst": "r26",
+   "a": "r14"
+  },
+  {
+   "op": "q32_to_i32_round",
+   "dst": "r27",
+   "a": "r26"
+  },
+  {
+   "op": "u32_from_i32",
+   "dst": "r28",
+   "a": "r27"
+  },
+  {
+   "op": "emit_event",
+   "cond": "r22",
+   "kind": 3,
+   "a": "r23",
+   "b": "r28"
+  },
+  {
+   "op": "not_bool",
+   "dst": "r29",
+   "a": "r22"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r30",
+   "value": 268435456
+  },
+  {
+   "op": "mul_u32",
+   "dst": "r31",
+   "a": "r24",
+   "b": "r30"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r32",
+   "value": 268435456
+  },
+  {
+   "op": "mul_u32",
+   "dst": "r33",
+   "a": "r23",
+   "b": "r32"
+  },
+  {
+   "op": "eq_u32",
+   "dst": "r34",
+   "a": "r31",
+   "b": "r33"
+  },
+  {
+   "op": "and_bool",
+   "dst": "r35",
+   "a": "r29",
+   "b": "r34"
+  },
+  {
+   "op": "emit_event",
+   "cond": "r35",
+   "kind": 4,
+   "a": "r25",
+   "b": "r12"
+  },
+  {
+   "op": "despawn_self",
+   "cond": "r22"
+  },
+  {
+   "op": "store_u32",
+   "field": "life",
+   "src": "r12"
+  },
+  {
+   "op": "store_q32",
+   "field": "energy",
+   "src": "r10"
+  },
+  {
+   "op": "store_v3",
+   "x": "pos_x",
+   "y": "pos_y",
+   "z": "pos_z",
+   "src": "r14"
+  },
+  {
+   "op": "store_v3",
+   "x": "vel_x",
+   "y": "vel_y",
+   "z": "vel_z",
+   "src": "r15"
+  },
+  {
+   "op": "store_i64",
+   "field": "score",
+   "src": "r18"
+  }
+ ]
+}

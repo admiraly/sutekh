@@ -1,0 +1,567 @@
+{
+ "capsule_format": "0.1",
+ "ir_version": "0.4",
+ "system_id": "det.bits04",
+ "source": "bits04.lir.json",
+ "schema": {
+  "id": "det.probe",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "fields": [
+  {
+   "id": 2,
+   "name": "n",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 3,
+   "name": "ua",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 4,
+   "name": "ub",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 7,
+   "name": "ia",
+   "type": "i32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 8,
+   "name": "ib",
+   "type": "i32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 9,
+   "name": "ic",
+   "type": "i32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 10,
+   "name": "la",
+   "type": "i64",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 12,
+   "name": "lb",
+   "type": "i64",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 14,
+   "name": "lc",
+   "type": "i64",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 16,
+   "name": "qa",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 18,
+   "name": "qb",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 20,
+   "name": "qc",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 22,
+   "name": "o_add_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 23,
+   "name": "o_sub_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 24,
+   "name": "o_mul_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 25,
+   "name": "o_div_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 26,
+   "name": "o_neg_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 27,
+   "name": "o_abs_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 28,
+   "name": "o_min_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 29,
+   "name": "o_max_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 30,
+   "name": "o_clamp_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 31,
+   "name": "o_eq_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 32,
+   "name": "o_lt_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 33,
+   "name": "o_le_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 34,
+   "name": "o_select_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 35,
+   "name": "o_shl_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 36,
+   "name": "o_shr_i32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 37,
+   "name": "o_add_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 39,
+   "name": "o_sub_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 41,
+   "name": "o_mul_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 43,
+   "name": "o_div_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 45,
+   "name": "o_neg_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 47,
+   "name": "o_abs_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 49,
+   "name": "o_min_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 51,
+   "name": "o_max_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 53,
+   "name": "o_clamp_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 55,
+   "name": "o_eq_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 57,
+   "name": "o_lt_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 59,
+   "name": "o_le_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 61,
+   "name": "o_select_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 63,
+   "name": "o_shl_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 65,
+   "name": "o_shr_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 67,
+   "name": "o_add_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 69,
+   "name": "o_sub_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 71,
+   "name": "o_mul_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 73,
+   "name": "o_div_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 75,
+   "name": "o_neg_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 77,
+   "name": "o_abs_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 79,
+   "name": "o_min_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 81,
+   "name": "o_max_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 83,
+   "name": "o_clamp_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 85,
+   "name": "o_eq_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 87,
+   "name": "o_lt_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 89,
+   "name": "o_le_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 91,
+   "name": "o_select_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 93,
+   "name": "o_shl_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 95,
+   "name": "o_shr_q32",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 97,
+   "name": "o_and_u32",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 98,
+   "name": "o_or_u32",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 99,
+   "name": "o_xor_u32",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 100,
+   "name": "o_not_u32",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 101,
+   "name": "o_shl_u32",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 102,
+   "name": "o_shr_u32",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 103,
+   "name": "o_div_u32",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 104,
+   "name": "o_rem_u32",
+   "type": "u32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 105,
+   "name": "o_and_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 107,
+   "name": "o_or_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 109,
+   "name": "o_xor_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 111,
+   "name": "o_not_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 113,
+   "name": "o_i32_from_u32",
+   "type": "i32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 114,
+   "name": "o_i64_from_i32",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 116,
+   "name": "o_q32_from_raw",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 118,
+   "name": "o_const_i64",
+   "type": "i64",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 120,
+   "name": "o_v3_get",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 122,
+   "name": "o_vneg_x",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 124,
+   "name": "o_vneg_y",
+   "type": "q32",
+   "read": false,
+   "write": true
+  },
+  {
+   "id": 126,
+   "name": "o_vneg_z",
+   "type": "q32",
+   "read": false,
+   "write": true
+  }
+ ],
+ "schedule": {
+  "phase": "simulate",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 65536,
+  "allocation": "forbidden"
+ },
+ "tests": [
+  "tests/determinism/det_matrix.c"
+ ]
+}

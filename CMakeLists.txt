@@ -784,5 +784,6 @@ if(SUTEKH_BUILD_BENCH)
 endif()
 # ---- END in-process host API ----
 include(cmake/SutekhHostOps.cmake)
+include(cmake/SutekhDeterminism.cmake)
 include(cmake/SutekhPresentation.cmake)
 include(cmake/SutekhPublic.cmake)

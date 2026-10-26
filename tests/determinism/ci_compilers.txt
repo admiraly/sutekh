@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 admiraly
+# SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
+# Compilers of the determinism-matrix CI legs (.github/workflows/repository-checks.yml, SUTEKH_DET_COMPILER_LEG;
+# checked at configure time by cmake/SutekhDeterminism.cmake). Format: <leg> <CMAKE_C_COMPILER_ID> <version prefix>.
+# A runner image that changes a compiler stops that leg. Update a line deliberately, in a commit that says which
+# image changed and that the leg then passed against the unchanged expectation: the list records which compilers
+# the cross-build claim (docs/DETERMINISM_MATRIX.md section 1) was observed on. Never edit it to make a failing
+# matrix pass.
+linux-gcc GNU 15.2.0
+linux-clang Clang 21.1.8
+windows-clang Clang 20.1.8
+windows-clang-native Clang 20.1.8
+windows-msvc MSVC 19.51.36260

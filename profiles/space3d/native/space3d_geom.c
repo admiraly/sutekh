@@ -22,6 +22,19 @@ static int v3_is_zero(SuV3 a) {
     return a.x == 0 && a.y == 0 && a.z == 0;
 }
 
+/* s * h for a sign s in {-1, 0, +1}, as the wrapping product: -1 * INT64_MIN is INT64_MIN. A half extent is an
+ * arbitrary q32 lane value, so the plain int64_t product could overflow (undefined behaviour); this is the value
+ * every supported compiler produced for it (determinism matrix finding D1, tests/determinism/test_det_regress.c).
+ * Half extents are not validated. A negative or INT64_MIN extent describes no box, and the two negations of it here
+ * differ on purpose: the slab and clamp tests use the profile's saturating su_q32_neg (-INT64_MIN = INT64_MAX), the
+ * corner products use this wrapping one (as before the fix). Both are fixed functions of the input bits, so results
+ * stay deterministic. Through the operator an INT64_MIN extent never reaches this product (its bounds saturate to an
+ * empty interval, so the broadphase never makes the box a candidate); a small negative extent does reach the narrow
+ * phase (measured in the matrix's space3d workloads) and is deterministic like any other input. */
+static int64_t sign_mul(int s, int64_t h) {
+    return s > 0 ? h : s < 0 ? su_i64_from_bits((uint64_t)0 - (uint64_t)h) : 0;
+}
+
 static int64_t v3_comp(SuV3 a, int i) {
     return i == 0 ? a.x : (i == 1 ? a.y : a.z);
 }
@@ -259,14 +272,14 @@ S3Hit s3_sweep_sphere_obb(SuV3 c0, SuV3 v, int64_t r, SuV3 center, SuQuat q, SuV
     hp = su_v3_addf(p, su_v3_scalef(u, tmin));
     for (i = 0; i < 3; i++) {
         int64_t c = v3_comp(hp, i), hh = v3_comp(half, i);
-        out[i] = c < su_q32_neg(hh) ? -1 : (c > hh ? 1 : 0);
+        out[i] = c < su_q32_neg(hh) ? -1 : (c > hh ? 1 : 0); /* saturating neg: see sign_mul for hh < 0 */
         outc += out[i] != 0;
     }
     if (outc <= 1) {
         s = tmin;
     } else {
         /* Edge (two axes outside) or vertex (three): capsules of radius r along the box edges at that corner. */
-        SuV3 corner = v3(out[0] * half.x, out[1] * half.y, out[2] * half.z);
+        SuV3 corner = v3(sign_mul(out[0], half.x), sign_mul(out[1], half.y), sign_mul(out[2], half.z));
         int found = 0, k;
         int64_t best = 0;
         for (k = 0; k < 3; k++) {
@@ -468,7 +481,8 @@ S3Hit s3_sweep_capsule_sphere(SuV3 c0, SuV3 v, int64_t r, SuV3 e0, SuV3 e1, SuV3
 
 /* Box corner (sx, sy, sz in {-1, +1}) in world space. */
 static SuV3 box_corner(SuV3 center, SuQuat q, SuV3 half, int sx, int sy, int sz) {
-    return su_v3_addf(center, su_quat_rotatef(q, v3(sx * half.x, sy * half.y, sz * half.z)));
+    return su_v3_addf(center,
+                      su_quat_rotatef(q, v3(sign_mul(sx, half.x), sign_mul(sy, half.y), sign_mul(sz, half.z))));
 }
 
 /* Edge j (0..11) of the box: axis j / 4, the other two signs from j % 4. */

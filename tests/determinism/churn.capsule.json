@@ -1,0 +1,111 @@
+{
+ "capsule_format": "0.1",
+ "ir_version": "0.3",
+ "system_id": "det.churn",
+ "source": "churn.lir.json",
+ "schema": {
+  "id": "det.churn",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "fields": [
+  {
+   "id": 1,
+   "name": "kind",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 2,
+   "name": "life",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 4,
+   "name": "energy",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 6,
+   "name": "drain",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 8,
+   "name": "pos_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 10,
+   "name": "pos_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 12,
+   "name": "pos_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 14,
+   "name": "vel_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 16,
+   "name": "vel_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 18,
+   "name": "vel_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 20,
+   "name": "score",
+   "type": "i64",
+   "read": true,
+   "write": true
+  }
+ ],
+ "schedule": {
+  "phase": "simulate",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 65536,
+  "allocation": "forbidden",
+  "max_struct_per_row": 1,
+  "max_events_per_row": 2
+ },
+ "tests": [
+  "tests/determinism/det_matrix.c"
+ ],
+ "capabilities": [
+  "despawn_self",
+  "emit_event"
+ ]
+}

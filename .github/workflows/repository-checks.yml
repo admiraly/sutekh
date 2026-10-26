@@ -231,3 +231,170 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           ctest --test-dir build --output-on-failure -j 2
           if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  # Determinism matrix (docs/DETERMINISM_MATRIX.md, issue #141): the same workloads on optimized builds of each
+  # compiler and OS, every tier the build has (uniform and mixed per-system tiers, static and DLL), each compared with
+  # the committed expectations tests/determinism/expected_digests.txt and expected_tiers.txt. Each leg pins its
+  # compiler (tests/determinism/ci_compilers.txt), keeps its manifests and replays, and plays the replays of the
+  # other OS: Windows plays Linux GCC and Linux Clang, Linux plays every Windows leg.
+  determinism-linux:
+    name: Determinism matrix, Linux ${{ matrix.cc }} Release (native tier)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            cxx: g++
+          - cc: clang
+            cxx: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned test dependencies and fetch the pinned AsmJit commit
+        run: |
+          python -m pip install -r tools/requirements-dev.txt
+          python tools/bootstrap_asmjit.py
+          ${{ matrix.cc }} --version
+      - name: Configure (compiler pinned by tests/determinism/ci_compilers.txt) and build the matrix targets
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=ON -DSUTEKH_RENDER=OFF -DSUTEKH_DET_COMPILER_LEG=linux-${{ matrix.cc }}
+          cmake --build build -j 2 --target det_matrix det_matrix_dll det_op_list test_det_regress racer_microcosm sutekh
+      - name: Run the determinism tests (four tier modes, DLL, op coverage, regression fixtures, RTS engine)
+        run: ctest --test-dir build --output-on-failure -j 2 -R "^determinism_"
+      - name: Write manifests (static and DLL) and replays
+        run: |
+          mkdir -p det-out/replays
+          for t in reference planned native mixed; do
+            build/det_matrix --fixtures build/det_fixtures --tier $t --rollback 0 --out det-out/linux-${{ matrix.cc }}-$t.txt --replay-dir det-out/replays
+            build/det_matrix_dll --fixtures build/det_fixtures --tier $t --rollback 0 --out det-out/linux-${{ matrix.cc }}-dll-$t.txt
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: det-linux-${{ matrix.cc }}
+          path: det-out
+
+  determinism-windows:
+    name: Determinism matrix, Windows ${{ matrix.name }} Release
+    needs: determinism-linux
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # LLVM clang targeting x86_64-pc-windows-msvc (MSVC headers, libraries and UCRT), VM tiers.
+          - name: clang
+            leg: windows-clang
+            cc: clang
+            native: 'OFF'
+          # The same with the native tier (AsmJit, Win64 calling convention).
+          - name: clang native
+            leg: windows-clang-native
+            cc: clang
+            native: 'ON'
+          # MSVC cl (environment from vcvars64.bat), VM tiers.
+          - name: MSVC cl
+            leg: windows-msvc
+            cc: cl
+            native: 'OFF'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned test dependencies and fetch the pinned AsmJit commit
+        run: |
+          python -m pip install -r tools/requirements-dev.txt
+          python tools/bootstrap_asmjit.py
+      - name: Configure (compiler pinned by tests/determinism/ci_compilers.txt), build and run the determinism tests
+        shell: pwsh
+        run: |
+          if ("${{ matrix.cc }}" -eq "cl") {
+            $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+            cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" && set" | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2]) } }
+            $cxx = "cl"
+          } else {
+            $cxx = "clang++"
+            & clang --version
+          }
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=${{ matrix.cc }} "-DCMAKE_CXX_COMPILER=$cxx" -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=${{ matrix.native }} -DSUTEKH_RENDER=OFF -DSUTEKH_DET_COMPILER_LEG=${{ matrix.leg }}
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cmake --build build -j 2 --target det_matrix det_matrix_dll det_op_list test_det_regress racer_microcosm sutekh
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          ctest --test-dir build --output-on-failure -j 2 -R "^determinism_"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: det-linux-gcc
+          path: det-linux-gcc
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: det-linux-clang
+          path: det-linux-clang
+      - name: Play the Linux GCC and Linux Clang replays on this build; write manifests (static and DLL) and replays
+        shell: bash
+        run: |
+          tiers="reference planned mixed"
+          if [ "${{ matrix.native }}" = "ON" ]; then tiers="$tiers native"; fi
+          mkdir -p det-out/replays
+          for t in $tiers; do
+            build/det_matrix --fixtures build/det_fixtures --tier $t --play-dir det-linux-gcc/replays
+            build/det_matrix --fixtures build/det_fixtures --tier $t --play-dir det-linux-clang/replays
+            build/det_matrix --fixtures build/det_fixtures --tier $t --rollback 0 --out det-out/${{ matrix.leg }}-$t.txt --replay-dir det-out/replays
+            build/det_matrix_dll --fixtures build/det_fixtures --tier $t --rollback 0 --out det-out/${{ matrix.leg }}-dll-$t.txt
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: det-${{ matrix.leg }}
+          path: det-out
+
+  determinism-play-windows-on-linux:
+    name: Determinism matrix, Windows replays played on Linux GCC (every tier)
+    needs: determinism-windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Fetch the pinned AsmJit commit, configure and build
+        run: |
+          python -m pip install -r tools/requirements-dev.txt
+          python tools/bootstrap_asmjit.py
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=ON -DSUTEKH_RENDER=OFF -DSUTEKH_DET_COMPILER_LEG=linux-gcc
+          cmake --build build -j 2 --target det_matrix
+          python3 -I tests/determinism/gen_workloads.py fixtures --out build/det_fixtures
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: det-windows-*
+          path: det
+      - name: Play every Windows leg's replays
+        run: |
+          for d in det/det-windows-*; do
+            for t in reference planned native mixed; do
+              build/det_matrix --fixtures build/det_fixtures --tier $t --play-dir $d/replays
+            done
+          done
+
+  determinism-compare:
+    name: Determinism matrix, every manifest against the expectation
+    needs: [determinism-linux, determinism-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: det-*
+          path: det
+      - name: Compare
+        run: python3 -I tests/determinism/compare_manifests.py tests/determinism/expected_digests.txt $(find det -name '*.txt' | sort)

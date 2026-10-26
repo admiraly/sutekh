@@ -1,0 +1,441 @@
+{
+ "capsule_format": "0.1",
+ "ir_version": "0.3",
+ "system_id": "det.sixdof",
+ "source": "sixdof.lir.json",
+ "schema": {
+  "id": "det.sixdof",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "fields": [
+  {
+   "id": 1,
+   "name": "kind",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 2,
+   "name": "probe_n",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 10,
+   "name": "pos_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 12,
+   "name": "pos_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 14,
+   "name": "pos_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 16,
+   "name": "vel_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 18,
+   "name": "vel_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 20,
+   "name": "vel_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 22,
+   "name": "rot_w",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 24,
+   "name": "rot_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 26,
+   "name": "rot_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 28,
+   "name": "rot_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 30,
+   "name": "angvel_x",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 32,
+   "name": "angvel_y",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 34,
+   "name": "angvel_z",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 40,
+   "name": "thrust_x",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 42,
+   "name": "thrust_y",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 44,
+   "name": "thrust_z",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 46,
+   "name": "torque_x",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 48,
+   "name": "torque_y",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 50,
+   "name": "torque_z",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 52,
+   "name": "vmax",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 54,
+   "name": "probe_a",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 56,
+   "name": "probe_b",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 58,
+   "name": "probe_c",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 60,
+   "name": "o_mul",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 62,
+   "name": "o_div",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 64,
+   "name": "o_sqrt",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 66,
+   "name": "o_rsqrt",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 68,
+   "name": "o_len",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 70,
+   "name": "o_dot",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 72,
+   "name": "o_lensq",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 74,
+   "name": "o_nx",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 76,
+   "name": "o_ny",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 78,
+   "name": "o_nz",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 80,
+   "name": "o_cx",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 82,
+   "name": "o_cy",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 84,
+   "name": "o_cz",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 86,
+   "name": "o_rx",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 88,
+   "name": "o_ry",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 90,
+   "name": "o_rz",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 92,
+   "name": "o_qw",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 94,
+   "name": "o_qx",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 96,
+   "name": "o_qy",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 98,
+   "name": "o_qz",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 100,
+   "name": "o_kx",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 102,
+   "name": "o_ky",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 104,
+   "name": "o_kz",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 106,
+   "name": "o_i64",
+   "type": "i64",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 108,
+   "name": "o_idiv",
+   "type": "i64",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 110,
+   "name": "o_i32",
+   "type": "i32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 111,
+   "name": "o_round",
+   "type": "i32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 112,
+   "name": "o_floor",
+   "type": "i64",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 114,
+   "name": "o_shl",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 116,
+   "name": "o_shr",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 118,
+   "name": "o_shl64",
+   "type": "i64",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 120,
+   "name": "o_conv",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 122,
+   "name": "o_clamp",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 124,
+   "name": "o_mm",
+   "type": "q32",
+   "read": true,
+   "write": true
+  }
+ ],
+ "schedule": {
+  "phase": "simulate",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 65536,
+  "allocation": "forbidden"
+ },
+ "tests": [
+  "tests/determinism/det_matrix.c"
+ ]
+}
