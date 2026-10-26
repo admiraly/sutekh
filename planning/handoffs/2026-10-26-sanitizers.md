@@ -117,6 +117,59 @@ GitHub Actions on PR 154 (run 40288625904, Ubuntu clang 21.1.8): every job passe
 139 tests, 0 failures, scanner 103 logs / 0 reports, 15m54s. Native ON: 156 tests, 0 failures, scanner 138 logs /
 0 reports, 17m57s. The runner registers more tests than the local lanes (139/156 against 136/153).
 
+## Round 2: merge of main `2cb7286` (determinism matrix, PRs 145, 151, 152)
+
+The light review passed. The branch then took a merge of origin/main (no force-push), which brought two problems.
+
+- **Leak in det_matrix:** in an ASan trial merge, five determinism tests leaked: determinism_matrix_reference,
+  _planned, _mixed, _dll and determinism_play_static. `det_matrix.c` calloc'd `m.line` and `tiers.line`
+  (1,064,960 bytes) and never freed them. This is a test defect. They are now freed on the normal exit and on the
+  error returns after the allocation.
+- **Timeouts:** on GitHub's 4-vCPU runner with native ON, the full-length matrix tests took more than their own
+  900 s TIMEOUT under ASan+UBSan Debug: determinism_matrix_reference, _planned, _mixed, _native and _dll. Locally
+  they took about 280 s each. determinism_play_static then failed with "cannot open .../probe04.sureplay": the
+  replays it plays are written by determinism_matrix_dll, which had timed out.
+
+The choice: a reduced run in sanitizer builds. Raising the timeout or excluding the tests was rejected.
+
+- **What the reduced run does:** `det_matrix --max-ticks T` stops every workload at tick T, which must be a
+  multiple of its keyframe interval. In ASan builds CMake passes T = 120 (cache `SUTEKH_DET_MAX_TICKS`).
+- **What still runs:** every workload (11), every tier (reference, planned, mixed, native), the DLL, the mid-run
+  rollback (in place and into a fresh world on another tier, from tick 80), and replay recording and playback.
+- **Cross-build comparison:** `--expect` against the committed `expected_digests.txt` compares only the keyframe
+  digests up to tick T. Those equal the full run's first keyframes because no input generator depends on the run
+  length. So the committed cross-build oracle still holds for ticks 0, 60 and 120.
+- **Comparison inside the lane:** trace, end-state, event and replay lines describe the shorter run. They are
+  compared with the reference tier's manifest from the same build (`--expect-same`, fixture
+  `det_reduced_reference`). No reduced-run constants are committed.
+- **Full-length lanes:** unchanged. They still compare every line with the committed file.
+- **Fixture dependency, in every build:** determinism_play_static now requires fixture `det_replays`, which
+  determinism_matrix_dll sets up. It used to be a plain DEPENDS. A producer failure now shows play_static as not
+  run.
+- **Checks that bite:** a tampered keyframe digest at tick 60 in the committed file fails. One at tick 600 is
+  correctly ignored in reduced mode. A tampered trace line in the reference manifest fails `--expect-same`. A T
+  that is not a multiple of 60 is refused (exit 2). The GCC Debug binary's reduced manifest equals the clang ASan
+  lane's reference manifest.
+- **Local run times:** 46-50 s per matrix test (was about 280 s), 15 s for play_static.
+
+Also: `tools/scan_sanitizer_logs.py` now says when the log directory does not exist (review nit), and its test
+checks the message. `docs/DETERMINISM_MATRIX.md` section 2 documents the reduced run.
+
+Round 2 paths: `tests/determinism/det_matrix.c`, `cmake/SutekhDeterminism.cmake`,
+`cmake/SutekhSanitizers.cmake` (comment), `docs/DETERMINISM_MATRIX.md`, `tools/scan_sanitizer_logs.py`,
+`tests/tools/test_scan_sanitizer_logs.py`, this file.
+
+Round 2 local results on the merge with `2cb7286` (same machine and commands as above):
+
+| Lane | Tests | Failures | Skips | Sanitizer reports |
+|---|---|---|---|---|
+| ASan+UBSan, native OFF | 161 | 0 | 1 (audio_device) | 0 (104 logs, 104 leak checks not run) |
+| ASan+UBSan, native ON | 179 | 0 | 2 (native_unwind, audio_device) | 0 (139 logs, 139 leak checks not run) |
+| GCC Debug, `-Werror` | 182 | 0 | 1 (audio_device) | n/a |
+| GCC Release, `-Werror` | 182 | 0 | 1 (audio_device) | n/a |
+
+The GCC Debug and Release matrix tests run at full length: "190 lines equal expected_digests.txt" on every tier.
+
 ## Unrun
 
 - ASan+UBSan with renderer, window or importer on (lavapipe and SDL are not instrumented; not attempted).

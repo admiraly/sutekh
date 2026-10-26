@@ -18,6 +18,7 @@
 #                              fatal error" and the worker exits nonzero. The override is honoured only in
 #                              sanitizer builds (su_sandbox.c). It is not set for containment, which keeps the
 #                              self-sandbox on and checks that it reports "on".
+# The determinism matrix runs a reduced workload in these builds (cmake/SutekhDeterminism.cmake, SUTEKH_DET_MAX_TICKS).
 # Disposable children under the containment seccomp filter (ptrace denied) still cannot run LeakSanitizer; that is
 # a leak-coverage gap, not a failure, and the CI job counts it.
 

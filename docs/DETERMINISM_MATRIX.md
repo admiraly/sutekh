@@ -199,6 +199,21 @@ first differing workload and keyframe. To find the exact tick:
 2. Play the replays with `--play-dir` on the other build. `SU_REPLAY_DESYNC` names the tick.
 3. Optionally, `--dump-dir` writes every keyframe snapshot so two states can be compared field by field.
 
+**Sanitizer builds (reduced run).** Under ASan+UBSan a full run takes longer than the 900 s test timeout on CI
+runners. When `SUTEKH_SANITIZE` is set, or `CMAKE_C_FLAGS` has `-fsanitize=address`, the ctests pass
+`--max-ticks 120` (cache `SUTEKH_DET_MAX_TICKS`; empty means full length elsewhere), and every workload stops at
+tick 120. Every workload, tier, restore, rollback and replay playback still runs. The comparison is split:
+
+- **Against `expected_digests.txt`:** `--expect` compares only the keyframe digests up to tick 120 (ticks 0, 60
+  and 120). These are the full run's first keyframes, so the cross-build oracle still holds for that prefix.
+- **Against the reference tier:** the trace, end-state and replay lines describe the shorter run.
+  `determinism_matrix_reference` writes `det_manifest_reference.txt`. Every other tier and the DLL compare their
+  whole manifest with it (`--expect-same`, fixture `det_reduced_reference`).
+
+No reduced-run constants are committed. Full-length lanes are unchanged. In every build, `determinism_play_static`
+requires the replays written by `determinism_matrix_dll` (fixture `det_replays`), so a failure there shows it as
+not run.
+
 **Sensitivity (mutation check).** `tests/determinism/run_mutants.py --build <dir>` applies one plausible
 cross-platform difference at a time, rebuilds `det_matrix`, runs the named workloads against the expectation, and
 restores the source. Results on 2026-10-26 (GCC 16.2.1 Release), every mutant caught:
