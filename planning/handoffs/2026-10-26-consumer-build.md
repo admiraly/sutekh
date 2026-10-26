@@ -3,7 +3,7 @@
 ## State and scope
 
 Locally verified on `feat/issue-143-consumer-build`, based on `374af9d` (origin/main, merge of PR 146). Code commit
-`2461f20`; this handoff and `planning/evidence/consumer-build/` are a separate commit on top. Not merged.
+`2461f20`; this handoff and `planning/evidence/consumer-build/` are separate commits on top. PR 150. Not merged.
 
 Sutekh can now be consumed with `add_subdirectory` (as a git submodule) without the consumer seeing Sutekh's tests,
 engine internals or warning policy, and without writing into the submodule. Top-level builds are unchanged (same
