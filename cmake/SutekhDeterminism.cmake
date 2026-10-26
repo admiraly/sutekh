@@ -31,6 +31,11 @@ if(SUTEKH_DET_COMPILER_LEG)
     message(STATUS "determinism leg ${SUTEKH_DET_COMPILER_LEG}: ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
 endif()
 
+# Everything below is a test (SUTEKH_BUILD_TESTS, CMakeLists.txt); racer_microcosm exists whenever tests do.
+if(NOT SUTEKH_BUILD_TESTS)
+    return()
+endif()
+
 foreach(variant "" "_dll")
     add_executable(det_matrix${variant} "${SU_DET_DIR}/det_matrix.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/ir/su_sha256.c")
     target_include_directories(det_matrix${variant} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"

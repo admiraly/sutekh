@@ -17,7 +17,7 @@ function(_sutekh_numeric3d_late)
         endif()
     endforeach()
     # IR 0.3 typed lanes through the in-process host API.
-    if(TARGET su_host)
+    if(TARGET su_host AND SUTEKH_BUILD_TESTS)
         add_executable(test_host03 "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/test_host03.c")
         target_link_libraries(test_host03 PRIVATE su_host)
         target_include_directories(test_host03 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -31,16 +31,21 @@ function(_sutekh_numeric3d_late)
         add_test(NAME host04 COMMAND test_host04 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
     # 6dof_racer_microcosm: the engine's schedule executor (su_agent) running two IR 0.3 systems and space3d.query.
-    if(TARGET su_agent)
+    if(TARGET su_agent AND SUTEKH_BUILD_TESTS)
         # Schema-relative binding of space3d.query (su_host_load_bound, su_sched_add_host_bound).
         add_executable(test_space3d_bind "${CMAKE_CURRENT_SOURCE_DIR}/tests/space3d/test_space3d_bind.c")
         target_link_libraries(test_space3d_bind PRIVATE su_agent su_space3d)
         sutekh_apply_warnings(test_space3d_bind)
-        add_test(NAME space3d_bind COMMAND test_space3d_bind "${CMAKE_BINARY_DIR}"
+        add_test(NAME space3d_bind COMMAND test_space3d_bind "${CMAKE_CURRENT_BINARY_DIR}"
                  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+    # The racer bench is also the scene generator of the host-operator tests (cmake/SutekhHostOps.cmake).
+    if(TARGET su_agent AND (SUTEKH_BUILD_BENCH OR SUTEKH_BUILD_TESTS))
         add_executable(racer_microcosm "${CMAKE_CURRENT_SOURCE_DIR}/bench/space3d/racer_microcosm.c")
         target_link_libraries(racer_microcosm PRIVATE su_agent su_space3d)
         sutekh_apply_warnings(racer_microcosm)
+    endif()
+    if(TARGET su_agent AND SUTEKH_BUILD_TESTS)
         if(Python3_Interpreter_FOUND)
             add_test(NAME space3d_racer_replay COMMAND "${Python3_EXECUTABLE}" -I
                      "${CMAKE_CURRENT_SOURCE_DIR}/bench/space3d/run_bench.py" --driver $<TARGET_FILE:racer_microcosm> --check)
@@ -49,7 +54,7 @@ function(_sutekh_numeric3d_late)
             # world.specialize of racer.move on native builds), compared lane by lane with the in-process driver.
             add_test(NAME space3d_serve COMMAND "${Python3_EXECUTABLE}" -I
                      "${CMAKE_CURRENT_SOURCE_DIR}/tests/space3d/test_space3d_serve.py" --binary $<TARGET_FILE:sutekh>
-                     --driver $<TARGET_FILE:racer_microcosm> --work "${CMAKE_BINARY_DIR}/space3d_serve_scratch"
+                     --driver $<TARGET_FILE:racer_microcosm> --work "${CMAKE_CURRENT_BINARY_DIR}/space3d_serve_scratch"
                      --arena $<TARGET_FILE:arena_host>)
             set_tests_properties(space3d_serve PROPERTIES TIMEOUT 600)
             add_test(NAME space3d_racer_generated COMMAND "${Python3_EXECUTABLE}" -I
@@ -59,6 +64,7 @@ function(_sutekh_numeric3d_late)
 endfunction()
 cmake_language(DEFER CALL _sutekh_numeric3d_late)
 find_package(Python3 COMPONENTS Interpreter)
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_num tests/num/test_num.c)
 target_link_libraries(test_num PRIVATE su_ir)
 sutekh_apply_warnings(test_num)
@@ -84,22 +90,22 @@ if(SUTEKH_NATIVE)
     if(Python3_Interpreter_FOUND)
         add_test(NAME ir03_native_diff COMMAND "${Python3_EXECUTABLE}" -I
                  "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/ir03_diff.py" --driver $<TARGET_FILE:ir03_native_driver>
-                 --work "${CMAKE_BINARY_DIR}/ir03_native_diff_scratch" --programs 600 --rows 48 --seed 11 --native)
+                 --work "${CMAKE_CURRENT_BINARY_DIR}/ir03_native_diff_scratch" --programs 600 --rows 48 --seed 11 --native)
         # IR 0.4: bit operations and row filters must match the VM; cross-row reads must be refused.
         add_test(NAME ir04_native_diff COMMAND "${Python3_EXECUTABLE}" -I
                  "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/ir03_diff.py" --driver $<TARGET_FILE:ir03_native_driver>
-                 --work "${CMAKE_BINARY_DIR}/ir04_native_diff_scratch" --programs 400 --rows 48 --seed 13 --native
+                 --work "${CMAKE_CURRENT_BINARY_DIR}/ir04_native_diff_scratch" --programs 400 --rows 48 --seed 13 --native
                  --ir04)
     endif()
 endif()
 if(Python3_Interpreter_FOUND)
     # Seeded random IR 0.3 programs: real verifier + VM against an independent interpreter.
     add_test(NAME ir03_diff COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/ir03_diff.py"
-             --driver $<TARGET_FILE:ir03_driver> --work "${CMAKE_BINARY_DIR}/ir03_diff_scratch"
+             --driver $<TARGET_FILE:ir03_driver> --work "${CMAKE_CURRENT_BINARY_DIR}/ir03_diff_scratch"
              --programs 300 --rows 48 --seed 1)
     # IR 0.4 programs (bit operations, gather/find_eq, row filters) against the same independent interpreter.
     add_test(NAME ir04_diff COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/ir03/ir03_diff.py"
-             --driver $<TARGET_FILE:ir03_driver> --work "${CMAKE_BINARY_DIR}/ir04_diff_scratch"
+             --driver $<TARGET_FILE:ir03_driver> --work "${CMAKE_CURRENT_BINARY_DIR}/ir04_diff_scratch"
              --programs 300 --rows 48 --seed 2 --ir04)
 endif()
 # IR 0.4 verifier, VM known answers, row filter, chunked cross-row reads.
@@ -107,6 +113,7 @@ add_executable(test_ir04 tests/ir04/test_ir04.c)
 target_link_libraries(test_ir04 PRIVATE su_vm su_jobs)
 sutekh_apply_warnings(test_ir04)
 add_test(NAME ir04 COMMAND test_ir04 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif() # SUTEKH_BUILD_TESTS
 
 # space3d (docs/SPACE3D.md): narrow phase, broadphase and the space3d.query host operator.
 add_library(su_space3d STATIC profiles/space3d/native/space3d_geom.c profiles/space3d/native/space3d_mesh.c
@@ -114,6 +121,7 @@ add_library(su_space3d STATIC profiles/space3d/native/space3d_geom.c profiles/sp
 target_include_directories(su_space3d PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/profiles/space3d/native")
 target_link_libraries(su_space3d PUBLIC su_world su_ir)
 sutekh_apply_warnings(su_space3d)
+if(SUTEKH_BUILD_TESTS)
 add_executable(test_space3d_geom tests/space3d/test_space3d_geom.c)
 target_link_libraries(test_space3d_geom PRIVATE su_space3d)
 if(UNIX)
@@ -137,3 +145,4 @@ if(UNIX)
 endif()
 sutekh_apply_warnings(test_space3d_ops)
 add_test(NAME space3d_ops COMMAND test_space3d_ops WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif() # SUTEKH_BUILD_TESTS

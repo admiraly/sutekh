@@ -145,6 +145,10 @@ Local validation of this round:
   in `PACK_VALIDATION.json` only, which was regenerated. GCC Release native, Clang Release native and Clang UBSan
   were rebuilt: full ctest 167 tests each, 0 failures, the same 2 skips, and 0 `runtime error` lines. The matrix
   ctests passed against the unchanged expectations, so main's changes did not move any digest.
+- **Second merge of `origin/main` (`70ce82d`, consumer build).** Main now gates tests behind `SUTEKH_BUILD_TESTS`, so
+  `cmake/SutekhDeterminism.cmake` returns early when tests are off (its compiler-leg check still runs). A configure
+  with tests, bench and examples off succeeds. GCC, Clang and UBSan were rebuilt: full ctest 167/167 each, the same 2
+  skips, 0 UBSan runtime errors, and 14 `determinism_*` tests registered.
 
 Source hashes of this round:
 
@@ -293,7 +297,8 @@ Observed in the job logs:
   passed.
 
 Commit `3bc4244` (the fix round before the merge) ran no checks: GitHub reported the PR as conflicting, in
-`PACK_VALIDATION.json` only. The later docs-only head records this section; its run is in the PR's checks.
+`PACK_VALIDATION.json` only. Two later heads run in the PR's checks, not recorded here: the docs commit that
+records this section, and a second merge of `origin/main`.
 
 ## SHA-256 evidence
 
