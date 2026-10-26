@@ -7,7 +7,8 @@ The host API does not carry the RTS operators (src/host/su_host_operators.c), so
 (bench/rts/replay/engine_backend.py) replays tests/determinism/rts_engine_golden.rtsreplay, an rts-replay/0.1
 command stream recorded once by a Linux GCC build, and compares the engine's canonical state digest (SHA-256 of the
 world.snapshot bytes), event digest and counts at every tick. Every build that passes produced the recorded state
-bytes at all 241 boundaries. These digests are the engine snapshot (format 0.2), not su_host_digest.
+bytes at all 241 boundaries, including a congested blob that exhausts the operators' per-query budget. These
+digests are the engine snapshot (format 0.2), not su_host_digest.
 
     python3 -I tests/determinism/rts_engine_golden.py check <sutekh> [golden]
     python3 -I tests/determinism/rts_engine_golden.py record <sutekh> <out>   (maintainers: regenerates the golden)
@@ -24,7 +25,7 @@ import engine_backend as eb  # noqa: E402
 import rts_replay as rr  # noqa: E402
 
 GOLDEN = os.path.join(HERE, "rts_engine_golden.rtsreplay")
-CAP = 256
+CAP = 512
 TICKS = 240
 SCENE = {"generator": "rts-units-splitmix64/0.1", "params": {"units": 192}, "seed": 20261026, "capacity": CAP}
 ENV = {"SUTEKH_CHECKPOINT_INTERVAL_TICKS": "64"}
@@ -51,6 +52,13 @@ def commands() -> list:
                                                       "pos_y": 16000 + 50 * i, "reload": 3, "damage": 9,
                                                       "flight": 2, "range_sq": 60000}, "external_id": 900 + i}
                                           for i in range(24)]}),
+        # A congested blob: 200 armed units within 160 x 40 coordinate units, more neighbours than the operators'
+        # per-query budget (RTS_OPS_BUDGET_K = 160), so rts.spatial truncates (counts.truncated_rows > 0).
+        (1, rr.CMD_SPAWN_BATCH, {"rows": [{"values": {"kind": 1, "team": i & 1, "hp": 60, "pos_x": 24000 + 8 * (i % 20),
+                                                      "pos_y": 24000 + 4 * (i // 20), "speed": 3, "reload": 2,
+                                                      "damage": 5, "flight": 1, "range_sq": 90000,
+                                                      "order_mode": 2, "order_x": 24080, "order_y": 24020},
+                                           "external_id": 2000 + i} for i in range(200)]}),
         (2, rr.CMD_SET_FIELDS, {"entities": [{"entity": h(s), "values": {"formation_slot": 192, "formation_gen": 1,
                                                                           "formation_ox": 16384 + 64 * (s - 128),
                                                                           "formation_oy": 16384}}

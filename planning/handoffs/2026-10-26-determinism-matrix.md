@@ -46,6 +46,122 @@ Conservative choices and their reasons:
 - **D4 left alone.** The VM tier globals are documented, not changed: the file belongs to the VM owner and the race
   is tier-neutral.
 
+## Fix round after the independent review (2026-10-26)
+
+The review found no divergence. It failed the PR on scope: `docs/DETERMINISM_MATRIX.md` section 1 claimed more than
+the matrix tested. Each point was either covered by new tests or removed from the claim. Points in the review's
+order:
+
+1. **space3d.**
+   - Four new workloads: `s3_query`, `s3_prox`, `s3_shape` and `s3_compound`, one per operator variant.
+     - Each has 96 sphere, capsule or compound movers in a 24 m arena.
+     - The obstacles are spheres, rotating boxes, rotating capsules, rotating meshes from operator data, gates and a
+       floor box, plus three D1-style boxes.
+     - `det.s3move` / `det.s3move_c` bounce the movers on contacts 0 and 1, so the operator's results feed motion.
+   - Activity is pinned in the expectation: 10,780 to 17,234 contacts per 600 ticks, proximity hits, sub-shape
+     contacts and truncation flags.
+   - The reviewer's mutation (libm `sqrt` in `ray_sphere`) is now caught by all four workloads at tick 60
+     (`run_mutants.py`).
+   - Two exclusions were measured with an instrumented build: `INT64_MIN` extents never reach the narrow phase, while
+     −1 m extents reach it in 6 to 2,650 sweeps per run. Both are stated in section 1.
+2. **Operation coverage.**
+   - `probe04` (`det.bits04` and `det.gather04`, IR 0.4 with a row filter) runs the 45 missing operations with edge
+     operands.
+   - `determinism_op_coverage` reads the table from the library (`det_op_list`) and fails on any operation without a
+     live use in a matrix workload. Live means its result reaches a store, an event or a despawn; there is a
+     self-test for this.
+   - Coverage is now 110 of 110. The overclaim at old lines 87-89 was corrected, and IR 0.4's status is stated in
+     section 1.
+3. **Native fallback.** `tests/determinism/expected_tiers.txt` pins each workload's per-system placement in each
+   tier mode (`--expect-tiers`, every matrix ctest). A copy that expects `det.sixdof=planned` under native fails
+   with `PLACEMENT MISMATCH`.
+4. **RTS operators.**
+   - Section 1 lists the limits.
+   - The engine recording gained a congested blob of 200 armed units: `truncated_rows` is 200 for 20 ticks.
+   - It was re-recorded with `CAP` 512, at most 420 rows (still one chunk).
+   - A native-tier serve run was not added (optional).
+5. **Tiers and CI manifests.**
+   - The claim now says "uniform per-run tiers and the mixed placement".
+   - `--tier mixed` cycles native / reference / planned per system (`mixed_vm` without native); ctest
+     `determinism_matrix_mixed`.
+   - CI writes and compares DLL manifests for every tier mode.
+6. **Cross-chunk merge.** `churn3k`: 3,072 slots, about 2,800 live entities, host spawns and despawns, IR deaths and
+   events. A reversed merge order is caught by `churn3k` and not by `churn` (one chunk), which shows the merge is now
+   reached.
+7. **Rollback.** Every workload, churn included, restores the snapshot of a mid-run tick off a keyframe, in place
+   and into a fresh world on another tier. It re-simulates the same commands from the saved generator state, and
+   every per-tick digest must match. This runs in every matrix ctest.
+8. **Compiler pinning.**
+   - `tests/determinism/ci_compilers.txt` lists every CI leg's compiler.
+   - `-DSUTEKH_DET_COMPILER_LEG=<leg>` makes the configure step fail on any other compiler.
+   - The file's header says it changes only deliberately.
+   - `det_matrix` also prints the compiler that built it.
+9. **Cross-playback directions.**
+   - Each Windows leg plays the Linux GCC and Linux Clang replays.
+   - The new job `determinism-play-windows-on-linux` plays every Windows leg's replays on Linux GCC, in all four tier
+     modes.
+10. **Nits.**
+    - `play_foreign` checks the played tick count, the end tick, the keyframe count and the digest count.
+    - The RTS stand-in's distance is computed in `uint64_t` from absolute differences.
+    - `tests/determinism/fixtures/racer16.json` is committed, and `determinism_fixture_racer_committed` checks that
+      `racer_microcosm` still dumps it byte for byte.
+    - D1: the wrapping product against the saturating negation is documented at `sign_mul` and at the slab test in
+      `space3d_geom.c`, and in section 5. Half extents stay unvalidated, because validating them would change the
+      operator's semantics.
+
+New and changed paths in this round:
+
+- `tests/determinism/`:
+  - `det_matrix.c`, `gen_workloads.py`, `rts_engine_golden.py` and `rts_engine_golden.rtsreplay`;
+  - `expected_digests.txt` (11 workloads, 191 lines);
+  - new: `expected_tiers.txt`, `ci_compilers.txt`, `check_op_coverage.py`, `det_op_list.c`, `run_mutants.py`,
+    `fixtures/racer16.json`, `{s3move,s3move_c,bits04,gather04}.{capsule,lir}.json`.
+- `cmake/SutekhDeterminism.cmake`, `.github/workflows/repository-checks.yml`.
+- `profiles/space3d/native/space3d_geom.c` (comments only).
+- `docs/DETERMINISM_MATRIX.md` (rewritten section 1, workloads, results, D5), `docs/DETERMINISM_AND_BFME.md`,
+  `docs/NUMERIC_FIXED_Q32.md`.
+- `PACK_VALIDATION.json`.
+
+Local validation of this round:
+
+- **Builds.** Same machine and toolchains as below. The build directories moved to a second disk because
+  the root filesystem ran out of space; the full suites were re-run there from fresh configures.
+- **Matrix.** Eight builds: GCC/Clang Release with native, GCC Debug with native, Clang Debug, Clang `-march=native`,
+  GCC portable, GCC `-ffast-math`, and Clang UBSan with native. On every tier mode each build has (reference,
+  planned, mixed, and native where built):
+  - the manifest SHA-256 was `3ce716273cc36c7b682847da0be8dedf803620a6efcc8368a3e1909450e03925`, equal to the
+    expectation;
+  - placements equal `expected_tiers.txt`;
+  - the rollback check passed for 11 of 11 workloads.
+- **Per build.** The DLL (planned) passed. Each build played GCC's nine replays (reference, planned), the GCC DLL
+  played each build's replays, and every replay file was byte-identical to GCC's. `test_det_regress` gave 108/108,
+  op coverage 110/110, and `rts_engine_golden` matched 241/241.
+- **Full ctest on fresh builds.** GCC Release native, Clang Release native, and Clang UBSan (halt on error): 156
+  tests each, 0 failures, 2 skips (`native_unwind`, `audio_device`). The UBSan LastTest.log has 0 `runtime error`
+  lines.
+- **Mutation set.** `run_mutants.py` on the final source: 6 of 6 caught (table in `docs/DETERMINISM_MATRIX.md`
+  section 2).
+
+Source hashes of this round:
+
+| File | SHA-256 |
+|---|---|
+| `tests/determinism/det_matrix.c` | `276c4153dedc2844d367f05b8270dbec3055e89b1e8ea02ecd6db02ed9cdb055` |
+| `tests/determinism/expected_digests.txt` | `b31a09332321d255c78eeeaf55dc9ea6acbb74d1810a4e55dc034285dc71aeab` |
+| `tests/determinism/expected_tiers.txt` | `5f6407e469bd7db0be3891bab51a532fb4702a58644664c70643b911bc8a4176` |
+| `tests/determinism/rts_engine_golden.rtsreplay` | `a914e83028ac925e21e02c1a3c1c4200ea6bb98adf2736397e5fa0d3b324f103` |
+| `tests/determinism/fixtures/racer16.json` | `f438f286f961752b6e636d3ef8e48df8abdc56f947f299c2cefe853271b4e4c1` |
+| `tests/determinism/bits04.lir.json` | `5d34e6d88049eb39c6e99d211dc90939e2d8ed5c8aeeba4ebc6c598144597aff` |
+| `tests/determinism/gather04.lir.json` | `f58cddf948af2e7c893e7a6c17b0de985c0512fe0007aeb359955a557daf6124` |
+| `tests/determinism/s3move.lir.json` | `1f7621175904e5be6cf82e1aa452575747f85bbf26a1720381aefb61c39a23af` |
+| `tests/determinism/s3move_c.lir.json` | `68ac7ad20cef8e9809f9580bcfcea9fbf591d8974fe87b553c02453fa0f0e96d` |
+| `profiles/space3d/native/space3d_geom.c` | `c07355afe27360ed9f5dd67aee4a74d657f9844fd87ea346fad2e2462dc40758` |
+
+CI of this round: see section "CI", "Fix round".
+
+The sections below record the first round as it was. Its manifest hash `4dee8c73…` and the five-workload counts are
+superseded.
+
 ## Local validation
 
 Machine and tools:
@@ -149,7 +265,9 @@ step failed: pwsh did not expand `-DCMAKE_CXX_COMPILER=$cxx`. Fixed in `bd24204`
   - `runtime-windows-msvc` (Debug): 136/136.
   - `validate` (Linux, Windows): pass.
 
-The final head (this commit adds the CI record to the docs) re-runs the same jobs. Its result is in the PR's checks.
+The final head of the first round (`7bc562a`, docs only) passed all 13 jobs (run 40263702485).
+
+**Fix round.** `<to be filled from the PR checks of the fix-round head>`
 
 ## SHA-256 evidence
 

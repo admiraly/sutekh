@@ -1,0 +1,133 @@
+{
+ "capsule_format": "0.1",
+ "ir_version": "0.4",
+ "system_id": "det.gather04",
+ "source": "gather04.lir.json",
+ "schema": {
+  "id": "det.probe",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "fixed_q32_v1",
+ "fields": [
+  {
+   "id": 1,
+   "name": "kind",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 3,
+   "name": "ua",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 4,
+   "name": "ub",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 5,
+   "name": "key",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 6,
+   "name": "slot_a",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 7,
+   "name": "ia",
+   "type": "i32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 10,
+   "name": "la",
+   "type": "i64",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 16,
+   "name": "qa",
+   "type": "q32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 128,
+   "name": "g_u32",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 129,
+   "name": "g_i32",
+   "type": "i32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 130,
+   "name": "g_i64",
+   "type": "i64",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 132,
+   "name": "g_q32",
+   "type": "q32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 134,
+   "name": "g_find",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 135,
+   "name": "g_far",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 136,
+   "name": "g_mark",
+   "type": "u32",
+   "read": true,
+   "write": true
+  }
+ ],
+ "schedule": {
+  "phase": "simulate",
+  "after": [],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 65536,
+  "allocation": "forbidden"
+ },
+ "tests": [
+  "tests/determinism/det_matrix.c"
+ ]
+}

@@ -24,7 +24,13 @@ static int v3_is_zero(SuV3 a) {
 
 /* s * h for a sign s in {-1, 0, +1}, as the wrapping product: -1 * INT64_MIN is INT64_MIN. A half extent is an
  * arbitrary q32 lane value, so the plain int64_t product could overflow (undefined behaviour); this is the value
- * every supported compiler produced for it (determinism matrix finding D1, tests/determinism/test_det_regress.c). */
+ * every supported compiler produced for it (determinism matrix finding D1, tests/determinism/test_det_regress.c).
+ * Half extents are not validated. A negative or INT64_MIN extent describes no box, and the two negations of it here
+ * differ on purpose: the slab and clamp tests use the profile's saturating su_q32_neg (-INT64_MIN = INT64_MAX), the
+ * corner products use this wrapping one (as before the fix). Both are fixed functions of the input bits, so results
+ * stay deterministic. Through the operator an INT64_MIN extent never reaches this product (its bounds saturate to an
+ * empty interval, so the broadphase never makes the box a candidate); a small negative extent does reach the narrow
+ * phase (measured in the matrix's space3d workloads) and is deterministic like any other input. */
 static int64_t sign_mul(int s, int64_t h) {
     return s > 0 ? h : s < 0 ? su_i64_from_bits((uint64_t)0 - (uint64_t)h) : 0;
 }
@@ -266,7 +272,7 @@ S3Hit s3_sweep_sphere_obb(SuV3 c0, SuV3 v, int64_t r, SuV3 center, SuQuat q, SuV
     hp = su_v3_addf(p, su_v3_scalef(u, tmin));
     for (i = 0; i < 3; i++) {
         int64_t c = v3_comp(hp, i), hh = v3_comp(half, i);
-        out[i] = c < su_q32_neg(hh) ? -1 : (c > hh ? 1 : 0);
+        out[i] = c < su_q32_neg(hh) ? -1 : (c > hh ? 1 : 0); /* saturating neg: see sign_mul for hh < 0 */
         outc += out[i] != 0;
     }
     if (outc <= 1) {

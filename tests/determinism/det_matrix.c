@@ -41,6 +41,7 @@
 #include <string.h>
 
 #include "ir/su_sha256.h"
+#include "s3mesh_blob.h"
 #include "sutekh/host.h"
 #include "sutekh/replay.h"
 
@@ -232,9 +233,11 @@ typedef struct Workload {
     uint64_t ticks;
     uint64_t keyframe;
     int replayed;
+    void (*stats)(Ctx *c, const SuHostWorld *w); /* optional: accumulates the activity line */
     SuHostWorld *(*create)(Ctx *c);
     void (*inputs)(Ctx *c, SuHostWorld *w, uint64_t tick); /* queue the record of tick (before it runs) */
     void (*between)(Ctx *c, SuHostWorld *w);               /* host actions after a tick (not replayed) */
+    uint32_t arg;                                          /* workload variant (Ctx.arg while it runs) */
 } Workload;
 
 struct Ctx {
@@ -255,6 +258,14 @@ struct Ctx {
     Bytes race_cap, race_lir, move_cap, move_lir, query, racer_fx;
     /* sixdof, churn */
     Bytes six_cap, six_lir, churn_cap, churn_lir;
+    uint32_t arg;  /* the running workload's variant */
+    uint32_t ccap; /* churn capacity */
+    /* space3d operator variants and the motion systems */
+    Bytes s3_rec[4], s3_move_cap, s3_move_lir, s3_movec_cap, s3_movec_lir;
+    TBlob s3_mesh, s3_compound;
+    uint64_t s3_contacts, s3_two, s3_gates, s3_prox, s3_sub, s3_trunc; /* operator activity (manifest line) */
+    /* IR 0.4 probes */
+    Bytes bits_cap, bits_lir, gather_cap, gather_lir;
 };
 
 static SuHostWorld *create_world(const SuHostCapsule *caps, uint32_t n, const Bytes *fx, uint64_t capacity,
@@ -451,14 +462,13 @@ static void rts_inputs(Ctx *c, SuHostWorld *w, uint64_t tick) {
                 continue;
             }
             for (t = 0; t < n; t++) {
-                int64_t dx, dy;
-                uint64_t d2;
+                uint64_t dx, dy, d2;
                 if (!alive[t] || c->kind[t] != 1u || c->team[t] == c->team[s]) {
                     continue;
                 }
-                dx = (int64_t)px[t] - (int64_t)px[s];
-                dy = (int64_t)py[t] - (int64_t)py[s];
-                d2 = (uint64_t)(dx * dx) + (uint64_t)(dy * dy);
+                dx = px[t] > px[s] ? (uint64_t)px[t] - px[s] : (uint64_t)px[s] - px[t]; /* < 2^32 */
+                dy = py[t] > py[s] ? (uint64_t)py[t] - py[s] : (uint64_t)py[s] - py[t];
+                d2 = dx * dx + dy * dy; /* < 2^65 cannot occur: positions are below 2^31 (rts_u32_v1 domain) */
                 if (d2 < best) {
                     best = d2;
                     bs = t;
@@ -645,7 +655,9 @@ static void six_inputs(Ctx *c, SuHostWorld *w, uint64_t tick) {
 
 /* ---- churn ---- */
 
-#define CHURN_CAP 96u
+/* Capacity Ctx.ccap: 96 (churn) or 3072 (churn3k: three SU_CHUNK_SLOTS chunks, so the per-chunk structural
+ * command and event buffers are merged across chunks every tick). */
+#define CHURN_CAP (c->ccap)
 
 static void churn_spawn(Ctx *c, SuHostWorld *w) {
     SuHostValue v[24];
@@ -680,12 +692,14 @@ static void churn_spawn(Ctx *c, SuHostWorld *w) {
 
 static SuHostWorld *churn_create(Ctx *c) {
     SuHostCapsule cap = ir_capsule(&c->churn_cap, &c->churn_lir);
-    SuHostWorld *w = create_world(&cap, 1, NULL, CHURN_CAP, 60, CHURN_CAP, 2u * CHURN_CAP, 128, 11u);
+    SuHostWorld *w;
     uint32_t s;
+    c->ccap = c->arg;
+    w = create_world(&cap, 1, NULL, CHURN_CAP, 60, CHURN_CAP, 2u * CHURN_CAP, CHURN_CAP == 96u ? 128u : 4096u, 11u);
     if (w == NULL) {
         return NULL;
     }
-    for (s = 0; s < 64u; s++) {
+    for (s = 0; s < (CHURN_CAP == 96u ? 64u : CHURN_CAP - 272u); s++) {
         churn_spawn(c, w);
     }
     return w;
@@ -708,7 +722,7 @@ static void churn_inputs(Ctx *c, SuHostWorld *w, uint64_t tick) {
 
 /* Between ticks: spawn 0..3 entities into the lowest free slots; every 5th tick despawn a random live entity. */
 static void churn_between(Ctx *c, SuHostWorld *w) {
-    uint32_t k = rng_below(&c->rng, 4u), i;
+    uint32_t k = rng_below(&c->rng, CHURN_CAP == 96u ? 4u : 48u), i, d, nd = CHURN_CAP / 96u;
     uint64_t tick = su_host_tick(w);
     for (i = 0; i < k; i++) {
         uint32_t s;
@@ -720,7 +734,7 @@ static void churn_between(Ctx *c, SuHostWorld *w) {
         }
         churn_spawn(c, w);
     }
-    if (tick % 5u == 0u) {
+    for (d = 0; tick % 5u == 0u && d < nd; d++) { /* every 5th tick: nd random live entities despawned */
         uint32_t start = rng_below(&c->rng, CHURN_CAP), s;
         for (s = 0; s < CHURN_CAP; s++) {
             uint64_t e = 0;
@@ -736,7 +750,375 @@ static void churn_between(Ctx *c, SuHostWorld *w) {
     }
 }
 
+/* ---- space3d operator variants ----
+ * One world per operator: space3d.query (arg 0), query_prox (1), query_shape (2), query_compound (3), each with
+ * det.s3move (det.s3move_c for compound) before it. 96 movers fly through 40 m of spheres, rotating boxes, rotating
+ * capsules, rotating static meshes (two triangle meshes from operator data) and gates in a 24 m arena over a 1 km
+ * floor box, and
+ * bounce on the operator's contacts of the previous tick, so every result lane feeds back into motion. Three boxes
+ * have D1-style extents: the two with INT64_MIN extents get empty bounds and never reach the narrow phase (the
+ * INT64_MIN product itself is covered by test_det_regress); the one with -1 m extents reaches it (6 to 2,650 sphere
+ * sweeps per run, counted 2026-10-26). Commands every 30 ticks kick movers. */
+
+#define S3_ROWS 224u
+#define S3_MOVERS 96u
+
+static const char *const k_s3_rec[4] = {"profiles/space3d/space3d_query.capsule.json",
+                                        "profiles/space3d/space3d_query_prox.capsule.json",
+                                        "profiles/space3d/space3d_query_shape.capsule.json",
+                                        "profiles/space3d/space3d_query_compound.capsule.json"};
+
+static void s3_blobs(Ctx *c) {
+    SuV3 v[16];
+    uint32_t t[72];
+    TGeom g[2];
+    TPart p[2];
+    TMesh m[2], cm[2];
+    TSub u[5];
+    SuV3 h0, h1;
+    uint32_t i;
+    h0.x = h0.y = h0.z = 3 * ONE_RAW;
+    h1.x = 6 * ONE_RAW;
+    h1.y = ONE_RAW / 2;
+    h1.z = 4 * ONE_RAW;
+    tbox_verts(h0, v);
+    tbox_verts(h1, v + 8);
+    tbox_tris(t);
+    tbox_tris(t + 36);
+    for (i = 0; i < 2u; i++) {
+        g[i].nv = 8;
+        g[i].nt = 12;
+        g[i].v = v + 8u * i;
+        g[i].t = t + 36u * i;
+        p[i].geom = i;
+        p[i].pos.x = p[i].pos.y = p[i].pos.z = 0;
+        p[i].rot.w = ONE_RAW;
+        p[i].rot.x = p[i].rot.y = p[i].rot.z = 0;
+        p[i].scale = ONE_RAW;
+        m[i].first = i;
+        m[i].count = 1;
+    }
+    p[1].rot.w = INT64_C(3037000500); /* 90 degrees about y */
+    p[1].rot.y = INT64_C(3037000500);
+    tb_build(&c->s3_mesh, g, 2, p, 2, m, 2);
+    /* Compounds: 0 = a long capsule and a sphere; 1 = a cross of three capsules. */
+    memset(u, 0, sizeof u);
+    u[0].a.z = -2 * ONE_RAW;
+    u[0].b.z = 2 * ONE_RAW;
+    u[0].r = ONE_RAW / 2;
+    u[1].a.y = u[1].b.y = ONE_RAW;
+    u[1].r = ONE_RAW * 3 / 4;
+    u[2].a.x = -2 * ONE_RAW;
+    u[2].b.x = 2 * ONE_RAW;
+    u[2].r = ONE_RAW / 4;
+    u[3].a.y = -2 * ONE_RAW;
+    u[3].b.y = 2 * ONE_RAW;
+    u[3].r = ONE_RAW / 4;
+    u[4].a.z = -ONE_RAW;
+    u[4].b.z = ONE_RAW;
+    u[4].r = ONE_RAW / 3;
+    cm[0].first = 0;
+    cm[0].count = 2;
+    cm[1].first = 2;
+    cm[1].count = 3;
+    tb_build2(&c->s3_compound, g, 2, p, 2, m, 2, u, 5, cm, 2);
+}
+
+/* Appends (fid, value) for a lane the world has; skips lanes the variant's record does not declare. */
+static void s3_put(const SuHostWorld *w, SuHostValue *v, uint32_t *n, const char *name, int64_t x, int is64) {
+    uint32_t id = 0;
+    char lo[64];
+    snprintf(lo, sizeof lo, "%s.lo", name);
+    if (su_host_field_id(w, is64 ? lo : name, &id) != SU_OK) {
+        return;
+    }
+    if (is64) {
+        six_spawn_values(v, n, id, x);
+    } else {
+        v[*n].field_id = id;
+        v[*n].value = (uint32_t)u64_of(x);
+        (*n)++;
+    }
+}
+
+/* Uniform raw q32 in [-m, m] metres. */
+static int64_t s3_coord(Rng *r, uint32_t m) {
+    return rng_q32(r, 2u * m, -(int64_t)m, 1u << 31) - (int64_t)(1u << 30);
+}
+
+static void s3_spawn(Ctx *c, SuHostWorld *w, uint32_t kind, uint32_t slot) {
+    SuHostValue v[48];
+    uint32_t n = 0;
+    uint64_t ent = 0;
+    SuHostError e;
+    uint32_t st;
+    int64_t px = s3_coord(&c->rng, 22), py = s3_coord(&c->rng, 22), pz = s3_coord(&c->rng, 22);
+    s3_put(w, v, &n, "kind", kind, 0);
+    s3_put(w, v, &n, "pos_x", px, 1);
+    s3_put(w, v, &n, "pos_y", py, 1);
+    s3_put(w, v, &n, "pos_z", pz, 1);
+    s3_put(w, v, &n, "prev_x", px, 1);
+    s3_put(w, v, &n, "prev_y", py, 1);
+    s3_put(w, v, &n, "prev_z", pz, 1);
+    s3_put(w, v, &n, "rot_w", ONE_RAW, 1);
+    s3_put(w, v, &n, "angvel_x", rng_q32(&c->rng, 4u, -2, 0), 1);
+    s3_put(w, v, &n, "angvel_y", rng_q32(&c->rng, 4u, -2, 1u << 31), 1);
+    s3_put(w, v, &n, "angvel_z", rng_q32(&c->rng, 2u, -1, 1u << 30), 1);
+    if (kind == 1u) {
+        s3_put(w, v, &n, "vel_x", rng_q32(&c->rng, 50u, -25, 1u << 31), 1);
+        s3_put(w, v, &n, "vel_y", rng_q32(&c->rng, 50u, -25, 1u << 31), 1);
+        s3_put(w, v, &n, "vel_z", rng_q32(&c->rng, 50u, -25, 1u << 31), 1);
+        s3_put(w, v, &n, "radius", ONE_RAW + rng_q32(&c->rng, 1u, 0, 1u << 31), 1);
+        s3_put(w, v, &n, "next_gate", rng_below(&c->rng, 6u), 0);
+        s3_put(w, v, &n, "prox_margin", rng_q32(&c->rng, 3u, 1, 0), 1);
+        s3_put(w, v, &n, "z0", -rng_q32(&c->rng, 2u, 0, 1u << 31), 1);
+        s3_put(w, v, &n, "z1", rng_q32(&c->rng, 2u, 0, 1u << 31), 1);
+        s3_put(w, v, &n, "compound", slot % 3u == 2u ? 0xFFFFFFFFu : slot % 3u, 0); /* 0xFFFFFFFF: plain capsule */
+        s3_put(w, v, &n, "rot0_w", ONE_RAW, 1);
+    } else if (kind == 2u) {
+        s3_put(w, v, &n, "radius", rng_q32(&c->rng, 4u, 2, 1u << 31), 1);
+    } else if (kind == 3u) {
+        s3_put(w, v, &n, "half_x", rng_q32(&c->rng, 4u, 0, 1u << 31) + ONE_RAW / 2, 1);
+        s3_put(w, v, &n, "half_y", rng_q32(&c->rng, 4u, 0, 1u << 31) + ONE_RAW / 2, 1);
+        s3_put(w, v, &n, "half_z", rng_q32(&c->rng, 4u, 0, 1u << 31) + ONE_RAW / 2, 1);
+    } else if (kind == 4u) {
+        s3_put(w, v, &n, "radius", ONE_RAW / 2 + rng_q32(&c->rng, 2u, 0, 0), 1);
+        s3_put(w, v, &n, "half_z", rng_q32(&c->rng, 4u, 1, 1u << 31), 1);
+    } else if (kind == 8u) {
+        s3_put(w, v, &n, "gate_index", slot % 2u, 0); /* mesh index */
+    } else { /* gates 5..7 */
+        s3_put(w, v, &n, "gate_index", slot % 6u, 0);
+        s3_put(w, v, &n, "half_x", rng_q32(&c->rng, 4u, 3, 0), 1);
+        s3_put(w, v, &n, "half_y", rng_q32(&c->rng, 4u, 3, 0), 1);
+        s3_put(w, v, &n, "radius", rng_q32(&c->rng, 3u, 3, 0), 1);
+    }
+    st = su_host_spawn(w, v, n, slot, &ent, &e);
+    if (st != SU_OK) {
+        fail("space3d spawn", st, &e);
+    }
+}
+
+/* A static box at (x, y, z) with the given half extents (raw), not rotating. */
+static void s3_box(SuHostWorld *w, int64_t x, int64_t y, int64_t z, int64_t hx, int64_t hy, int64_t hz) {
+    SuHostValue v[32];
+    uint32_t n = 0;
+    uint64_t ent = 0;
+    SuHostError e;
+    uint32_t st;
+    s3_put(w, v, &n, "kind", 3, 0);
+    s3_put(w, v, &n, "pos_x", x, 1);
+    s3_put(w, v, &n, "pos_y", y, 1);
+    s3_put(w, v, &n, "pos_z", z, 1);
+    s3_put(w, v, &n, "prev_x", x, 1);
+    s3_put(w, v, &n, "prev_y", y, 1);
+    s3_put(w, v, &n, "prev_z", z, 1);
+    s3_put(w, v, &n, "rot_w", ONE_RAW, 1);
+    s3_put(w, v, &n, "half_x", hx, 1);
+    s3_put(w, v, &n, "half_y", hy, 1);
+    s3_put(w, v, &n, "half_z", hz, 1);
+    st = su_host_spawn(w, v, n, 0, &ent, &e);
+    if (st != SU_OK) {
+        fail("space3d box", st, &e);
+    }
+}
+
+static SuHostWorld *s3_create(Ctx *c) {
+    SuHostCapsule caps[2];
+    SuHostWorld *w;
+    SuHostError e;
+    uint32_t st, s, i;
+    static const uint32_t layout[][2] = {{1u, S3_MOVERS}, {2u, 36u}, {3u, 30u}, {4u, 24u}, {8u, 8u},
+                                         {5u, 2u},        {6u, 2u},  {7u, 2u}};
+    caps[0] = c->arg == 3u ? ir_capsule(&c->s3_movec_cap, &c->s3_movec_lir)
+                           : ir_capsule(&c->s3_move_cap, &c->s3_move_lir);
+    caps[1] = ir_capsule(&c->s3_rec[c->arg], NULL);
+    w = create_world(caps, 2, NULL, S3_ROWS, 60, 1, 4u * S3_ROWS, 4096, 31u);
+    if (w == NULL) {
+        return NULL;
+    }
+    st = c->arg == 3u ? su_host_set_operator_data(w, NULL, c->s3_compound.p, c->s3_compound.n, &e)
+                      : su_host_set_operator_data(w, NULL, c->s3_mesh.p, c->s3_mesh.n, &e);
+    if (st != SU_OK) {
+        fail("operator data", st, &e);
+    }
+    s = 0;
+    for (i = 0; i < sizeof layout / sizeof layout[0]; i++) {
+        uint32_t k;
+        for (k = 0; k < layout[i][1]; k++) {
+            s3_spawn(c, w, layout[i][0], s++);
+        }
+    }
+    /* Floor: the top face of a 1 km box at y = -24 m. */
+    s3_box(w, 0, -INT64_C(1024) * ONE_RAW, 0, INT64_C(1000) * ONE_RAW, INT64_C(1000) * ONE_RAW,
+           INT64_C(1000) * ONE_RAW);
+    /* D1-style extents (empty bounds: never narrow-phase candidates). */
+    s3_box(w, 0, 0, 0, INT64_MIN, ONE_RAW, ONE_RAW);
+    s3_box(w, 5 * ONE_RAW, 0, 0, -ONE_RAW, -ONE_RAW, -ONE_RAW);
+    s3_box(w, 0, 5 * ONE_RAW, 0, INT64_MIN, INT64_MIN, INT64_MIN);
+    return w;
+}
+
+/* Operator activity after a tick: contacts reported, movers with two contacts, gate crossings, proximity hits,
+ * compound sub-shape contacts and truncation flags. Written to the manifest, so the expectation pins it and a
+ * workload whose operator went quiet is visible. */
+static void s3_stats(Ctx *c, const SuHostWorld *w) {
+    uint32_t idc = 0, idg = 0, idp = 0, ids = 0, idf = 0, s;
+    const uint32_t *hc, *gd, *ps = NULL, *sb = NULL, *fl;
+    uint64_t rows = su_host_capacity(w);
+    if (su_host_field_id(w, "hit_count", &idc) != SU_OK || su_host_field_id(w, "gate_dir", &idg) != SU_OK ||
+        su_host_field_id(w, "hit_flags", &idf) != SU_OK) {
+        return;
+    }
+    hc = col(w, idc);
+    gd = col(w, idg);
+    fl = col(w, idf);
+    if (su_host_field_id(w, "prox_slot", &idp) == SU_OK) {
+        ps = col(w, idp);
+    }
+    if (su_host_field_id(w, "c0_sub", &ids) == SU_OK) {
+        sb = col(w, ids);
+    }
+    for (s = 0; s < rows; s++) {
+        c->s3_contacts += hc[s];
+        c->s3_two += hc[s] == 2u;
+        c->s3_gates += gd[s] != 0u;
+        c->s3_trunc += fl[s] != 0u;
+        c->s3_prox += ps != NULL && ps[s] != NONE32;
+        c->s3_sub += sb != NULL && sb[s] != NONE32 && (sb[s] & 0xFFFFu) != 0xFFFFu;
+    }
+}
+
+static void s3_inputs(Ctx *c, SuHostWorld *w, uint64_t tick) {
+    uint32_t vx = field(w, "vel_x"), s;
+    if (tick % 30u != 15u) {
+        return;
+    }
+    /* A command: a velocity kick (up to 40 m/s per axis) for every 4th mover, from a random phase. */
+    for (s = rng_below(&c->rng, 4u); s < S3_MOVERS; s += 4u) {
+        uint64_t e = 0;
+        uint32_t ax;
+        if (su_host_entity_at(w, s, &e) != SU_OK) {
+            continue;
+        }
+        for (ax = 0; ax < 3u; ax++) {
+            b_put64(&c->batch, e, vx + 2u * ax, rng_q32(&c->rng, 80u, -40, 1u << 31));
+        }
+    }
+    b_push(&c->batch, w, tick);
+}
+
+/* ---- IR 0.4 probes: det.bits04 (every family op, bit ops, conversions; native-lowerable) and det.gather04
+ * (gathers, find_eq_u32, row filter; VM only). Edge operands every tick. ---- */
+
+#define PROBE_ROWS 64u
+
+static const int32_t k_i32_edges[] = {0, 1, -1, 2, -2, INT32_MIN, INT32_MAX, INT32_MIN + 1, INT32_MAX - 1,
+                                      46340, 46341, -46341, 65536, -65536, 31, 32, 33, 63, 64};
+static const uint32_t k_u32_edges[] = {0u, 1u, 2u, 0xFFFFFFFFu, 0xFFFFFFFEu, 0x80000000u, 0x7FFFFFFFu,
+                                       31u, 32u, 33u, 63u, 64u, 65535u, 65536u};
+
+static uint32_t probe_u32(Rng *r) {
+    uint64_t x = rng_next(r);
+    return (x & 3u) == 0u ? k_u32_edges[(x >> 8) % (sizeof k_u32_edges / sizeof k_u32_edges[0])]
+                          : (uint32_t)(rng_next(r) >> (uint32_t)((x >> 8) % 33u));
+}
+
+static int32_t probe_i32(Rng *r) {
+    uint64_t x = rng_next(r);
+    uint32_t u;
+    int32_t v;
+    if ((x & 3u) == 0u) {
+        return k_i32_edges[(x >> 8) % (sizeof k_i32_edges / sizeof k_i32_edges[0])];
+    }
+    u = (uint32_t)(rng_next(r) >> (uint32_t)((x >> 8) % 33u));
+    memcpy(&v, &u, sizeof v);
+    return v;
+}
+
+static void probe_values(Ctx *c, const SuHostWorld *w, uint64_t e, int spawn, SuHostValue *v, uint32_t *n) {
+    static const char *const i32n[3] = {"ia", "ib", "ic"};
+    static const char *const i64n[3] = {"la", "lb", "lc"};
+    static const char *const q32n[3] = {"qa", "qb", "qc"};
+    uint32_t k;
+    (void)e;
+    (void)spawn;
+    s3_put(w, v, n, "n", rng_below(&c->rng, 72u), 0);
+    s3_put(w, v, n, "ua", probe_u32(&c->rng), 0);
+    s3_put(w, v, n, "ub", probe_u32(&c->rng), 0);
+    s3_put(w, v, n, "key", 1u + rng_below(&c->rng, 24u), 0); /* never 0: dead rows hold 0 */
+    s3_put(w, v, n, "slot_a", rng_below(&c->rng, 8u) == 0u ? probe_u32(&c->rng) : rng_below(&c->rng, PROBE_ROWS), 0);
+    for (k = 0; k < 3u; k++) {
+        int32_t x = probe_i32(&c->rng);
+        uint32_t u;
+        memcpy(&u, &x, sizeof u);
+        s3_put(w, v, n, i32n[k], u, 0);
+        s3_put(w, v, n, i64n[k], six_operand(&c->rng), 1);
+        s3_put(w, v, n, q32n[k], six_operand(&c->rng), 1);
+    }
+}
+
+static SuHostWorld *probe_create(Ctx *c) {
+    SuHostCapsule caps[2];
+    SuHostWorld *w;
+    uint32_t s;
+    caps[0] = ir_capsule(&c->bits_cap, &c->bits_lir);
+    caps[1] = ir_capsule(&c->gather_cap, &c->gather_lir);
+    w = create_world(caps, 2, NULL, PROBE_ROWS, 120, 0, 0, 64, 41u);
+    if (w == NULL) {
+        return NULL;
+    }
+    for (s = 0; s < PROBE_ROWS - 4u; s++) { /* the last four slots stay dead (gathers and find_eq see zeros) */
+        SuHostValue v[32];
+        uint32_t n = 0;
+        uint64_t ent = 0;
+        SuHostError e;
+        uint32_t st;
+        s3_put(w, v, &n, "kind", s % 4u == 3u ? 2u : 1u, 0); /* kind 2 rows are outside gather04's row filter */
+        probe_values(c, w, 0, 1, v, &n);
+        st = su_host_spawn(w, v, n, s, &ent, &e);
+        if (st != SU_OK) {
+            fail("probe spawn", st, &e);
+        }
+    }
+    return w;
+}
+
+static void probe_inputs(Ctx *c, SuHostWorld *w, uint64_t tick) {
+    uint32_t s;
+    (void)tick;
+    for (s = 0; s < PROBE_ROWS; s++) {
+        SuHostValue v[32];
+        uint32_t n = 0, k;
+        uint64_t e = 0;
+        if (su_host_entity_at(w, s, &e) != SU_OK) {
+            continue;
+        }
+        probe_values(c, w, e, 0, v, &n);
+        for (k = 0; k < n; k++) {
+            b_put(&c->batch, e, v[k].field_id, v[k].value);
+        }
+    }
+    b_push(&c->batch, w, tick);
+}
+
 /* ---------- the runner ---------- */
+
+/* The compiler that built this driver (the library is built by the same toolchain in every CI leg). */
+static const char *compiler_id(void) {
+#if defined(__clang__) && defined(_MSC_VER)
+    return "clang " __clang_version__ " (msvc target)";
+#elif defined(__clang__)
+    return "clang " __clang_version__;
+#elif defined(__GNUC__)
+    return "gcc " __VERSION__;
+#elif defined(_MSC_VER)
+#define SU_STR2(x) #x
+#define SU_STR(x) SU_STR2(x)
+    return "msvc " SU_STR(_MSC_FULL_VER);
+#else
+    return "unknown";
+#endif
+}
 
 static const char *tier_name(uint32_t t) {
     switch (t) {
@@ -753,8 +1135,14 @@ static const char *tier_name(uint32_t t) {
     }
 }
 
-/* Puts every IR system on tier (native: where the backend lowers it, else planned). The tiers line lists them. */
-static void apply_tier(SuHostWorld *w, uint32_t tier, char *out, size_t cap) {
+/* --tier mixed: per system, in schedule order, native / reference / planned in turn (reference / planned without the
+ * native backend), so adjacent systems of one world run on different tiers. */
+#define TIER_MIXED 99u
+
+/* Puts every IR system on tier (native: where the backend lowers it, else planned; mixed: see TIER_MIXED) and
+ * writes the placement ("system=tier,...") to out. The placement is compared with expected_tiers.txt, so a native
+ * refusal that silently falls back to planned is a failure, not a pass. */
+static void apply_tier(SuHostWorld *w, uint32_t tier_mode, char *out, size_t cap) {
     uint32_t i, n = su_host_system_count(w);
     size_t used = 0;
     out[0] = '\0';
@@ -765,6 +1153,11 @@ static void apply_tier(SuHostWorld *w, uint32_t tier, char *out, size_t cap) {
         (void)su_host_system_info(w, i, &sid, NULL);
         (void)su_host_system_tier(w, i, &cur);
         if (cur != SU_HOST_TIER_OPERATOR) {
+            static const uint32_t cycle3[3] = {SU_HOST_TIER_NATIVE, SU_HOST_TIER_REFERENCE, SU_HOST_TIER_PLANNED};
+            static const uint32_t cycle2[2] = {SU_HOST_TIER_REFERENCE, SU_HOST_TIER_PLANNED};
+            uint32_t tier = tier_mode != TIER_MIXED ? tier_mode
+                            : su_host_native_available() ? cycle3[i % 3u]
+                                                         : cycle2[i % 2u];
             uint32_t want = tier;
             uint32_t st = su_host_system_set_tier(w, i, want, &e);
             if (st == SU_E_CAPABILITY_DENIED && tier == SU_HOST_TIER_NATIVE) {
@@ -797,7 +1190,75 @@ typedef struct Opts {
     const char *play_dir;
     const char *dump_dir;
     const char *only;
+    const char *expect_tiers;
+    int rollback;
 } Opts;
+
+static const char *mode_name(uint32_t tier_mode) {
+    if (tier_mode == TIER_MIXED) {
+        return su_host_native_available() ? "mixed" : "mixed_vm";
+    }
+    return tier_name(tier_mode);
+}
+
+/* Mid-run rollback (docs/DETERMINISM_MATRIX.md section 2): the snapshot of tick r is restored (a) in place into the
+ * world that ran, (b) into a fresh world on another tier, and the same command stream (the generator state of tick r
+ * included) is re-simulated to the end; every per-tick digest must equal the first pass. */
+static int rollback_check(const Workload *wl, Ctx *c, const Opts *o, SuHostWorld *w, const uint8_t *snap,
+                          size_t snap_len, Rng at_r, uint64_t r, uint8_t (*digs)[32]) {
+    int pass;
+    int ok = 1;
+    for (pass = 0; pass < 2 && ok; pass++) {
+        SuHostWorld *x = w;
+        SuHostError e;
+        uint32_t st;
+        uint64_t t;
+        char tl[TIERS_CAP];
+        if (pass == 1) {
+            x = wl->create(c);
+            if (x == NULL) {
+                return 0;
+            }
+            apply_tier(x, o->tier == SU_HOST_TIER_REFERENCE ? SU_HOST_TIER_PLANNED : SU_HOST_TIER_REFERENCE, tl,
+                       sizeof tl);
+            st = su_host_snapshot_restore(x, snap, snap_len, &e);
+        } else {
+            st = su_host_snapshot_restore_inplace(x, snap, snap_len, &e);
+        }
+        c->rng = at_r;
+        c->batch.n = 0;
+        if (st != SU_OK || su_host_tick(x) != r) {
+            fail(pass == 0 ? "rollback restore in place" : "rollback restore into a fresh world", st, &e);
+            ok = 0;
+        }
+        for (t = r; ok && t < wl->ticks; t++) {
+            uint64_t done = 0;
+            uint8_t d[32];
+            wl->inputs(c, x, su_host_tick(x));
+            st = su_host_step(x, 1, &done, &e);
+            if (st != SU_OK || done != 1u) {
+                fail("rollback step", st, &e);
+                ok = 0;
+                break;
+            }
+            if (wl->between != NULL) {
+                wl->between(c, x);
+            }
+            (void)su_host_digest(x, d);
+            if (memcmp(d, digs[t + 1u], 32) != 0) {
+                fprintf(stderr, "det_matrix: %s: rollback %s from tick %llu diverges at tick %llu\n", wl->name,
+                        pass == 0 ? "in place" : "into a fresh world on another tier", (unsigned long long)r,
+                        (unsigned long long)(t + 1u));
+                g_failed = 1;
+                ok = 0;
+            }
+        }
+        if (x != w) {
+            su_host_world_destroy(x);
+        }
+    }
+    return ok;
+}
 
 static void dump_snapshot(const SuHostWorld *w, const char *dir, const char *name) {
     size_t size = 0, got = 0;
@@ -827,7 +1288,13 @@ static void run_workload(const Workload *wl, Ctx *c, const Opts *o, Manifest *m,
     char tl[TIERS_CAP];
     uint64_t t;
     uint32_t st;
+    uint64_t roll_r;
+    uint8_t (*digs)[32];
+    uint8_t *roll_snap = NULL;
+    size_t roll_len = 0;
+    Rng roll_rng;
 
+    roll_rng.s = 0;
     c->rng.s = UINT64_C(0x5EED000000000000) ^ (uint64_t)strlen(wl->name) * UINT64_C(0x9E3779B97F4A7C15);
     {
         const char *p;
@@ -837,13 +1304,19 @@ static void run_workload(const Workload *wl, Ctx *c, const Opts *o, Manifest *m,
     }
     c->batch.n = 0;
     c->batch.dropped = 0;
+    c->arg = wl->arg;
+    c->s3_contacts = c->s3_two = c->s3_gates = c->s3_prox = c->s3_sub = c->s3_trunc = 0;
     w = wl->create(c);
     if (w == NULL) {
         g_failed = 1;
         return;
     }
     apply_tier(w, o->tier, tl, sizeof tl);
-    mf_add(tiers, "%s tiers %llu %s", wl->name, 0, tl);
+    if (tiers->n < 64u) {
+        snprintf(tiers->line[tiers->n++], LINE_CAP, "%s %s %s", mode_name(o->tier), wl->name, tl);
+    }
+    roll_r = (wl->ticks / 2u / wl->keyframe) * wl->keyframe + wl->keyframe / 3u; /* mid-run, off a keyframe */
+    digs = o->rollback ? calloc((size_t)wl->ticks + 1u, sizeof *digs) : NULL;
     if (wl->replayed) {
         SuReplayOptions ro;
         memset(&ro, 0, sizeof ro);
@@ -873,8 +1346,21 @@ static void run_workload(const Workload *wl, Ctx *c, const Opts *o, Manifest *m,
         if (wl->between != NULL) {
             wl->between(c, w);
         }
+        if (wl->stats != NULL) {
+            wl->stats(c, w);
+        }
         (void)su_host_digest(w, d);
         su_sha256_update(&trace, d, 32);
+        if (digs != NULL) {
+            memcpy(digs[t + 1u], d, 32);
+            if (t + 1u == roll_r) {
+                size_t got = 0;
+                roll_rng = c->rng;
+                if (su_host_snapshot_size(w, &roll_len) == SU_OK && (roll_snap = malloc(roll_len)) != NULL) {
+                    (void)su_host_snapshot_write(w, roll_snap, roll_len, &got);
+                }
+            }
+        }
         if ((t + 1u) % wl->keyframe == 0u || t + 1u == wl->ticks) {
             hex32(d, hex);
             mf_add(m, "%s kf %llu %s", wl->name, su_host_tick(w), hex);
@@ -896,6 +1382,14 @@ static void run_workload(const Workload *wl, Ctx *c, const Opts *o, Manifest *m,
         mf_add(m, "%s events %llu %s", wl->name, su_host_tick(w), fx);
         snprintf(fx, sizeof fx, "%u", (unsigned)c->batch.dropped);
         mf_add(m, "%s dropped_writes %llu %s", wl->name, su_host_tick(w), fx);
+        if (wl->stats != NULL) {
+            char act[160];
+            snprintf(act, sizeof act, "contacts=%llu,two=%llu,gates=%llu,prox=%llu,sub=%llu,flags=%llu",
+                     (unsigned long long)c->s3_contacts, (unsigned long long)c->s3_two,
+                     (unsigned long long)c->s3_gates, (unsigned long long)c->s3_prox,
+                     (unsigned long long)c->s3_sub, (unsigned long long)c->s3_trunc);
+            mf_add(m, "%s activity %llu %s", wl->name, su_host_tick(w), act);
+        }
     }
     if (rw != NULL) {
         uint8_t *bytes = NULL;
@@ -941,6 +1435,18 @@ static void run_workload(const Workload *wl, Ctx *c, const Opts *o, Manifest *m,
         }
         su_replay_writer_destroy(rw);
     }
+    if (digs != NULL && !g_failed) {
+        if (roll_snap == NULL || !rollback_check(wl, c, o, w, roll_snap, roll_len, roll_rng, roll_r, digs)) {
+            fprintf(stderr, "det_matrix: %s: rollback check failed\n", wl->name);
+            g_failed = 1;
+        } else {
+            printf("det_matrix: %s: rollback from tick %llu (in place, and into a fresh world on another tier): every "
+                   "per-tick digest matches\n",
+                   wl->name, (unsigned long long)roll_r);
+        }
+    }
+    free(roll_snap);
+    free(digs);
     su_host_world_destroy(w);
 }
 
@@ -961,6 +1467,7 @@ static void play_foreign(const Workload *wl, Ctx *c, const Opts *o) {
         return;
     }
     c->rng.s = 0;
+    c->arg = wl->arg;
     w = wl->create(c);
     st = su_replay_open(b.p, b.n, &r, &e);
     if (st != SU_OK || w == NULL) {
@@ -976,6 +1483,13 @@ static void play_foreign(const Workload *wl, Ctx *c, const Opts *o) {
             fprintf(stderr, "det_matrix: %s: foreign replay diverges at tick %llu (%s)\n", wl->name,
                     (unsigned long long)e.tick, e.message);
             g_failed = 1;
+        } else if (done != wl->ticks || info.end_tick != wl->ticks ||
+                   info.keyframe_count != wl->ticks / wl->keyframe + 1u ||
+                   info.digest_count != wl->ticks - wl->ticks / wl->keyframe) {
+            fprintf(stderr, "det_matrix: %s: foreign replay is not this workload's recording (%llu ticks played, %u "
+                            "keyframes, %u digests)\n",
+                    wl->name, (unsigned long long)done, (unsigned)info.keyframe_count, (unsigned)info.digest_count);
+            g_failed = 1;
         } else {
             printf("det_matrix: %s: played %s (%llu ticks, %u keyframes, %u digests): every digest matches\n",
                    wl->name, path, (unsigned long long)done, (unsigned)info.keyframe_count,
@@ -985,6 +1499,54 @@ static void play_foreign(const Workload *wl, Ctx *c, const Opts *o) {
     su_replay_close(r);
     su_host_world_destroy(w);
     free(b.p);
+}
+
+/* Every placement line ("<mode> <workload> <system=tier,...>") must equal the line of the same mode and workload in
+ * the expectation file; a missing line is a failure too. */
+static int compare_tiers(const Manifest *t, const char *path) {
+    Bytes b;
+    uint32_t k;
+    int ok = 1;
+    if (!slurp(path, &b)) {
+        return 0;
+    }
+    for (k = 0; k < t->n; k++) {
+        const char *ln = t->line[k];
+        const char *sp = strchr(ln, ' ');
+        const char *sp2 = sp != NULL ? strchr(sp + 1, ' ') : NULL;
+        const char *s = (const char *)b.p;
+        int found = 0;
+        size_t key = sp2 != NULL ? (size_t)(sp2 - ln) + 1u : strlen(ln);
+        while (*s != '\0') {
+            const char *nl = strchr(s, '\n');
+            size_t len = nl != NULL ? (size_t)(nl - s) : strlen(s);
+            if (len > 0u && s[len - 1u] == '\r') {
+                len--;
+            }
+            if (len >= key && memcmp(s, ln, key) == 0) {
+                found = 1;
+                if (len != strlen(ln) || memcmp(s, ln, len) != 0) {
+                    fprintf(stderr, "det_matrix: PLACEMENT MISMATCH\n  expected: %.*s\n  got:      %s\n", (int)len, s,
+                            ln);
+                    ok = 0;
+                }
+                break;
+            }
+            if (nl == NULL) {
+                break;
+            }
+            s = nl + 1;
+        }
+        if (!found) {
+            fprintf(stderr, "det_matrix: no expected placement for: %s\n", ln);
+            ok = 0;
+        }
+    }
+    free(b.p);
+    if (ok) {
+        printf("det_matrix: %u placements equal %s\n", (unsigned)t->n, path);
+    }
+    return ok;
 }
 
 /* Compares the manifest with the expectation, line by line (CR ignored). */
@@ -1045,16 +1607,23 @@ int main(int argc, char **argv) {
     int i;
     uint32_t k;
     Workload wls[] = {
-        {"rts_duel16", 600, 60, 1, rts_create, rts_inputs, NULL},
-        {"rts_mixed1024", 600, 60, 1, rts_create, rts_inputs, NULL},
-        {"racer16", 720, 60, 1, racer_create, racer_inputs, NULL},
-        {"sixdof", 1200, 60, 1, six_create, six_inputs, NULL},
-        {"churn", 900, 60, 0, churn_create, churn_inputs, churn_between},
+        {"rts_duel16", 600, 60, 1, NULL, rts_create, rts_inputs, NULL, 0},
+        {"rts_mixed1024", 600, 60, 1, NULL, rts_create, rts_inputs, NULL, 0},
+        {"racer16", 720, 60, 1, NULL, racer_create, racer_inputs, NULL, 0},
+        {"sixdof", 1200, 60, 1, NULL, six_create, six_inputs, NULL, 0},
+        {"churn", 900, 60, 0, NULL, churn_create, churn_inputs, churn_between, 96},
+        {"churn3k", 300, 60, 0, NULL, churn_create, churn_inputs, churn_between, 3072},
+        {"s3_query", 600, 60, 1, s3_stats, s3_create, s3_inputs, NULL, 0},
+        {"s3_prox", 600, 60, 1, s3_stats, s3_create, s3_inputs, NULL, 1},
+        {"s3_shape", 600, 60, 1, s3_stats, s3_create, s3_inputs, NULL, 2},
+        {"s3_compound", 600, 60, 1, s3_stats, s3_create, s3_inputs, NULL, 3},
+        {"probe04", 600, 60, 1, NULL, probe_create, probe_inputs, NULL, 0},
     };
     const uint32_t nwl = (uint32_t)(sizeof wls / sizeof wls[0]);
 
     memset(&o, 0, sizeof o);
     o.tier = SU_HOST_TIER_PLANNED;
+    o.rollback = 1;
     for (i = 1; i < argc; i += 2) { /* every option takes one value */
         const char *a = argv[i];
         const char *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -1071,6 +1640,8 @@ int main(int argc, char **argv) {
                 o.tier = SU_HOST_TIER_PLANNED;
             } else if (strcmp(v, "native") == 0) {
                 o.tier = SU_HOST_TIER_NATIVE;
+            } else if (strcmp(v, "mixed") == 0) {
+                o.tier = TIER_MIXED;
             } else {
                 fprintf(stderr, "det_matrix: unknown tier %s\n", v);
                 return 2;
@@ -1087,14 +1658,19 @@ int main(int argc, char **argv) {
             o.dump_dir = v;
         } else if (strcmp(a, "--only") == 0) {
             o.only = v;
+        } else if (strcmp(a, "--expect-tiers") == 0) {
+            o.expect_tiers = v;
+        } else if (strcmp(a, "--rollback") == 0) {
+            o.rollback = strcmp(v, "0") != 0;
         } else {
             fprintf(stderr, "det_matrix: unknown option %s\n", a);
             return 2;
         }
     }
     if (o.fixtures == NULL) {
-        fprintf(stderr, "usage: det_matrix --fixtures DIR --tier reference|planned|native [--out FILE] [--expect FILE]"
-                        " [--replay-dir DIR] [--play-dir DIR] [--only NAME]\n");
+        fprintf(stderr, "usage: det_matrix --fixtures DIR --tier reference|planned|native|mixed [--out FILE]"
+                        " [--expect FILE] [--expect-tiers FILE] [--replay-dir DIR] [--play-dir DIR] [--dump-dir DIR]"
+                        " [--only NAME] [--rollback 0|1]\n");
         return 2;
     }
     if (o.tier == SU_HOST_TIER_NATIVE && !su_host_native_available()) {
@@ -1102,9 +1678,26 @@ int main(int argc, char **argv) {
         return 77;
     }
     c.fixtures = o.fixtures;
+    printf("det_matrix: built by %s; native backend %s\n", compiler_id(), su_host_native_available() ? "yes" : "no");
     {
-        char path[1024];
-        snprintf(path, sizeof path, "%s/racer16.json", o.fixtures);
+        const char *path = "tests/determinism/fixtures/racer16.json";
+        uint32_t v;
+        for (v = 0; v < 4u; v++) {
+            if (!slurp(k_s3_rec[v], &c.s3_rec[v])) {
+                return 2;
+            }
+        }
+        if (!slurp("tests/determinism/s3move.capsule.json", &c.s3_move_cap) ||
+            !slurp("tests/determinism/s3move.lir.json", &c.s3_move_lir) ||
+            !slurp("tests/determinism/s3move_c.capsule.json", &c.s3_movec_cap) ||
+            !slurp("tests/determinism/s3move_c.lir.json", &c.s3_movec_lir) ||
+            !slurp("tests/determinism/bits04.capsule.json", &c.bits_cap) ||
+            !slurp("tests/determinism/bits04.lir.json", &c.bits_lir) ||
+            !slurp("tests/determinism/gather04.capsule.json", &c.gather_cap) ||
+            !slurp("tests/determinism/gather04.lir.json", &c.gather_lir)) {
+            return 2;
+        }
+        s3_blobs(&c);
         if (!slurp("capsules/space3d_racer/race.capsule.json", &c.race_cap) ||
             !slurp("capsules/space3d_racer/race.lir.json", &c.race_lir) ||
             !slurp("capsules/space3d_racer/move.capsule.json", &c.move_cap) ||
@@ -1141,7 +1734,10 @@ int main(int argc, char **argv) {
     }
     if (o.play_dir == NULL) {
         for (k = 0; k < tiers.n; k++) {
-            printf("det_matrix: %s\n", tiers.line[k]);
+            printf("det_matrix: placement %s\n", tiers.line[k]);
+        }
+        if (o.expect_tiers != NULL && !g_failed && !compare_tiers(&tiers, o.expect_tiers)) {
+            g_failed = 1;
         }
         if (o.out != NULL) {
             FILE *f = strcmp(o.out, "-") == 0 ? stdout : fopen(o.out, "wb");
@@ -1161,7 +1757,7 @@ int main(int argc, char **argv) {
             if (!compare(&m, o.expect, &o)) {
                 g_failed = 1;
             } else {
-                printf("det_matrix: tier %s: %u lines equal %s\n", tier_name(o.tier), (unsigned)m.n, o.expect);
+                printf("det_matrix: tier %s: %u lines equal %s\n", mode_name(o.tier), (unsigned)m.n, o.expect);
             }
         }
     }

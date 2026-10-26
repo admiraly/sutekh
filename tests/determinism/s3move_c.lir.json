@@ -1,0 +1,498 @@
+{
+ "ir_version": "0.3",
+ "system_id": "det.s3move_c",
+ "numeric_profile": "fixed_q32_v1",
+ "query": "space3d",
+ "instructions": [
+  {
+   "op": "const_q32",
+   "dst": "r1",
+   "num": 1,
+   "den": 60
+  },
+  {
+   "op": "const_q32",
+   "dst": "r2",
+   "num": 0,
+   "den": 1
+  },
+  {
+   "op": "const_q32",
+   "dst": "r3",
+   "num": 2,
+   "den": 1
+  },
+  {
+   "op": "load_u32",
+   "dst": "r4",
+   "field": "kind"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r5",
+   "value": 1
+  },
+  {
+   "op": "eq_u32",
+   "dst": "r6",
+   "a": "r4",
+   "b": "r5"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r7",
+   "x": "pos_x",
+   "y": "pos_y",
+   "z": "pos_z"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r8",
+   "x": "vel_x",
+   "y": "vel_y",
+   "z": "vel_z"
+  },
+  {
+   "op": "load_q32",
+   "dst": "r9",
+   "field": "rot_w"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r10",
+   "x": "rot_x",
+   "y": "rot_y",
+   "z": "rot_z"
+  },
+  {
+   "op": "make_quat",
+   "dst": "r11",
+   "w": "r9",
+   "v": "r10"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r12",
+   "x": "angvel_x",
+   "y": "angvel_y",
+   "z": "angvel_z"
+  },
+  {
+   "op": "const_u32",
+   "dst": "r13",
+   "value": 0
+  },
+  {
+   "op": "load_u32",
+   "dst": "r14",
+   "field": "hit_count"
+  },
+  {
+   "op": "lt_u32",
+   "dst": "r15",
+   "a": "r13",
+   "b": "r14"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r16",
+   "x": "c0_nx",
+   "y": "c0_ny",
+   "z": "c0_nz"
+  },
+  {
+   "op": "load_q32",
+   "dst": "r17",
+   "field": "c0_toi"
+  },
+  {
+   "op": "v3_dot",
+   "dst": "r18",
+   "a": "r8",
+   "b": "r16"
+  },
+  {
+   "op": "lt_q32",
+   "dst": "r19",
+   "a": "r18",
+   "b": "r2"
+  },
+  {
+   "op": "and_bool",
+   "dst": "r20",
+   "a": "r15",
+   "b": "r19"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "r21",
+   "a": "r18",
+   "b": "r3"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r22",
+   "v": "r16",
+   "s": "r21"
+  },
+  {
+   "op": "v3_sub",
+   "dst": "r23",
+   "a": "r8",
+   "b": "r22"
+  },
+  {
+   "op": "select_v3",
+   "dst": "r24",
+   "cond": "r20",
+   "on_true": "r23",
+   "on_false": "r8"
+  },
+  {
+   "op": "le_q32",
+   "dst": "r25",
+   "a": "r17",
+   "b": "r2"
+  },
+  {
+   "op": "and_bool",
+   "dst": "r26",
+   "a": "r15",
+   "b": "r25"
+  },
+  {
+   "op": "const_q32",
+   "dst": "r27",
+   "num": 3,
+   "den": 1
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r28",
+   "v": "r16",
+   "s": "r27"
+  },
+  {
+   "op": "v3_add",
+   "dst": "r29",
+   "a": "r24",
+   "b": "r28"
+  },
+  {
+   "op": "select_v3",
+   "dst": "r30",
+   "cond": "r26",
+   "on_true": "r29",
+   "on_false": "r24"
+  },
+  {
+   "op": "load_v3",
+   "dst": "r31",
+   "x": "c1_nx",
+   "y": "c1_ny",
+   "z": "c1_nz"
+  },
+  {
+   "op": "load_q32",
+   "dst": "r32",
+   "field": "c1_toi"
+  },
+  {
+   "op": "v3_dot",
+   "dst": "r33",
+   "a": "r30",
+   "b": "r31"
+  },
+  {
+   "op": "lt_q32",
+   "dst": "r34",
+   "a": "r33",
+   "b": "r2"
+  },
+  {
+   "op": "and_bool",
+   "dst": "r35",
+   "a": "r15",
+   "b": "r34"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "r36",
+   "a": "r33",
+   "b": "r3"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r37",
+   "v": "r31",
+   "s": "r36"
+  },
+  {
+   "op": "v3_sub",
+   "dst": "r38",
+   "a": "r30",
+   "b": "r37"
+  },
+  {
+   "op": "select_v3",
+   "dst": "r39",
+   "cond": "r35",
+   "on_true": "r38",
+   "on_false": "r30"
+  },
+  {
+   "op": "le_q32",
+   "dst": "r40",
+   "a": "r32",
+   "b": "r2"
+  },
+  {
+   "op": "and_bool",
+   "dst": "r41",
+   "a": "r15",
+   "b": "r40"
+  },
+  {
+   "op": "const_q32",
+   "dst": "r42",
+   "num": 3,
+   "den": 1
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r43",
+   "v": "r31",
+   "s": "r42"
+  },
+  {
+   "op": "v3_add",
+   "dst": "r44",
+   "a": "r39",
+   "b": "r43"
+  },
+  {
+   "op": "select_v3",
+   "dst": "r45",
+   "cond": "r41",
+   "on_true": "r44",
+   "on_false": "r39"
+  },
+  {
+   "op": "v3_normalize",
+   "dst": "r46",
+   "a": "r7"
+  },
+  {
+   "op": "v3_dot",
+   "dst": "r47",
+   "a": "r45",
+   "b": "r46"
+  },
+  {
+   "op": "const_q32",
+   "dst": "r48",
+   "num": 24,
+   "den": 1
+  },
+  {
+   "op": "v3_len",
+   "dst": "r49",
+   "a": "r7"
+  },
+  {
+   "op": "lt_q32",
+   "dst": "r50",
+   "a": "r48",
+   "b": "r49"
+  },
+  {
+   "op": "lt_q32",
+   "dst": "r51",
+   "a": "r2",
+   "b": "r47"
+  },
+  {
+   "op": "and_bool",
+   "dst": "r52",
+   "a": "r50",
+   "b": "r51"
+  },
+  {
+   "op": "mul_q32",
+   "dst": "r53",
+   "a": "r47",
+   "b": "r3"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r54",
+   "v": "r46",
+   "s": "r53"
+  },
+  {
+   "op": "v3_sub",
+   "dst": "r55",
+   "a": "r45",
+   "b": "r54"
+  },
+  {
+   "op": "select_v3",
+   "dst": "r56",
+   "cond": "r52",
+   "on_true": "r55",
+   "on_false": "r45"
+  },
+  {
+   "op": "const_q32",
+   "dst": "r57",
+   "num": 60,
+   "den": 1
+  },
+  {
+   "op": "v3_clamp_len",
+   "dst": "r58",
+   "v": "r56",
+   "max": "r57"
+  },
+  {
+   "op": "v3_scale",
+   "dst": "r59",
+   "v": "r58",
+   "s": "r1"
+  },
+  {
+   "op": "v3_add",
+   "dst": "r60",
+   "a": "r7",
+   "b": "r59"
+  },
+  {
+   "op": "quat_integrate",
+   "dst": "r61",
+   "q": "r11",
+   "w": "r12",
+   "dt": "r1"
+  },
+  {
+   "op": "select_v3",
+   "dst": "r62",
+   "cond": "r6",
+   "on_true": "r60",
+   "on_false": "r7"
+  },
+  {
+   "op": "store_v3",
+   "x": "pos_x",
+   "y": "pos_y",
+   "z": "pos_z",
+   "src": "r62"
+  },
+  {
+   "op": "store_v3",
+   "x": "prev_x",
+   "y": "prev_y",
+   "z": "prev_z",
+   "src": "r7"
+  },
+  {
+   "op": "select_v3",
+   "dst": "r63",
+   "cond": "r6",
+   "on_true": "r58",
+   "on_false": "r8"
+  },
+  {
+   "op": "store_v3",
+   "x": "vel_x",
+   "y": "vel_y",
+   "z": "vel_z",
+   "src": "r63"
+  },
+  {
+   "op": "quat_get",
+   "dst": "r64",
+   "q": "r61",
+   "axis": 0
+  },
+  {
+   "op": "store_q32",
+   "field": "rot_w",
+   "src": "r64"
+  },
+  {
+   "op": "quat_get",
+   "dst": "r65",
+   "q": "r61",
+   "axis": 1
+  },
+  {
+   "op": "quat_get",
+   "dst": "r66",
+   "q": "r61",
+   "axis": 2
+  },
+  {
+   "op": "quat_get",
+   "dst": "r67",
+   "q": "r61",
+   "axis": 3
+  },
+  {
+   "op": "make_v3",
+   "dst": "r68",
+   "x": "r65",
+   "y": "r66",
+   "z": "r67"
+  },
+  {
+   "op": "store_v3",
+   "x": "rot_x",
+   "y": "rot_y",
+   "z": "rot_z",
+   "src": "r68"
+  },
+  {
+   "op": "quat_get",
+   "dst": "r69",
+   "q": "r11",
+   "axis": 0
+  },
+  {
+   "op": "store_q32",
+   "field": "rot0_w",
+   "src": "r69"
+  },
+  {
+   "op": "quat_get",
+   "dst": "r70",
+   "q": "r11",
+   "axis": 1
+  },
+  {
+   "op": "quat_get",
+   "dst": "r71",
+   "q": "r11",
+   "axis": 2
+  },
+  {
+   "op": "quat_get",
+   "dst": "r72",
+   "q": "r11",
+   "axis": 3
+  },
+  {
+   "op": "make_v3",
+   "dst": "r73",
+   "x": "r70",
+   "y": "r71",
+   "z": "r72"
+  },
+  {
+   "op": "store_v3",
+   "x": "rot0_x",
+   "y": "rot0_y",
+   "z": "rot0_z",
+   "src": "r73"
+  }
+ ]
+}

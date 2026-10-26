@@ -245,6 +245,201 @@ def gen_churn():
     return cap, lir03("det.churn", "det.churn", p.ins)
 
 
+def auto_capsule(system_id, src, schema, table, ins, version="0.3", caps=None, limits=None, row_filter=None):
+    """Capsule whose read/write flags are exactly what the IR loads and stores (the host refuses anything else)."""
+    reads, writes = set(), set()
+    for i in ins:
+        op = i["op"]
+        if op.startswith("load_") or op.startswith("gather_") or op == "find_eq_u32":
+            for k in ("field", "x", "y", "z"):
+                if k in i:
+                    reads.add(i[k])
+        elif op.startswith("store_"):
+            for k in ("field", "x", "y", "z"):
+                if k in i:
+                    writes.add(i[k])
+    if row_filter is not None:
+        reads.add(row_filter["field"])
+        reads |= writes  # a filtered module must be able to read every writable field
+    out = []
+    for name in sorted(reads | writes, key=lambda k: table[k][0]):
+        fid, t = table[name]
+        out.append({"id": fid, "name": name, "type": t, "read": name in reads, "write": name in writes})
+    c = capsule03(system_id, src, schema, table, [], set(), caps=caps, limits=limits)
+    c["fields"] = out
+    c["ir_version"] = version
+    return c
+
+
+def lir_v(system_id, schema, ins, version, row_filter=None):
+    d = lir03(system_id, schema, ins)
+    d["ir_version"] = version
+    if row_filter is not None:
+        d["row_filter"] = row_filter
+    return d
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# space3d motion: moves movers, bounces on the operator's contacts, keeps them in a 24 m arena, rotates every row
+# ---------------------------------------------------------------------------------------------------------------
+
+S3 = {
+    "kind": (1, "u32"), "pos_x": (10, "q32"), "pos_y": (12, "q32"), "pos_z": (14, "q32"),
+    "prev_x": (16, "q32"), "prev_y": (18, "q32"), "prev_z": (20, "q32"),
+    "rot_w": (22, "q32"), "rot_x": (24, "q32"), "rot_y": (26, "q32"), "rot_z": (28, "q32"),
+    "hit_count": (40, "u32"), "c0_toi": (44, "q32"), "c0_nx": (46, "q32"), "c0_ny": (48, "q32"), "c0_nz": (50, "q32"),
+    "c1_toi": (54, "q32"), "c1_nx": (56, "q32"), "c1_ny": (58, "q32"), "c1_nz": (60, "q32"),
+    "rot0_w": (80, "q32"), "rot0_x": (82, "q32"), "rot0_y": (84, "q32"), "rot0_z": (86, "q32"),
+    "vel_x": (100, "q32"), "vel_y": (102, "q32"), "vel_z": (104, "q32"),
+    "angvel_x": (106, "q32"), "angvel_y": (108, "q32"), "angvel_z": (110, "q32"),
+}
+
+
+def gen_s3move(compound):
+    p = Prog()
+    dt = p.q(1, 60)
+    zero = p.q(0)
+    two = p.q(2)
+    mover = p.op("eq_u32", a=p.op("load_u32", field="kind"), b=p.u(1))
+    pos = p.op("load_v3", x="pos_x", y="pos_y", z="pos_z")
+    vel = p.op("load_v3", x="vel_x", y="vel_y", z="vel_z")
+    rot = p.op("make_quat", w=p.op("load_q32", field="rot_w"), v=p.op("load_v3", x="rot_x", y="rot_y", z="rot_z"))
+    angvel = p.op("load_v3", x="angvel_x", y="angvel_y", z="angvel_z")
+    hit = p.op("lt_u32", a=p.u(0), b=p.op("load_u32", field="hit_count"))
+    v = vel
+    # Reflect on contact 0 and contact 1 when approaching; push out when the contact started overlapped (toi 0).
+    for k in ("c0", "c1"):
+        n = p.op("load_v3", x=k + "_nx", y=k + "_ny", z=k + "_nz")
+        toi = p.op("load_q32", field=k + "_toi")
+        vn = p.op("v3_dot", a=v, b=n)
+        appr = p.op("and_bool", a=hit, b=p.op("lt_q32", a=vn, b=zero))
+        refl = p.op("v3_sub", a=v, b=p.op("v3_scale", v=n, s=p.op("mul_q32", a=vn, b=two)))
+        v = p.op("select_v3", cond=appr, on_true=refl, on_false=v)
+        over = p.op("and_bool", a=hit, b=p.op("le_q32", a=toi, b=zero))
+        v = p.op("select_v3", cond=over, on_true=p.op("v3_add", a=v, b=p.op("v3_scale", v=n, s=p.q(3))), on_false=v)
+    # Arena: outside 24 m and moving outward, reflect about the radial direction.
+    rad = p.op("v3_normalize", a=pos)
+    vr = p.op("v3_dot", a=v, b=rad)
+    outw = p.op("and_bool", a=p.op("lt_q32", a=p.q(24), b=p.op("v3_len", a=pos)), b=p.op("lt_q32", a=zero, b=vr))
+    refl = p.op("v3_sub", a=v, b=p.op("v3_scale", v=rad, s=p.op("mul_q32", a=vr, b=two)))
+    v = p.op("select_v3", cond=outw, on_true=refl, on_false=v)
+    v = p.op("v3_clamp_len", v=v, max=p.q(60))
+    pos1 = p.op("v3_add", a=pos, b=p.op("v3_scale", v=v, s=dt))
+    rot1 = p.op("quat_integrate", q=rot, w=angvel, dt=dt)
+    p.op("store_v3", x="pos_x", y="pos_y", z="pos_z", src=p.op("select_v3", cond=mover, on_true=pos1, on_false=pos))
+    p.op("store_v3", x="prev_x", y="prev_y", z="prev_z", src=pos)
+    p.op("store_v3", x="vel_x", y="vel_y", z="vel_z", src=p.op("select_v3", cond=mover, on_true=v, on_false=vel))
+    p.op("store_q32", field="rot_w", src=p.op("quat_get", q=rot1, axis=0))
+    p.op("store_v3", x="rot_x", y="rot_y", z="rot_z",
+         src=p.op("make_v3", x=p.op("quat_get", q=rot1, axis=1), y=p.op("quat_get", q=rot1, axis=2),
+                  z=p.op("quat_get", q=rot1, axis=3)))
+    if compound:  # the start-of-tick orientation (the compound operator's turn pad)
+        p.op("store_q32", field="rot0_w", src=p.op("quat_get", q=rot, axis=0))
+        p.op("store_v3", x="rot0_x", y="rot0_y", z="rot0_z",
+             src=p.op("make_v3", x=p.op("quat_get", q=rot, axis=1), y=p.op("quat_get", q=rot, axis=2),
+                      z=p.op("quat_get", q=rot, axis=3)))
+    sid = "det.s3move_c" if compound else "det.s3move"
+    src = ("s3move_c" if compound else "s3move") + ".lir.json"
+    return auto_capsule(sid, src, "space3d", S3, p.ins), lir03(sid, "space3d", p.ins)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# IR 0.4 probes: every family operation of i32/i64/q32, the u32/i64 bit operations, the conversions and vector
+# operations the other workloads do not use (bits04, native-lowerable), and the cross-row reads (gather04, VM only)
+# ---------------------------------------------------------------------------------------------------------------
+
+FAMILY_OPS = ("add", "sub", "mul", "div", "neg", "abs", "min", "max", "clamp", "eq", "lt", "le", "select", "shl", "shr")
+PROBE = {"kind": (1, "u32"), "n": (2, "u32"), "ua": (3, "u32"), "ub": (4, "u32"), "key": (5, "u32"),
+         "slot_a": (6, "u32"), "ia": (7, "i32"), "ib": (8, "i32"), "ic": (9, "i32")}
+_next = [10]
+
+
+def _pf(name, t):
+    PROBE[name] = (_next[0], t)
+    _next[0] += 1 if t in ("u32", "i32") else 2
+
+
+for _n, _t in (("la", "i64"), ("lb", "i64"), ("lc", "i64"), ("qa", "q32"), ("qb", "q32"), ("qc", "q32")):
+    _pf(_n, _t)
+for _sfx, _t in (("i32", "i32"), ("i64", "i64"), ("q32", "q32")):
+    for _o in FAMILY_OPS:
+        _pf("o_%s_%s" % (_o, _sfx), _t)
+for _n, _t in (("o_and_u32", "u32"), ("o_or_u32", "u32"), ("o_xor_u32", "u32"), ("o_not_u32", "u32"),
+               ("o_shl_u32", "u32"), ("o_shr_u32", "u32"), ("o_div_u32", "u32"), ("o_rem_u32", "u32"),
+               ("o_and_i64", "i64"), ("o_or_i64", "i64"), ("o_xor_i64", "i64"), ("o_not_i64", "i64"),
+               ("o_i32_from_u32", "i32"), ("o_i64_from_i32", "i64"), ("o_q32_from_raw", "q32"), ("o_const_i64", "i64"),
+               ("o_v3_get", "q32"), ("o_vneg_x", "q32"), ("o_vneg_y", "q32"), ("o_vneg_z", "q32"),
+               ("g_u32", "u32"), ("g_i32", "i32"), ("g_i64", "i64"), ("g_q32", "q32"), ("g_find", "u32"),
+               ("g_far", "u32"), ("g_mark", "u32")):
+    _pf(_n, _t)
+
+
+def gen_bits04():
+    p = Prog()
+    n = p.op("load_u32", field="n")
+    vals = {
+        "i32": [p.op("load_i32", field=f) for f in ("ia", "ib", "ic")],
+        "i64": [p.op("load_i64", field=f) for f in ("la", "lb", "lc")],
+        "q32": [p.op("load_q32", field=f) for f in ("qa", "qb", "qc")],
+    }
+    for sfx, (a, b, c) in vals.items():
+        for o in FAMILY_OPS:
+            if o in ("add", "sub", "mul", "div", "min", "max"):
+                r = p.op("%s_%s" % (o, sfx), a=a, b=b)
+            elif o in ("neg", "abs"):
+                r = p.op("%s_%s" % (o, sfx), a=a)
+            elif o == "clamp":
+                r = p.op("clamp_" + sfx, x=a, lo=b, hi=c)
+            elif o in ("eq", "lt", "le"):  # the bool reaches state through a select
+                r = p.op("select_" + sfx, cond=p.op("%s_%s" % (o, sfx), a=a, b=b), on_true=c, on_false=a)
+            elif o == "select":
+                r = p.op("select_" + sfx, cond=p.op("lt_" + sfx, a=b, b=c), on_true=b, on_false=c)
+            else:  # shl, shr by the shared count (0..71)
+                r = p.op("%s_%s" % (o, sfx), a=a, n=n)
+            p.op("store_" + sfx, field="o_%s_%s" % (o, sfx), src=r)
+    ua = p.op("load_u32", field="ua")
+    ub = p.op("load_u32", field="ub")
+    for o in ("and", "or", "xor", "div", "rem"):
+        p.op("store_u32", field="o_%s_u32" % o, src=p.op(o + "_u32", a=ua, b=ub))
+    p.op("store_u32", field="o_not_u32", src=p.op("not_u32", a=ua))
+    p.op("store_u32", field="o_shl_u32", src=p.op("shl_u32", a=ua, n=n))
+    p.op("store_u32", field="o_shr_u32", src=p.op("shr_u32", a=ub, n=n))
+    la, lb, _lc = vals["i64"]
+    for o in ("and", "or", "xor"):
+        p.op("store_i64", field="o_%s_i64" % o, src=p.op(o + "_i64", a=la, b=lb))
+    p.op("store_i64", field="o_not_i64", src=p.op("not_i64", a=la))
+    p.op("store_i32", field="o_i32_from_u32", src=p.op("i32_from_u32", a=ua))
+    p.op("store_i64", field="o_i64_from_i32", src=p.op("i64_from_i32", a=vals["i32"][0]))
+    p.op("store_q32", field="o_q32_from_raw", src=p.op("q32_from_raw", a=lb))
+    p.op("store_i64", field="o_const_i64",
+         src=p.op("sub_i64", a=p.op("add_i64", a=p.op("const_i64", value=-9223372036854775807 - 1), b=la),
+                  b=p.op("const_i64", value=9223372036854775807)))
+    qa, qb, qc = vals["q32"]
+    v = p.op("make_v3", x=qa, y=qb, z=qc)
+    p.op("store_q32", field="o_v3_get", src=p.op("v3_get", v=v, axis=1))
+    p.op("store_v3", x="o_vneg_x", y="o_vneg_y", z="o_vneg_z", src=p.op("v3_neg", a=v))
+    return auto_capsule("det.bits04", "bits04.lir.json", "det.probe", PROBE, p.ins, "0.4"), \
+        lir_v("det.bits04", "det.probe", p.ins, "0.4")
+
+
+def gen_gather04():
+    p = Prog()
+    slot = p.op("slot_u32")
+    other = p.op("load_u32", field="slot_a")  # any value, out-of-range slots included (gathers give 0)
+    near = p.op("add_u32", a=slot, b=p.u(1))
+    p.op("store_u32", field="g_u32", src=p.op("gather_u32", field="ua", slot=other))
+    p.op("store_i32", field="g_i32", src=p.op("gather_i32", field="ia", slot=near))
+    p.op("store_i64", field="g_i64", src=p.op("gather_i64", field="la", slot=other))
+    p.op("store_q32", field="g_q32", src=p.op("gather_q32", field="qa", slot=near))
+    p.op("store_u32", field="g_find", src=p.op("find_eq_u32", field="key", key=p.op("load_u32", field="ub"), span=64))
+    p.op("store_u32", field="g_far", src=p.op("find_eq_u32", field="key", key=p.op("load_u32", field="ua"), span=4096))
+    # Rows outside the filter keep g_mark; filtered rows count up (the filter's skip path reaches state).
+    p.op("store_u32", field="g_mark", src=p.op("add_u32", a=p.op("load_u32", field="g_mark"), b=p.u(1)))
+    rf = {"field": "kind", "equals": 1, "mask": 1}
+    return auto_capsule("det.gather04", "gather04.lir.json", "det.probe", PROBE, p.ins, "0.4", row_filter=rf), \
+        lir_v("det.gather04", "det.probe", p.ins, "0.4", row_filter=rf)
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # RTS IR systems without the native operators
 # ---------------------------------------------------------------------------------------------------------------
@@ -276,6 +471,10 @@ def outputs():
         "tests/determinism/sixdof.capsule.json": six_c, "tests/determinism/sixdof.lir.json": six_l,
         "tests/determinism/churn.capsule.json": ch_c, "tests/determinism/churn.lir.json": ch_l,
     }
+    for name, (c, l) in (("s3move", gen_s3move(False)), ("s3move_c", gen_s3move(True)), ("bits04", gen_bits04()),
+                         ("gather04", gen_gather04())):
+        out["tests/determinism/%s.capsule.json" % name] = c
+        out["tests/determinism/%s.lir.json" % name] = l
     for s in RTS_SYSTEMS:
         out["tests/determinism/rts/%s.capsule.json" % s] = derived_rts(s)
     return out
