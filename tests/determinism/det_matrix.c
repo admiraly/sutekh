@@ -1714,6 +1714,8 @@ int main(int argc, char **argv) {
     tiers.line = calloc(64, LINE_CAP);
     m.n = tiers.n = 0;
     if (m.line == NULL || tiers.line == NULL) {
+        free(m.line);
+        free(tiers.line);
         return 2;
     }
     for (k = 0; k < nwl && !g_failed; k++) {
@@ -1722,6 +1724,8 @@ int main(int argc, char **argv) {
         }
         if (wls[k].create == rts_create &&
             !rts_load(&c, strcmp(wls[k].name, "rts_duel16") == 0 ? "rts_duel16" : "rts_mixed1024")) {
+            free(m.line);
+            free(tiers.line);
             return 2;
         }
         if (o.play_dir != NULL) {
@@ -1743,6 +1747,8 @@ int main(int argc, char **argv) {
             FILE *f = strcmp(o.out, "-") == 0 ? stdout : fopen(o.out, "wb");
             if (f == NULL) {
                 fprintf(stderr, "det_matrix: cannot write %s\n", o.out);
+                free(m.line);
+                free(tiers.line);
                 return 2;
             }
             fprintf(f, "# sutekh determinism matrix v1 (tests/determinism/det_matrix.c): workload kind tick value\n");
@@ -1762,5 +1768,7 @@ int main(int argc, char **argv) {
         }
     }
     printf("det_matrix: %s\n", g_failed ? "FAILED" : "ok");
+    free(m.line);
+    free(tiers.line);
     return g_failed ? 1 : 0;
 }
