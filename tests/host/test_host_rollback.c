@@ -5,6 +5,9 @@
  * differentially against su_host_snapshot_restore: the same snapshots, valid and corrupted, must give the
  * same status and the same resulting bytes, and a refused restore must leave the world unchanged. The fast
  * digest is checked against XXH64 reference vectors produced by python-xxhash 4.0.1.
+ * Ticks that carry input records allocate nothing (issue 149): straight, after an in-place restore and after an
+ * allocating restore (from its second tick) with re-simulation, with a record of SU_HOST_INPUT_MAX_WRITES writes, and on a refused tick; glibc builds count
+ * malloc/calloc/realloc by interposing them in this executable, which covers the static and the DLL build.
  *
  * Usage: test_host_rollback   (run from the repository root: it reads tests/fixtures/entities/) */
 /* SPDX-FileCopyrightText: 2026 admiraly */
@@ -17,6 +20,45 @@
 #include "sutekh/host.h"
 #ifndef SUTEKH_HOST_DLL
 #include "host/su_xxh64.h"
+#endif
+
+/* ---------- allocation counting (glibc, static and DLL builds) ---------- */
+
+/* Definitions in the executable interpose malloc for the whole process, the shared library included. Not under
+ * AddressSanitizer, which owns the allocator. */
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SU_TEST_ASAN 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#define SU_TEST_ASAN 1
+#endif
+#if defined(__linux__) && defined(__GLIBC__) && !defined(SU_TEST_ASAN)
+#define SU_TEST_COUNT_ALLOC 1
+extern void *__libc_malloc(size_t n);
+extern void *__libc_calloc(size_t n, size_t m);
+extern void *__libc_realloc(void *p, size_t n);
+static volatile int g_count_alloc;
+static unsigned long g_allocs;
+void *malloc(size_t n) {
+    if (g_count_alloc) {
+        g_allocs++;
+    }
+    return __libc_malloc(n);
+}
+void *calloc(size_t n, size_t m) {
+    if (g_count_alloc) {
+        g_allocs++;
+    }
+    return __libc_calloc(n, m);
+}
+void *realloc(void *p, size_t n) {
+    if (g_count_alloc) {
+        g_allocs++;
+    }
+    return __libc_realloc(p, n);
+}
 #endif
 
 static long g_checks = 0;
@@ -577,6 +619,198 @@ static void test_fast_digest(void) {
     su_host_world_destroy(b);
 }
 
+/* ---------- no allocation in ticks with inputs (issue 149) ---------- */
+
+#define NA_ENTS 32u
+#define NA_TICKS 16u
+
+/* Queues tick t0 + k's record for k < ticks: both fields of every entity still alive, and position 0 (the system
+ * then emits and despawns it) for entity k when k < 4. Deterministic, so a re-push re-simulates the same inputs. */
+static void na_push(SuHostWorld *w, uint64_t t0, uint32_t ticks, const uint64_t *h) {
+    static SuHostInput in[2u * NA_ENTS];
+    uint32_t k;
+    for (k = 0; k < ticks; k++) {
+        uint32_t n = 0;
+        uint32_t i;
+        SuHostError e;
+        for (i = 0; i < NA_ENTS; i++) {
+            if (i < k && i < 4u) {
+                continue; /* despawned by an earlier tick */
+            }
+            in[n].entity = h[i];
+            in[n].field_id = F_POS;
+            in[n].value = i == k && k < 4u ? 0u : 2u + (i * 7u + k * 13u) % 50u;
+            n++;
+            in[n].entity = h[i];
+            in[n].field_id = F_VEL;
+            in[n].value = k * 1000u + i;
+            n++;
+        }
+        CHECK(su_host_input_push(w, t0 + k, in, n, &e) == SU_OK);
+    }
+}
+
+static void hex32(const uint8_t d[32], char out[65]) {
+    uint32_t i;
+    for (i = 0; i < 32u; i++) {
+        snprintf(out + 2u * i, 3, "%02x", d[i]);
+    }
+}
+
+static unsigned long na_step(SuHostWorld *w, uint64_t n, uint32_t *st_out, uint64_t *done_out, SuHostError *e) {
+    unsigned long got = 0;
+    uint64_t done = 0;
+    uint32_t st;
+#ifdef SU_TEST_COUNT_ALLOC
+    g_allocs = 0;
+    g_count_alloc = 1;
+#endif
+    st = su_host_step(w, n, &done, e);
+#ifdef SU_TEST_COUNT_ALLOC
+    g_count_alloc = 0;
+    got = g_allocs;
+#endif
+    *st_out = st;
+    *done_out = done;
+    return got;
+}
+
+static void test_no_alloc_inputs(void) {
+    SuHostWorld *w = make_world(64, 256);
+    uint64_t h[NA_ENTS];
+    uint64_t t0;
+    uint64_t done = 0;
+    uint32_t st = 0;
+    unsigned long a;
+    uint8_t d[32];
+    char hex[65];
+    Bytes s;
+    Bytes ref;
+    Bytes now;
+    SuHostError e;
+    uint32_t i;
+    for (i = 0; i < NA_ENTS; i++) {
+        h[i] = spawn(w, 10u + i, i);
+    }
+    set_pos(w, 0, h[NA_ENTS - 1u], 9);
+    step(w, 1); /* any lazy first-tick setup outside the measurement */
+    s = snap(w);
+    CHECK(su_host_snapshot_restore_inplace(w, s.data, s.len, &e) == SU_OK); /* its scratch, allocated once */
+    t0 = su_host_tick(w);
+
+    /* Straight run: every tick carries a record of up to 64 writes; four ticks despawn an entity. */
+    na_push(w, t0, NA_TICKS, h);
+    a = na_step(w, NA_TICKS, &st, &done, &e);
+    CHECK(st == SU_OK && done == NA_TICKS);
+    CHECK(a == 0u);
+    if (a != 0u) {
+        fprintf(stderr, "ticks with inputs: %lu allocations\n", a);
+    }
+    ref = snap(w);
+    CHECK(su_host_digest(w, d) == SU_OK);
+    hex32(d, hex);
+    printf("inputs digest: %s\n", hex); /* compared across builds (handoff of issue 149) */
+
+    /* Rollback in place, then re-simulation of the same inputs. */
+    CHECK(su_host_snapshot_restore_inplace(w, s.data, s.len, &e) == SU_OK && su_host_tick(w) == t0);
+    na_push(w, t0, NA_TICKS, h);
+    a = na_step(w, NA_TICKS, &st, &done, &e);
+    CHECK(st == SU_OK && done == NA_TICKS);
+    CHECK(a == 0u);
+    if (a != 0u) {
+        fprintf(stderr, "in-place rollback + inputs: %lu allocations\n", a);
+    }
+    now = snap(w);
+    CHECK(same_bytes(ref, now));
+    free(now.data);
+
+    /* Allocating restore, then re-simulation. Its new entity runtime builds its tick cache in the first tick, with
+     * or without inputs (that tick is not measured: su_host_snapshot_restore_inplace is the allocation-free
+     * rollback); the input ticks after it allocate nothing. */
+    CHECK(su_host_snapshot_restore(w, s.data, s.len, &e) == SU_OK && su_host_tick(w) == t0);
+    na_push(w, t0, NA_TICKS, h);
+    step(w, 1);
+    a = na_step(w, NA_TICKS - 1u, &st, &done, &e);
+    CHECK(st == SU_OK && done == NA_TICKS - 1u);
+    CHECK(a == 0u);
+    if (a != 0u) {
+        fprintf(stderr, "restore + inputs: %lu allocations\n", a);
+    }
+    now = snap(w);
+    CHECK(same_bytes(ref, now));
+    free(now.data);
+
+    /* A refused tick (input naming an entity despawned after the push): no allocation, world unchanged, record
+     * kept. */
+    set_pos(w, su_host_tick(w), h[10], 20);
+    set_pos(w, su_host_tick(w), h[NA_ENTS - 1u], 30);
+    CHECK(su_host_despawn(w, h[NA_ENTS - 1u], &e) == SU_OK);
+    {
+        Bytes before = snap(w);
+        size_t enc = 0;
+        a = na_step(w, 1, &st, &done, &e);
+        CHECK(st == SU_E_STALE_HANDLE && done == 0u && e.index == UINT32_MAX);
+        CHECK(a == 0u);
+        now = snap(w);
+        CHECK(same_bytes(before, now));
+        CHECK(su_host_input_encode(w, su_host_tick(w), NULL, 0, &enc) == SU_OK && enc == 24u + 2u * 16u);
+        free(before.data);
+        free(now.data);
+    }
+    free(s.data);
+    free(ref.data);
+    su_host_world_destroy(w);
+}
+
+/* A record of SU_HOST_INPUT_MAX_WRITES writes (every cell of a 2048-row, 2-field world) applies without
+ * allocating; one write more is refused at push. */
+static void test_no_alloc_full_record(void) {
+    enum { ROWS = SU_HOST_INPUT_MAX_WRITES / 2u };
+    SuHostWorld *w = make_world(ROWS, 16);
+    SuHostInput *in = malloc((size_t)SU_HOST_INPUT_MAX_WRITES * sizeof *in);
+    SuHostInput extra;
+    uint64_t *h = malloc((size_t)ROWS * sizeof *h);
+    uint64_t done = 0;
+    uint32_t st = 0;
+    unsigned long a;
+    uint32_t i;
+    SuHostError e;
+    const uint32_t *col = NULL;
+    uint64_t rows = 0;
+    CHECK(in != NULL && h != NULL);
+    if (in == NULL || h == NULL) {
+        free(in);
+        free(h);
+        su_host_world_destroy(w);
+        return;
+    }
+    for (i = 0; i < ROWS; i++) {
+        h[i] = spawn(w, 10u, 1u);
+    }
+    step(w, 1);
+    for (i = 0; i < ROWS; i++) {
+        in[2u * i].entity = h[i];
+        in[2u * i].field_id = F_POS;
+        in[2u * i].value = 3u + i % 7u;
+        in[2u * i + 1u].entity = h[i];
+        in[2u * i + 1u].field_id = F_VEL;
+        in[2u * i + 1u].value = i;
+    }
+    CHECK(su_host_input_push(w, su_host_tick(w), in, SU_HOST_INPUT_MAX_WRITES, &e) == SU_OK);
+    extra = in[0];
+    CHECK(su_host_input_push(w, su_host_tick(w), &extra, 1, &e) == SU_E_RESOURCE_LIMIT);
+    a = na_step(w, 1, &st, &done, &e);
+    CHECK(st == SU_OK && done == 1u);
+    CHECK(a == 0u);
+    if (a != 0u) {
+        fprintf(stderr, "full record: %lu allocations\n", a);
+    }
+    CHECK(su_host_column(w, F_VEL, &col, &rows) == SU_OK && rows == ROWS && col[ROWS - 1u] == ROWS - 1u);
+    free(in);
+    free(h);
+    su_host_world_destroy(w);
+}
+
 int main(void) {
     Bytes cap = slurp("tests/fixtures/entities/emit_then_despawn.capsule.json");
     Bytes lir = slurp("tests/fixtures/entities/emit_then_despawn.lir.json");
@@ -595,6 +829,11 @@ int main(void) {
     test_inplace_errors_and_inputs();
     test_inplace_fuzz();
     test_fast_digest();
+    test_no_alloc_inputs();
+    test_no_alloc_full_record();
+#ifndef SU_TEST_COUNT_ALLOC
+    printf("note: allocation counting not built in (not glibc, or AddressSanitizer)\n");
+#endif
 
     free(cap.data);
     free(lir.data);
