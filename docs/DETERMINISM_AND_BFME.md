@@ -4,6 +4,8 @@
 
 **Repeatability:** the same build and inputs reproduce a result. **Cross-backend determinism:** allowed VM/native/ISA/platform variants reproduce the same specified result. **BFME fidelity:** the remake matches independently established original behavior for the selected game/version.
 
+**Qualified cross-build set (2026-10-26).** For worlds driven through the host API, `fixed_q32_v1` and `u32_mod_v1` give bit-identical states, `su_host_digest`, snapshots and replays on the builds and tiers listed in [DETERMINISM_MATRIX.md](DETERMINISM_MATRIX.md) section 1: Linux GCC and Clang and Windows clang (MSVC libraries) and MSVC `cl`, on x86-64, with the reference, planned and (where built) native tiers. The evidence is the committed expectation `tests/determinism/expected_digests.txt`, which every listed build reproduces. Builds, architectures and profiles not listed there carry no cross-build claim.
+
 These claims require different evidence. A million identical self-replays do not establish original BFME fidelity. Byte-perfect Open-BFME reconstruction, a compatible remake, and a performance-modified original executable are also separate projects with separate acceptance rules.
 
 ## 2. Numeric profiles

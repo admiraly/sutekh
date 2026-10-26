@@ -186,3 +186,129 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           ctest --test-dir build --output-on-failure -j 2
           if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  # Determinism matrix (docs/DETERMINISM_MATRIX.md, issue #141): the same workloads on optimized builds of each
+  # compiler and OS, every tier the build has, each compared with the committed expectation
+  # tests/determinism/expected_digests.txt; the manifests and Linux GCC's replays are kept for the cross-build steps.
+  determinism-linux:
+    name: Determinism matrix, Linux ${{ matrix.cc }} Release (native tier)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            cxx: g++
+          - cc: clang
+            cxx: clang++
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned test dependencies and fetch the pinned AsmJit commit
+        run: |
+          python -m pip install -r tools/requirements-dev.txt
+          python tools/bootstrap_asmjit.py
+          ${{ matrix.cc }} --version
+      - name: Configure and build the matrix targets
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=ON -DSUTEKH_RENDER=OFF
+          cmake --build build -j 2 --target det_matrix det_matrix_dll test_det_regress racer_microcosm sutekh
+      - name: Run the determinism tests (reference, planned and native tiers, DLL, regression fixtures, RTS engine)
+        run: ctest --test-dir build --output-on-failure -j 2 -R "^determinism_"
+      - name: Write manifests and replays
+        run: |
+          mkdir -p det-out/replays
+          for t in reference planned native; do
+            build/det_matrix --fixtures build/det_fixtures --tier $t --out det-out/linux-${{ matrix.cc }}-$t.txt --replay-dir det-out/replays
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: det-linux-${{ matrix.cc }}
+          path: det-out
+
+  determinism-windows:
+    name: Determinism matrix, Windows ${{ matrix.name }} Release
+    needs: determinism-linux
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # LLVM clang targeting x86_64-pc-windows-msvc (MSVC headers, libraries and UCRT), VM tiers.
+          - name: clang
+            cc: clang
+            native: 'OFF'
+          # The same with the native tier (AsmJit, Win64 calling convention).
+          - name: clang native
+            cc: clang
+            native: 'ON'
+          # MSVC cl (environment from vcvars64.bat), VM tiers.
+          - name: MSVC cl
+            cc: cl
+            native: 'OFF'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned test dependencies and fetch the pinned AsmJit commit
+        run: |
+          python -m pip install -r tools/requirements-dev.txt
+          python tools/bootstrap_asmjit.py
+      - name: Configure, build and run the determinism tests
+        shell: pwsh
+        run: |
+          if ("${{ matrix.cc }}" -eq "cl") {
+            $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+            cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" && set" | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2]) } }
+            $cxx = "cl"
+          } else {
+            $cxx = "clang++"
+          }
+          & ${{ matrix.cc }} --version
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=$cxx -DCMAKE_BUILD_TYPE=Release -DSUTEKH_NATIVE=${{ matrix.native }} -DSUTEKH_RENDER=OFF
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cmake --build build -j 2 --target det_matrix det_matrix_dll test_det_regress racer_microcosm sutekh
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          ctest --test-dir build --output-on-failure -j 2 -R "^determinism_"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: det-linux-gcc
+          path: det-linux-gcc
+      - name: Play the Linux GCC replays on this build, write manifests
+        shell: bash
+        run: |
+          tag=$(echo "${{ matrix.name }}" | tr ' ' '-')
+          tiers="reference planned"
+          if [ "${{ matrix.native }}" = "ON" ]; then tiers="$tiers native"; fi
+          mkdir -p det-out
+          for t in $tiers; do
+            build/det_matrix --fixtures build/det_fixtures --tier $t --play-dir det-linux-gcc/replays
+            build/det_matrix --fixtures build/det_fixtures --tier $t --out det-out/windows-$tag-$t.txt
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: det-windows-${{ strategy.job-index }}
+          path: det-out
+
+  determinism-compare:
+    name: Determinism matrix, every manifest against the expectation
+    needs: [determinism-linux, determinism-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: det-*
+          path: det
+      - name: Compare
+        run: python3 -I tests/determinism/compare_manifests.py tests/determinism/expected_digests.txt $(find det -name '*.txt' | sort)

@@ -1,0 +1,82 @@
+{
+ "capsule_format": "0.1",
+ "system_id": "rts.move",
+ "system_rev": 1,
+ "capabilities": [],
+ "ir_version": "0.1",
+ "source": "../../../capsules/rts/move.lir.json",
+ "schema": {
+  "id": "rts",
+  "version": 1,
+  "layout_generation": 1
+ },
+ "numeric_profile": "u32_mod_v1",
+ "fields": [
+  {
+   "id": 4,
+   "name": "pos_x",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 5,
+   "name": "pos_y",
+   "type": "u32",
+   "read": true,
+   "write": true
+  },
+  {
+   "id": 6,
+   "name": "speed",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 12,
+   "name": "order_mode",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 19,
+   "name": "goal_x",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 20,
+   "name": "goal_y",
+   "type": "u32",
+   "read": true,
+   "write": false
+  },
+  {
+   "id": 27,
+   "name": "target_valid",
+   "type": "u32",
+   "read": true,
+   "write": false
+  }
+ ],
+ "schedule": {
+  "phase": "rts",
+  "after": [
+   "rts.goal",
+   "rts.combat"
+  ],
+  "before": [],
+  "parallel": "serial"
+ },
+ "limits": {
+  "max_instructions": 4096,
+  "max_rows": 0,
+  "allocation": "forbidden"
+ },
+ "tests": [
+  "tests/determinism/det_matrix.c"
+ ]
+}

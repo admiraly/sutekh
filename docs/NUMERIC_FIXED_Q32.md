@@ -125,3 +125,13 @@ floating-point environment. `test_num_fast` compares every function with the ref
 seeded random inputs at every magnitude (15.9 million checks per run); `test_num_fast_portable` repeats it with
 `SU_NUM_FAST_PORTABLE`, which disables the compiler intrinsics.
 
+## Cross-build qualification (2026-10-26)
+
+The statement in section 1 that results are identical across x64 compilers was tested end to end
+(docs/DETERMINISM_MATRIX.md, issue #141). Five workloads ran through the host API: RTS IR, the 6DOF racer with
+space3d.query, a q32 probe workload on saturation-edge operands, and entity churn. They produced byte-identical
+manifests of per-keyframe `su_host_digest`, per-tick digest traces and replay bytes on every qualified build and tier
+listed there. The builds include GCC and Clang at `-O0` and `-O3`, `-march=native` (FMA), the portable limb path,
+and the Windows clang and MSVC legs of CI. The audit found one undefined-behaviour site outside this library, in the
+space3d box queries on `INT64_MIN` half extents. It is fixed, with a regression fixture; see that document,
+section 5, D1.
