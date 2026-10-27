@@ -61,6 +61,10 @@ typedef struct RegInst {
     size_t scratch_bytes;
     RegData *data;
     SuHostState *state;           /* operator state (issue 139), NULL when the descriptor declares none */
+    SuEvent *ev;                  /* max_events_per_tick records of this tick (issue 172), or NULL */
+    uint32_t ev_cap;
+    uint32_t ev_n;
+    uint32_t ev_refused;          /* SU_OK, or the code of an emission the operator did not see returned */
     char reason[128];             /* SuHostOperatorRun.reason, "" at every call */
     char why[256];                /* reason of the last failed run, "" otherwise */
 } RegInst;
@@ -72,7 +76,14 @@ _Static_assert(sizeof(void *) == 8u || sizeof(void *) == 4u, "unsupported pointe
 /* Version 2 appends four u32 without padding (issue 139). */
 _Static_assert(SU_HOST_OPERATOR_DESC_V2_SIZE == (sizeof(void *) == 8u ? 136u : 100u),
                "SU_HOST_OPERATOR_DESC_V2_SIZE moved");
-_Static_assert(sizeof(SuHostOperatorDesc) == SU_HOST_OPERATOR_DESC_V2_SIZE, "descriptor has trailing padding");
+/* Version 3 appends two u32 without padding (issue 172). */
+_Static_assert(SU_HOST_OPERATOR_DESC_V3_SIZE == (sizeof(void *) == 8u ? 144u : 108u),
+               "SU_HOST_OPERATOR_DESC_V3_SIZE moved");
+_Static_assert(sizeof(SuHostOperatorDesc) == SU_HOST_OPERATOR_DESC_V3_SIZE, "descriptor has trailing padding");
+/* SuHostOperatorRun through `state` (the layout an operator built against the 2026-10-26 header reads). */
+_Static_assert(SU_HOST_OPERATOR_RUN_STATE_SIZE == (sizeof(void *) == 8u ? 120u : 84u),
+               "SU_HOST_OPERATOR_RUN_STATE_SIZE moved: the run struct's released fields may not change");
+_Static_assert(sizeof(SuHostOperatorRun) == (sizeof(void *) == 8u ? 136u : 92u), "run struct has trailing padding");
 _Static_assert(offsetof(SuHostOperatorDesc, constants_hash) == (sizeof(void *) == 8u ? 48u : 32u),
                "v1 descriptor layout changed");
 
@@ -206,6 +217,7 @@ static void reg_destroy(void *p) {
     free(ri->alive);
     free(ri->gen);
     free(ri->scratch);
+    free(ri->ev);
     free(ri);
 }
 
@@ -247,6 +259,14 @@ static uint32_t reg_create(const HostOperator *op, uint64_t rows, void **inst) {
             return st;
         }
     }
+    if (r->pub.max_events_per_tick != 0u) {
+        ri->ev = calloc(r->pub.max_events_per_tick, sizeof *ri->ev);
+        if (ri->ev == NULL) {
+            reg_destroy(ri);
+            return SU_E_RESOURCE_LIMIT;
+        }
+        ri->ev_cap = r->pub.max_events_per_tick;
+    }
     if (r->pub.scratch_size != NULL) {
         size_t bytes = 0;
         uint32_t st = r->pub.scratch_size(rows, &bytes, r->pub.user);
@@ -265,6 +285,66 @@ static uint32_t reg_create(const HostOperator *op, uint64_t rows, void **inst) {
     }
     *inst = ri;
     return SU_OK;
+}
+
+/* One event appended by the operator during run (issue 172). The engine numbers the record (system index, tick,
+ * event_seq) at commit; the operator supplies the slot, the kind and the payload. A refusal is sticky: the code is
+ * remembered and reg_run fails the tick with it even when run returns SU_OK, so a swallowed refusal is never a
+ * silent drop (host.h, "events from host operators"). */
+static uint32_t reg_emit_event(void *ctx, uint32_t slot, uint32_t kind, uint32_t a, uint32_t b) {
+    RegInst *ri = (RegInst *)ctx;
+    SuEvent *e;
+    if (ri == NULL || ri->ev == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (kind >= SU_EVENT_KIND_RESERVED_MIN) {
+        ri->ev_refused = SU_E_TYPE;
+        return SU_E_TYPE;
+    }
+    if ((uint64_t)slot >= ri->rows) {
+        ri->ev_refused = SU_E_INVALID_ARGUMENT;
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (ri->ev_n >= ri->ev_cap) {
+        ri->ev_refused = SU_E_RESOURCE_LIMIT;
+        return SU_E_RESOURCE_LIMIT;
+    }
+    e = &ri->ev[ri->ev_n];
+    memset(e, 0, sizeof *e);
+    e->kind = kind;
+    e->slot = slot;
+    e->seq = ri->ev_n; /* one serial call: the emission order within the run */
+    e->a = a;
+    e->b = b;
+    ri->ev_n++;
+    return SU_OK;
+}
+
+/* The events of the last run, in emission order (schedule.c run_host, su_sched_set_host_events). */
+static SuEvent *reg_events(void *inst, uint32_t *count) {
+    RegInst *ri = (RegInst *)inst;
+    if (count != NULL) {
+        *count = ri != NULL ? ri->ev_n : 0u;
+    }
+    return ri != NULL ? ri->ev : NULL;
+}
+
+void su_host_operator_event_config(const HostOperator *op, uint32_t *cap, SuHostEventDrain *drain) {
+    if (cap != NULL) {
+        *cap = 0u;
+    }
+    if (drain != NULL) {
+        *drain = NULL;
+    }
+    if (op == NULL || op->reg == NULL || op->reg->pub.max_events_per_tick == 0u) {
+        return;
+    }
+    if (cap != NULL) {
+        *cap = op->reg->pub.max_events_per_tick;
+    }
+    if (drain != NULL) {
+        *drain = reg_events;
+    }
 }
 
 /* The schedule's host-entry call (schedule.c run_host): in holds the declared readable lanes (working columns),
@@ -322,6 +402,8 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
         memset(ri->scratch, 0, ri->scratch_bytes); /* always: scratch is not state */
     }
     ri->reason[0] = '\0';
+    ri->ev_n = 0u;
+    ri->ev_refused = SU_OK;
     memset(&run, 0, sizeof run);
     run.struct_size = (uint32_t)sizeof run;
     run.column_count = r->desc.field_count;
@@ -340,6 +422,8 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
     run.reason = ri->reason;
     run.reason_cap = sizeof ri->reason;
     run.state = ri->state;
+    run.emit_event = ri->ev != NULL ? reg_emit_event : NULL;
+    run.emit_ctx = ri->ev != NULL ? ri : NULL;
     if (ri->state != NULL) {
         su_hstate_begin_run(ri->state, ri->alive, ri->gen, ri->rows);
     }
@@ -349,12 +433,22 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
     }
     if (st != SU_OK) {
         ri->reason[sizeof ri->reason - 1u] = '\0';
-        snprintf(ri->why, sizeof ri->why, "operator run returned %s%s%s%s", su_host_status_name(st),
+        snprintf(ri->why, sizeof ri->why, "operator run returned %s%s%s%s%s", su_host_status_name(st),
                  ri->reason[0] != '\0' ? ": " : "", ri->reason,
                  st == SU_E_RESOURCE_LIMIT && ri->state != NULL && su_hstate_cap_refusals(ri->state) > 0u
                      ? " (operator state cap reached)"
-                     : "");
+                     : "",
+                 st == SU_E_RESOURCE_LIMIT && ri->ev_refused == SU_E_RESOURCE_LIMIT ? " (event cap reached)" : "");
         return st;
+    }
+    if (ri->ev_refused != SU_OK) {
+        snprintf(ri->why, sizeof ri->why, "event emission refused: %s (declared cap %u)",
+                 ri->ev_refused == SU_E_RESOURCE_LIMIT
+                     ? "the per-tick event cap was reached"
+                     : ri->ev_refused == SU_E_TYPE ? "the kind is reserved for engine records"
+                                                   : "the slot is not a row of this world",
+                 (unsigned)ri->ev_cap);
+        return ri->ev_refused;
     }
     if (check_inputs) {
         for (i = 0; i < r->desc.field_count; i++) {
@@ -384,10 +478,22 @@ static void reg_identity(const void *inst, uint8_t semantic[32]) {
         b[4u + i] = (uint8_t)(sb >> (8u * i));
     }
     su_sha256_init(&c);
-    su_sha256_update(&c, (const uint8_t *)"sutekh.host.registered.v1", 26u);
+    su_sha256_update(&c, (const uint8_t *)"sutekh.host.registered.v1", sizeof "sutekh.host.registered.v1");
     su_sha256_update(&c, semantic, 32u);
     su_sha256_update(&c, b, sizeof b);
     su_sha256_final(&c, semantic);
+    if (ri->reg->pub.max_events_per_tick != 0u) {
+        /* Events (issue 172): SHA-256("sutekh.host.events.v1\0" || hash above || u32 max_events_per_tick). */
+        uint32_t k;
+        for (k = 0; k < 4u; k++) {
+            b[k] = (uint8_t)(ri->reg->pub.max_events_per_tick >> (8u * k));
+        }
+        su_sha256_init(&c);
+        su_sha256_update(&c, (const uint8_t *)"sutekh.host.events.v1", sizeof "sutekh.host.events.v1");
+        su_sha256_update(&c, semantic, 32u);
+        su_sha256_update(&c, b, 4u);
+        su_sha256_final(&c, semantic);
+    }
     if (ri->state != NULL) {
         /* Operator state (issue 139): SHA-256("sutekh.host.state.v1\0" || hash above || u32 state_flags ||
          * u32 state_max_entries || u32 state_max_bytes), little-endian. Without state the hash is the one above. */
@@ -399,7 +505,7 @@ static void reg_identity(const void *inst, uint8_t semantic[32]) {
             }
         }
         su_sha256_init(&c);
-        su_sha256_update(&c, (const uint8_t *)"sutekh.host.state.v1", 21u);
+        su_sha256_update(&c, (const uint8_t *)"sutekh.host.state.v1", sizeof "sutekh.host.state.v1");
         su_sha256_update(&c, semantic, 32u);
         su_sha256_update(&c, b, 12u);
         su_sha256_final(&c, semantic);
@@ -611,6 +717,14 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError
         return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX,
                        "state: at most %u entries and %u bytes", (unsigned)SU_HOST_STATE_MAX_ENTRIES,
                        (unsigned)SU_HOST_STATE_MAX_BYTES);
+    }
+    /* Events (version 3 fields; all zero for a version 1 or 2 descriptor). */
+    if (desc->event_reserved != 0u) {
+        return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "event_reserved must be 0");
+    }
+    if (desc->max_events_per_tick > SU_CMDQ_MAX_TICK_CAP) {
+        return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX,
+                       "max_events_per_tick must be 0 (no events) or 1..%u", (unsigned)SU_CMDQ_MAX_TICK_CAP);
     }
     if (desc->release_data != NULL && desc->parse_data == NULL) {
         return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "release_data without parse_data");

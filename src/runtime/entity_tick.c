@@ -73,6 +73,11 @@ typedef struct EntCache {
     SuJobPool *pool;
     EntSys *es;
     uint32_t *status;
+    /* Host operator events of the tick (issue 172): one buffer of the sum of the host entries' declared per-tick
+     * caps, filled in schedule order, and the count so far. Not world state: reset every tick. */
+    SuEvent *hev;
+    uint64_t hev_cap;
+    uint64_t hev_n;
 } EntCache;
 
 struct SuEntRt {
@@ -95,6 +100,7 @@ static void ent_cache_drop(EntCache *c) {
     }
     free(c->es);
     free(c->status);
+    free(c->hev);
     su_jobs_pool_destroy(c->pool);
     su_cmdq_destroy(c->q);
     memset(c, 0, sizeof *c);
@@ -508,8 +514,27 @@ static uint32_t despawn_cb(void *ctx, uint64_t handle, uint32_t *old_gen) {
     return st;
 }
 
+/* Copies one host entry's records into the tick's host event buffer (issue 172), numbering them by system so the
+ * commit can interleave them with the IR systems' events. */
+static uint32_t cache_host_events(EntCache *c, uint32_t sys, const SuHostOpEvents *ev) {
+    uint64_t k;
+    if (ev->count == 0u) {
+        return SU_OK;
+    }
+    if (c->hev == NULL || (uint64_t)ev->count > c->hev_cap - c->hev_n) {
+        return SU_E_INTERNAL;
+    }
+    for (k = 0u; k < ev->count; k++) {
+        c->hev[c->hev_n + k] = ev->events[k];
+        c->hev[c->hev_n + k].system_index = sys;
+    }
+    c->hev_n += ev->count;
+    return SU_OK;
+}
+
 /* Merge, apply to the working table, log, zero the despawned columns. The caller publishes. */
-static uint32_t boundary(SuWorld *w, SuCmdQ *q, SuEventLog *log, uint64_t tick) {
+static uint32_t boundary(SuWorld *w, SuCmdQ *q, SuEventLog *log, uint64_t tick, const SuEvent *hev,
+                         uint64_t hev_n) {
     SuCmdCallbacks cb;
     SuCommitReport rep;
     uint32_t st;
@@ -521,7 +546,7 @@ static uint32_t boundary(SuWorld *w, SuCmdQ *q, SuEventLog *log, uint64_t tick) 
     if (cb.ctx == NULL) {
         return SU_E_INTERNAL;
     }
-    st = su_cmdq_commit(q, &cb, tick, log, &rep);
+    st = su_cmdq_commit_with_events(q, &cb, tick, log, hev, hev_n, &rep);
     if (st != SU_OK) {
         return st;
     }
@@ -589,6 +614,22 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
                 st = SU_E_RESOURCE_LIMIT;
             }
         }
+        if (st == SU_OK) {
+            /* One buffer for every host entry's declared events (issue 172); at most SU_SCHED_MAX_SYSTEMS entries
+             * of at most SU_CMDQ_MAX_TICK_CAP each, so the sum cannot wrap. */
+            uint64_t cap = 0u;
+            for (i = 0; i < s->count; i++) {
+                cap += s->sys[i].host_event_cap;
+            }
+            if (cap > 0u) {
+                c->hev = calloc((size_t)cap, sizeof *c->hev);
+                if (c->hev == NULL) {
+                    st = SU_E_RESOURCE_LIMIT;
+                } else {
+                    c->hev_cap = cap;
+                }
+            }
+        }
         c->count = s->count;
         for (i = 0; i < s->count; i++) {
             c->mods[i] = s->sys[i].mod;
@@ -641,6 +682,7 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
             goto out;
         }
         su_cmdq_reset(q);
+        c->hev_n = 0u;
         for (i = 0; i < s->count && st == SU_OK; i++) {
             if (fault != NULL && fault(i, fault_ctx) != 0) {
                 st = SU_E_CANDIDATE_FAILED;
@@ -656,6 +698,12 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
                     order = perm;
                 }
                 st = ent_sys_run(&es[i], pool, chunks, order);
+            } else if (s->sys[i].host_event_cap != 0u) {
+                SuHostOpEvents hev;
+                st = su_sched_run_system_events(w, s, i, opt, &hev);
+                if (st == SU_OK) {
+                    st = cache_host_events(c, i, &hev);
+                }
             } else {
                 st = su_sched_run_system(w, s, i, opt);
             }
@@ -674,7 +722,7 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
             *failed_index = i < s->count ? i : UINT32_MAX;
             goto out;
         }
-        st = boundary(w, q, rt->log, next_tick);
+        st = boundary(w, q, rt->log, next_tick, c->hev, c->hev_n);
         if (st != SU_OK) {
             su_world_abort(w);
             *failed_index = UINT32_MAX;

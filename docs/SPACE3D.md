@@ -47,6 +47,24 @@ With `SU_HOST_STATE_DROP_DEAD` the entries of dead entities are erased when a ti
 no state, and worlds without operator state keep version 1 snapshots byte for byte. Contract: `host.h`, "operator
 state". Evidence: `host_opstate*` tests (`tests/host/test_host_opstate.c`).
 
+**Events from operators (2026-10-27, issue 172).** A registered operator may append events to the world's event log
+while it runs, through `run->emit_event` (descriptor version 3: `max_events_per_tick`), for example one record per
+resolved hit, which per-row columns cannot express (they keep only the last occurrence in a tick). The records are
+the IR `emit_event` records: same 40-byte layout, same kind range (below `SU_EVENT_KIND_RESERVED_MIN`), the
+operator's schedule position as `system_index`, and `seq` numbering its emissions in the run from 0. A tick's log is
+ordered by schedule position and then by the order each system produced its records, so an operator's records appear
+in its emission order between the IR systems before and after it; nothing depends on thread timing, because `run` is
+one serial call per tick. Past `max_events_per_tick` emissions the append is refused with `SU_E_RESOURCE_LIMIT` and
+the refusal is sticky: the tick fails in that system and nothing of it is committed, the same outcome the IR path
+gives for an over-cap emission; the world's own `max_events_per_tick` bounds the tick's total, host records
+included. Because the records are the log, they are in the canonical snapshot, both digests, both restores and
+replay keyframes, and re-simulation re-emits them with the same sequence numbers. The operator's buffer is allocated
+at world creation; the entity tick's merge buffer (40 bytes times the sum of the declared caps) is allocated on the
+first step that builds the entity cache, and the declared cap joins the world identity. An operator that declares no
+cap gets `emit_event == NULL` and behaves exactly as before. Contract: `host.h`, "events from host operators".
+Evidence: `host_events`, `host_events_dll` and the cross-process `host_events_record` / `host_events_verify_*` tests
+(`tests/host/test_host_events.c`).
+
 Typed host lanes: `SuHostField.type` holds the lane's value type (`SU_TYPE_U32`, or `SU_TYPE_I32`/`I64`/`Q32` for a typed lane; a 64-bit field is two adjacent entries `I`, `I+1` named `<field>.lo`, `<field>.hi`). A descriptor with typed lanes has numeric profile `fixed_q32_v1` and operator family `<schema_id>_ops`. Descriptors with only u32 lanes (the RTS operators and their tests) keep `rts_ops_v<N>`, `u32_mod_v1`, and byte-identical declaration digests.
 
 ## 2. Schema `space3d` (profile `profiles/space3d`)

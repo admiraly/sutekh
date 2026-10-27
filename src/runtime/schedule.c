@@ -51,6 +51,17 @@ uint32_t su_sched_set_host_instance(SuSchedule *s, uint32_t idx, void *inst, voi
     return SU_OK;
 }
 
+uint32_t su_sched_set_host_events(SuSchedule *s, uint32_t idx, uint32_t cap, SuHostEventDrain drain) {
+    SuSysEntry *e;
+    if (s == NULL || idx >= s->count || cap == 0u || drain == NULL || s->sys[idx].kind != SU_SYS_KIND_HOST) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    e = &s->sys[idx];
+    e->host_event_cap = cap;
+    e->host_event_drain = drain;
+    return SU_OK;
+}
+
 void su_sched_free(SuSchedule *s) {
     uint32_t i;
     for (i = 0; i < s->count; i++) {
@@ -580,8 +591,8 @@ uint32_t su_sched_check_candidate(const SuSchedule *s, const SuLirModule *m, uin
 /* Host entry (M3-04a, section 3.1). The operator sees only its declared reads and writes: the bindings of
  * other fields are dropped from the views it is given. Staging of a declared write is committed for whole
  * columns, so the operator must store every row of each declared write (copy working to staging first).
- * A failed run commits nothing. */
-static uint32_t run_host(SuWorld *w, const SuSysEntry *e) {
+ * A failed run commits nothing. ev (optional) receives the events the run appended (issue 172). */
+static uint32_t run_host(SuWorld *w, const SuSysEntry *e, SuHostOpEvents *ev) {
     const SuHostOpDesc *d = e->host;
     SuInvocation inv;
     SuOutputs out;
@@ -596,6 +607,12 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e) {
     SuOutputs full_out;
     uint32_t cur_in = 0;
     uint32_t cur_out = 0;
+    void *inst = e->host_inst != NULL ? e->host_inst : d->host_ctx;
+
+    if (ev != NULL) {
+        ev->events = NULL;
+        ev->count = 0u;
+    }
 
     st = su_world_build_invocation(w, &full_inv);
     if (st != SU_OK) {
@@ -636,16 +653,24 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e) {
     out = full_out;
     out.bindings = wb;
     out.binding_count = nw;
-    st = d->run(w, &inv, &out, e->host_inst != NULL ? e->host_inst : d->host_ctx);
+    st = d->run(w, &inv, &out, inst);
     if (st != SU_OK) {
         return st;
     }
-    return su_world_commit_staging(w, wid, nw);
+    st = su_world_commit_staging(w, wid, nw);
+    if (st != SU_OK) {
+        return st;
+    }
+    if (ev != NULL && e->host_event_drain != NULL) {
+        ev->events = e->host_event_drain(inst, &ev->count);
+    }
+    return SU_OK;
 }
 
-static uint32_t run_one_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt) {
+static uint32_t run_one_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt,
+                               SuHostOpEvents *ev) {
     if (s->sys[i].kind == SU_SYS_KIND_HOST) {
-        return run_host(w, &s->sys[i]);
+        return run_host(w, &s->sys[i], ev);
     }
 #ifdef SU_HAVE_NATIVE
     if (s->sys[i].native_seq != 0u) {
@@ -674,7 +699,19 @@ uint32_t su_sched_run_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSche
     if (w == NULL || s == NULL || i >= s->count) {
         return SU_E_INVALID_ARGUMENT;
     }
-    return run_one_system(w, s, i, opt);
+    return run_one_system(w, s, i, opt, NULL);
+}
+
+uint32_t su_sched_run_system_events(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt,
+                                    SuHostOpEvents *ev) {
+    if (ev != NULL) {
+        ev->events = NULL;
+        ev->count = 0u;
+    }
+    if (w == NULL || s == NULL || i >= s->count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return run_one_system(w, s, i, opt, ev);
 }
 
 uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
@@ -686,7 +723,9 @@ uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSch
     *done = 0;
     *failed_index = UINT32_MAX;
     for (k = 0; k < s->count; k++) {
-        if (s->sys[k].mod->uses_entity_ops) {
+        /* A host operator that appends events needs the entity tick too (issue 172): its records join the tick's
+         * event buffers and are committed to the log with the IR systems' events. */
+        if (s->sys[k].mod->uses_entity_ops || s->sys[k].host_event_cap != 0u) {
             has_entity_ops = 1;
         }
     }
@@ -706,7 +745,7 @@ uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSch
             if (fault != NULL && fault(i, fault_ctx) != 0) {
                 st = SU_E_CANDIDATE_FAILED;
             } else {
-                st = run_one_system(w, s, i, opt);
+                st = run_one_system(w, s, i, opt, NULL);
             }
             if (st == SU_OK) {
                 /* Dead rows are canonically zero after every system's commit (contract B1). */

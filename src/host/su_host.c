@@ -894,6 +894,16 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
         if (st == SU_OK) {
             hw->ops[i] = op;
         }
+        if (st == SU_OK) {
+            /* A host operator that appends events (issue 172) runs through the entity tick, so its records join the
+             * log with the IR systems' events and count toward the world's per-tick event cap. */
+            uint32_t ev_cap = 0u;
+            SuHostEventDrain ev_drain = NULL;
+            su_host_operator_event_config(op, &ev_cap, &ev_drain);
+            if (ev_cap != 0u) {
+                st = su_sched_set_host_events(&hw->sched, i, ev_cap, ev_drain);
+            }
+        }
         if (st == SU_OK && op->identity != NULL) {
             /* Registered operators: flags and this world's scratch size join the system's semantic hash (and so
              * su_host_system_info, the world identity and replay headers). */
