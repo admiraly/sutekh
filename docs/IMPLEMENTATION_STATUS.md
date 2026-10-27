@@ -11,10 +11,15 @@ keeps `generation << 32 | slot` with the slot offset by the table's base, so it 
 are unchanged, and a table-qualified call rejects another table's handle with `SU_E_STALE_HANDLE`. Single-table
 worlds are byte-identical to the parent revision (identity, snapshot versions 1 and 2, digests, fast digests,
 replays); multi-table worlds fold their table descriptors into the identity and write snapshot version 3. The
-decision, the API and the formats are in [MULTI_TABLE_WORLDS.md](MULTI_TABLE_WORLDS.md); the first slice refuses IR
-entity operations and operator events in multi-table worlds and leaves the space3d cross-table form to the recorded
-follow-up. Evidence: `host_tables`, `host_tables_dll` (`tests/host/test_host_tables.c`) and
-`bench/host/bench_host_tables.c`; the handoff is `planning/handoffs/2026-10-27-issue-140.md`.
+decision, the API and the formats are in [MULTI_TABLE_WORLDS.md](MULTI_TABLE_WORLDS.md). The entity tick is
+table-aware (slice 2): `despawn_self` and `emit_event` run in every table, host-operator events join the same log
+with a world slot, `slot_u32`/`gen_u32`/`handle_live` use world slots, `space3d.query` can take its movers from one
+table and its targets from another, and a stateful registered operator works in any table (its DROP_DEAD purge
+checks each key against the table that owns it). In-tick spawning by an operator into a named table is the recorded
+follow-up (section 8.3 of the design note). Evidence: `host_tables`, `host_tables_dll`
+(`tests/host/test_host_tables.c`), `host_tables_entities`, `host_tables_entities_dll`
+(`tests/host/test_host_tables_entities.c`) and `bench/host/bench_host_tables.c`; the handoff is
+`planning/handoffs/2026-10-27-issue-140b.md`.
 
 ## Current checkpoint — 14 October 2026
 
@@ -453,7 +458,7 @@ Owner-authorized downstream work outside the milestone order (extension of `plan
 
 ## IR 0.4: bit operations, row filter, cross-row reads, field budget (19 October 2026)
 
-Downstream request work outside the milestone order (M3 gates unchanged). Implemented and tested: `SU_LIMIT_FIELDS` raised from 256 to 1,024 lanes (no persisted format stores it); IR 0.4 (`LIVE_IR_SPEC.md` "IR 0.4", artifact format 4) with u32 `and/or/xor/not/shl/shr/div/rem`, i64 `and/or/xor/not`, a capsule-level `row_filter` (masked u32 equality; filtered rows keep their values and run nothing), `gather_u32/_i32/_i64/_q32` (a field of another row by slot, entry state) and `find_eq_u32` (lowest slot whose field equals a key: first claimant by slot order), with a whole-table view for chunked runs (`su_vm_context_set_table_view`). Both VM tiers implement every operation; the native scalar lowering covers the bit operations and the row filter and refuses cross-row reads (`ir_0_4_gather_not_lowered`). Tests: `ir04`, `host04`, `ir04_diff`, `ir04_native_diff`. Not done: a discard binding for host-operator output lanes, native cross-row reads, reductions other than `find_eq_u32`.
+Downstream request work outside the milestone order (M3 gates unchanged). Implemented and tested: `SU_LIMIT_FIELDS` raised from 256 to 1,024 lanes (no persisted format stores it); IR 0.4 (`LIVE_IR_SPEC.md` "IR 0.4", artifact format 4) with u32 `and/or/xor/not/shl/shr/div/rem`, i64 `and/or/xor/not`, a capsule-level `row_filter` (masked u32 equality; filtered rows keep their values and run nothing), `gather_u32/_i32/_i64/_q32` (a field of another row by slot, entry state) and `find_eq_u32` (lowest slot whose field equals a key: first claimant by slot order), with a whole-table view for chunked runs (`su_vm_context_set_table_view`; `su_vm_context_set_table_view_base` when the table's local slot 0 is not world slot 0, issue 140, so gather slots are world slots). Both VM tiers implement every operation; the native scalar lowering covers the bit operations and the row filter and refuses cross-row reads (`ir_0_4_gather_not_lowered`). Tests: `ir04`, `host04`, `ir04_diff`, `ir04_native_diff`. Not done: a discard binding for host-operator output lanes, native cross-row reads, reductions other than `find_eq_u32`.
 
 ## Registered host operators (26 October 2026)
 

@@ -61,6 +61,7 @@ struct SuHostState {
     const uint32_t *gen;
     uint64_t rows;
     uint64_t entity_base;    /* world slot of the operator's table's local slot 0 (issue 140; 0 before) */
+    uint64_t world_slots;    /* world slots of every table together (see su_hstate_begin_run) */
 };
 
 static void put_u32(uint8_t *p, uint32_t v) {
@@ -302,8 +303,11 @@ static void compact(SuHostState *s, uint32_t skip) {
 static int entity_alive(const SuHostState *s, uint64_t entity) {
     uint32_t slot = SU_ENTITY_SLOT(entity);
     uint32_t gen = SU_ENTITY_GEN(entity);
-    if ((uint64_t)slot < s->entity_base) {
-        return 0;
+    if ((uint64_t)slot < s->entity_base || (uint64_t)slot >= s->entity_base + s->rows) {
+        /* Another table's slot (below world_slots) or no table's: the run cannot see it, so the publish decides
+         * (su_hstate_commit); a slot no table owns is dead. Single-table worlds have world_slots == rows and base 0,
+         * so this is the released check. */
+        return (uint64_t)slot < s->world_slots;
     }
     slot -= (uint32_t)s->entity_base;
     return gen != 0u && slot < s->rows && s->alive != NULL && s->alive[slot] != 0u && s->gen[slot] == gen;
@@ -314,8 +318,18 @@ static SuEntity local_handle(uint64_t entity, uint64_t base) {
     return SU_ENTITY_MAKE(SU_ENTITY_SLOT(entity) - (uint32_t)base, SU_ENTITY_GEN(entity));
 }
 
-static int dead_in(const SuEnts *ents, uint64_t entity, uint64_t base) {
-    return (uint64_t)SU_ENTITY_SLOT(entity) < base || su_ents_validate(ents, local_handle(entity, base)) != SU_OK;
+/* 1 when the entity is dead in the committed entity table of the table its slot belongs to (issue 140: an entry
+ * keyed by another table's live handle is alive). A slot no table owns is dead. */
+static int dead_in(const SuHStateTables *tabs, uint64_t entity) {
+    uint32_t slot = SU_ENTITY_SLOT(entity);
+    uint32_t t;
+    for (t = 0; t < tabs->count; t++) {
+        if ((uint64_t)slot >= tabs->base[t] && (uint64_t)slot < tabs->base[t] + tabs->rows[t]) {
+            return tabs->ents[t] == NULL ||
+                   su_ents_validate(tabs->ents[t], local_handle(entity, tabs->base[t])) != SU_OK;
+        }
+    }
+    return 1;
 }
 
 /* Inserts or replaces (entity, sub) with len uninitialized bytes; *out = the bytes. */
@@ -364,11 +378,19 @@ static int writable(const SuHostState *s) {
 
 /* ---------- engine side ---------- */
 
-void su_hstate_begin_run(SuHostState *s, const uint8_t *alive, const uint32_t *gen, uint64_t rows, uint64_t base) {
+void su_hstate_begin_run(SuHostState *s, const uint8_t *alive, const uint32_t *gen, uint64_t rows, uint64_t base,
+                         uint64_t world_slots) {
     s->alive = alive;
     s->gen = gen;
     s->rows = rows;
     s->entity_base = base;
+    s->world_slots = world_slots;
+    /* A multi-table world's run can key state by another table's handle, which its own views cannot validate, so the
+     * publish must check every entry against the table that owns it: scan each tick. Single-table worlds keep the
+     * released behaviour (a scan only after a despawn may have happened). */
+    if (world_slots > rows) {
+        s->maybe_dead = 1;
+    }
     s->cap_refusals = 0u;
     s->writable = 1;
 }
@@ -388,14 +410,14 @@ void su_hstate_note_despawn(SuHostState *s) {
     s->maybe_dead = 1;
 }
 
-void su_hstate_commit(SuHostState *s, const SuEnts *ents, uint64_t base) {
+void su_hstate_commit(SuHostState *s, const SuHStateTables *tabs) {
     HsSide t;
-    if ((s->flags & SU_HOST_STATE_DROP_DEAD) != 0u && ents != NULL && s->maybe_dead) {
+    if ((s->flags & SU_HOST_STATE_DROP_DEAD) != 0u && tabs != NULL && s->maybe_dead) {
         s->maybe_dead = 0;
         const HsSide *d = cur(s);
         uint32_t i, first = NONE;
         for (i = 0; i < d->n; i++) {
-            if (dead_in(ents, d->e[i].entity, base)) {
+            if (dead_in(tabs, d->e[i].entity)) {
                 first = i;
                 break;
             }
@@ -412,7 +434,7 @@ void su_hstate_commit(SuHostState *s, const SuEnts *ents, uint64_t base) {
             for (i = first; i < w->n; i++) {
                 if (i == first || w->e[i].entity != last) {
                     last = w->e[i].entity;
-                    last_dead = dead_in(ents, last, base);
+                    last_dead = dead_in(tabs, last);
                 }
                 if (last_dead) {
                     w->live -= w->e[i].len;

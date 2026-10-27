@@ -63,6 +63,7 @@ extern "C" {
 #define SU_HOST_INPUT_MAX_WRITES 4096u   /* cell writes in one tick's record */
 #define SU_HOST_INPUT_WINDOW 1024u       /* records may be queued this many ticks ahead of the world */
 #define SU_HOST_ENTITY_NONE UINT64_C(0)
+#define SU_HOST_TABLE_NONE UINT32_C(0xFFFFFFFF) /* no table: a capsule's target set (SuHostWorldDesc) */
 
 typedef struct SuHostError {
     uint32_t code;      /* SU_OK or SU_E_* */
@@ -120,25 +121,38 @@ typedef struct SuHostWorldDesc {
     /* capsule_count entries: the table of each capsule (0..table_count-1). NULL: every capsule is in table 0
      * (the only legal value for a single-table world). */
     const uint32_t *capsule_table;
+    /* Appended 2026-10-27 (issue 140); read only when struct_size covers it (v1..v4 descriptors do not, and get
+     * SU_HOST_TABLE_NONE for every capsule). capsule_count entries: the table whose rows the capsule's operator
+     * reads as its TARGET SET, or SU_HOST_TABLE_NONE (0xFFFFFFFF) for none. Only a host operator record that
+     * declares target lanes (SuHostOperatorDesc.target_field_count > 0) may name one, and the table must differ
+     * from the capsule's own table. See "tables" and "cross-table host operators" below. */
+    const uint32_t *capsule_target_table;
 } SuHostWorldDesc;
 
 #define SU_HOST_STATE_BUDGET_DEFAULT UINT64_C(1073741824) /* 1 GiB of reserved operator state per world */
 
 /* Size of the first released SuHostWorldDesc (through seed): 80 bytes with 8-byte pointers (LP64, LLP64; pinned at
  * compile time), of the second (through schema, issue 144): 88 bytes, of the third (through state_budget_bytes, issue
- * 153): 96 bytes, and of the fourth (through capsule_table, issue 140): 120 bytes. Versioning as for
+ * 153): 96 bytes, of the fourth (through capsule_table, issue 140): 120 bytes, and of the fifth (through
+ * capsule_target_table, issue 140, cross-table operators): 128 bytes. Versioning as for
  * SuHostOperatorDesc: struct_size may be SU_HOST_WORLD_DESC_V1_SIZE, SU_HOST_WORLD_DESC_V2_SIZE,
- * SU_HOST_WORLD_DESC_V3_SIZE, or sizeof(SuHostWorldDesc) (120 bytes with 8-byte pointers) or larger, in which case
+ * SU_HOST_WORLD_DESC_V3_SIZE, SU_HOST_WORLD_DESC_V4_SIZE, or sizeof(SuHostWorldDesc) (128 bytes with 8-byte
+ * pointers) or larger, in which case
  * every byte beyond the library's sizeof(SuHostWorldDesc) must be zero (a nonzero unknown byte is
  * SU_E_INVALID_ARGUMENT, so a request this library cannot honour fails instead of being ignored). Only struct_size
- * bytes are read; fields beyond it are zero (no schema, the default state budget, one table). A size below the v1
+ * bytes are read; fields beyond it are zero (no schema, the default state budget, one table, no target set). A size
+ * below the v1
  * size, or any other size below sizeof(SuHostWorldDesc) (one that ends inside a field), is SU_E_INVALID_ARGUMENT.
  * Zero the whole descriptor (memset) before filling it. */
 #define SU_HOST_WORLD_DESC_V1_SIZE (offsetof(SuHostWorldDesc, seed) + sizeof(uint64_t))
 #define SU_HOST_WORLD_DESC_V2_SIZE (offsetof(SuHostWorldDesc, state_budget_bytes))
 /* Version 3 (2026-10-26, issue 153; through state_budget_bytes): the last size before the multi-table fields. */
 #define SU_HOST_WORLD_DESC_V3_SIZE (offsetof(SuHostWorldDesc, state_budget_bytes) + sizeof(uint64_t))
-/* Version 4 (2026-10-27, issue 140; through capsule_table) is sizeof(SuHostWorldDesc). */
+/* Version 4 (2026-10-27, issue 140; through capsule_table): the first multi-table descriptor, 120 bytes with 8-byte
+ * pointers. */
+#define SU_HOST_WORLD_DESC_V4_SIZE (offsetof(SuHostWorldDesc, capsule_target_table))
+/* Version 5 (2026-10-27, issue 140; through capsule_target_table, cross-table operators) is sizeof(SuHostWorldDesc):
+ * 128 bytes with 8-byte pointers. */
 
 /* Creates a world. Capsules are verified (any SU_E_* of su_lir_verify, err->index = capsule index), joined
  * into one schedule (SU_E_SCHEMA_MISMATCH when they disagree on schema or a field) and checked by the effect
@@ -156,9 +170,9 @@ typedef struct SuHostWorldDesc {
  * larger schedule reaches that budget at a smaller capacity. Native kernels are a process-wide resource of at most
  * 32 (su_host_system_set_tier refuses the next one).
  *
- * Tables (2026-10-27, issue 140): see "tables" below. A multi-table world declares every table's schema, refuses a
- * capsule that uses IR entity operations or an operator that declares events (the entity tick owns one table in
- * this version), and keeps one identity, one tick, one input stream, one log, one snapshot and one digest.
+ * Tables (2026-10-27, issue 140): see "tables" below. A multi-table world declares every table's schema, runs IR
+ * entity operations and operator events in every table (the entity tick is table-aware), and keeps one identity,
+ * one tick, one input stream, one log, one snapshot and one digest.
  *
  * Operator-state budget (2026-10-26, issue 153): once the capsules are parsed and before any operator state, column
  * or operator scratch is allocated, the reservations of the stateful operators ("operator state", Bounds) are summed
@@ -645,6 +659,23 @@ typedef struct SuHostOperatorRun {
      * after run returns, or after the world is destroyed, is undefined. */
     uint32_t (*emit_event)(void *emit_ctx, uint32_t slot, uint32_t kind, uint32_t a, uint32_t b);
     void *emit_ctx;
+    /* Added 2026-10-27 (issue 140; present when struct_size covers it): the world handle space of this run.
+     * table_base is the world slot of the local slot 0 of the operator's own table, so an operator that reports a
+     * row writes table_base + local slot (the host's handles are world slots; table 0's base is 0). target_* describe
+     * the target set the world bound to this entry (SuHostWorldDesc.capsule_target_table): target_table is its
+     * table index (SU_HOST_TABLE_NONE when the operator has no target set), target_columns its declared target
+     * lanes in descriptor order under the descriptor's own IDs, target_rows its capacity, target_base the world
+     * slot of its local slot 0, and target_alive/target_generation its working entity views (target_rows entries,
+     * valid during this call). Target columns are read-only: writing one is undefined and the engine does not
+     * check it (they are the other table's working columns). */
+    uint64_t table_base;
+    uint32_t target_table;
+    uint32_t target_column_count;
+    const SuHostOperatorColumn *target_columns;
+    uint64_t target_rows;
+    uint64_t target_base;
+    const uint8_t *target_alive;
+    const uint32_t *target_generation;
 } SuHostOperatorRun;
 
 /* Size of SuHostOperatorRun through `state` (the 2026-10-26 layout): 120 bytes with 8-byte pointers, 84 with
@@ -654,6 +685,9 @@ typedef struct SuHostOperatorRun {
 /* Size through emit_ctx (the 2026-10-27 layout, with events): 136 bytes with 8-byte pointers, 92 with 4-byte
  * pointers. A later version appends after it; this pins the layout an operator built against this header sees. */
 #define SU_HOST_OPERATOR_RUN_EVENTS_SIZE (offsetof(SuHostOperatorRun, emit_ctx) + sizeof(void *))
+/* Size through target_generation (the 2026-10-27 layout, with the world handle space and target sets; issue 140):
+ * 192 bytes with 8-byte pointers, 132 with 4-byte pointers. */
+#define SU_HOST_OPERATOR_RUN_TARGETS_SIZE (offsetof(SuHostOperatorRun, target_generation) + sizeof(void *))
 
 typedef struct SuHostOperatorDesc {
     uint32_t struct_size;                 /* >= SU_HOST_OPERATOR_DESC_V1_SIZE; normally sizeof(SuHostOperatorDesc) */
@@ -696,6 +730,13 @@ typedef struct SuHostOperatorDesc {
      * events run may append in one tick (SU_E_RESOURCE_LIMIT past it). event_reserved must be 0. */
     uint32_t max_events_per_tick;
     uint32_t event_reserved;              /* 0 */
+    /* Version 4 (2026-10-27, issue 140): cross-table target set (see "cross-table host operators"). target_field_count
+     * 0 (with target_fields NULL) means none. Otherwise 1..1024 read-only lanes of ANOTHER table, ascending ID,
+     * unique, that the operator reads through run->target_columns; the world binds them to a table it names in
+     * SuHostWorldDesc.capsule_target_table. target_reserved must be 0. */
+    uint32_t target_field_count;
+    uint32_t target_reserved;             /* 0 */
+    const struct SuHostOperatorField *target_fields;
 } SuHostOperatorDesc;
 
 /* Size of the first released SuHostOperatorDesc (through user): 120 bytes with 8-byte pointers (LP64, LLP64), 84
@@ -705,6 +746,8 @@ typedef struct SuHostOperatorDesc {
 #define SU_HOST_OPERATOR_DESC_V2_SIZE (offsetof(SuHostOperatorDesc, state_reserved) + sizeof(uint32_t))
 /* Version 3 (through event_reserved): 144 bytes with 8-byte pointers, 108 with 4-byte pointers. */
 #define SU_HOST_OPERATOR_DESC_V3_SIZE (offsetof(SuHostOperatorDesc, event_reserved) + sizeof(uint32_t))
+/* Version 4 (through target_fields, issue 140): 160 bytes with 8-byte pointers, 120 with 4-byte pointers. */
+#define SU_HOST_OPERATOR_DESC_V4_SIZE (offsetof(SuHostOperatorDesc, target_fields) + sizeof(void *))
 
 /* Zeroes *d (padding included) and sets struct_size: use it before filling a descriptor. */
 #define SU_HOST_OPERATOR_DESC_INIT(d) \
@@ -955,9 +998,11 @@ typedef struct SuHostSchema {
  * and `capsule_table` assigns the capsules. Every table declares its schema (SuHostTableDesc.schema; the
  * SuHostSchema rules above), because a table's lanes are not necessarily the union of its systems' fields.
  * The capacities must sum to at most SU_LIMIT_ROWS. A table with no system is legal and costs nothing per
- * tick. A multi-table world refuses a capsule that uses IR entity operations (spawn, despawn_self,
- * emit_event) with SU_E_CAPABILITY_DENIED at creation: the entity tick owns one table in this version (see
- * docs/MULTI_TABLE_WORLDS.md section 8). Host spawn and despawn work in every table.
+ * tick: it is never begun or published, and only its tick counter follows the world's. A table's systems may
+ * use IR entity operations (despawn_self, emit_event) and host operators that declare events: the entity tick
+ * keeps each system's chunk cache, entity view and event buffers on that system's own table, with one command
+ * queue and one event log for the world, so a record's system_index names its table through the schedule. Host
+ * spawn and despawn work in every table, between ticks.
  *
  * Handles: a handle keeps its 64-bit layout (generation << 32 | slot), and the slot is the table's local slot
  * plus the table's base, where the base of table 0 is 0 and the base of table t is the sum of the capacities
@@ -965,13 +1010,22 @@ typedef struct SuHostSchema {
  * single-table world's handles are unchanged, and the generation range is unchanged. A table-qualified call
  * rejects a handle of another table with SU_E_STALE_HANDLE, like a dead or retired handle.
  *
+ * World slots (one rule for IR and host records): a record's slot is the WORLD slot of its row, the table's
+ * base plus the table's local slot. slot_u32, despawn_self and emit_event name world slots in the system's own
+ * table; gen_u32 is the row's generation in that table; handle_live takes a world slot of the system's own
+ * table, so another table's slot is not live for it; gather_* takes a world slot of the system's own table
+ * (out of its range = 0) and find_eq_u32 returns one. An operator's run->table_base is its table's base, so an
+ * operator reports table_base + local row, and its emit_event slot (0..world slots - 1) is a world slot too. A
+ * record's table therefore follows from its slot. Table 0's base is 0, so single-table worlds are unchanged.
+ *
  * Identity: a single-table world's identity is exactly that of earlier releases. A multi-table world folds its
  * table descriptors into it, so a snapshot or replay loads only into a world with the same tables, capacities,
  * schemas and order:
  *   identity = SHA-256("SUHTABLES" 0x00 || identity_without_tables || u32 table_count ||
- *                      per table: u32 schema-ID length | schema ID | u32 schema_version |
- *                      u32 layout_generation | u64 capacity | u32 lane count |
+ *                      per table: 32-byte schema digest | u32 schema-ID length | schema ID |
+ *                      u32 schema_version | u32 layout_generation | u64 capacity | u32 lane count |
  *                      per lane ascending ID: u32 id | u32 value type | u32 name length | name)
+ * A capsule that binds a target table folds one more section (cross-table host operators, below).
  * Snapshot: a multi-table world writes version 3 ("SUHSNAP" 0x00 | u32 3 | identity | u64 tick |
  * u32 table_count | per table: u64 state length | canonical world state (SUWSTATE) | u64 log length | event log
  * (SUEL) | operator state as in version 2 when the world has any). A single-table world keeps version 1 or 2
@@ -979,8 +1033,8 @@ typedef struct SuHostSchema {
  * so it covers every table and the shared log by construction.
  *
  * Host spawn/despawn event records of a multi-table world carry the WORLD slot in slot and a (and the
- * generation in b), so a record names its table; an IR system's events carry the emitting row's local slot and
- * their system_index, which names the table through the schedule. */
+ * generation in b), so a record names its table; IR system and host operator events carry the world slot of
+ * their row in slot. */
 
 #define SU_HOST_MAX_TABLES 8u
 
@@ -1036,20 +1090,61 @@ SU_HOST_API uint32_t su_host_read_i64_in(const SuHostWorld *w, uint32_t table, u
 /* Exact heap accounting of the world (M3-08a, contract 9.3, OD-10), per table and in total: the sum of the
  * bytes the world asked its allocator for and still holds, with the categories of su_world_memory summed into
  * table_total[t]. input_storage is the per-tick input application buffers (allocated at creation, issue 149);
- * metadata is the host world struct (which contains the schedule struct and its fixed entry array). The
- * schedule's heap allocations (modules, VM contexts, operator instances, the event log), spool and snapshot
- * bytes are not part of the world root (see su_evlog_memory_bytes and the snapshot owner).
- * SU_E_INVALID_ARGUMENT: NULL w or out, or out->struct_size < sizeof(SuHostMemory). */
+ * queued_inputs is the queued per-tick records (pushed inputs not yet applied, freed as they are consumed);
+ * restore_scratch is the entity-table and event-log scratch su_host_snapshot_restore_inplace allocates on its
+ * first call (0 before it); metadata is the host world struct (which contains the schedule struct and its fixed
+ * entry array). total is their sum. The schedule's heap allocations (modules, VM contexts, operator instances and
+ * their data, the event log), spool and snapshot bytes are not part of the world root (see su_evlog_memory_bytes
+ * and the snapshot owner), so total is the world's own storage, not the process's cost of the world.
+ * SU_E_INVALID_ARGUMENT: NULL w or out, or out->struct_size < SU_HOST_MEMORY_V1_SIZE (a caller may pass that size
+ * and receives the fields it covers). total always includes every category, so such a caller sees a total larger
+ * than the fields it receives. */
 typedef struct SuHostMemory {
     uint32_t struct_size;            /* in: sizeof(SuHostMemory) */
     uint32_t table_count;            /* out: tables of the world */
     uint64_t tables_total;           /* out: sum of table_total */
     uint64_t input_storage;          /* out: su_host_step's input application buffers */
     uint64_t metadata;               /* out: the world struct and its per-table arrays */
-    uint64_t total;                  /* out: tables_total + input_storage + metadata */
+    uint64_t total;                  /* out: tables_total + input_storage + queued_inputs + restore_scratch +
+                                      * metadata */
     uint64_t table_total[SU_HOST_MAX_TABLES]; /* out: per table, 0 beyond table_count */
+    /* Appended 2026-10-27 (issue 140): the categories the earlier claim left out. */
+    uint64_t queued_inputs;          /* out: queued input records (record headers and their write arrays) */
+    uint64_t restore_scratch;        /* out: su_host_snapshot_restore_inplace's scratch, 0 until its first call */
 } SuHostMemory;
+
+/* Size of the first released SuHostMemory (through table_total): 96 bytes with 8-byte pointers. A caller may pass
+ * that size and receives the fields it covers (the appended ones stay untouched). */
+#define SU_HOST_MEMORY_V1_SIZE (offsetof(SuHostMemory, queued_inputs))
 SU_HOST_API uint32_t su_host_memory(const SuHostWorld *w, SuHostMemory *out);
+
+/* ---- cross-table host operators (additive, API version 1; 2026-10-27, issue 140) ----
+ *
+ * A host operator can read a second table's rows as its TARGET SET: its movers are its own table's rows and its
+ * targets another table's. This is the form space3d.query needs for projectiles in one table against ships in
+ * another (docs/SPACE3D.md section 1). It takes three pieces, all additive:
+ *
+ *  - SuHostOperatorDesc.target_field_count/target_fields (descriptor version 4): 1..SU_LIMIT_FIELDS read-only
+ *    lanes of ANOTHER table, ascending ID and unique, named as the target table declares them (lane names, so
+ *    "pos_x.lo" for a q32 field). The operator keeps its own IDs and sees the lanes through
+ *    run->target_columns; run_targets is the run function of an operator with a target set (run is used when
+ *    the entry names no target table, and both are refused if only one is present).
+ *  - SuHostWorldDesc.capsule_target_table (descriptor version 5): per capsule, the table its operator's target
+ *    set reads, or SU_HOST_TABLE_NONE. It must differ from the capsule's own table, and only a host operator
+ *    that declares target lanes may name one (an IR system cannot).
+ *  - SuHostOperatorRun.target_table/target_columns/target_rows/target_base/target_alive/target_generation:
+ *    the target table, its capacity and base, its columns under the descriptor's IDs, and its alive and
+ *    generation views for this run. During a tick they are the target table's working values, so a target
+ *    system earlier in the schedule is visible; a target table with no system is not in its tick, so its
+ *    committed values are read instead. A target set is read-only: writing a target column is undefined and
+ *    the engine does not check it.
+ *
+ * The target lanes are resolved against the target table's DECLARED schema by name and value type at creation
+ * (SU_E_SCHEMA_MISMATCH names the lane), and the binding joins the world identity, so a snapshot or replay is
+ * bound to it. The operator instance (create and scratch_size) is sized for its own table's rows plus the
+ * target table's rows, so one scratch can cover both. A world with no target set has no such section in its
+ * identity and keeps every earlier byte, snapshot and digest.
+ */
 
 /* ---- execution tiers (additive, API version 1; 2026-10-18) ----
  * Every tier gives bit-identical results (states, events, digests): the tiers are differential-tested against
@@ -1067,7 +1162,7 @@ SU_HOST_API uint32_t su_host_system_tier(const SuHostWorld *w, uint32_t index, u
 /* Selects the tier of IR system index. REFERENCE and PLANNED apply to every VM context of the system.
  * NATIVE compiles the system (scalar), admits the kernel by a seeded differential check against the VM and
  * installs it; SU_E_CAPABILITY_DENIED without the native backend, for a system with entity operations
- * (spawn, despawn, emit_event: those stay on the VM) or when the backend cannot lower the module (err->message
+ * (despawn_self, emit_event: those stay on the VM) or when the backend cannot lower the module (err->message
  * says why); SU_E_CANDIDATE_FAILED when admission finds a mismatch. A host operator's tier cannot be changed
  * (SU_E_INVALID_ARGUMENT). On failure the system keeps its tier.
  * Native kernels live in a process-wide registry (at most 32 live kernels) that is not thread-safe: in a

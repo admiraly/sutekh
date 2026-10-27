@@ -67,13 +67,33 @@ Evidence: `host_events`, `host_events_dll` and the cross-process `host_events_re
 
 Typed host lanes: `SuHostField.type` holds the lane's value type (`SU_TYPE_U32`, or `SU_TYPE_I32`/`I64`/`Q32` for a typed lane; a 64-bit field is two adjacent entries `I`, `I+1` named `<field>.lo`, `<field>.hi`). A descriptor with typed lanes has numeric profile `fixed_q32_v1` and operator family `<schema_id>_ops`. Descriptors with only u32 lanes (the RTS operators and their tests) keep `rts_ops_v<N>`, `u32_mod_v1`, and byte-identical declaration digests.
 
-**Cross-table movers and targets (planned; issue 140).** The operators of this family read one table: their movers,
-targets and results are lanes of the world's single table. A world with several tables (`host.h`, "tables") lets a
-game keep projectiles and ships apart, but a `space3d.query` entry bound to one table cannot yet take its targets
-from another. The first slice of issue 140 (per-table schemas, capacities, spawn/despawn, hash/commit, identity and
-snapshot) does not change the operators; the cross-table form is the recorded follow-up in
-[MULTI_TABLE_WORLDS.md](MULTI_TABLE_WORLDS.md) section 8: a second table selector in the operator descriptor and the
-target columns in a trailing field of `SuHostOperatorRun`, so existing operators keep their layout.
+**Cross-table movers and targets (2026-10-27, issue 140, slice 2).** A world with several tables (`host.h`, "tables")
+keeps projectiles and ships apart; a `space3d.query` entry can take its **movers** from its own table and its
+**collidables and gates** from another. Three additive pieces, no change to a single-table operator:
+
+- the descriptor declares the target lanes (`SuHostOperatorDesc.target_field_count/target_fields`, descriptor
+  version 4): the read-only lanes a target row is queried by. For this family they are `kind`, `gate_index`, the
+  pose (`pos_*`, `rot_*`), `radius` and the half extents; a target row is never swept, so `prev_*`,
+  `next_gate`, `prox_margin`, `z0/z1`, `compound` and `rot0_*` are not part of the set. The names are the
+  target table's **declared** lane names (`pos_x.lo`, `pos_x.hi`, ...), resolved at world creation.
+- `SuHostWorldDesc.capsule_target_table` names, per capsule, the table whose rows the entry reads as targets
+  (descriptor version 5); it must differ from the capsule's own table.
+- `SuHostOperatorRun.target_*` gives the operator the target table, its rows and base, its columns under the
+  descriptor's IDs, and its alive/generation views. The target columns are the target table's working values
+  during a tick (a target system earlier in the schedule is visible) or its committed values when the table has
+  no system; the operator only reads them.
+
+Movers are the operator's own table's rows; a target row is offered as a candidate to a mover and ranked by its
+**world** slot, so the candidate cap and contact order are the same rule as the single-table form. A mover
+table's non-mover rows are neither movers nor targets, so a query in the projectile table does not collide
+projectiles with each other unless the game puts a row in the target set too. A target set is bound once at
+world creation, joins the world identity, and needs one instance scratch for both tables' rows, so the tick
+still allocates nothing. The cross-table result lanes (`c0_slot`, `c0_gen`, `gate_slot`, ...) carry **world**
+slots and generations, so a game's handle check (`handle_live`) matches the host's handles. A world without a
+target set is byte-identical to the single-table form: the released operator path runs unchanged. Evidence:
+`host_tables_entities` (`tests/host/test_host_tables_entities.c`) runs the issue's example (ships in table 0,
+projectiles in table 1, spawns, events, despawns, cross-table queries, snapshot and replay) and a target table
+with no system; `space3d_ops`, `space3d_ops_v2_grid` and the determinism matrix are unchanged.
 
 ## 2. Schema `space3d` (profile `profiles/space3d`)
 
@@ -420,7 +440,9 @@ those of the v1 variant of the same suffix. Only candidate selection and the bud
   both sides by the finer row's query. Cells are looked up by a 64-bit hash with an exact cell check. Both methods
   give the same result unless the grid's budget cuts.
 - *Budget (declared capacity, part of the identity).* The pair budget is max(2^22, 1024 x capacity) grid entries
-  visited per tick (capacity: the world's row count; 67,108,864 at 65,536 rows). When the grid's per-row entry counts
+  visited per tick (capacity: the world's row count; 67,108,864 at 65,536 rows). A cross-table query (section 1,
+  issue 140) counts the mover table's rows plus its target table's, the rows it indexes. When the grid's per-row
+  entry counts
   sum to more than the budget, every row's query visits at most `cut` entries, the largest value with
   sum(min(count, cut)) <= budget, in a fixed order (coarser levels first, so large bodies are kept; in each level the
   cell of the row's centre first, then by z, y, x; entries in slot order). Only the most crowded rows are cut. A cut

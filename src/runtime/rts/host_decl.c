@@ -81,6 +81,36 @@ uint32_t su_host_desc_validate(const SuHostOpDesc *d) {
         }
         i++;
     }
+    /* Cross-table target set (issue 140): read-only lanes with the same lane rules, and a run function that takes
+     * them. Both absent or both present. */
+    if ((d->target_field_count == 0u) != (d->target_fields == NULL) ||
+        (d->target_field_count != 0u) != (d->run_targets != NULL)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (d->target_field_count > SU_LIMIT_FIELDS) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (i = 0; i < d->target_field_count; i++) {
+        const SuHostField *f = &d->target_fields[i];
+        if (f->name == NULL || strlen(f->name) == 0u || strlen(f->name) > SU_WORLD_NAME_MAX ||
+            su_type_lanes(f->type) == 0u || f->access != SU_ACCESS_READ) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        if (i > 0u && f->id <= d->target_fields[i - 1u].id) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    for (i = 0; i < d->target_field_count; i++) {
+        const SuHostField *f = &d->target_fields[i];
+        if (su_type_lanes(f->type) != 2u) {
+            continue;
+        }
+        if (i + 1u >= d->target_field_count || d->target_fields[i + 1u].id != f->id + 1u ||
+            d->target_fields[i + 1u].type != f->type) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        i++;
+    }
     return SU_OK;
 }
 

@@ -82,6 +82,16 @@ static inline uint32_t su_handle_live(const uint8_t *alive, const uint32_t *gene
     return (generations != NULL ? generations[slot] : 1u) == gen ? 1u : 0u;
 }
 
+/* As su_handle_live for a table whose local slot 0 is world slot base (issue 140): slot is a WORLD slot, and a
+ * slot below base or beyond the table's slots is not live. base 0 is exactly su_handle_live. */
+static inline uint32_t su_handle_live_base(const uint8_t *alive, const uint32_t *generations, uint64_t slots,
+                                           uint32_t base, uint32_t slot, uint32_t gen) {
+    if (slot < base) {
+        return 0u;
+    }
+    return su_handle_live(alive, generations, slots, slot - base, gen);
+}
+
 /* Storage lanes of a field value type: 1 for u32 and i32, 2 for i64 and q32, 0 otherwise. */
 uint32_t su_type_lanes(uint32_t value_type);
 /* "u32", "bool", "i32", "i64", "q32", "v3", "quat" or "?". */

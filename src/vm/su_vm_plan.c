@@ -289,11 +289,15 @@ static uint32_t exec1(const SuVmPlanInsn *p, int64_t *R, SuVmPlanRun *run, size_
     case SU_OP_GATHER_I32:
     case SU_OP_GATHER_I64:
     case SU_OP_GATHER_Q32: {
-        uint64_t s = (uint64_t)(uint32_t)R[p->b], bits = 0;
-        if (s < run->gather_rows) {
-            bits = run->gather_cols[p->a][s];
-            if (p->op == SU_OP_GATHER_I64 || p->op == SU_OP_GATHER_Q32) {
-                bits |= (uint64_t)run->gather_cols[p->a + 1u][s] << 32;
+        uint32_t ws = (uint32_t)R[p->b];
+        uint64_t bits = 0;
+        if (ws >= run->gather_base) {
+            uint64_t s = (uint64_t)(ws - run->gather_base);
+            if (s < run->gather_rows) {
+                bits = run->gather_cols[p->a][s];
+                if (p->op == SU_OP_GATHER_I64 || p->op == SU_OP_GATHER_Q32) {
+                    bits |= (uint64_t)run->gather_cols[p->a + 1u][s] << 32;
+                }
             }
         }
         R[p->d] = p->op == SU_OP_GATHER_U32   ? (int64_t)(uint32_t)bits
@@ -302,8 +306,8 @@ static uint32_t exec1(const SuVmPlanInsn *p, int64_t *R, SuVmPlanRun *run, size_
         return SU_OK;
     }
     case SU_OP_HANDLE_LIVE:
-        R[p->d] = (int64_t)su_handle_live(run->ents_alive, run->ents_gen, run->ents_slots, (uint32_t)R[p->a],
-                                          (uint32_t)R[p->b]);
+        R[p->d] = (int64_t)su_handle_live_base(run->ents_alive, run->ents_gen, run->ents_slots, run->ents_base,
+                                               (uint32_t)R[p->a], (uint32_t)R[p->b]);
         return SU_OK;
     case SU_OP_FIND_EQ_U32: {
         const uint32_t *col = run->gather_cols[p->a];
@@ -312,7 +316,7 @@ static uint32_t exec1(const SuVmPlanInsn *p, int64_t *R, SuVmPlanRun *run, size_
         uint32_t found = SU_FIND_NONE;
         for (s = 0; s < n; s++) {
             if (col[s] == key) {
-                found = (uint32_t)s;
+                found = run->gather_base + (uint32_t)s;
                 break;
             }
         }

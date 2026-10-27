@@ -736,6 +736,23 @@ target_link_libraries(test_host_tables_dll PRIVATE sutekh_host)
 sutekh_apply_warnings(test_host_tables_dll)
 add_test(NAME host_tables_dll COMMAND test_host_tables_dll WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Multi-table worlds, slice 2 (issue 140): the table-aware entity tick, operator events in a multi-table world,
+# world slots, cross-table space3d, a stateful operator in a table other than 0, and the end-to-end two-kind world.
+add_executable(test_host_tables_entities tests/host/test_host_tables_entities.c)
+target_link_libraries(test_host_tables_entities PRIVATE su_host)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(test_host_tables_entities PRIVATE SU_TEST_WRAP_ALLOC)
+    target_link_options(test_host_tables_entities PRIVATE "LINKER:--wrap=malloc,--wrap=calloc,--wrap=realloc")
+endif()
+sutekh_apply_warnings(test_host_tables_entities)
+add_test(NAME host_tables_entities COMMAND test_host_tables_entities
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_executable(test_host_tables_entities_dll tests/host/test_host_tables_entities.c)
+target_link_libraries(test_host_tables_entities_dll PRIVATE sutekh_host)
+sutekh_apply_warnings(test_host_tables_entities_dll)
+add_test(NAME host_tables_entities_dll COMMAND test_host_tables_entities_dll
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(test_host_rollback tests/host/test_host_rollback.c)
 target_include_directories(test_host_rollback PRIVATE src)
 target_link_libraries(test_host_rollback PRIVATE su_host)

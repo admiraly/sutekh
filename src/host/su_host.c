@@ -518,6 +518,44 @@ static void compute_identity(SuHostWorld *hw) {
         }
         su_sha256_final(&c, hw->identity);
     }
+    /* Cross-table host operators (issue 140): a capsule's target table and the lanes it binds there change what the
+     * world computes, so they join the identity. Folded only when some entry has a target set, so a world without
+     * one (every world of the earlier slices) keeps its identity byte for byte. */
+    {
+        uint32_t n = 0;
+        uint32_t t;
+        for (i = 0; i < hw->sched.count; i++) {
+            if (hw->sched.sys[i].target_table != UINT32_MAX) {
+                n++;
+            }
+        }
+        if (n > 0u) {
+            uint8_t prev[32];
+            memcpy(prev, hw->identity, 32u);
+            su_sha256_init(&c);
+            su_sha256_update(&c, (const uint8_t *)"SUHTARGET", 10u); /* includes the terminating 0x00 */
+            su_sha256_update(&c, prev, 32u);
+            put_u32(b, n);
+            su_sha256_update(&c, b, 4u);
+            for (i = 0; i < hw->sched.count; i++) {
+                const SuSysEntry *e = &hw->sched.sys[i];
+                if (e->target_table == UINT32_MAX) {
+                    continue;
+                }
+                put_u32(b, i);
+                su_sha256_update(&c, b, 4u);
+                put_u32(b, e->target_table);
+                su_sha256_update(&c, b, 4u);
+                put_u32(b, e->target_bind_count);
+                su_sha256_update(&c, b, 4u);
+                for (t = 0; t < e->target_bind_count; t++) {
+                    put_u32(b, e->target_bind[t]);
+                    su_sha256_update(&c, b, 4u);
+                }
+            }
+            su_sha256_final(&c, hw->identity);
+        }
+    }
 }
 
 /* Declared world schema (issue 144): expands SuHostSchema fields into storage lanes (i64/q32: "x.lo" at J, "x.hi" at
@@ -739,6 +777,77 @@ static uint32_t add_host_record(SuHostWorld *hw, uint32_t table, const SuHostCap
     return SU_OK;
 }
 
+/* "u32", "i32", "i64" or "q32" (a lane's value type, for messages). */
+static const char *vtype_name(uint32_t t) {
+    return t == SU_TYPE_Q32 ? "q32" : t == SU_TYPE_I64 ? "i64" : t == SU_TYPE_I32 ? "i32" : "u32";
+}
+
+/* 1 when field id is readable in the table's world: a target set reads the other table's working columns through
+ * the world's read invocation, which carries the READ fields only. A lane some system writes and no one reads is
+ * write-only, so it cannot be a target lane. */
+static int world_field_readable(const SuWorld *w, uint32_t id) {
+    uint32_t n = su_world_field_count(w);
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        SuWorldFieldDesc fd;
+        uint32_t def = 0;
+        if (su_world_field_at(w, i, &fd, &def) == SU_OK && fd.id == id) {
+            return (fd.access & SU_ACCESS_READ) != 0u;
+        }
+    }
+    return 0;
+}
+
+/* Cross-table host operator (issue 140): resolves the target lanes of host entry i against table tgt's DECLARED
+ * schema and binds them. A target lane is matched by name, and its value type must equal the descriptor's: the
+ * operator keeps its own IDs (run->target_columns reports them), the world knows which columns they are. */
+static uint32_t bind_target(SuHostWorld *hw, uint32_t i, uint32_t tgt, SuHostError *err) {
+    const SuSysEntry *e = &hw->sched.sys[i];
+    const SuHostOpDesc *d = e->host;
+    const SuSchedTable *tab = &hw->sched.tables[tgt];
+    uint32_t bind[SU_LIMIT_FIELDS];
+    uint32_t k, j;
+
+    if (!tab->declared) {
+        return set_err(err, SU_E_SCHEMA_MISMATCH, i, UINT64_MAX,
+                       "capsule %u (%s): target table %u declares no schema, so its target lanes cannot be resolved",
+                       (unsigned)i, e->system_id, (unsigned)tgt);
+    }
+    for (k = 0; k < d->target_field_count; k++) {
+        const SuHostField *f = &d->target_fields[k];
+        uint32_t want = f->type == 0u ? SU_TYPE_U32 : f->type;
+        int found = 0;
+        for (j = 0; j < tab->declared_count; j++) {
+            const SuSchedField *l = &tab->declared_fields[j];
+            uint32_t have = l->value_type == 0u ? SU_TYPE_U32 : l->value_type;
+            if (strcmp(l->name, f->name) != 0) {
+                continue;
+            }
+            if (have != want) {
+                return set_err(err, SU_E_SCHEMA_MISMATCH, i, UINT64_MAX,
+                               "capsule %u (%s): target lane %s of table %u is %s, the operator reads it as %s",
+                               (unsigned)i, e->system_id, f->name, (unsigned)tgt, vtype_name(have), vtype_name(want));
+            }
+            if (!world_field_readable(hw->tabs[tgt].w, l->id)) {
+                return set_err(err, SU_E_SCHEMA_MISMATCH, i, UINT64_MAX,
+                               "capsule %u (%s): target lane %s of table %u is write-only, so it cannot be read "
+                               "as a target",
+                               (unsigned)i, e->system_id, f->name, (unsigned)tgt);
+            }
+            bind[k] = l->id;
+            found = 1;
+            break;
+        }
+        if (!found) {
+            return set_err(err, SU_E_SCHEMA_MISMATCH, i, UINT64_MAX,
+                           "capsule %u (%s): target lane %s is not a lane of table %u's declared schema",
+                           (unsigned)i, e->system_id, f->name, (unsigned)tgt);
+        }
+    }
+    return su_sched_set_host_target(&hw->sched, i, tgt, hw->tabs[e->table].base, hw->tabs[tgt].base,
+                                    hw->tabs[tgt].rows, bind);
+}
+
 _Static_assert(SU_HOST_MAX_CAPSULES <= SU_SCHED_MAX_SYSTEMS, "host worlds fit the schedule");
 _Static_assert(SU_HOST_MAX_CAPSULES <= 64u, "opdata_mask has one bit per schedule entry");
 _Static_assert(SU_HOST_SCHEMA_MAX_LANES == SU_LIMIT_FIELDS, "declared schemas use the field limit");
@@ -746,7 +855,8 @@ _Static_assert(SU_HOST_WORLD_DESC_V1_SIZE == offsetof(SuHostWorldDesc, schema), 
 _Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V1_SIZE == 80u, "first-release SuHostWorldDesc is 80 bytes");
 _Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V2_SIZE == 88u, "v2 SuHostWorldDesc (schema) is 88 bytes");
 _Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V3_SIZE == 96u, "v3 SuHostWorldDesc is 96 bytes");
-_Static_assert(sizeof(void *) != 8u || sizeof(SuHostWorldDesc) == 120u, "v4 SuHostWorldDesc (tables) is 120 bytes");
+_Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V4_SIZE == 120u, "v4 SuHostWorldDesc (tables) is 120 bytes");
+_Static_assert(sizeof(void *) != 8u || sizeof(SuHostWorldDesc) == 128u, "v5 SuHostWorldDesc (targets) is 128 bytes");
 _Static_assert(sizeof(void *) != 8u || sizeof(SuHostTableDesc) == 40u, "SuHostTableDesc is 40 bytes");
 _Static_assert(SU_HOST_SCHEMA_V1_SIZE == (sizeof(void *) == 8u ? 32u : 24u), "first-release SuHostSchema size");
 _Static_assert(sizeof(SuHostSchema) == SU_HOST_SCHEMA_V1_SIZE, "SuHostSchema has no padding after the v1 fields");
@@ -793,6 +903,7 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
     uint32_t nfacts = 0;
     uint32_t i;
     uint32_t st;
+    uint64_t world_slots = 0; /* every table's slots together: the world handle space (issue 140) */
 
     clear_err(err);
     if (out == NULL) {
@@ -804,7 +915,8 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
      * ending inside a field is refused. */
     if (desc_in == NULL || desc_in->struct_size < SU_HOST_WORLD_DESC_V1_SIZE ||
         (desc_in->struct_size != SU_HOST_WORLD_DESC_V1_SIZE && desc_in->struct_size != SU_HOST_WORLD_DESC_V2_SIZE &&
-         desc_in->struct_size != SU_HOST_WORLD_DESC_V3_SIZE && desc_in->struct_size < sizeof *desc_in)) {
+         desc_in->struct_size != SU_HOST_WORLD_DESC_V3_SIZE && desc_in->struct_size != SU_HOST_WORLD_DESC_V4_SIZE &&
+         desc_in->struct_size < sizeof *desc_in)) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
                        "descriptor: struct_size, capsules (1..%u), reserved0 or fixture is invalid",
                        (unsigned)SU_HOST_MAX_CAPSULES);
@@ -857,10 +969,30 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
                                "capsule %u: table %u does not exist (%u tables)", (unsigned)i,
                                (unsigned)desc->capsule_table[i], (unsigned)desc->table_count);
             }
+            if (desc->capsule_target_table != NULL && desc->capsule_target_table[i] != SU_HOST_TABLE_NONE) {
+                if (desc->capsule_target_table[i] >= desc->table_count) {
+                    return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                                   "capsule %u: target table %u does not exist (%u tables)", (unsigned)i,
+                                   (unsigned)desc->capsule_target_table[i], (unsigned)desc->table_count);
+                }
+                if (desc->capsule_target_table[i] == desc->capsule_table[i]) {
+                    return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                                   "capsule %u: the target table must differ from the capsule's own table",
+                                   (unsigned)i);
+                }
+            }
         }
     } else if (desc->tables != NULL || desc->capsule_table != NULL || desc->table_reserved != 0u) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
                        "descriptor: a single-table world takes no tables, capsule_table or table_reserved byte");
+    }
+    if (desc->capsule_target_table != NULL) {
+        for (i = 0; i < desc->capsule_count; i++) {
+            if (desc->capsule_target_table[i] != SU_HOST_TABLE_NONE && desc->table_count <= 1u) {
+                return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                               "capsule %u: a target set needs a world with several tables", (unsigned)i);
+            }
+        }
     }
     if (desc->tick_rate_hz == 0u || desc->tick_rate_hz > SU_HOST_TICK_RATE_MAX) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "tick_rate_hz must be 1..%u",
@@ -984,18 +1116,6 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
     if (st != SU_OK) {
         goto fail;
     }
-    if (hw->table_count > 1u) {
-        for (i = 0; i < hw->sched.count; i++) {
-            if (hw->sched.sys[i].mod->uses_entity_ops) {
-                set_err(err, SU_E_CAPABILITY_DENIED, i, UINT64_MAX,
-                        "capsule %u (%s): IR entity operations are not supported in a world with tables "
-                        "(docs/MULTI_TABLE_WORLDS.md section 8)",
-                        (unsigned)i, hw->sched.sys[i].system_id);
-                st = SU_E_CAPABILITY_DENIED;
-                goto fail;
-            }
-        }
-    }
     st = su_sched_enable_entities(&hw->sched, hw->max_struct, hw->max_events, hw->log_max);
     if (st != SU_OK) {
         set_err(err, st, UINT32_MAX, UINT64_MAX, "entity runtime caps are out of range");
@@ -1021,6 +1141,7 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
                 goto fail;
             }
             base += hw->tabs[t].rows;
+            world_slots = base;
             if (hw->tabs[t].rows > max_rows) {
                 max_rows = hw->tabs[t].rows;
             }
@@ -1041,7 +1162,17 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
             continue;
         }
         op = su_host_operator_find(hw->sched.sys[i].system_id);
-        st = op != NULL ? op->create(op, hw->tabs[hw->sched.sys[i].table].rows, &inst) : SU_E_INTERNAL;
+        {
+            /* An operator bound to a target table (issue 140) holds both tables' rows in its scratch: the cross-table
+             * query indexes movers and targets in one row space. */
+            uint32_t own = hw->sched.sys[i].table;
+            uint64_t inst_rows = hw->tabs[own].rows;
+            if (hw->table_count > 1u && desc->capsule_target_table != NULL &&
+                desc->capsule_target_table[i] != SU_HOST_TABLE_NONE) {
+                inst_rows += hw->tabs[desc->capsule_target_table[i]].rows;
+            }
+            st = op != NULL ? op->create(op, inst_rows, &inst) : SU_E_INTERNAL;
+        }
         if (st == SU_OK) {
             st = su_sched_set_host_instance(&hw->sched, i, inst, op->destroy);
             if (st != SU_OK) {
@@ -1051,7 +1182,7 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
         if (st == SU_OK) {
             hw->ops[i] = op;
             if (op->set_base != NULL) {
-                op->set_base(hw->sched.sys[i].host_inst, hw->tabs[hw->sched.sys[i].table].base);
+                op->set_base(hw->sched.sys[i].host_inst, hw->tabs[hw->sched.sys[i].table].base, world_slots);
             }
         }
         if (st == SU_OK) {
@@ -1080,13 +1211,37 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
         }
     }
     if (hw->table_count > 1u) {
-        /* A host operator that appends events runs through the entity tick, which owns one table in this version. */
+        /* Cross-table host operators (issue 140): a capsule whose operator declares target lanes names its target
+         * table, whose declared schema must carry every target lane by name. Bound after the tables exist (the
+         * target's rows and base are needed) and before the identity is computed (it covers the binding). */
         for (i = 0; i < hw->sched.count; i++) {
-            if (hw->sched.sys[i].host_event_cap != 0u) {
-                st = set_err(err, SU_E_CAPABILITY_DENIED, i, UINT64_MAX,
-                             "capsule %u (%s): operator events are not supported in a world with tables "
-                             "(docs/MULTI_TABLE_WORLDS.md section 8)",
-                             (unsigned)i, hw->sched.sys[i].system_id);
+            const SuSysEntry *e = &hw->sched.sys[i];
+            uint32_t tgt;
+            tgt = desc->capsule_target_table != NULL ? desc->capsule_target_table[i] : SU_HOST_TABLE_NONE;
+            if (tgt != SU_HOST_TABLE_NONE &&
+                (e->kind != SU_SYS_KIND_HOST || e->host == NULL || e->host->target_field_count == 0u)) {
+                st = set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                             "capsule %u (%s): this system takes no target set (a target table needs a host operator "
+                             "that declares target lanes)",
+                             (unsigned)i, e->system_id);
+                goto fail;
+            }
+            if (e->kind != SU_SYS_KIND_HOST || e->host == NULL || e->host->target_field_count == 0u) {
+                continue;
+            }
+            if (tgt == SU_HOST_TABLE_NONE) {
+                continue; /* no target set bound: the operator runs over its own table only */
+            }
+            st = bind_target(hw, i, tgt, err);
+            if (st != SU_OK) {
+                goto fail;
+            }
+        }
+    } else if (desc->capsule_target_table != NULL) {
+        for (i = 0; i < hw->sched.count; i++) {
+            if (desc->capsule_target_table[i] != SU_HOST_TABLE_NONE) {
+                st = set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                             "capsule %u: a target set needs a world with several tables", (unsigned)i);
                 goto fail;
             }
         }
@@ -2023,9 +2178,18 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
         }
         {
             /* The tick published: its operator state changes become committed state (with SU_HOST_STATE_DROP_DEAD,
-             * after erasing the entries of entities the committed entity table no longer holds alive). */
+             * after erasing the entries of entities the committed entity table no longer holds alive; an entry
+             * keyed by another table's handle is checked against that table, issue 140). */
+            SuHStateTables tabs;
             uint32_t k;
             int died = -1; /* computed once, only for a world with operator state */
+            memset(&tabs, 0, sizeof tabs);
+            tabs.count = w->table_count;
+            for (k = 0; k < w->table_count; k++) {
+                tabs.ents[k] = su_world_entities_committed(w->tabs[k].w);
+                tabs.base[k] = w->tabs[k].base;
+                tabs.rows[k] = w->tabs[k].rows;
+            }
             for (k = 0; k < w->sched.count; k++) {
                 if (w->opstate[k] != NULL) {
                     if (died < 0) {
@@ -2034,11 +2198,7 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
                     if (died) {
                         su_hstate_note_despawn(w->opstate[k]);
                     }
-                    {
-                        uint32_t tt = w->sched.sys[k].table;
-                        su_hstate_commit(w->opstate[k], su_world_entities_committed(w->tabs[tt].w),
-                                         w->tabs[tt].base);
-                    }
+                    su_hstate_commit(w->opstate[k], &tabs);
                 }
             }
         }
@@ -2932,31 +3092,51 @@ uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint64_t entity, 
 }
 
 uint32_t su_host_memory(const SuHostWorld *w, SuHostMemory *out) {
+    SuHostMemory m;
     uint32_t t;
-    if (w == NULL || out == NULL || out->struct_size < sizeof *out) {
+    size_t sz;
+    if (w == NULL || out == NULL || out->struct_size < SU_HOST_MEMORY_V1_SIZE) {
         return SU_E_INVALID_ARGUMENT;
     }
-    memset(out, 0, sizeof *out);
-    out->struct_size = (uint32_t)sizeof *out;
-    out->table_count = w->table_count;
+    memset(&m, 0, sizeof m);
+    m.struct_size = (uint32_t)sizeof m;
+    m.table_count = w->table_count;
     for (t = 0; t < w->table_count; t++) {
-        SuWorldMemory m;
-        if (su_world_memory(w->tabs[t].w, &m) != SU_OK) {
+        SuWorldMemory wm;
+        if (su_world_memory(w->tabs[t].w, &wm) != SU_OK) {
             return SU_E_INVALID_ARGUMENT;
         }
-        out->table_total[t] = m.total;
-        out->tables_total += m.total;
+        m.table_total[t] = wm.total;
+        m.tables_total += wm.total;
     }
     /* The input application buffers of su_host_step: the undo cells and their values, and one column buffer per
      * table (issue 149 storage, allocated at creation). */
-    out->input_storage = (uint64_t)w->in_max * (uint64_t)(sizeof(struct UndoCell) + sizeof(uint32_t));
+    m.input_storage = (uint64_t)w->in_max * (uint64_t)(sizeof(struct UndoCell) + sizeof(uint32_t));
     for (t = 0; t < w->table_count; t++) {
-        out->input_storage += w->in_col_rows[t] * (uint64_t)sizeof(uint32_t);
+        m.input_storage += w->in_col_rows[t] * (uint64_t)sizeof(uint32_t);
     }
+    /* Queued input records (issue 140: the earlier claim left them out): the record array, which grows with the
+     * queue, and each record's write array (cap entries, freed when the record is consumed). */
+    m.queued_inputs = (uint64_t)w->rec_cap * (uint64_t)sizeof(HostRecord);
+    for (t = 0; t < w->rec_count; t++) {
+        m.queued_inputs += (uint64_t)w->recs[t].cap * (uint64_t)sizeof(SuHostInput);
+    }
+    /* su_host_snapshot_restore_inplace's scratch (allocated by its first call, never freed before destruction):
+     * one entity table per table and the event log. */
+    for (t = 0; t < SU_HOST_MAX_TABLES; t++) {
+        m.restore_scratch += su_ents_memory_bytes(w->rb_ents[t]);
+    }
+    m.restore_scratch += su_evlog_memory_bytes(w->rb_log);
     /* The host world struct (it contains the schedule struct and the fixed per-entry arrays). The schedule's
-     * heap allocations (modules, VM contexts, operator instances, the event log) are not part of the world root. */
-    out->metadata = (uint64_t)sizeof *w;
-    out->total = out->tables_total + out->input_storage + out->metadata;
+     * heap allocations (modules, VM contexts, operator instances and their data, the event log) are not part of the
+     * world root. */
+    m.metadata = (uint64_t)sizeof *w;
+    m.total = m.tables_total + m.input_storage + m.queued_inputs + m.restore_scratch + m.metadata;
+    /* Never report a size larger than the caller's struct: a v1 caller gets the fields it covers and its own size
+     * back (host.h, SU_HOST_MEMORY_V1_SIZE), a current caller sizeof(SuHostMemory). */
+    sz = out->struct_size < sizeof m ? (size_t)out->struct_size : sizeof m;
+    memcpy(out, &m, sz);
+    out->struct_size = (uint32_t)sz;
     return SU_OK;
 }
 
@@ -3038,7 +3218,8 @@ uint32_t su_host_system_set_tier(SuHostWorld *w, uint32_t index, uint32_t tier, 
                            "system %s uses entity operations; it stays on the VM", e->system_id);
         }
         msg[0] = '\0';
-        st = su_nv_prepare(e->mod, w->sched.layout_generation, SU_NCAP_X86_64_SCALAR, &seq, msg, sizeof msg);
+        st = su_nv_prepare(e->mod, w->sched.tables[e->table].layout_generation, SU_NCAP_X86_64_SCALAR, &seq, msg,
+                           sizeof msg);
         if (st != SU_OK) {
             return set_err(err, SU_E_CAPABILITY_DENIED, index, UINT64_MAX, "native backend refused %s: %s (%s)",
                            e->system_id, msg, su_status_name(st));

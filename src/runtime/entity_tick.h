@@ -52,4 +52,15 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
                           void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
                           uint32_t *failed_index);
 
+/* As su_ent_run_ticks for a world with several tables (issue 140): ws[t] is table t's world, nw >=
+ * su_sched_table_count. Every entry runs on its own table's world with that table's chunk cache, entity table
+ * view, rows and layout generation; one queue holds the tick's structural commands and events of every table, so
+ * the log keeps the (system_index, slot, seq) order of one table and a record's slot is a WORLD slot (the table's
+ * base plus its local slot). Tables are begun, zeroed and published in index order; a table with no scheduled
+ * system is never begun or published and is kept at the world's tick. A failure in any table aborts every open
+ * table. nw == 1 is exactly su_ent_run_ticks. */
+uint32_t su_ent_run_ticks_tables(SuWorld *const *ws, uint32_t nw, SuSchedule *s, SuEntRt *rt, uint64_t ticks,
+                                 SuSchedFault fault, void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
+                                 uint32_t *failed_index);
+
 #endif

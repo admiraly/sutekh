@@ -822,9 +822,10 @@ static void test_registration(void) {
     d.state_max_bytes = SU_HOST_STATE_MAX_BYTES + 1u;
     check(su_host_register_operator(&d, &err) == SU_E_INVALID_ARGUMENT, "too many bytes refused");
     check(SU_HOST_OPERATOR_DESC_V2_SIZE == (sizeof(void *) == 8u ? 136u : 100u) &&
-              SU_HOST_OPERATOR_DESC_V3_SIZE == sizeof(SuHostOperatorDesc) &&
-              SU_HOST_OPERATOR_DESC_V3_SIZE == (sizeof(void *) == 8u ? 144u : 108u),
-          "descriptor sizes: v2 ends at state_reserved, v3 is the library's");
+              SU_HOST_OPERATOR_DESC_V3_SIZE == (sizeof(void *) == 8u ? 144u : 108u) &&
+              SU_HOST_OPERATOR_DESC_V4_SIZE == sizeof(SuHostOperatorDesc) &&
+              SU_HOST_OPERATOR_DESC_V4_SIZE == (sizeof(void *) == 8u ? 160u : 120u),
+          "descriptor sizes: v2 ends at state_reserved, v3 at event_reserved, v4 is the library's");
 }
 
 static void register_ops(void) {

@@ -81,6 +81,28 @@ static const SuHostField k_fields[] = {
     RQ(SPACE3D_F_ROT0_Z, "rot0_z"),
 };
 
+/* The target set (issue 140): the read-only lanes a cross-table query reads from the other table's rows. A target
+ * row is never swept, so prev, next_gate, prox_margin, z, compound and rot0 are not part of it. The lanes are
+ * resolved against the target table's DECLARED schema by name (host.h, "tables"), so a game's own schema must
+ * declare lanes with these names and value types. */
+static const SuHostField k_target_fields[] = {
+    R32(SPACE3D_F_KIND, "kind"),
+    R32(SPACE3D_F_GATE_INDEX, "gate_index"),
+    RQ(SPACE3D_F_POS_X, "pos_x"),
+    RQ(SPACE3D_F_POS_Y, "pos_y"),
+    RQ(SPACE3D_F_POS_Z, "pos_z"),
+    RQ(SPACE3D_F_ROT_W, "rot_w"),
+    RQ(SPACE3D_F_ROT_X, "rot_x"),
+    RQ(SPACE3D_F_ROT_Y, "rot_y"),
+    RQ(SPACE3D_F_ROT_Z, "rot_z"),
+    RQ(SPACE3D_F_RADIUS, "radius"),
+    RQ(SPACE3D_F_HALF_X, "half_x"),
+    RQ(SPACE3D_F_HALF_Y, "half_y"),
+    RQ(SPACE3D_F_HALF_Z, "half_z"),
+};
+
+#define S3_NTARGET (sizeof k_target_fields / sizeof k_target_fields[0])
+
 #define S3_NFIELDS_COMPOUND (sizeof k_fields / sizeof k_fields[0])
 #define S3_NFIELDS_SHAPE (S3_NFIELDS_COMPOUND - 11u)
 #define S3_NFIELDS_PROX (S3_NFIELDS_SHAPE - 4u)
@@ -97,6 +119,22 @@ static uint32_t query2_run(const SuWorld *w, const SuInvocation *in, SuOutputs *
 static uint32_t query2_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 static uint32_t query2_run_shape(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
 static uint32_t query2_run_compound(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
+static uint32_t query_run_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out, const SuHostOpTargets *t,
+                             void *host_ctx);
+static uint32_t query_run_prox_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out, const SuHostOpTargets *t,
+                                  void *host_ctx);
+static uint32_t query_run_shape_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out,
+                                   const SuHostOpTargets *t, void *host_ctx);
+static uint32_t query_run_compound_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out,
+                                      const SuHostOpTargets *t, void *host_ctx);
+static uint32_t query2_run_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out, const SuHostOpTargets *t,
+                              void *host_ctx);
+static uint32_t query2_run_prox_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out,
+                                   const SuHostOpTargets *t, void *host_ctx);
+static uint32_t query2_run_shape_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out,
+                                    const SuHostOpTargets *t, void *host_ctx);
+static uint32_t query2_run_compound_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out,
+                                       const SuHostOpTargets *t, void *host_ctx);
 
 /* Literal: SHA-256 of space3d_constants_text() (checked by test_space3d_ops). */
 const SuHostOpDesc g_space3d_query_desc = {
@@ -109,6 +147,9 @@ const SuHostOpDesc g_space3d_query_desc = {
     k_fields,
     query_run,
     &g_ctx,
+    (uint32_t)S3_NTARGET,
+    k_target_fields,
+    query_run_tg,
 };
 
 /* Literal: SHA-256 of space3d_prox_constants_text() (checked by test_space3d_ops). Shares the static context: one
@@ -123,6 +164,9 @@ const SuHostOpDesc g_space3d_query_prox_desc = {
     k_fields,
     query_run_prox,
     &g_ctx,
+    (uint32_t)S3_NTARGET,
+    k_target_fields,
+    query_run_prox_tg,
 };
 
 /* Literal: SHA-256 of space3d_shape_constants_text() (checked by test_space3d_ops). */
@@ -136,6 +180,9 @@ const SuHostOpDesc g_space3d_query_shape_desc = {
     k_fields,
     query_run_shape,
     &g_ctx,
+    (uint32_t)S3_NTARGET,
+    k_target_fields,
+    query_run_shape_tg,
 };
 
 /* Literal: SHA-256 of space3d_compound_constants_text() (checked by test_space3d_ops). */
@@ -149,6 +196,9 @@ const SuHostOpDesc g_space3d_query_compound_desc = {
     k_fields,
     query_run_compound,
     &g_ctx,
+    (uint32_t)S3_NTARGET,
+    k_target_fields,
+    query_run_compound_tg,
 };
 
 /* space3d_ops_v2 (issue 163). Literals: SHA-256 of space3d2_*constants_text() (checked by test_space3d_ops). They
@@ -163,6 +213,9 @@ const SuHostOpDesc g_space3d_query2_desc = {
     k_fields,
     query2_run,
     &g_ctx,
+    (uint32_t)S3_NTARGET,
+    k_target_fields,
+    query2_run_tg,
 };
 
 const SuHostOpDesc g_space3d_query2_prox_desc = {
@@ -175,6 +228,9 @@ const SuHostOpDesc g_space3d_query2_prox_desc = {
     k_fields,
     query2_run_prox,
     &g_ctx,
+    (uint32_t)S3_NTARGET,
+    k_target_fields,
+    query2_run_prox_tg,
 };
 
 const SuHostOpDesc g_space3d_query2_shape_desc = {
@@ -187,6 +243,9 @@ const SuHostOpDesc g_space3d_query2_shape_desc = {
     k_fields,
     query2_run_shape,
     &g_ctx,
+    (uint32_t)S3_NTARGET,
+    k_target_fields,
+    query2_run_shape_tg,
 };
 
 const SuHostOpDesc g_space3d_query2_compound_desc = {
@@ -199,6 +258,9 @@ const SuHostOpDesc g_space3d_query2_compound_desc = {
     k_fields,
     query2_run_compound,
     &g_ctx,
+    (uint32_t)S3_NTARGET,
+    k_target_fields,
+    query2_run_compound_tg,
 };
 
 Space3dCtx *space3d_query_ctx(void) {
@@ -542,6 +604,49 @@ typedef struct Cols {
 enum { F_POSX, F_POSY, F_POSZ, F_PREVX, F_PREVY, F_PREVZ, F_ROTW, F_ROTX, F_ROTY, F_ROTZ, F_RADIUS, F_HALFX,
        F_HALFY, F_HALFZ };
 
+/* The row sets of one run (issue 140). Without a target set (tg NULL) there is one set: unified index == row index
+ * and every base 0, so every path below is the released one. With a target set, unified index u < nmv is row u of
+ * the mover table (the operator's own) and u >= nmv is row u - nmv of the target table; the scratch arrays and
+ * candidate lists are indexed by u. A reported slot is a WORLD slot (base + local row), matching the host's
+ * handles. */
+typedef struct RowSet {
+    const Cols *mv;         /* movers: the operator's own table */
+    const Cols *tg;         /* targets: the target table, or NULL */
+    uint32_t nmv;
+    uint32_t ntg;
+    const uint8_t *alive;   /* unified: nmv + ntg entries */
+    const uint32_t *gen;    /* unified */
+    uint64_t base_mv;       /* world slot of the mover table's local slot 0 */
+    uint64_t base_tg;       /* world slot of the target table's local slot 0 */
+} RowSet;
+
+static int rs_is_tg(const RowSet *rs, uint32_t u) {
+    return rs->tg != NULL && u >= rs->nmv;
+}
+
+static const Cols *rs_cols(const RowSet *rs, uint32_t u) {
+    return rs_is_tg(rs, u) ? rs->tg : rs->mv;
+}
+
+static uint32_t rs_row(const RowSet *rs, uint32_t u) {
+    return rs_is_tg(rs, u) ? u - rs->nmv : u;
+}
+
+/* The row's kind. A target row carries no previous position (its columns are the target set), so a MOVER kind there
+ * is a static sphere at its position: the target set never sweeps. */
+static uint32_t rs_kind(const RowSet *rs, uint32_t u) {
+    uint32_t k = rs_cols(rs, u)->kind[rs_row(rs, u)];
+    return (rs_is_tg(rs, u) && k == SPACE3D_KIND_MOVER) ? SPACE3D_KIND_SPHERE : k;
+}
+
+static uint32_t rs_gen(const RowSet *rs, uint32_t u) {
+    return rs->gen != NULL ? rs->gen[u] : 0u;
+}
+
+static uint32_t rs_slot(const RowSet *rs, uint32_t u) {
+    return (uint32_t)(rs_is_tg(rs, u) ? rs->base_tg + (u - rs->nmv) : rs->base_mv + u);
+}
+
 static const uint32_t *in_col(const SuInvocation *in, uint32_t id) {
     uint32_t i;
     for (i = 0; i < in->binding_count; i++) {
@@ -753,7 +858,9 @@ static int64_t turn_pad(int64_t reach, int64_t sn) {
     return su_q32_addf(su_q32_mulf(su_q32_addf(reach, reach), sn), 1);
 }
 
-static void geo_of(const Cols *c, uint32_t r, Geo *g) {
+static void geo_of(const RowSet *rs, uint32_t u, Geo *g) {
+    const Cols *c = rs_cols(rs, u);
+    uint32_t r = rs_row(rs, u);
     int64_t sn = turn_sin(c, r);
     const S3SubShape *sub = NULL;
     uint32_t n = 0, i;
@@ -809,39 +916,43 @@ static int64_t prox_margin_of(const Cols *c, uint32_t r) {
 
 /* Surface distance (q32, >= 0) between mover m at its end position and collidable o (others at their end position
  * too): centre-to-shape distance minus the radii, clamped at 0. Every step is a profile operation in this order. */
-static int64_t prox_distance(const Cols *c, uint32_t m, uint32_t o, int64_t margin) {
-    SuV3 p = rd3(c, F_POSX, m);
+static int64_t prox_distance(const RowSet *rs, uint32_t um, uint32_t uo, int64_t margin) {
+    const Cols *cm = rs_cols(rs, um);
+    const Cols *co = rs_cols(rs, uo);
+    uint32_t m = rs_row(rs, um);
+    uint32_t o = rs_row(rs, uo);
+    SuV3 p = rd3(cm, F_POSX, m);
     int64_t d;
-    uint32_t ko = c->kind[o];
+    uint32_t ko = rs_kind(rs, uo);
     SuV3 e0, e1, f0, f1;
-    int mseg = mover_seg(c, m, &e0, &e1);
-    int oseg = mover_seg(c, o, &f0, &f1);
+    int mseg = mover_seg(cm, m, &e0, &e1);
+    int oseg = mover_seg(co, o, &f0, &f1);
     if (ko == SPACE3D_KIND_MESH) {
         /* Static mesh: core distance to its triangles, searched within margin + the mover's radius (a value
          * beyond it means "not within the margin", which the caller drops). */
-        d = s3mesh_dist(c->meshes, c->gate_index[o], rd3(c, F_POSX, o), rdrot(c, o), p, e0, e1,
-                        su_q32_addf(margin, rdq(c, F_RADIUS, m)), c->mst);
+        d = s3mesh_dist(co->meshes, co->gate_index[o], rd3(co, F_POSX, o), rdrot(co, o), p, e0, e1,
+                        su_q32_addf(margin, rdq(cm, F_RADIUS, m)), co->mst);
     } else if (mseg || oseg) {
         /* Capsule mover involved (query_shape): core segment distances. */
         if (ko == SPACE3D_KIND_BOX) {
-            d = s3_dist_seg_obb(p, e0, e1, rd3(c, F_POSX, o), rdrot(c, o), rd3(c, F_HALFX, o));
+            d = s3_dist_seg_obb(p, e0, e1, rd3(co, F_POSX, o), rdrot(co, o), rd3(co, F_HALFX, o));
         } else {
             SuV3 a, b;
             if (ko == SPACE3D_KIND_CAPSULE) {
-                capsule_ends(c, o, &a, &b);
+                capsule_ends(co, o, &a, &b);
             } else {
-                SuV3 po = rd3(c, F_POSX, o);
+                SuV3 po = rd3(co, F_POSX, o);
                 a = su_v3_addf(po, f0);
                 b = su_v3_addf(po, f1);
             }
-            d = su_q32_subf(s3_dist_seg_seg(p, e0, e1, a, b), rdq(c, F_RADIUS, o));
+            d = su_q32_subf(s3_dist_seg_seg(p, e0, e1, a, b), rdq(co, F_RADIUS, o));
         }
     } else if (ko == SPACE3D_KIND_MOVER || ko == SPACE3D_KIND_SPHERE) {
-        d = su_q32_subf(su_v3_lenf(su_v3_subf(p, rd3(c, F_POSX, o))), rdq(c, F_RADIUS, o));
+        d = su_q32_subf(su_v3_lenf(su_v3_subf(p, rd3(co, F_POSX, o))), rdq(co, F_RADIUS, o));
     } else if (ko == SPACE3D_KIND_CAPSULE) {
         SuV3 a, b, ab, cp;
         int64_t den, t = 0;
-        capsule_ends(c, o, &a, &b);
+        capsule_ends(co, o, &a, &b);
         ab = su_v3_subf(b, a);
         den = su_v3_dotf(ab, ab);
         if (den > 0) {
@@ -849,27 +960,29 @@ static int64_t prox_distance(const Cols *c, uint32_t m, uint32_t o, int64_t marg
             t = t < 0 ? 0 : t > ONE ? ONE : t;
         }
         cp = su_v3_addf(a, su_v3_scalef(ab, t));
-        d = su_q32_subf(su_v3_lenf(su_v3_subf(p, cp)), rdq(c, F_RADIUS, o));
+        d = su_q32_subf(su_v3_lenf(su_v3_subf(p, cp)), rdq(co, F_RADIUS, o));
     } else {
-        SuV3 l = su_quat_rotatef(su_quat_conjf(rdrot(c, o)), su_v3_subf(p, rd3(c, F_POSX, o)));
-        SuV3 h = rd3(c, F_HALFX, o), q;
+        SuV3 l = su_quat_rotatef(su_quat_conjf(rdrot(co, o)), su_v3_subf(p, rd3(co, F_POSX, o)));
+        SuV3 h = rd3(co, F_HALFX, o), q;
         q.x = l.x < -h.x ? -h.x : l.x > h.x ? h.x : l.x;
         q.y = l.y < -h.y ? -h.y : l.y > h.y ? h.y : l.y;
         q.z = l.z < -h.z ? -h.z : l.z > h.z ? h.z : l.z;
         d = su_v3_lenf(su_v3_subf(l, q));
     }
-    d = su_q32_subf(d, rdq(c, F_RADIUS, m));
+    d = su_q32_subf(d, rdq(cm, F_RADIUS, m));
     return d < 0 ? 0 : d;
 }
 
-static void row_bounds(Space3dScratch *s, const Cols *c, uint32_t r, uint32_t kind) {
+static void row_bounds(Space3dScratch *s, const RowSet *rs, uint32_t u, uint32_t kind) {
+    const Cols *c = rs_cols(rs, u);
+    uint32_t r = rs_row(rs, u);
     SuV3 lo, hi, lo2, hi2;
     int64_t rad = rdq(c, F_RADIUS, r);
     SuV3 e0, e1;
     Geo g;
     g.special = 0;
     if (c->compound != NULL && kind == SPACE3D_KIND_MOVER) {
-        geo_of(c, r, &g);
+        geo_of(rs, u, &g);
     }
     if (g.special) {
         /* Pieces: the end spheres of every piece at the start and end positions (padded radius). */
@@ -940,12 +1053,12 @@ static void row_bounds(Space3dScratch *s, const Cols *c, uint32_t r, uint32_t ki
         s3_bounds_sphere(b, rad, &lo2, &hi2);
         bounds_union(&lo, &hi, lo2, hi2);
     }
-    s->lo[0][r] = su_q32_subf(lo.x, S3_BOUNDS_SLACK);
-    s->lo[1][r] = su_q32_subf(lo.y, S3_BOUNDS_SLACK);
-    s->lo[2][r] = su_q32_subf(lo.z, S3_BOUNDS_SLACK);
-    s->hi[0][r] = su_q32_addf(hi.x, S3_BOUNDS_SLACK);
-    s->hi[1][r] = su_q32_addf(hi.y, S3_BOUNDS_SLACK);
-    s->hi[2][r] = su_q32_addf(hi.z, S3_BOUNDS_SLACK);
+    s->lo[0][u] = su_q32_subf(lo.x, S3_BOUNDS_SLACK);
+    s->lo[1][u] = su_q32_subf(lo.y, S3_BOUNDS_SLACK);
+    s->lo[2][u] = su_q32_subf(lo.z, S3_BOUNDS_SLACK);
+    s->hi[0][u] = su_q32_addf(hi.x, S3_BOUNDS_SLACK);
+    s->hi[1][u] = su_q32_addf(hi.y, S3_BOUNDS_SLACK);
+    s->hi[2][u] = su_q32_addf(hi.z, S3_BOUNDS_SLACK);
 }
 
 /* Stable bottom-up merge sort of idx[0..n) by (lo[axis][slot], slot). */
@@ -1227,13 +1340,18 @@ static uint64_t s3_rank(const Space3dScratch *s, uint32_t m, uint32_t o) {
 }
 
 /* Offers candidate o (rank d for m) to mover m: m keeps the SPACE3D_CAND_MAX smallest (rank, slot), whatever the
- * order of offers; flag 1 when one is dropped. */
-static void s3_offer(Space3dScratch *s, uint32_t m, uint32_t o, uint64_t d) {
+ * order of offers; flag 1 when one is dropped. The slot is the WORLD slot (rs), so a cross-table query keeps the
+ * same rule as a single-table one. */
+static void s3_offer(Space3dScratch *s, const RowSet *rs, uint32_t m, uint32_t o, uint64_t d) {
     uint32_t n = s->ncand[m], j;
+    if (rs->tg != NULL && o < rs->nmv) {
+        return; /* a mover row of the mover table is not a target */
+    }
+    uint32_t oslot = rs_slot(rs, o);
     if (n == SPACE3D_CAND_MAX) {
         uint32_t w = s->cand[m][n - 1u];
         s->flags[m] |= SPACE3D_FLAG_CAND_TRUNCATED;
-        if (d > s->gworst[m] || (d == s->gworst[m] && o > w)) {
+        if (d > s->gworst[m] || (d == s->gworst[m] && oslot > rs_slot(rs, w))) {
             return;
         }
         n--;
@@ -1246,7 +1364,7 @@ static void s3_offer(Space3dScratch *s, uint32_t m, uint32_t o, uint64_t d) {
         while (lo < hi) {
             uint32_t mid = lo + (hi - lo) / 2u, p = s->cand[m][mid];
             uint64_t dp = s3_rank(s, m, p);
-            if (dp < d || (dp == d && p < o)) {
+            if (dp < d || (dp == d && rs_slot(rs, p) < oslot)) {
                 lo = mid + 1u;
             } else {
                 hi = mid;
@@ -1264,7 +1382,7 @@ static void s3_offer(Space3dScratch *s, uint32_t m, uint32_t o, uint64_t d) {
 
 typedef struct S3Grid {
     Space3dScratch *s;
-    const Cols *c;
+    const RowSet *rs;
     uint64_t all, movers; /* level masks: levels holding entries, levels holding movers */
     uint64_t ext[64][3];  /* per level and axis: the largest bounds extent of its entries (<= 2^level) */
     uint64_t visited;     /* entries visited */
@@ -1276,7 +1394,7 @@ typedef struct S3Grid {
 static int s3_visit(S3Grid *g, uint32_t q, uint32_t h, uint32_t l, const uint64_t cell[3], int own, uint32_t *left) {
     Space3dScratch *s = g->s;
     uint32_t i, b = s->htab[h].beg, e = s->htab[h].end, qi = s->eidx[q], ql = s->eflag[qi] & 0x3Fu;
-    int qm = g->c->kind[q] == SPACE3D_KIND_MOVER, done = 1, mixed = (s->hcut[h] & 2u) != 0u;
+    int qm = rs_kind(g->rs, q) == SPACE3D_KIND_MOVER, done = 1, mixed = (s->hcut[h] & 2u) != 0u;
     const uint64_t *qb = s->ebox + 6u * (size_t)qi;
     if (e - b > *left) {
         e = b + *left;
@@ -1300,10 +1418,10 @@ static int s3_visit(S3Grid *g, uint32_t q, uint32_t h, uint32_t l, const uint64_
         }
         om = (s->eflag[i] & 0x40u) != 0u;
         if (qm) { /* (a static q visits coarser levels only: om is then what matters) */
-            s3_offer(s, q, o, s3_rank_b(s, q, ob, l));
+            s3_offer(s, g->rs, q, o, s3_rank_b(s, q, ob, l));
         }
         if (om && !own) {
-            s3_offer(s, o, q, s3_rank_b(s, o, qb, ql)); /* o is coarser: it never visits q's level */
+            s3_offer(s, g->rs, o, q, s3_rank_b(s, o, qb, ql)); /* o is coarser: it never visits q's level */
         }
     }
     return done;
@@ -1314,7 +1432,7 @@ static int s3_visit(S3Grid *g, uint32_t q, uint32_t h, uint32_t l, const uint64_
 static void s3_query(S3Grid *g, uint32_t q, uint32_t *count, uint32_t cut) {
     Space3dScratch *s = g->s;
     uint32_t own = s->glevel[q], l, a, left = cut, cutting = 0;
-    int qm = g->c->kind[q] == SPACE3D_KIND_MOVER;
+    int qm = rs_kind(g->rs, q) == SPACE3D_KIND_MOVER;
     uint64_t mask = qm ? g->all : g->movers & ~((UINT64_C(2) << own) - 1u);
     for (l = 63u; l + 1u > own; l--) {
         uint64_t c0[3], n[3], cm[3], cell[3], k;
@@ -1373,7 +1491,7 @@ void space3d_test_force_grid(int on) {
  * axis, slot), every pair with overlapping intervals on the sweep axis examined; it gives every overlapping pair
  * with a mover to its movers. The number of such pairs is counted first (a binary search per entry): when it
  * exceeds `limit`, nothing is offered and 0 is returned (the grid runs instead). */
-static int s3_sweep(Space3dScratch *s, const Cols *c, uint32_t n, uint64_t limit, Space3dStats *st) {
+static int s3_sweep(Space3dScratch *s, const RowSet *rs, uint32_t n, uint64_t limit, Space3dStats *st) {
     uint32_t *ord = s->eidx; /* free until the grid is built */
     uint32_t i, a, axis = 0;
     uint64_t pairs = 0;
@@ -1420,7 +1538,7 @@ static int s3_sweep(Space3dScratch *s, const Cols *c, uint32_t n, uint64_t limit
     }
     for (i = 0; i < n; i++) {
         uint32_t p = ord[i], j, a1 = (axis + 1u) % 3u, a2 = (axis + 2u) % 3u;
-        int pm = c->kind[p] == SPACE3D_KIND_MOVER;
+        int pm = rs_kind(rs, p) == SPACE3D_KIND_MOVER;
         for (j = i + 1u; j < n; j++) {
             uint32_t q = ord[j];
             int qm;
@@ -1428,16 +1546,16 @@ static int s3_sweep(Space3dScratch *s, const Cols *c, uint32_t n, uint64_t limit
                 break;
             }
             pairs++;
-            qm = c->kind[q] == SPACE3D_KIND_MOVER;
+            qm = rs_kind(rs, q) == SPACE3D_KIND_MOVER;
             if ((!pm && !qm) || s->lo[a1][p] > s->hi[a1][q] || s->lo[a1][q] > s->hi[a1][p] ||
                 s->lo[a2][p] > s->hi[a2][q] || s->lo[a2][q] > s->hi[a2][p]) {
                 continue;
             }
             if (pm) {
-                s3_offer(s, p, q, s3_rank(s, p, q));
+                s3_offer(s, rs, p, q, s3_rank(s, p, q));
             }
             if (qm) {
-                s3_offer(s, q, p, s3_rank(s, q, p));
+                s3_offer(s, rs, q, p, s3_rank(s, q, p));
             }
         }
     }
@@ -1445,16 +1563,18 @@ static int s3_sweep(Space3dScratch *s, const Cols *c, uint32_t n, uint64_t limit
     return 1;
 }
 
-/* The v2 broadphase over coll[0..ncoll) (ascending slot; reordered here). Fills cand/ncand/flags and the stats. */
-static void v2_broadphase(Space3dScratch *s, const Cols *c, uint32_t ncoll, uint64_t rows, Space3dStats *st) {
+/* The v2 broadphase over coll[0..ncoll) (ascending slot; reordered here). Fills cand/ncand/flags and the stats.
+ * budget_rows is every row the query indexes (movers, plus the target table's rows for a cross-table query). */
+static void v2_broadphase(Space3dScratch *s, const RowSet *rs, uint32_t ncoll, uint64_t budget_rows,
+                          Space3dStats *st) {
     S3Grid g;
     uint64_t total = 0, budget;
     uint32_t i, a, n = 0, cut = UINT32_MAX, maxc = 0;
-    budget = (uint64_t)SPACE3D_PAIR_BUDGET_PER_ROW * rows;
+    budget = (uint64_t)SPACE3D_PAIR_BUDGET_PER_ROW * budget_rows;
     budget = budget > SPACE3D_PAIR_BUDGET_MIN ? budget : SPACE3D_PAIR_BUDGET_MIN;
     st->pair_budget = budget;
     g.s = s;
-    g.c = c;
+    g.rs = rs;
     g.all = g.movers = 0;
     g.visited = g.cross = 0;
     memset(g.ext, 0, sizeof g.ext);
@@ -1475,14 +1595,14 @@ static void v2_broadphase(Space3dScratch *s, const Cols *c, uint32_t ncoll, uint
             uint64_t e = s3_u(s->hi[a][r]) - s3_u(s->lo[a][r]);
             g.ext[l][a] = e > g.ext[l][a] ? e : g.ext[l][a];
         }
-        if (c->kind[r] == SPACE3D_KIND_MOVER) {
+        if (rs_kind(rs, r) == SPACE3D_KIND_MOVER) {
             g.movers |= UINT64_C(1) << l;
         }
         s->coll[n++] = r;
     }
     /* The sweep first: cheap where bounds are sparse. When it finishes within its limit, every overlapping pair
      * was found and the result is final; else the grid (whose result is the same unless it cuts). */
-    if (!g_force_grid && s3_sweep(s, c, n, (uint64_t)SPACE3D_SWEEP_TRY_PER_ROW * n, st)) {
+    if (!g_force_grid && s3_sweep(s, rs, n, (uint64_t)SPACE3D_SWEEP_TRY_PER_ROW * n, st)) {
         st->budget_cut = UINT32_MAX;
         return;
     }
@@ -1495,7 +1615,7 @@ static void v2_broadphase(Space3dScratch *s, const Cols *c, uint32_t ncoll, uint
             s->ebox[6u * (size_t)i + 3u + a] = s3_u(s->hi[a][r]);
         }
         s->eidx[r] = i;
-        s->eflag[i] = (uint8_t)(s->glevel[r] | (c->kind[r] == SPACE3D_KIND_MOVER ? 0x40u : 0u));
+        s->eflag[i] = (uint8_t)(s->glevel[r] | (rs_kind(rs, r) == SPACE3D_KIND_MOVER ? 0x40u : 0u));
     }
     s3_table_build(s, n);
     /* Budget: every row's entry count; when the sum exceeds the budget, the cut. */
@@ -1529,7 +1649,7 @@ static void v2_broadphase(Space3dScratch *s, const Cols *c, uint32_t ncoll, uint
         uint32_t r = s->coll[i];
         if (s->gcount[r] > cut) {
             st->pairs_skipped += s->gcount[r] - cut;
-            if (c->kind[r] == SPACE3D_KIND_MOVER) {
+            if (rs_kind(rs, r) == SPACE3D_KIND_MOVER) {
                 s->flags[r] |= SPACE3D_FLAG_SWEEP_BUDGET;
             }
         }
@@ -1554,7 +1674,8 @@ static void v2_broadphase(Space3dScratch *s, const Cols *c, uint32_t ncoll, uint
 }
 
 typedef struct Contact {
-    uint32_t slot;
+    uint32_t slot;   /* world slot of the row that was hit (issue 140) */
+    uint32_t gen;    /* its generation, from the entity table it belongs to */
     int64_t toi;
     SuV3 n;
     uint32_t sub;
@@ -1564,8 +1685,10 @@ typedef struct Contact {
 
 /* Piece p of a mover (reference point c0, displacement v) against static row o; mesh hits are searched up to
  * tmax only (s3mesh_sweep_lim). A sphere piece sweeps its own centre. */
-static S3Hit piece_static(const Cols *c, uint32_t o, SuV3 c0, SuV3 v, const Piece *p, int64_t tmax) {
-    uint32_t ko = c->kind[o];
+static S3Hit piece_static(const RowSet *rs, uint32_t uo, SuV3 c0, SuV3 v, const Piece *p, int64_t tmax) {
+    const Cols *c = rs_cols(rs, uo);
+    uint32_t o = rs_row(rs, uo);
+    uint32_t ko = rs_kind(rs, uo);
     SuV3 cc = p->seg ? c0 : su_v3_addf(c0, p->e0);
     if (ko == SPACE3D_KIND_MESH) {
         SuV3 z = {0, 0, 0};
@@ -1604,17 +1727,22 @@ static S3Hit piece_piece(SuV3 c0, SuV3 vr, const Piece *p, SuV3 o0, const Piece 
 
 /* Narrow phase with pieces: the earliest hit over (mover piece i, other piece j), ties to the lower (i, j); *sub
  * receives S3_SUB_PAIR(i or SPACE3D_SUB_NONE, j or SPACE3D_SUB_NONE). */
-static S3Hit narrow_geo(const Cols *c, uint32_t m, const Geo *gm, uint32_t o, const Geo *go, uint32_t *sub) {
-    SuV3 c0 = rd3(c, F_PREVX, m);
-    SuV3 v = su_v3_subf(rd3(c, F_POSX, m), c0);
+static S3Hit narrow_geo(const RowSet *rs, uint32_t um, const Geo *gm, uint32_t uo, const Geo *go,
+                        uint32_t *sub) {
+    const Cols *cm = rs_cols(rs, um);
+    const Cols *co = rs_cols(rs, uo);
+    uint32_t m = rs_row(rs, um);
+    uint32_t o = rs_row(rs, uo);
+    SuV3 c0 = rd3(cm, F_PREVX, m);
+    SuV3 v = su_v3_subf(rd3(cm, F_POSX, m), c0);
     S3Hit best;
     uint32_t i, j, bi = 0, bj = 0;
     best.hit = 0;
     best.toi = 0;
     best.n.x = best.n.y = best.n.z = 0;
-    if (c->kind[o] == SPACE3D_KIND_MOVER) {
-        SuV3 o0 = rd3(c, F_PREVX, o);
-        SuV3 vr = su_v3_subf(v, su_v3_subf(rd3(c, F_POSX, o), o0));
+    if (rs_kind(rs, uo) == SPACE3D_KIND_MOVER) {
+        SuV3 o0 = rd3(co, F_PREVX, o);
+        SuV3 vr = su_v3_subf(v, su_v3_subf(rd3(co, F_POSX, o), o0));
         for (i = 0; i < gm->n; i++) {
             for (j = 0; j < go->n; j++) {
                 S3Hit h = piece_piece(c0, vr, &gm->p[i], o0, &go->p[j]);
@@ -1629,7 +1757,7 @@ static S3Hit narrow_geo(const Cols *c, uint32_t m, const Geo *gm, uint32_t o, co
         return best;
     }
     for (i = 0; i < gm->n; i++) {
-        S3Hit h = piece_static(c, o, c0, v, &gm->p[i], best.hit ? best.toi : ONE);
+        S3Hit h = piece_static(rs, uo, c0, v, &gm->p[i], best.hit ? best.toi : ONE);
         if (h.hit && (!best.hit || h.toi < best.toi)) {
             best = h;
             bi = i;
@@ -1640,79 +1768,88 @@ static S3Hit narrow_geo(const Cols *c, uint32_t m, const Geo *gm, uint32_t o, co
 }
 
 /* Narrow phase of mover m against candidate o. */
-static S3Hit narrow(const Cols *c, uint32_t m, uint32_t o) {
-    SuV3 c0 = rd3(c, F_PREVX, m);
-    SuV3 v = su_v3_subf(rd3(c, F_POSX, m), c0);
-    int64_t r = rdq(c, F_RADIUS, m);
-    uint32_t ko = c->kind[o];
+static S3Hit narrow(const RowSet *rs, uint32_t um, uint32_t uo) {
+    const Cols *cm = rs_cols(rs, um);
+    const Cols *co = rs_cols(rs, uo);
+    uint32_t m = rs_row(rs, um);
+    uint32_t o = rs_row(rs, uo);
+    SuV3 c0 = rd3(cm, F_PREVX, m);
+    SuV3 v = su_v3_subf(rd3(cm, F_POSX, m), c0);
+    int64_t r = rdq(cm, F_RADIUS, m);
+    uint32_t ko = rs_kind(rs, uo);
     SuV3 e0, e1, f0, f1;
-    int mseg = mover_seg(c, m, &e0, &e1);
-    int oseg = mover_seg(c, o, &f0, &f1);
+    int mseg = mover_seg(cm, m, &e0, &e1);
+    int oseg = mover_seg(co, o, &f0, &f1);
     if (ko == SPACE3D_KIND_MESH) {
-        return s3mesh_sweep(c->meshes, c->gate_index[o], rd3(c, F_POSX, o), rdrot(c, o), c0, v, r, e0, e1, c->mst);
+        return s3mesh_sweep(co->meshes, co->gate_index[o], rd3(co, F_POSX, o), rdrot(co, o), c0, v, r, e0, e1,
+                            co->mst);
     }
     if (mseg || oseg) {
         /* Capsule mover involved (query_shape). Another mover is taken at its start position with the relative
          * displacement, as for spheres. */
         if (ko == SPACE3D_KIND_MOVER) {
-            SuV3 o0 = rd3(c, F_PREVX, o);
-            SuV3 vr = su_v3_subf(v, su_v3_subf(rd3(c, F_POSX, o), o0));
+            SuV3 o0 = rd3(co, F_PREVX, o);
+            SuV3 vr = su_v3_subf(v, su_v3_subf(rd3(co, F_POSX, o), o0));
             SuV3 a = su_v3_addf(o0, f0), b = su_v3_addf(o0, f1);
             if (!mseg) {
-                return s3_sweep_sphere_capsule(c0, vr, r, a, b, rdq(c, F_RADIUS, o));
+                return s3_sweep_sphere_capsule(c0, vr, r, a, b, rdq(co, F_RADIUS, o));
             }
-            return s3_sweep_capsule_capsule(c0, vr, r, e0, e1, a, b, rdq(c, F_RADIUS, o));
+            return s3_sweep_capsule_capsule(c0, vr, r, e0, e1, a, b, rdq(co, F_RADIUS, o));
         }
         if (ko == SPACE3D_KIND_SPHERE) {
-            return s3_sweep_capsule_sphere(c0, v, r, e0, e1, rd3(c, F_POSX, o), rdq(c, F_RADIUS, o));
+            return s3_sweep_capsule_sphere(c0, v, r, e0, e1, rd3(co, F_POSX, o), rdq(co, F_RADIUS, o));
         }
         if (ko == SPACE3D_KIND_BOX) {
-            return s3_sweep_capsule_obb(c0, v, r, e0, e1, rd3(c, F_POSX, o), rdrot(c, o), rd3(c, F_HALFX, o));
+            return s3_sweep_capsule_obb(c0, v, r, e0, e1, rd3(co, F_POSX, o), rdrot(co, o), rd3(co, F_HALFX, o));
         } else {
             SuV3 a, b;
-            capsule_ends(c, o, &a, &b);
-            return s3_sweep_capsule_capsule(c0, v, r, e0, e1, a, b, rdq(c, F_RADIUS, o));
+            capsule_ends(co, o, &a, &b);
+            return s3_sweep_capsule_capsule(c0, v, r, e0, e1, a, b, rdq(co, F_RADIUS, o));
         }
     }
     if (ko == SPACE3D_KIND_MOVER) {
-        SuV3 o0 = rd3(c, F_PREVX, o);
-        SuV3 vo = su_v3_subf(rd3(c, F_POSX, o), o0);
-        return s3_sweep_sphere_sphere(c0, su_v3_subf(v, vo), r, o0, rdq(c, F_RADIUS, o));
+        SuV3 o0 = rd3(co, F_PREVX, o);
+        SuV3 vo = su_v3_subf(rd3(co, F_POSX, o), o0);
+        return s3_sweep_sphere_sphere(c0, su_v3_subf(v, vo), r, o0, rdq(co, F_RADIUS, o));
     }
     if (ko == SPACE3D_KIND_SPHERE) {
-        return s3_sweep_sphere_sphere(c0, v, r, rd3(c, F_POSX, o), rdq(c, F_RADIUS, o));
+        return s3_sweep_sphere_sphere(c0, v, r, rd3(co, F_POSX, o), rdq(co, F_RADIUS, o));
     }
     if (ko == SPACE3D_KIND_BOX) {
-        return s3_sweep_sphere_obb(c0, v, r, rd3(c, F_POSX, o), rdrot(c, o), rd3(c, F_HALFX, o));
+        return s3_sweep_sphere_obb(c0, v, r, rd3(co, F_POSX, o), rdrot(co, o), rd3(co, F_HALFX, o));
     } else {
         SuV3 a, b;
-        capsule_ends(c, o, &a, &b);
-        return s3_sweep_sphere_capsule(c0, v, r, a, b, rdq(c, F_RADIUS, o));
+        capsule_ends(co, o, &a, &b);
+        return s3_sweep_sphere_capsule(c0, v, r, a, b, rdq(co, F_RADIUS, o));
     }
 }
 
 /* Index of the first gate (lowest slot) whose gate_index equals key, in gate_slot[0..ng) sorted by
  * (gate_index, slot); S3_NONE when none. */
-static uint32_t find_gate(const uint32_t *gate_slot, const Cols *c, uint32_t ng, uint32_t key) {
+static uint32_t gate_index_of(const RowSet *rs, uint32_t u) {
+    return rs_cols(rs, u)->gate_index[rs_row(rs, u)];
+}
+
+static uint32_t find_gate(const uint32_t *gate_slot, const RowSet *rs, uint32_t ng, uint32_t key) {
     uint32_t lo = 0, hi = ng;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2u;
-        if (c->gate_index[gate_slot[mid]] < key) {
+        if (gate_index_of(rs, gate_slot[mid]) < key) {
             lo = mid + 1u;
         } else {
             hi = mid;
         }
     }
-    return lo < ng && c->gate_index[gate_slot[lo]] == key ? gate_slot[lo] : S3_NONE;
+    return lo < ng && gate_index_of(rs, gate_slot[lo]) == key ? gate_slot[lo] : S3_NONE;
 }
 
-static void sort_gates(uint32_t *gate_slot, const Cols *c, uint32_t ng) {
+static void sort_gates(uint32_t *gate_slot, const RowSet *rs, uint32_t ng) {
     /* Insertion sort by (gate_index, slot): gates are few; the input is in ascending slot order. */
     uint32_t i, j;
     for (i = 1; i < ng; i++) {
         uint32_t key = gate_slot[i];
         j = i;
-        while (j > 0 && c->gate_index[gate_slot[j - 1u]] > c->gate_index[key]) {
+        while (j > 0 && gate_index_of(rs, gate_slot[j - 1u]) > gate_index_of(rs, key)) {
             gate_slot[j] = gate_slot[j - 1u];
             j--;
         }
@@ -1720,13 +1857,58 @@ static void sort_gates(uint32_t *gate_slot, const Cols *c, uint32_t ng) {
     }
 }
 
-static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx, int prox,
-                           int shape, int compound, int v2) {
+/* Target set columns (issue 140): the read-only lanes the descriptor declares for the other table, under the
+ * descriptor's IDs. A target row is never swept, so prev, next_gate, prox_margin, z, compound and rot0 are not part
+ * of a target set and stay NULL. */
+static int bind_target_cols(const SuHostOpTargets *t, Cols *c) {
+    static const uint32_t qid[11] = {SPACE3D_F_POS_X,  SPACE3D_F_POS_Y, SPACE3D_F_POS_Z, SPACE3D_F_ROT_W,
+                                     SPACE3D_F_ROT_X, SPACE3D_F_ROT_Y, SPACE3D_F_ROT_Z, SPACE3D_F_RADIUS,
+                                     SPACE3D_F_HALF_X, SPACE3D_F_HALF_Y, SPACE3D_F_HALF_Z};
+    uint32_t i, k;
+    memset(c, 0, sizeof *c);
+    c->kind = NULL;
+    c->gate_index = NULL;
+    for (i = 0; i < t->column_count; i++) {
+        uint32_t id = t->columns[i].field_id;
+        if (id == SPACE3D_F_KIND) {
+            c->kind = t->columns[i].in;
+        } else if (id == SPACE3D_F_GATE_INDEX) {
+            c->gate_index = t->columns[i].in;
+        }
+        for (k = 0; k < 11u; k++) {
+            if (id == qid[k]) {
+                c->f[k][0] = t->columns[i].in;
+            } else if (id == qid[k] + 1u) {
+                c->f[k][1] = t->columns[i].in;
+            }
+        }
+    }
+    if (c->kind == NULL || c->gate_index == NULL) {
+        return 0;
+    }
+    for (k = 0; k < 11u; k++) {
+        if (c->f[k][0] == NULL || c->f[k][1] == NULL) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A row's world slot, for the canonical candidate and contact order. */
+static int slot_less(const RowSet *rs, uint32_t a, uint32_t b) {
+    uint32_t sa = rs_slot(rs, a), sb = rs_slot(rs, b);
+    return sa < sb || (sa == sb && a < b);
+}
+
+static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *out, const SuHostOpTargets *t,
+                           void *host_ctx, int prox, int shape, int compound, int v2) {
     Space3dCtx *ctx = host_ctx != NULL ? (Space3dCtx *)host_ctx : &g_ctx;
     Space3dScratch *s = ctx->scratch == &g_scratch ? static_scratch() : ctx->scratch;
     Cols c;
+    Cols ctg;
+    RowSet rs;
     uint64_t rows64 = in->row_count;
-    uint32_t rows, r, ncoll = 0, ngate = 0, axis = 0, i;
+    uint32_t rows, r, u, total, ncoll = 0, ngate = 0, axis = 0, i;
     uint64_t pairs = 0;
     int budget_hit = 0;
     uint32_t any_trunc = 0;
@@ -1740,6 +1922,26 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
     if (!bind_cols(in, out, &c, prox, shape, compound)) {
         return SU_E_SCHEMA_MISMATCH;
     }
+    memset(&rs, 0, sizeof rs);
+    rs.mv = &c;
+    rs.tg = NULL;
+    rs.nmv = rows;
+    rs.ntg = 0u;
+    rs.base_mv = 0u;
+    rs.base_tg = 0u;
+    if (t != NULL) {
+        if (t->rows > UINT32_MAX || !bind_target_cols(t, &ctg)) {
+            return SU_E_SCHEMA_MISMATCH;
+        }
+        rs.tg = &ctg;
+        rs.ntg = (uint32_t)t->rows;
+        rs.base_mv = t->own_base;
+        rs.base_tg = t->base;
+    }
+    total = rows + rs.ntg;
+    if ((uint64_t)total > s->max_rows) {
+        return SU_E_RESOURCE_LIMIT; /* the instance was sized for the mover table only */
+    }
     memset(&st, 0, sizeof st);
     {
         S3MeshStats ms0;
@@ -1748,48 +1950,73 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
     }
     c.meshes = ctx->meshes;
     c.mst = &mst;
+    if (rs.tg != NULL) {
+        ctg.meshes = ctx->meshes;
+        ctg.mst = &mst;
+    }
     st.rows = rows;
     if (rows > 0u && (su_world_alive_view(w, 0, rows, s->alive) != SU_OK ||
                       su_world_generation_view(w, 0, rows, s->gen) != SU_OK)) {
         return SU_E_INTERNAL;
     }
+    if (rs.ntg > 0u) {
+        /* The target table's entity views were filled by the host for this run (SuHostOpTargets): place them after
+         * the mover rows in the unified index space. */
+        if (t->alive == NULL || t->generation == NULL) {
+            return SU_E_INTERNAL;
+        }
+        memcpy(s->alive + rows, t->alive, (size_t)rs.ntg);
+        memcpy(s->gen + rows, t->generation, (size_t)rs.ntg * sizeof *s->gen);
+    }
+    rs.alive = s->alive;
+    rs.gen = s->gen;
 
-    /* Gather collidables (ascending slot) and gates; compute bounds. */
-    for (r = 0; r < rows; r++) {
-        uint32_t k = c.kind[r];
-        s->ncand[r] = 0;
-        s->flags[r] = 0;
-        if (!s->alive[r]) {
+    /* Gather collidables (ascending world slot) and gates; compute bounds. With a target set (issue 140) the
+     * collidables and gates are the TARGET table's rows only: the mover table's rows are the movers, so projectiles
+     * do not collide with each other unless the game puts them in the target set too. */
+    for (u = 0; u < total; u++) {
+        uint32_t k = rs_kind(&rs, u);
+        s->ncand[u] = 0;
+        s->flags[u] = 0;
+        if (!s->alive[u]) {
             continue;
         }
-        if (is_collidable(k) || is_mesh(&c, r)) {
-            row_bounds(s, &c, r, k);
+        r = rs_row(&rs, u);
+        if (rs.tg != NULL && u < rs.nmv && k != SPACE3D_KIND_MOVER) {
+            continue; /* the mover table's non-mover rows are neither movers nor targets */
+        }
+        if (is_collidable(k) || is_mesh(rs_cols(&rs, u), r)) {
+            row_bounds(s, &rs, u, k);
             if (prox && k == SPACE3D_KIND_MOVER) {
                 /* Proximity: a mover's bounds grow by its margin, so every collidable within it is a candidate. */
                 int64_t mg = prox_margin_of(&c, r);
                 uint32_t a;
                 if (mg > 0) {
                     for (a = 0; a < 3u; a++) {
-                        s->lo[a][r] = su_q32_subf(s->lo[a][r], mg);
-                        s->hi[a][r] = su_q32_addf(s->hi[a][r], mg);
+                        s->lo[a][u] = su_q32_subf(s->lo[a][u], mg);
+                        s->hi[a][u] = su_q32_addf(s->hi[a][u], mg);
                     }
                 }
             }
-            s->coll[ncoll++] = r;
+            s->coll[ncoll++] = u;
             st.movers += k == SPACE3D_KIND_MOVER;
-        } else if (k >= SPACE3D_KIND_GATE_RECT && k <= SPACE3D_KIND_GATE_ELLIPSE) {
-            s->gate_slot[ngate++] = r;
+        } else if (rs.tg == NULL || u >= rs.nmv) {
+            if (k >= SPACE3D_KIND_GATE_RECT && k <= SPACE3D_KIND_GATE_ELLIPSE) {
+                s->gate_slot[ngate++] = u;
+            }
         }
     }
     st.collidables = ncoll;
     st.gates = ngate;
-    sort_gates(s->gate_slot, &c, ngate);
+    sort_gates(s->gate_slot, &rs, ngate);
 
     if (ctx != NULL && ctx->brute_force) {
         /* Test seam: no broadphase; the narrow phase below takes every other collidable (s->coll stays in
          * ascending slot order) with no candidate cap and no budget. */
     } else if (v2) {
-        v2_broadphase(s, &c, ncoll, rows64, &st);
+        /* The budget counts every row the query indexes: the mover table's rows and, for a cross-table query (issue
+         * 140), the target table's too. Single-table: total == rows, so the budget is the released one. */
+        v2_broadphase(s, &rs, ncoll, (uint64_t)total, &st);
     } else if (ncoll > 1u) {
         /* Sweep axis: largest spread of bound centres (lo + hi, saturating), ties to the lower axis. */
         int64_t best = -1;
@@ -1821,8 +2048,8 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
                     budget_hit = 1;
                     break;
                 }
-                pm = c.kind[p] == SPACE3D_KIND_MOVER;
-                qm = c.kind[q] == SPACE3D_KIND_MOVER;
+                pm = rs_kind(&rs, p) == SPACE3D_KIND_MOVER;
+                qm = rs_kind(&rs, q) == SPACE3D_KIND_MOVER;
                 if (!pm && !qm) {
                     continue;
                 }
@@ -1830,10 +2057,10 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
                     s->lo[a2][q] > s->hi[a2][p]) {
                     continue;
                 }
-                if (pm) {
+                if (pm && (rs.tg == NULL || q >= rs.nmv)) {
                     add_cand(s, p, q);
                 }
-                if (qm) {
+                if (qm && (rs.tg == NULL || p >= rs.nmv)) {
                     add_cand(s, q, p);
                 }
             }
@@ -1849,64 +2076,67 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
         st.budget_hit = (uint32_t)budget_hit;
     }
 
-    /* Per row: narrow phase for movers, zeros for every other row. */
-    for (r = 0; r < rows; r++) {
+    /* Per mover: the narrow phase. Only the mover table's rows produce results (they are the only rows with output
+     * lanes); a target row's columns are read-only. */
+    for (u = 0; u < rs.nmv; u++) {
         Contact best[SPACE3D_CONTACTS];
         uint32_t nbest = 0, found = 0, k, j;
         uint32_t pslot = S3_NONE;
         int64_t pdist = 0;
-        uint32_t flags = s->flags[r];
+        uint32_t flags = s->flags[u];
         uint32_t gdir = SPACE3D_GATE_NONE, gslot = S3_NONE;
         int64_t gtoi = 0;
-        int mover = s->alive[r] && c.kind[r] == SPACE3D_KIND_MOVER;
+        int mover = s->alive[u] && rs_kind(&rs, u) == SPACE3D_KIND_MOVER;
         int brute = ctx != NULL && ctx->brute_force;
         Geo gm, go;
         gm.special = 0;
         go.special = 0;
         if (mover && compound) {
-            geo_of(&c, r, &gm);
+            geo_of(&rs, u, &gm);
         }
         if (mover) {
-            uint32_t n = brute ? ncoll : s->ncand[r];
+            uint32_t n = brute ? ncoll : s->ncand[u];
             if (budget_hit) {
                 flags |= SPACE3D_FLAG_SWEEP_BUDGET;
             }
-            /* Candidates in ascending slot order (insertion sort, n <= SPACE3D_CAND_MAX). */
+            /* Candidates in ascending world slot order (insertion sort, n <= SPACE3D_CAND_MAX). */
             for (k = 1; k < n && !brute; k++) {
-                uint32_t key = s->cand[r][k];
+                uint32_t key = s->cand[u][k];
                 j = k;
-                while (j > 0 && s->cand[r][j - 1u] > key) {
-                    s->cand[r][j] = s->cand[r][j - 1u];
+                while (j > 0 && slot_less(&rs, key, s->cand[u][j - 1u])) {
+                    s->cand[u][j] = s->cand[u][j - 1u];
                     j--;
                 }
-                s->cand[r][j] = key;
+                s->cand[u][j] = key;
             }
             st.candidates += n;
             for (k = 0; k < n; k++) {
-                uint32_t o = brute ? s->coll[k] : s->cand[r][k];
+                uint32_t o = brute ? s->coll[k] : s->cand[u][k];
                 uint32_t sub = S3_NONE;
                 S3Hit h;
-                if (o == r) {
+                if (o == u || (rs.tg != NULL && o < rs.nmv)) {
                     continue;
                 }
                 go.special = 0;
-                if (compound && c.kind[o] == SPACE3D_KIND_MOVER) {
-                    geo_of(&c, o, &go);
+                if (compound && rs_kind(&rs, o) == SPACE3D_KIND_MOVER) {
+                    geo_of(&rs, o, &go);
                 }
-                h = gm.special || go.special ? narrow_geo(&c, r, &gm, o, &go, &sub) : narrow(&c, r, o);
+                h = gm.special || go.special ? narrow_geo(&rs, u, &gm, o, &go, &sub) : narrow(&rs, u, o);
                 st.narrow_tests++;
                 if (!h.hit) {
                     continue;
                 }
                 found++;
-                /* Insert by (toi, slot); candidates arrive in ascending slot, so equal toi keeps slot order. */
+                /* Insert by (toi, world slot); candidates arrive in ascending world slot, so equal toi keeps slot
+                 * order. */
                 for (j = nbest; j > 0 && best[j - 1u].toi > h.toi; j--) {
                     if (j < SPACE3D_CONTACTS) {
                         best[j] = best[j - 1u];
                     }
                 }
                 if (j < SPACE3D_CONTACTS) {
-                    best[j].slot = o;
+                    best[j].slot = rs_slot(&rs, o);
+                    best[j].gen = rs_gen(&rs, o);
                     best[j].toi = h.toi;
                     best[j].n = h.n;
                     best[j].sub = sub;
@@ -1916,18 +2146,18 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
                 }
             }
             if (prox) {
-                /* Closest collidable within the margin among the same candidates (ascending slot: a strict < keeps
-                 * the lowest slot among equal distances). */
-                int64_t mg = prox_margin_of(&c, r);
+                /* Closest collidable within the margin among the same candidates (ascending world slot: a strict <
+                 * keeps the lowest slot among equal distances). */
+                int64_t mg = prox_margin_of(&c, u);
                 for (k = 0; k < n && mg > 0; k++) {
-                    uint32_t o = brute ? s->coll[k] : s->cand[r][k];
+                    uint32_t o = brute ? s->coll[k] : s->cand[u][k];
                     int64_t d;
-                    if (o == r) {
+                    if (o == u || (rs.tg != NULL && o < rs.nmv)) {
                         continue;
                     }
                     /* a mesh need only be searched below the best distance so far (strict < keeps ties); compound
                      * movers too are measured by their radius/z0/z1 shape (query_compound: the proximity envelope) */
-                    d = prox_distance(&c, r, o, pslot == S3_NONE || pdist > mg ? mg : pdist);
+                    d = prox_distance(&rs, u, o, pslot == S3_NONE || pdist > mg ? mg : pdist);
                     if (d <= mg && (pslot == S3_NONE || d < pdist)) {
                         pslot = o;
                         pdist = d;
@@ -1940,24 +2170,27 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
             }
             /* Gate crossing of the centre segment against the next gate. */
             {
-                uint32_t g = find_gate(s->gate_slot, &c, ngate, c.next_gate[r]);
+                uint32_t g = find_gate(s->gate_slot, &rs, ngate, c.next_gate[u]);
                 if (g != S3_NONE) {
                     S3GateHit gh;
-                    int gshape = c.kind[g] == SPACE3D_KIND_GATE_DISC     ? S3_GATE_DISC
-                                : c.kind[g] == SPACE3D_KIND_GATE_ELLIPSE ? S3_GATE_ELLIPSE
-                                                                         : S3_GATE_RECT;
-                    if (s3_segment_gate(rd3(&c, F_PREVX, r), rd3(&c, F_POSX, r), rd3(&c, F_POSX, g), rdrot(&c, g),
-                                        rdq(&c, F_HALFX, g), rdq(&c, F_HALFY, g), rdq(&c, F_RADIUS, g), gshape,
-                                        &gh) != 0) {
+                    const Cols *gc = rs_cols(&rs, g);
+                    uint32_t gr = rs_row(&rs, g);
+                    uint32_t gk = rs_kind(&rs, g);
+                    int gshape = gk == SPACE3D_KIND_GATE_DISC      ? S3_GATE_DISC
+                                 : gk == SPACE3D_KIND_GATE_ELLIPSE ? S3_GATE_ELLIPSE
+                                                                  : S3_GATE_RECT;
+                    if (s3_segment_gate(rd3(&c, F_PREVX, u), rd3(&c, F_POSX, u), rd3(gc, F_POSX, gr),
+                                        rdrot(gc, gr), rdq(gc, F_HALFX, gr), rdq(gc, F_HALFY, gr),
+                                        rdq(gc, F_RADIUS, gr), gshape, &gh) != 0) {
                         gdir = gh.dir > 0 ? SPACE3D_GATE_FORWARD : SPACE3D_GATE_BACKWARD;
-                        gslot = g;
+                        gslot = rs_slot(&rs, g);
                         gtoi = gh.toi;
                     }
                 }
             }
         }
-        c.hit_count[r] = nbest;
-        c.hit_flags[r] = mover ? flags : 0u;
+        c.hit_count[u] = nbest;
+        c.hit_flags[u] = mover ? flags : 0u;
         if (mover) {
             st.rows_cand_truncated += (flags & SPACE3D_FLAG_CAND_TRUNCATED) != 0u;
             st.rows_contact_truncated += (flags & SPACE3D_FLAG_CONTACT_TRUNCATED) != 0u;
@@ -1966,23 +2199,23 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
         }
         for (k = 0; k < SPACE3D_CONTACTS; k++) {
             int have = k < nbest;
-            c.c_slot[k][r] = have ? best[k].slot : S3_NONE;
-            c.c_gen[k][r] = have ? s->gen[best[k].slot] : 0u;
-            wrq(c.c_q[k][0], r, have ? best[k].toi : 0);
-            wrq(c.c_q[k][1], r, have ? best[k].n.x : 0);
-            wrq(c.c_q[k][2], r, have ? best[k].n.y : 0);
-            wrq(c.c_q[k][3], r, have ? best[k].n.z : 0);
+            c.c_slot[k][u] = have ? best[k].slot : S3_NONE;
+            c.c_gen[k][u] = have ? best[k].gen : 0u;
+            wrq(c.c_q[k][0], u, have ? best[k].toi : 0);
+            wrq(c.c_q[k][1], u, have ? best[k].n.x : 0);
+            wrq(c.c_q[k][2], u, have ? best[k].n.y : 0);
+            wrq(c.c_q[k][3], u, have ? best[k].n.z : 0);
             if (compound) {
-                c.c_sub[k][r] = have ? best[k].sub : S3_NONE;
+                c.c_sub[k][u] = have ? best[k].sub : S3_NONE;
             }
         }
-        c.gate_dir[r] = gdir;
-        c.gate_slot[r] = gslot;
-        wrq(c.gate_toi, r, gtoi);
+        c.gate_dir[u] = gdir;
+        c.gate_slot[u] = gslot;
+        wrq(c.gate_toi, u, gtoi);
         if (prox) {
-            c.prox_slot[r] = pslot;
-            c.prox_gen[r] = pslot != S3_NONE ? s->gen[pslot] : 0u;
-            wrq(c.prox_dist, r, pdist);
+            c.prox_slot[u] = pslot != S3_NONE ? rs_slot(&rs, pslot) : S3_NONE;
+            c.prox_gen[u] = pslot != S3_NONE ? rs_gen(&rs, pslot) : 0u;
+            wrq(c.prox_dist, u, pdist);
         }
     }
     st.mesh_nodes = mst.nodes;
@@ -2001,33 +2234,75 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
 }
 
 static uint32_t query_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 0, 0, 0, 0);
+    return query_core(w, in, out, NULL, host_ctx, 0, 0, 0, 0);
 }
 
 static uint32_t query_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 1, 0, 0, 0);
+    return query_core(w, in, out, NULL, host_ctx, 1, 0, 0, 0);
 }
 
 static uint32_t query_run_shape(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 1, 1, 0, 0);
+    return query_core(w, in, out, NULL, host_ctx, 1, 1, 0, 0);
 }
 
 static uint32_t query_run_compound(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 1, 1, 1, 0);
+    return query_core(w, in, out, NULL, host_ctx, 1, 1, 1, 0);
 }
 
 static uint32_t query2_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 0, 0, 0, 1);
+    return query_core(w, in, out, NULL, host_ctx, 0, 0, 0, 1);
 }
 
 static uint32_t query2_run_prox(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 1, 0, 0, 1);
+    return query_core(w, in, out, NULL, host_ctx, 1, 0, 0, 1);
 }
 
 static uint32_t query2_run_shape(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 1, 1, 0, 1);
+    return query_core(w, in, out, NULL, host_ctx, 1, 1, 0, 1);
 }
 
 static uint32_t query2_run_compound(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
-    return query_core(w, in, out, host_ctx, 1, 1, 1, 1);
+    return query_core(w, in, out, NULL, host_ctx, 1, 1, 1, 1);
+}
+
+/* Cross-table forms (issue 140): the movers are the operator's own table's rows, the collidables and gates the
+ * target table's rows. Same results as the single-table form when the two tables are one. */
+static uint32_t query_run_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out, const SuHostOpTargets *t,
+                             void *host_ctx) {
+    return query_core(w, in, out, t, host_ctx, 0, 0, 0, 0);
+}
+
+static uint32_t query_run_prox_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out, const SuHostOpTargets *t,
+                                  void *host_ctx) {
+    return query_core(w, in, out, t, host_ctx, 1, 0, 0, 0);
+}
+
+static uint32_t query_run_shape_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out,
+                                   const SuHostOpTargets *t, void *host_ctx) {
+    return query_core(w, in, out, t, host_ctx, 1, 1, 0, 0);
+}
+
+static uint32_t query_run_compound_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out,
+                                      const SuHostOpTargets *t, void *host_ctx) {
+    return query_core(w, in, out, t, host_ctx, 1, 1, 1, 0);
+}
+
+static uint32_t query2_run_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out, const SuHostOpTargets *t,
+                              void *host_ctx) {
+    return query_core(w, in, out, t, host_ctx, 0, 0, 0, 1);
+}
+
+static uint32_t query2_run_prox_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out,
+                                   const SuHostOpTargets *t, void *host_ctx) {
+    return query_core(w, in, out, t, host_ctx, 1, 0, 0, 1);
+}
+
+static uint32_t query2_run_shape_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out,
+                                    const SuHostOpTargets *t, void *host_ctx) {
+    return query_core(w, in, out, t, host_ctx, 1, 1, 0, 1);
+}
+
+static uint32_t query2_run_compound_tg(const SuWorld *w, const SuInvocation *in, SuOutputs *out,
+                                       const SuHostOpTargets *t, void *host_ctx) {
+    return query_core(w, in, out, t, host_ctx, 1, 1, 1, 1);
 }

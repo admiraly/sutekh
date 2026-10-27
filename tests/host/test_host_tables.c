@@ -543,21 +543,24 @@ static void test_memory_accounting(void) {
     CHECK(m.table_count == 2u);
     CHECK(m.table_total[0] > 0u && m.table_total[1] > 0u);
     CHECK(m.tables_total == m.table_total[0] + m.table_total[1]);
-    CHECK(m.total == m.tables_total + m.input_storage + m.metadata);
+    CHECK(m.total == m.tables_total + m.input_storage + m.queued_inputs + m.restore_scratch + m.metadata);
     {
         uint64_t two_total = m.total;
         uint64_t ship_bytes = m.table_total[0];
         uint64_t pool_bytes = m.table_total[1];
         uint64_t input = m.input_storage;
+        uint64_t queued = m.queued_inputs;
+        uint64_t restore = m.restore_scratch;
         uint64_t meta = m.metadata;
         uint64_t one_total;
         CHECK(su_host_memory(one, &m) == SU_OK);
         CHECK(m.table_count == 1u);
         one_total = m.total;
-        printf("memory: two tables %llu bytes (ship %llu + pool %llu + input %llu + metadata %llu); "
-               "one union table %llu bytes; two tables save %llu bytes (%.2fx)\n",
+        printf("memory: two tables %llu bytes (ship %llu + pool %llu + input %llu + queued %llu + restore %llu + "
+               "metadata %llu); one union table %llu bytes; two tables save %llu bytes (%.2fx)\n",
                (unsigned long long)two_total, (unsigned long long)ship_bytes, (unsigned long long)pool_bytes,
-               (unsigned long long)input, (unsigned long long)meta, (unsigned long long)one_total,
+               (unsigned long long)input, (unsigned long long)queued, (unsigned long long)restore,
+               (unsigned long long)meta, (unsigned long long)one_total,
                (unsigned long long)(one_total - two_total), (double)one_total / (double)two_total);
         CHECK(two_total < one_total);
         /* The two-table world holds only the cells its kinds need: 10,000 x 2 + 200,000 x 2 against
@@ -623,7 +626,8 @@ static void test_refusals(void) {
         d.capsule_table = swapped;
         CHECK(su_host_world_create(&d, &w, &e) == SU_E_SCHEMA_MISMATCH && w == NULL);
     }
-    /* IR entity operations are not supported in a multi-table world (first slice). */
+    /* IR entity operations are supported in a multi-table world (slice 2): the entity tick is table-aware, so a
+     * table-0 system that despawns rows runs while table 1 sits idle. */
     ent_cap = slurp("tests/fixtures/entities/despawn_move.capsule.json");
     ent_lir = slurp("tests/fixtures/entities/despawn_move.lir.json");
     memset(&ent, 0, sizeof ent);
@@ -633,6 +637,10 @@ static void test_refusals(void) {
     ent.lir_len = ent_lir.len;
     {
         TableSchema ent_schema;
+        SuHostValue sv = {2u, 1u};
+        uint64_t h = 0;
+        uint64_t done = 0;
+        uint8_t dg[32];
         memset(&ent_schema, 0, sizeof ent_schema);
         ent_schema.s.struct_size = (uint32_t)sizeof ent_schema.s;
         ent_schema.s.field_count = 2;
@@ -647,12 +655,23 @@ static void test_refusals(void) {
         ent_schema.f[1].type = SU_TYPE_U32;
         ent_schema.f[1].name = "velocity_x";
         td[0].schema = &ent_schema.s;
+        td[0].max_entities = 2u;
         td[1].schema = &pool.s;
         d.capsule_count = 2;
         d.capsules = (SuHostCapsule[]){ent, g_pool};
         d.capsule_table = tables;
-        CHECK(su_host_world_create(&d, &w, &e) == SU_E_CAPABILITY_DENIED && w == NULL);
-        CHECK(strstr(e.message, "entity operations") != NULL);
+        w = NULL;
+        CHECK(su_host_world_create(&d, &w, &e) == SU_OK);
+        if (w != NULL) {
+            CHECK(su_host_spawn_in(w, 0u, &sv, 1u, 0u, &h, &e) == SU_OK);
+            CHECK(su_host_spawn_in(w, 0u, &sv, 1u, 1u, &h, &e) == SU_OK);
+            CHECK(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u);
+            /* despawn_move despawns the rows its fixture marks dead; the world stepped, so table 0's entity
+             * operations ran and table 1 (no system) stayed idle. */
+            CHECK(su_host_digest(w, dg) == SU_OK);
+            CHECK(su_host_tick(w) == 1u);
+            su_host_world_destroy(w);
+        }
     }
     free(ent_cap.data);
     free(ent_lir.data);
@@ -704,6 +723,18 @@ static void test_large_idle_table(void) {
     CHECK(su_host_digest(one, d1) == SU_OK);
     CHECK(memcmp(d1, d2, 32) != 0);
     CHECK(su_host_tick(two) == su_host_tick(one));
+    /* The small table's columns are the same in both worlds: the idle table costs nothing and changes nothing. */
+    {
+        uint32_t f;
+        for (f = 1u; f <= 2u; f++) {
+            const uint32_t *c2 = NULL;
+            const uint32_t *c1 = NULL;
+            uint64_t r2 = 0, r1 = 0;
+            CHECK(su_host_column_in(two, 0u, f, &c2, &r2) == SU_OK);
+            CHECK(su_host_column(one, f, &c1, &r1) == SU_OK);
+            CHECK(r1 == r2 && r1 == 8u && memcmp(c1, c2, (size_t)r1 * sizeof *c1) == 0);
+        }
+    }
     /* The idle table keeps the world's tick (it is never begun or published), so its canonical state restores. */
     CHECK(su_host_table_capacity(two, 1u, &rows) == SU_OK && rows == 1000u);
     {
@@ -741,7 +772,6 @@ static void test_no_allocation_in_tick(void) {
     uint64_t proj[2] = {0, 0};
     uint64_t done = 0;
     uint32_t i;
-
     ship_schema(&ship);
     pool_schema(&pool);
     w = make_two(&ship, &pool, 4u, 4u, NULL, 0u, NULL, 0u, &e);
@@ -777,6 +807,48 @@ static void test_no_allocation_in_tick(void) {
     g_count_alloc = 0;
     CHECK(g_allocs == 0u);
     su_host_world_destroy(w);
+    /* A failure inside a system run (the second emit_event of a tick over the world's event cap) allocates
+     * nothing either, and leaves the committed root as it was. */
+    {
+        Bytes ec = slurp("tests/fixtures/entities/emit_then_despawn.capsule.json");
+        Bytes el = slurp("tests/fixtures/entities/emit_then_despawn.lir.json");
+        SuHostCapsule cap;
+        SuHostWorldDesc d;
+        SuHostWorld *ew = NULL;
+        uint8_t before[32], after[32];
+        memset(&cap, 0, sizeof cap);
+        cap.capsule_json = ec.data;
+        cap.capsule_len = ec.len;
+        cap.lir_json = el.data;
+        cap.lir_len = el.len;
+        memset(&d, 0, sizeof d);
+        d.struct_size = (uint32_t)sizeof d;
+        d.capsule_count = 1;
+        d.capsules = &cap;
+        d.tick_rate_hz = 120;
+        d.max_entities = 4u;
+        d.max_events_per_tick = 1u; /* the capsule declares one event per row; two rows emit in one chunk */
+        CHECK(su_host_world_create(&d, &ew, &e) == SU_OK);
+        free(ec.data);
+        free(el.data);
+        if (ew != NULL) {
+            uint64_t h = 0;
+            /* Warm up the entity cache with an empty tick: the first entity tick builds the cache (allocates). */
+            CHECK(su_host_step(ew, 1u, &done, &e) == SU_OK && done == 1u);
+            sv.field_id = 2u; /* velocity_x = 1 */
+            sv.value = 1u;
+            CHECK(su_host_spawn_in(ew, 0u, &sv, 1u, 0u, &h, &e) == SU_OK);
+            CHECK(su_host_spawn_in(ew, 0u, &sv, 1u, 1u, &h, &e) == SU_OK);
+            CHECK(su_host_digest(ew, before) == SU_OK);
+            g_allocs = 0u;
+            g_count_alloc = 1;
+            CHECK(su_host_step(ew, 1u, &done, &e) == SU_E_RESOURCE_LIMIT && done == 0u);
+            g_count_alloc = 0;
+            CHECK(g_allocs == 0u);
+            CHECK(su_host_digest(ew, after) == SU_OK && memcmp(before, after, 32u) == 0);
+            su_host_world_destroy(ew);
+        }
+    }
 #endif
 }
 
@@ -813,6 +885,77 @@ static void test_descriptor_versions(void) {
     su_host_world_destroy(w4);
 }
 
+/* The categories su_host_memory appends (issue 140): queued input records and the in-place restore scratch are
+ * counted, so the "exact" claim covers them too. */
+static void test_memory_categories(void) {
+    TableSchema ship, pool;
+    SuHostWorld *w;
+    SuHostError e;
+    SuHostMemory m;
+    SuHostValue sv = {2u, 1u};
+    SuHostInput in;
+    uint64_t h = 0;
+    uint64_t done = 0;
+    uint8_t *snap = NULL;
+    size_t size = 0;
+
+    ship_schema(&ship);
+    pool_schema(&pool);
+    w = make_two(&ship, &pool, 4u, 4u, NULL, 0u, NULL, 0u, &e);
+    memset(&m, 0, sizeof m);
+    m.struct_size = (uint32_t)sizeof m;
+    CHECK(su_host_memory(w, &m) == SU_OK);
+    CHECK(m.queued_inputs == 0u && m.restore_scratch == 0u);
+    CHECK(su_host_spawn_in(w, 0u, &sv, 1u, 0u, &h, &e) == SU_OK);
+    CHECK(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u);
+    in.entity = h;
+    in.field_id = 2u;
+    in.value = 3u;
+    CHECK(su_host_input_push(w, su_host_tick(w), &in, 1u, &e) == SU_OK);
+    memset(&m, 0, sizeof m);
+    m.struct_size = (uint32_t)sizeof m;
+    CHECK(su_host_memory(w, &m) == SU_OK);
+    CHECK(m.queued_inputs > 0u);
+    CHECK(m.total == m.tables_total + m.input_storage + m.queued_inputs + m.restore_scratch + m.metadata);
+    /* The first in-place restore allocates its scratch; the next su_host_memory reports it. */
+    CHECK(su_host_snapshot_size(w, &size) == SU_OK && size > 0u);
+    snap = malloc(size);
+    CHECK(snap != NULL && su_host_snapshot_write(w, snap, size, &size) == SU_OK);
+    CHECK(su_host_snapshot_restore_inplace(w, snap, size, &e) == SU_OK);
+    free(snap);
+    memset(&m, 0, sizeof m);
+    m.struct_size = (uint32_t)sizeof m;
+    CHECK(su_host_memory(w, &m) == SU_OK);
+    CHECK(m.restore_scratch > 0u);
+    CHECK(m.total == m.tables_total + m.input_storage + m.queued_inputs + m.restore_scratch + m.metadata);
+    /* A caller that passes the first released size gets the fields it covers, and the full total; the size it is
+     * given back is its own, never one larger than its struct (a caller may trust it). */
+    {
+        enum { GUARD = 16 };
+        uint8_t buf[SU_HOST_MEMORY_V1_SIZE + GUARD];
+        SuHostMemory *v1 = (SuHostMemory *)(void *)buf;
+        size_t k;
+        memset(buf, 0xAA, sizeof buf);
+        v1->struct_size = SU_HOST_MEMORY_V1_SIZE;
+        CHECK(su_host_memory(w, v1) == SU_OK);
+        CHECK(v1->total == m.total && v1->tables_total == m.tables_total);
+        CHECK(v1->struct_size == SU_HOST_MEMORY_V1_SIZE);
+        /* Nothing past the caller's size was written: the guard keeps its fill. */
+        for (k = (size_t)SU_HOST_MEMORY_V1_SIZE; k < sizeof buf; k++) {
+            CHECK(buf[k] == 0xAAu);
+        }
+    }
+    /* A current-size caller gets sizeof(SuHostMemory) back. */
+    {
+        SuHostMemory cur;
+        memset(&cur, 0, sizeof cur);
+        cur.struct_size = (uint32_t)sizeof cur;
+        CHECK(su_host_memory(w, &cur) == SU_OK);
+        CHECK(cur.struct_size == (uint32_t)sizeof(SuHostMemory));
+    }
+    su_host_world_destroy(w);
+}
+
 int main(void) {
     g_cap = slurp("examples/movement.capsule.json");
     g_lir = slurp("examples/movement.lir.json");
@@ -835,6 +978,7 @@ int main(void) {
     test_snapshot_round_trip();
     test_replay_round_trip();
     test_memory_accounting();
+    test_memory_categories();
     test_refusals();
     test_large_idle_table();
     test_descriptor_versions();

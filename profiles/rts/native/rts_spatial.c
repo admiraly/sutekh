@@ -69,6 +69,9 @@ const SuHostOpDesc g_rts_spatial_desc = {
     k_spatial_fields,
     spatial_run,
     &g_spatial_ctx,
+    0u,       /* no target set (issue 140) */
+    NULL,
+    NULL,
 };
 
 RtsOpsCtx *rts_spatial_ctx(void) {

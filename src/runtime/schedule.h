@@ -56,6 +56,27 @@ typedef struct SuHostField {
  * after it has stored every declared write for every row, or a SU_E_* code (the tick aborts).
  * Deviation from section 3.1, recorded in the M3-04a handoff: the w argument was added because
  * sections 4.1 and 4.3 read alive and generation, which are not fields and are not in SuInvocation. */
+/* A target table's read lanes as run_targets sees them (issue 140): the descriptor's target lanes, in descriptor
+ * order, under the descriptor's own IDs. */
+typedef struct SuHostTargetColumn {
+    uint32_t field_id;
+    const uint32_t *in;   /* rows cells, working values of the target table */
+} SuHostTargetColumn;
+
+/* The target set of one run (issue 140). own_base and base are WORLD slots (the local slot 0 of the operator's own
+ * table and of the target table), so an operator that reports a row stores base + local slot, matching the host's
+ * handles. */
+typedef struct SuHostOpTargets {
+    uint32_t table;             /* table index of the target set */
+    uint64_t rows;              /* rows of the target table */
+    uint64_t base;              /* world slot of the target table's local slot 0 */
+    uint64_t own_base;          /* world slot of the operator's own table's local slot 0 */
+    uint32_t column_count;      /* the descriptor's target_field_count */
+    const SuHostTargetColumn *columns;
+    const uint8_t *alive;       /* rows entries: 1 alive, 0 dead */
+    const uint32_t *generation; /* rows entries */
+} SuHostOpTargets;
+
 typedef struct SuHostOpDesc {
     const char *system_id;          /* "rts.spatial", "rts.scatter"; 1..SU_DIAG_SYSTEM_BYTES-1 bytes */
     const char *schema_id;          /* must equal the world schema ID */
@@ -65,6 +86,14 @@ typedef struct SuHostOpDesc {
     const SuHostField *fields;      /* declared set, ascending id, unique, access never 0 */
     uint32_t (*run)(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx);
     void *host_ctx;                 /* operator scratch, admitted at creation, never allocated in the tick */
+    /* Cross-table target set (issue 140; appended, so every earlier descriptor keeps its meaning): read-only lanes
+     * the operator reads from ANOTHER table's rows, under the descriptor's own IDs. target_field_count 0 means the
+     * operator has no target set and runs exactly as before. run_targets is the run function of an operator with a
+     * target set (NULL: the operator takes none, and binding one is refused). */
+    uint32_t target_field_count;    /* 0..SU_LIMIT_FIELDS */
+    const SuHostField *target_fields; /* ascending id, unique, access SU_ACCESS_READ only */
+    uint32_t (*run_targets)(const SuWorld *w, const SuInvocation *in, SuOutputs *out, const SuHostOpTargets *t,
+                            void *host_ctx);
 } SuHostOpDesc;
 
 typedef struct SuSchedField {
@@ -103,6 +132,17 @@ typedef struct SuSysEntry {
     SuHostEventDrain host_event_drain; /* host entries with host_event_cap: the events of the last run */
     uint32_t vm_tier;        /* IR entries: SU_VM_TIER_* of every VM context the entry runs on (its own ctx, and the
                               * entity runtime's per-call contexts); 0 = the process default (su_vm_default_tier) */
+    /* Host entries bound to a target set (issue 140): the table its descriptor's target lanes read, the world slot
+     * of that table's local slot 0, its rows, and the owned per-run alive/generation views. target_table is
+     * UINT32_MAX for every entry without su_sched_set_host_target. */
+    uint32_t target_table;
+    uint32_t target_bind_count;   /* the descriptor's target_field_count */
+    uint32_t *target_bind;        /* owned; target_bind_count world field IDs of the target table, descriptor order */
+    uint64_t own_base;            /* world slot of the entry's own table's local slot 0 */
+    uint64_t target_base;
+    uint64_t target_rows;
+    uint8_t *target_alive;        /* owned; target_rows entries, filled before every run */
+    uint32_t *target_gen;         /* owned; target_rows entries */
     uint64_t txid;          /* registry transaction that made this module live; 0 = creation */
     uint64_t system_rev;     /* 1 at creation, +1 per installed revision */
     uint64_t installed_tick; /* effective tick of the install (0 at creation) */
@@ -143,6 +183,11 @@ typedef struct SuSchedule {
     SuSchedField *declared_fields; /* owned; the declared lanes, ascending id, access 0 */
     uint32_t table_count;    /* 1..SU_SCHED_MAX_TABLES; 1 for every classic schedule */
     SuSchedTable tables[SU_SCHED_MAX_TABLES]; /* per table; tables[0] mirrors the fields above */
+    /* Worlds of the tick being run (issue 140): ws[t] is table t's world, so a host entry bound to a target table
+     * can read that table's columns and entity table. Set by the tick functions for their duration, NULL outside a
+     * tick; a schedule belongs to one world. */
+    SuWorld *const *tick_worlds;
+    uint32_t tick_nw;
 } SuSchedule;
 
 /* Test seam: called before each system of a tick. Returns nonzero to fail that system
@@ -238,6 +283,14 @@ uint32_t su_sched_set_host_instance(SuSchedule *s, uint32_t idx, void *inst, voi
  * count toward the per-tick event cap. SU_E_INVALID_ARGUMENT when idx is not a host entry, cap is 0 or drain is
  * NULL. A host entry without this call keeps the plain path (no events, no entity runtime needed). */
 uint32_t su_sched_set_host_events(SuSchedule *s, uint32_t idx, uint32_t cap, SuHostEventDrain drain);
+/* Binds host entry idx to a target table (issue 140): the entry's operator reads its descriptor's target lanes from
+ * table target_table, whose local slot 0 is world slot target_base and which has target_rows rows; bind holds the
+ * world field ID of each descriptor target lane, in descriptor order (copied). Allocates the per-run alive and
+ * generation views of the target table once, here (never in a tick). Set at world creation, before the first tick.
+ * SU_E_INVALID_ARGUMENT when idx is not a host entry, target_table is out of range or bind is NULL,
+ * SU_E_RESOURCE_LIMIT when the views cannot be allocated. */
+uint32_t su_sched_set_host_target(SuSchedule *s, uint32_t idx, uint32_t target_table, uint64_t own_base,
+                                  uint64_t target_base, uint64_t target_rows, const uint32_t *bind);
 /* Builds the union field table from the current entries. Conflicting ID/name/type for
  * one field is SU_E_SCHEMA_MISMATCH. Call after the last su_sched_add. */
 uint32_t su_sched_finalize(SuSchedule *s);

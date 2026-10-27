@@ -158,6 +158,25 @@ uint32_t su_cmdq_commit(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEv
 uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEventLog *log,
                                     const SuEvent *host_ev, uint64_t host_n, SuCommitReport *rep);
 
+/* Per-table routing of one commit (issue 140, worlds with several tables). cb[t] applies table t's despawns to
+ * table t's working entity table; sys_table[i] is the table of system i (every system the queue was built for);
+ * base[t] is the world slot of table t's local slot 0. A command or event record of system i then carries
+ * slot + base[sys_table[i]] in `slot` (a SU_EVENT_DESPAWNED record's `a` is already the world slot of the
+ * expected handle the emitter queued), so every record names its row in the world handle space and the records
+ * stay ordered by (system_index, slot, seq) exactly as for one table. The base is added after the merge, not
+ * before it: the merge compares a system's events with its command records, and both carry the table's LOCAL slot
+ * there, so a table >= 1 system's records interleave by row and emission order as they do in table 0. base all
+ * zero with one table is su_cmdq_commit_with_events byte for byte. */
+typedef struct SuCmdTables {
+    const SuCmdCallbacks *cb;   /* table_count entries */
+    const uint32_t *sys_table;  /* nsystems entries, indexed by system_index */
+    const uint64_t *base;       /* table_count entries */
+    uint32_t table_count;
+} SuCmdTables;
+
+uint32_t su_cmdq_commit_tables(SuCmdQ *q, const SuCmdTables *t, uint64_t tick, SuEventLog *log,
+                               const SuEvent *host_ev, uint64_t host_n, SuCommitReport *rep);
+
 /* ---- bounded event log (ring) ---- */
 
 /* capacity in [1, SU_CMDQ_MAX_LOG_CAPACITY]. base_seq is the event_seq of the first event ever

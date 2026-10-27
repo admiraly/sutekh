@@ -58,6 +58,10 @@ uint32_t su_vm_context_set_entity_view(SuExecContext *ctx, const uint8_t *alive,
  * offset fails with SU_E_INVALID_ARGUMENT). Gathers read entry state only, so results do not depend on chunking or
  * worker count. Returns SU_E_INVALID_ARGUMENT on NULL ctx. */
 uint32_t su_vm_context_set_table_view(SuExecContext *ctx, const SuInvocation *table);
+/* As su_vm_context_set_table_view for a table whose local slot 0 is world slot base_slot (issue 140): a gather's
+ * slot operand is then a world slot (base_slot + local row, out of range = 0) and find_eq_u32 returns one
+ * (base_slot + local row). base_slot 0 is exactly the call above, so a single-table world is unchanged. */
+uint32_t su_vm_context_set_table_view_base(SuExecContext *ctx, const SuInvocation *table, uint32_t base_slot);
 
 /* IR 0.4 (2026-10-26). Whole entity table for handle_live, used by the NEXT invocations until replaced: alive (one
  * byte per slot, nonzero = alive; NULL = all alive) and generations (one u32 per slot; NULL = 1) of slots
@@ -67,6 +71,11 @@ uint32_t su_vm_context_set_table_view(SuExecContext *ctx, const SuInvocation *ta
  * SU_E_INVALID_ARGUMENT). Returns SU_E_INVALID_ARGUMENT on NULL ctx. */
 uint32_t su_vm_context_set_entity_table(SuExecContext *ctx, const uint8_t *alive, const uint32_t *generations,
                                         uint64_t slot_count);
+/* As su_vm_context_set_entity_table for a table whose local slot 0 is world slot base_slot (issue 140): the slot
+ * operand of handle_live is then a world slot (base_slot + local slot), so handles stored in columns match the
+ * host's. base_slot 0 is exactly the call above. */
+uint32_t su_vm_context_set_entity_table_base(SuExecContext *ctx, const uint8_t *alive, const uint32_t *generations,
+                                             uint64_t slot_count, uint32_t base_slot);
 
 /* Row limit used by the wrapper (default SU_LIMIT_ROWS). Returns
  * SU_E_INVALID_ARGUMENT on NULL ctx. */

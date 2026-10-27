@@ -6,7 +6,8 @@
  * descriptor: a valid record binds every operator lane to a lane of a game schema ("racer_game", IDs + 1000,
  * names prefixed "g_"); each altered record breaks one rule of the contract and must be refused with
  * SU_E_SCHEMA_MISMATCH. The schedule refuses a declaration whose lanes do not match the binding.
- * Run from the repository root (the base record supplies the operator identity). Usage: test_space3d_bind <scratch> */
+ * Run from the repository root (the base record supplies the operator identity). Usage: test_space3d_bind <scratch>
+ * Without an argument the records go to TMPDIR (or TEMP on Windows), never the working directory. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,10 +95,24 @@ static int write_record(const char *path, int variant, const char *schema_id) {
 int main(int argc, char **argv) {
     const SuHostOpDesc *d = &g_space3d_query_desc;
     char path[1024], msg[256];
+    static char scratch_dir[768];
     uint32_t bind[SU_LIMIT_FIELDS], sv = 0, gen = 0, k, st;
     int bound = 0, v;
     SuLirModule *decl = NULL, *plain = NULL;
-    const char *scratch = argc > 1 ? argv[1] : ".";
+    const char *scratch = argc > 1 ? argv[1] : NULL;
+
+    if (scratch == NULL) {
+        /* Temp files belong under TMPDIR (TEMP on Windows), not in the repository root. */
+        const char *tmp = getenv("TMPDIR");
+        if (tmp == NULL || tmp[0] == '\0') {
+            tmp = getenv("TEMP");
+        }
+        if (tmp == NULL || tmp[0] == '\0') {
+            tmp = ".";
+        }
+        snprintf(scratch_dir, sizeof scratch_dir, "%s", tmp);
+        scratch = scratch_dir;
+    }
 
     /* The committed record: unbound, identity binding, unchanged semantic hash. */
     CHECK(su_host_load_bound("profiles/space3d/space3d_query.capsule.json", NULL, d, &plain, &sv, &gen, bind, &bound,

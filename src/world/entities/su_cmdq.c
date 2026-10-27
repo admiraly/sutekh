@@ -714,8 +714,64 @@ uint32_t su_cmdq_commit(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEv
     return su_cmdq_commit_with_events(q, cb, tick, log, NULL, 0u, rep);
 }
 
-uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEventLog *log,
-                                    const SuEvent *host_ev, uint64_t host_n, SuCommitReport *rep) {
+/* Apply driver with per-table routing (issue 140): command i's callback is t->cb[t->sys_table[system_index]].
+ * A command record's slot is the table's LOCAL slot, as queued; the caller adds the table's base when it writes
+ * the record (commit_core below). The despawn handle (c->arg) is a WORLD handle, as the IR emitter builds it. */
+static uint32_t apply_routed(const SuStructCmd *cmds, uint64_t n, const SuCmdTables *t, uint64_t tick,
+                             SuEvent *rec, uint64_t rec_cap) {
+    uint64_t i;
+    if (t == NULL || t->cb == NULL || t->sys_table == NULL || t->base == NULL ||
+        (n != 0u && (cmds == NULL || rec == NULL))) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (rec_cap < n) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    for (i = 0u; i < n; i++) {
+        uint32_t table = t->sys_table[cmds[i].system_index];
+        if (table >= t->table_count) {
+            return SU_E_INTERNAL;
+        }
+        if (cmds[i].kind == SU_STRUCT_DESPAWN && t->cb[table].despawn == NULL) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    for (i = 0u; i < n; i++) {
+        const SuStructCmd *c = &cmds[i];
+        const SuCmdCallbacks *cb = &t->cb[t->sys_table[c->system_index]];
+        SuEvent *r = &rec[i];
+        uint32_t st;
+        uint32_t old_gen = 0u;
+
+        if (c->kind == SU_STRUCT_DESPAWN) {
+            st = cb->despawn(cb->ctx, c->arg, &old_gen);
+        } else {
+            st = SU_E_INVALID_ARGUMENT; /* unknown or reserved kind */
+        }
+        r->event_seq = 0u;
+        r->tick = tick;
+        r->system_index = c->system_index;
+        r->slot = c->slot;
+        r->seq = c->seq;
+        if (st == SU_OK) {
+            r->kind = SU_EVENT_DESPAWNED;
+            r->a = SU_ENTITY_SLOT(c->arg);
+            r->b = old_gen;
+        } else {
+            r->kind = SU_EVENT_REJECTED;
+            r->a = c->kind;
+            r->b = st;
+        }
+    }
+    return SU_OK;
+}
+
+/* The body of su_cmdq_commit_with_events. t NULL: one table, cb for every system, base 0 (the released path,
+ * byte for byte). Otherwise every record of a system's command or event gains the base of that system's table in
+ * slot, so a record names its row across tables; a SU_EVENT_DESPAWNED record's a already holds the world slot
+ * (the emitter's expected handle). */
+static uint32_t commit_core(SuCmdQ *q, const SuCmdCallbacks *cb, const SuCmdTables *t, uint64_t tick,
+                            SuEventLog *log, const SuEvent *host_ev, uint64_t host_n, SuCommitReport *rep) {
     SuCmdView v;
     uint32_t st;
     uint64_t base;
@@ -726,7 +782,7 @@ uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_
     uint64_t n_despawned = 0u;
     uint64_t n_rejected = 0u;
 
-    if (q == NULL || cb == NULL || log == NULL || (host_n != 0u && host_ev == NULL)) {
+    if (q == NULL || (cb == NULL && t == NULL) || log == NULL || (host_n != 0u && host_ev == NULL)) {
         return SU_E_INVALID_ARGUMENT;
     }
     st = su_cmdq_merge(q, &v);
@@ -738,7 +794,11 @@ uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_
     if (v.n_events + v.n_cmds + host_n > q->per_tick_e) {
         return SU_E_RESOURCE_LIMIT;
     }
-    st = su_cmdq_apply(v.cmds, v.n_cmds, cb, tick, q->rec, q->per_tick_s);
+    if (t != NULL) {
+        st = apply_routed(v.cmds, v.n_cmds, t, tick, q->rec, q->per_tick_s);
+    } else {
+        st = su_cmdq_apply(v.cmds, v.n_cmds, cb, tick, q->rec, q->per_tick_s);
+    }
     if (st != SU_OK) {
         return st;
     }
@@ -749,7 +809,6 @@ uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_
             n_rejected++;
         }
     }
-
     base = su_evlog_next_seq(log);
     i = 0u;
     j = 0u;
@@ -779,8 +838,26 @@ uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_
             q->fin[k] = host_ev[h++];
         } else if (take_sys) {
             q->fin[k] = v.events[i++];
+            if (t != NULL) {
+                uint32_t table = t->sys_table[q->fin[k].system_index];
+                if (table >= t->table_count) {
+                    return SU_E_INTERNAL;
+                }
+                q->fin[k].slot += (uint32_t)t->base[table];
+            }
         } else {
+            /* World slots (issue 140): a record names its row in the world handle space. The base is added here,
+             * after the comparison, so the merge compares local slots with local slots (both sides of a system
+             * carry its table's local slot); adding it before the merge would sort a table >= 1 system's events
+             * ahead of its despawns. */
             q->fin[k] = q->rec[j++];
+            if (t != NULL) {
+                uint32_t table = t->sys_table[q->fin[k].system_index];
+                if (table >= t->table_count) {
+                    return SU_E_INTERNAL;
+                }
+                q->fin[k].slot += (uint32_t)t->base[table];
+            }
         }
         q->fin[k].tick = tick;
         q->fin[k].event_seq = base + k;
@@ -800,6 +877,19 @@ uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_
         rep->event_fallback = v.event_fallback;
     }
     return SU_OK;
+}
+
+uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEventLog *log,
+                                    const SuEvent *host_ev, uint64_t host_n, SuCommitReport *rep) {
+    return commit_core(q, cb, NULL, tick, log, host_ev, host_n, rep);
+}
+
+uint32_t su_cmdq_commit_tables(SuCmdQ *q, const SuCmdTables *t, uint64_t tick, SuEventLog *log,
+                               const SuEvent *host_ev, uint64_t host_n, SuCommitReport *rep) {
+    if (t == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return commit_core(q, NULL, t, tick, log, host_ev, host_n, rep);
 }
 
 /* ---- event log ---------------------------------------------------------- */
