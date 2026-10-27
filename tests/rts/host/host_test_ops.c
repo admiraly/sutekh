@@ -115,16 +115,20 @@ static uint32_t run_probe(const SuWorld *w, const SuInvocation *in, SuOutputs *o
 
 SuHostOpDesc g_test_target_writer = {
     TEST_HOST_TGT_ID, "demo.actor", 1u, {0}, 1u, k_rw_fields, run_target_writer, NULL,
+    0u, NULL, NULL, /* no target set (issue 140) */
 };
 SuHostOpDesc g_test_probe = {
     TEST_HOST_PROBE_ID, "demo.actor", 1u, {0}, 1u, k_r_fields, run_probe, NULL,
+    0u, NULL, NULL, /* no target set (issue 140) */
 };
 
 SuHostOpDesc g_test_vel_bump = {
     TEST_HOST_VEL_ID, "demo.actor", 1u, {0}, 1u, k_vel_fields, run_vel_bump, NULL,
+    0u, NULL, NULL, /* no target set (issue 140) */
 };
 SuHostOpDesc g_test_pos_writer = {
     TEST_HOST_POS_ID, "demo.actor", 1u, {0}, 1u, k_pos_fields, run_pos_writer, NULL,
+    0u, NULL, NULL, /* no target set (issue 140) */
 };
 
 void test_host_ops_init(void) {
