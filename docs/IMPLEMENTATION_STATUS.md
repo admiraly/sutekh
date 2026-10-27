@@ -1,5 +1,19 @@
 # Implementation status
 
+## 64-bit lanes in a cross-table target set — 27 October 2026 (issue 182)
+
+A registered host operator whose target set (descriptor version 4, `SuHostOperatorDesc.target_fields`) contains a
+64-bit lane can be registered again. The target-set check in `src/host/su_host_registered.c` validated that a q32 or
+i64 entry is followed by its `id + 1` partner of the same type but did not skip that partner, so the next iteration
+rejected the `.hi` entry as a lane of its own with `target field N is a 64-bit lane: the next entry must be id + 1
+with the same type`; every target set with 64-bit geometry was refused. The loop now checks the partner as a lane
+(read-only, known type, reserved 0, identifier name) and skips it, as `check_fields` already does for the operator's
+own fields. No other target-set rule, message or identity byte changed: worlds without a 64-bit target lane keep
+their identity and digests (the determinism matrix pins are unchanged). Evidence: `host_tables_entities`,
+`host_tables_entities_dll` (`tests/host/test_host_tables_entities.c`: a mixed q32 + i64 + u32 target set read by a
+cross-table run, and the refusals) and the full suite on GCC, Clang and Clang ASan+UBSan; the handoff is
+`planning/handoffs/2026-10-27-issue-182.md`.
+
 ## Multi-table worlds — 27 October 2026 (issue 140)
 
 The in-process host API (`include/sutekh/host.h`) can now run a world with up to `SU_HOST_MAX_TABLES` tables, each an

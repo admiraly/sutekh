@@ -697,6 +697,13 @@ const HostOperator *su_host_registered_at(uint32_t index) {
     return op;
 }
 
+/* One entry of a cross-table target set's own rules (host.h, "cross-table target sets"): a read-only lane of a
+ * known type with a nonzero id and an identifier name. A 64-bit lane's .hi half obeys them too. */
+static int target_lane_ok(const SuHostOperatorField *f) {
+    return ident_ok(f->name, SU_WORLD_NAME_MAX) && f->reserved == 0u && f->access == SU_ACCESS_READ &&
+           su_type_lanes(f->type) != 0u && f->id != 0u;
+}
+
 /* Field table rules of host.h (SuHostOperatorField). Returns SU_OK or SU_E_INVALID_ARGUMENT with err set. */
 static uint32_t check_fields(const SuHostOperatorDesc *d, SuHostError *err) {
     uint32_t i, k;
@@ -847,19 +854,27 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError
     }
     for (i = 0; i < desc->target_field_count; i++) {
         const SuHostOperatorField *f = &desc->target_fields[i];
-        if (!ident_ok(f->name, SU_WORLD_NAME_MAX) || f->reserved != 0u || f->access != SU_ACCESS_READ ||
-            su_type_lanes(f->type) == 0u || f->id == 0u ||
-            (i > 0u && f->id <= desc->target_fields[i - 1u].id)) {
+        if (!target_lane_ok(f) || (i > 0u && f->id <= desc->target_fields[i - 1u].id)) {
             return reg_err(err, SU_E_INVALID_ARGUMENT, i,
                            "target field %u must be a read-only lane: id >= 1, ascending, a known type, "
                            "access read, reserved 0 and a name of [A-Za-z0-9_.-]", (unsigned)i);
         }
-        if (su_type_lanes(f->type) == 2u &&
-            (i + 1u >= desc->target_field_count || desc->target_fields[i + 1u].id != f->id + 1u ||
-             desc->target_fields[i + 1u].type != f->type)) {
-            return reg_err(err, SU_E_INVALID_ARGUMENT, i,
-                           "target field %u is a 64-bit lane: the next entry must be id + 1 with the same type",
-                           (unsigned)i);
+        if (su_type_lanes(f->type) == 2u) {
+            /* A 64-bit value is two storage lanes, so this entry's next one is its .hi half, not a lane of its own:
+             * check the partner as a lane, then skip it, as check_fields does for the operator's own fields. */
+            const SuHostOperatorField *h =
+                i + 1u < desc->target_field_count ? &desc->target_fields[i + 1u] : NULL;
+            if (h == NULL || h->id != f->id + 1u || h->type != f->type) {
+                return reg_err(err, SU_E_INVALID_ARGUMENT, i,
+                               "target field %u is a 64-bit lane: the next entry must be id + 1 with the same type",
+                               (unsigned)i);
+            }
+            if (!target_lane_ok(h)) {
+                return reg_err(err, SU_E_INVALID_ARGUMENT, i + 1u,
+                               "target field %u must be a read-only lane: id >= 1, ascending, a known type, "
+                               "access read, reserved 0 and a name of [A-Za-z0-9_.-]", (unsigned)i + 1u);
+            }
+            i++;
         }
     }
     if (su_host_builtin_find(desc->system_id) != NULL) {
