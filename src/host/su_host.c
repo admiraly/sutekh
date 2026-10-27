@@ -40,6 +40,7 @@
 #define HOST_SNAP_MAGIC "SUHSNAP"   /* 7 bytes + 0x00 */
 #define HOST_SNAP_VERSION 1u
 #define HOST_SNAP_VERSION_OPSTATE 2u   /* a world with operator state (issue 139): + operator state section */
+#define HOST_SNAP_VERSION_TABLES 3u    /* a world with several tables (issue 140): per-table state sections */
 #define HOST_OPSTATE_MAGIC "SUOPSTAT"  /* 8 bytes + 0x00 */
 #define HOST_OPSTATE_MAGIC_BYTES 9u
 #define HOST_OPSTATE_VERSION 1u
@@ -65,6 +66,8 @@ static uint32_t set_err(SuHostError *err, uint32_t code, uint32_t index, uint64_
     }
     return code;
 }
+
+static int table_of_slot(const SuHostWorld *w, uint32_t slot, uint32_t *table, uint32_t *local);
 
 static void clear_err(SuHostError *err) {
     if (err != NULL) {
@@ -210,6 +213,7 @@ static uint32_t check_effects(const SuSchedule *s, const CapsuleFacts *facts, Su
         in[i].phase = facts[i].phase;
         in[i].declared_parallel = 1u;
         in[i].host_declared = s->sys[i].kind == SU_SYS_KIND_HOST ? 1u : 0u; /* its record's access is the effect */
+        in[i].table = s->sys[i].table; /* systems in different tables never share columns (issue 140) */
         in[i].after = facts[i].after;
         in[i].after_count = facts[i].after_count;
         in[i].before = facts[i].before;
@@ -260,28 +264,31 @@ static uint32_t read_u32_array(const SuJsonValue *arr, uint64_t expect, uint32_t
     return SU_OK;
 }
 
-/* Field descriptors of the schedule's union table. The names are borrowed from the schedule. */
-static SuWorldFieldDesc *schedule_fields(const SuSchedule *s) {
-    SuWorldFieldDesc *d = malloc((size_t)(s->field_count > 0u ? s->field_count : 1u) * sizeof *d);
+/* Field descriptors of one table's union table. The names are borrowed from the schedule. */
+static SuWorldFieldDesc *table_fields(const SuSchedule *s, uint32_t table) {
+    uint32_t n = 0;
+    const SuSchedField *f = su_sched_table_fields(s, table, &n);
+    SuWorldFieldDesc *d = malloc((size_t)(n > 0u ? n : 1u) * sizeof *d);
     uint32_t i;
     if (d == NULL) {
         return NULL;
     }
-    for (i = 0; i < s->field_count; i++) {
-        d[i].id = s->fields[i].id;
-        d[i].type = s->fields[i].type;
+    for (i = 0; i < n; i++) {
+        d[i].id = f[i].id;
+        d[i].type = f[i].type;
         /* A declared lane no system binds (access 0) is a read-only column of the world: no staging, written only
          * by the host between ticks. World access is not in the schema digest or the canonical state. */
-        d[i].access = s->fields[i].access != 0u ? s->fields[i].access : SU_ACCESS_READ;
-        d[i].name = s->fields[i].name;
+        d[i].access = f[i].access != 0u ? f[i].access : SU_ACCESS_READ;
+        d[i].name = f[i].name;
     }
     return d;
 }
 
-/* Opens the world: from the fixture (world fixture format, as world.create) or empty with capacity. */
-static uint32_t open_world(SuHostWorld *hw, const SuHostWorldDesc *desc, SuHostError *err) {
+/* Opens one table's world: from its fixture (world fixture format, as world.create) or empty with capacity. */
+static uint32_t open_table(SuHostWorld *hw, uint32_t table, const uint8_t *fixture, size_t fixture_len,
+                           uint64_t max_entities, SuHostError *err) {
     const SuSchedule *s = &hw->sched;
-    SuWorldFieldDesc *fd = schedule_fields(s);
+    SuWorldFieldDesc *fd = table_fields(s, table);
     SuWorldDesc wd;
     SuJsonDoc doc;
     SuJsonLimits lim;
@@ -290,6 +297,8 @@ static uint32_t open_world(SuHostWorld *hw, const SuHostWorldDesc *desc, SuHostE
     const SuJsonValue *ids_arr;
     const SuJsonValue *cols;
     const SuJsonValue *sid;
+    const SuSchedField *fields = NULL;
+    uint32_t field_count = 0;
     uint32_t *ids = NULL;
     uint32_t *vals = NULL;
     uint64_t tick = 1;
@@ -297,94 +306,110 @@ static uint32_t open_world(SuHostWorld *hw, const SuHostWorldDesc *desc, SuHostE
     uint32_t i;
     uint32_t st;
 
+    fields = su_sched_table_fields(s, table, &field_count);
     memset(&doc, 0, sizeof doc);
     if (fd == NULL) {
         return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "allocation failed");
     }
     memset(&wd, 0, sizeof wd);
-    wd.schema_id = s->schema_id;
-    wd.schema_version = s->schema_version;
-    wd.layout_generation = s->layout_generation;
+    wd.schema_id = s->tables[table].schema_id;
+    wd.schema_version = s->tables[table].schema_version;
+    wd.layout_generation = s->tables[table].layout_generation;
     wd.fields = fd;
-    wd.field_count = s->field_count;
-    if (desc->fixture_json == NULL) {
-        if (desc->max_entities == 0u) {
+    wd.field_count = field_count;
+    if (fixture == NULL) {
+        if (max_entities == 0u) {
             free(fd);
             return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
-                           "an empty world needs max_entities >= 1");
+                           "table %u: an empty table needs max_entities >= 1", (unsigned)table);
         }
-        st = su_world_create_ex(&wd, desc->max_entities, &hw->w);
+        st = su_world_create_ex(&wd, max_entities, &hw->tabs[table].w);
         free(fd);
-        return st == SU_OK ? SU_OK : set_err(err, st, UINT32_MAX, UINT64_MAX, "world creation failed");
+        if (table == 0u) {
+            hw->w = hw->tabs[0].w;
+        }
+        return st == SU_OK ? SU_OK : set_err(err, st, UINT32_MAX, UINT64_MAX, "table %u: world creation failed",
+                                             (unsigned)table);
     }
-    if (desc->fixture_len > HOST_FIXTURE_MAX) {
+    if (fixture_len > HOST_FIXTURE_MAX) {
         free(fd);
-        return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "fixture exceeds 256 MiB");
+        return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "table %u: fixture exceeds 256 MiB",
+                       (unsigned)table);
     }
-    lim.max_bytes = desc->fixture_len;
+    lim.max_bytes = fixture_len;
     lim.max_depth = HOST_JSON_DEPTH;
-    st = su_json_parse(desc->fixture_json, desc->fixture_len, &lim, &doc, &jerr);
+    st = su_json_parse(fixture, fixture_len, &lim, &doc, &jerr);
     if (st != SU_OK) {
-        set_err(err, st, UINT32_MAX, UINT64_MAX, "fixture: %s", jerr.message);
+        set_err(err, st, UINT32_MAX, UINT64_MAX, "table %u fixture: %s", (unsigned)table, jerr.message);
         goto out;
     }
     root = doc.root;
     sid = member(root, "schema_id");
     if (root == NULL || root->type != SU_JSON_OBJECT || !su_json_get_uint(member(root, "tick"), &tick) ||
         tick != 0u) {
-        st = set_err(err, SU_E_TYPE, UINT32_MAX, UINT64_MAX, "fixture must be an object with tick 0");
+        st = set_err(err, SU_E_TYPE, UINT32_MAX, UINT64_MAX, "table %u: fixture must be an object with tick 0",
+                     (unsigned)table);
         goto out;
     }
-    if (sid == NULL || sid->type != SU_JSON_STRING || strcmp(sid->u.string.data, s->schema_id) != 0) {
+    if (sid == NULL || sid->type != SU_JSON_STRING || strcmp(sid->u.string.data, s->tables[table].schema_id) != 0) {
         st = set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
-                     "fixture schema_id does not match the capsules' schema");
+                     "table %u: fixture schema_id does not match the table's schema", (unsigned)table);
         goto out;
     }
     ids_arr = member(root, "entity_ids");
     if (ids_arr == NULL || ids_arr->type != SU_JSON_ARRAY) {
-        st = set_err(err, SU_E_TYPE, UINT32_MAX, UINT64_MAX, "fixture entity_ids must be an array");
+        st = set_err(err, SU_E_TYPE, UINT32_MAX, UINT64_MAX, "table %u: fixture entity_ids must be an array",
+                     (unsigned)table);
         goto out;
     }
     rows = ids_arr->u.array.count;
     if (rows > SU_LIMIT_ROWS) {
-        st = set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "fixture row count exceeds the row limit");
+        st = set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX,
+                     "table %u: fixture row count exceeds the row limit", (unsigned)table);
         goto out;
     }
     st = read_u32_array(ids_arr, rows, &ids);
     if (st != SU_OK) {
-        set_err(err, st, UINT32_MAX, UINT64_MAX, "fixture entity_ids must be u32 integers");
+        set_err(err, st, UINT32_MAX, UINT64_MAX, "table %u: fixture entity_ids must be u32 integers", (unsigned)table);
         goto out;
     }
     cols = member(root, "columns");
     if (cols == NULL || cols->type != SU_JSON_OBJECT) {
-        st = set_err(err, SU_E_TYPE, UINT32_MAX, UINT64_MAX, "fixture columns must be an object");
+        st = set_err(err, SU_E_TYPE, UINT32_MAX, UINT64_MAX, "table %u: fixture columns must be an object",
+                     (unsigned)table);
         goto out;
     }
     wd.row_count = rows;
     wd.entity_ids = ids;
-    st = su_world_create_ex(&wd, desc->max_entities, &hw->w);
+    st = su_world_create_ex(&wd, max_entities, &hw->tabs[table].w);
     if (st != SU_OK) {
-        set_err(err, st, UINT32_MAX, UINT64_MAX, "world creation failed");
+        set_err(err, st, UINT32_MAX, UINT64_MAX, "table %u: world creation failed", (unsigned)table);
         goto out;
     }
-    for (i = 0; i < s->field_count; i++) {
-        st = read_u32_array(member(cols, s->fields[i].name), rows, &vals);
+    if (table == 0u) {
+        hw->w = hw->tabs[0].w;
+    }
+    for (i = 0; i < field_count; i++) {
+        st = read_u32_array(member(cols, fields[i].name), rows, &vals);
         if (st == SU_OK) {
-            st = su_world_init_committed(hw->w, s->fields[i].id, vals, rows);
+            st = su_world_init_committed(hw->tabs[table].w, fields[i].id, vals, rows);
         }
         free(vals);
         vals = NULL;
         if (st != SU_OK) {
-            set_err(err, st, s->fields[i].id, UINT64_MAX, "fixture column %s is missing, mis-sized or not u32",
-                    s->fields[i].name);
+            set_err(err, st, fields[i].id, UINT64_MAX, "table %u: fixture column %s is missing, mis-sized or not u32",
+                    (unsigned)table, fields[i].name);
             goto out;
         }
     }
     st = SU_OK;
 out:
     if (st != SU_OK) {
-        su_world_destroy(hw->w);
-        hw->w = NULL;
+        su_world_destroy(hw->tabs[table].w);
+        hw->tabs[table].w = NULL;
+        if (table == 0u) {
+            hw->w = NULL;
+        }
     }
     free(ids);
     free(fd);
@@ -451,6 +476,48 @@ static void compute_identity(SuHostWorld *hw) {
         }
         su_sha256_final(&c, hw->identity);
     }
+    if (hw->table_count > 1u) {
+        /* Multi-table world (issue 140): fold the table descriptors in, so a snapshot or replay loads only into a
+         * world with the same tables, capacities, schemas and order. Single-table worlds never take this path. */
+        const SuSchedule *s = &hw->sched;
+        uint8_t prev[32];
+        uint32_t t;
+        memcpy(prev, hw->identity, 32u);
+        su_sha256_init(&c);
+        su_sha256_update(&c, (const uint8_t *)"SUHTABLES", 10u); /* includes the terminating 0x00 */
+        su_sha256_update(&c, prev, 32u);
+        put_u32(b, hw->table_count);
+        su_sha256_update(&c, b, 4u);
+        for (t = 0; t < hw->table_count; t++) {
+            const SuSchedTable *tab = &s->tables[t];
+            uint8_t sd[32];
+            memset(sd, 0, sizeof sd);
+            (void)su_world_schema_digest(hw->tabs[t].w, sd);
+            su_sha256_update(&c, sd, 32u);
+            put_u32(b, (uint32_t)strlen(tab->schema_id));
+            su_sha256_update(&c, b, 4u);
+            su_sha256_update(&c, (const uint8_t *)tab->schema_id, strlen(tab->schema_id));
+            put_u32(b, tab->schema_version);
+            su_sha256_update(&c, b, 4u);
+            put_u32(b, tab->layout_generation);
+            su_sha256_update(&c, b, 4u);
+            put_u64(b, hw->tabs[t].rows);
+            su_sha256_update(&c, b, 8u);
+            put_u32(b, tab->field_count);
+            su_sha256_update(&c, b, 4u);
+            for (i = 0; i < tab->field_count; i++) {
+                const SuSchedField *f = &tab->fields[i];
+                put_u32(b, f->id);
+                su_sha256_update(&c, b, 4u);
+                put_u32(b, f->value_type);
+                su_sha256_update(&c, b, 4u);
+                put_u32(b, (uint32_t)strlen(f->name));
+                su_sha256_update(&c, b, 4u);
+                su_sha256_update(&c, (const uint8_t *)f->name, strlen(f->name));
+            }
+        }
+        su_sha256_final(&c, hw->identity);
+    }
 }
 
 /* Declared world schema (issue 144): expands SuHostSchema fields into storage lanes (i64/q32: "x.lo" at J, "x.hi" at
@@ -489,7 +556,7 @@ static int lane_like(const char *s) {
     return n > 3u && (strcmp(s + n - 3u, ".lo") == 0 || strcmp(s + n - 3u, ".hi") == 0);
 }
 
-static uint32_t declare_schema(SuHostWorld *hw, const SuHostSchema *caller, SuHostError *err) {
+static uint32_t declare_schema(SuHostWorld *hw, uint32_t table, const SuHostSchema *caller, SuHostError *err) {
     SuHostSchema local;
     const SuHostSchema *sc = &local;
     SuSchedField *lanes;
@@ -598,7 +665,7 @@ static uint32_t declare_schema(SuHostWorld *hw, const SuHostSchema *caller, SuHo
             }
         }
     }
-    st = su_sched_declare_schema(&hw->sched, sc->schema_id, sc->schema_version, sc->layout_generation, lanes, n);
+    st = su_sched_declare_table(&hw->sched, table, sc->schema_id, sc->schema_version, sc->layout_generation, lanes, n);
     free(lanes);
     if (st != SU_OK) {
         return set_err(err, st, UINT32_MAX, UINT64_MAX, "schema could not be declared");
@@ -607,25 +674,34 @@ static uint32_t declare_schema(SuHostWorld *hw, const SuHostSchema *caller, SuHo
 }
 
 /* A capsule's schema facts against the declared schema: a specific message instead of the generic join failure. */
-static uint32_t check_declared_facts(const SuHostWorld *hw, const char *query, uint32_t sv, uint32_t gen, uint32_t i,
-                                     SuHostError *err) {
+static uint32_t check_declared_facts(const SuHostWorld *hw, uint32_t table, const char *query, uint32_t sv,
+                                     uint32_t gen, uint32_t i, SuHostError *err) {
     const SuSchedule *s = &hw->sched;
-    if (!s->declared || (strcmp(query, s->schema_id) == 0 && sv == s->schema_version && gen == s->layout_generation)) {
+    const SuSchedTable *t = &s->tables[table];
+    if (!t->declared || (strcmp(query, t->schema_id) == 0 && sv == t->schema_version &&
+                         gen == t->layout_generation)) {
         return SU_OK;
     }
+    if (table == 0u) {
+        return set_err(err, SU_E_SCHEMA_MISMATCH, i, UINT64_MAX,
+                       "capsule %u: schema %s version %u generation %u is not the declared world schema %s version %u "
+                       "generation %u",
+                       (unsigned)i, query, (unsigned)sv, (unsigned)gen, t->schema_id, (unsigned)t->schema_version,
+                       (unsigned)t->layout_generation);
+    }
     return set_err(err, SU_E_SCHEMA_MISMATCH, i, UINT64_MAX,
-                   "capsule %u: schema %s version %u generation %u is not the declared world schema %s version %u "
-                   "generation %u",
-                   (unsigned)i, query, (unsigned)sv, (unsigned)gen, s->schema_id, (unsigned)s->schema_version,
-                   (unsigned)s->layout_generation);
+                   "capsule %u: schema %s version %u generation %u is not the declared schema %s version %u "
+                   "generation %u of table %u",
+                   (unsigned)i, query, (unsigned)sv, (unsigned)gen, t->schema_id, (unsigned)t->schema_version,
+                   (unsigned)t->layout_generation, (unsigned)table);
 }
 
 /* Capsule index i is a host operator record (lir_json NULL): find the operator its system_id names (built in, or
  * registered with su_host_register_operator), check the record against it (su_host_load_bound_bytes_named: exact
  * or schema-relative binding; a registered operator's record names its operator_name) and append the host
  * entry. */
-static uint32_t add_host_record(SuHostWorld *hw, const SuHostCapsule *c, const CapsuleFacts *f, uint32_t i,
-                                SuHostError *err) {
+static uint32_t add_host_record(SuHostWorld *hw, uint32_t table, const SuHostCapsule *c, const CapsuleFacts *f,
+                                uint32_t i, SuHostError *err) {
     const SuJsonValue *sid = member(f->doc.root, "system_id");
     const HostOperator *op = sid != NULL && sid->type == SU_JSON_STRING ? su_host_operator_find(sid->u.string.data)
                                                                          : NULL;
@@ -649,12 +725,12 @@ static uint32_t add_host_record(SuHostWorld *hw, const SuHostCapsule *c, const C
     if (st != SU_OK) {
         return set_err(err, st, i, UINT64_MAX, "capsule %u: host record refused: %s", (unsigned)i, msg);
     }
-    st = check_declared_facts(hw, decl->query, sv, gen, i, err);
+    st = check_declared_facts(hw, table, decl->query, sv, gen, i, err);
     if (st != SU_OK) {
         su_host_decl_free(decl);
         return st;
     }
-    st = su_sched_add_host_bound(&hw->sched, op->desc, decl, bound ? bind : NULL, sv, gen, 0u, 1u, 0u);
+    st = su_sched_add_host_bound_table(&hw->sched, table, op->desc, decl, bound ? bind : NULL, sv, gen, 0u, 1u, 0u);
     if (st != SU_OK) {
         su_host_decl_free(decl);
         return set_err(err, st, i, UINT64_MAX,
@@ -668,9 +744,10 @@ _Static_assert(SU_HOST_MAX_CAPSULES <= 64u, "opdata_mask has one bit per schedul
 _Static_assert(SU_HOST_SCHEMA_MAX_LANES == SU_LIMIT_FIELDS, "declared schemas use the field limit");
 _Static_assert(SU_HOST_WORLD_DESC_V1_SIZE == offsetof(SuHostWorldDesc, schema), "v1 descriptor ends at seed");
 _Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V1_SIZE == 80u, "first-release SuHostWorldDesc is 80 bytes");
-_Static_assert(SU_HOST_WORLD_DESC_V2_SIZE == offsetof(SuHostWorldDesc, state_budget_bytes), "v2 ends at schema");
 _Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V2_SIZE == 88u, "v2 SuHostWorldDesc (schema) is 88 bytes");
-_Static_assert(sizeof(void *) != 8u || sizeof(SuHostWorldDesc) == 96u, "SuHostWorldDesc with the budget is 96 bytes");
+_Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V3_SIZE == 96u, "v3 SuHostWorldDesc is 96 bytes");
+_Static_assert(sizeof(void *) != 8u || sizeof(SuHostWorldDesc) == 120u, "v4 SuHostWorldDesc (tables) is 120 bytes");
+_Static_assert(sizeof(void *) != 8u || sizeof(SuHostTableDesc) == 40u, "SuHostTableDesc is 40 bytes");
 _Static_assert(SU_HOST_SCHEMA_V1_SIZE == (sizeof(void *) == 8u ? 32u : 24u), "first-release SuHostSchema size");
 _Static_assert(sizeof(SuHostSchema) == SU_HOST_SCHEMA_V1_SIZE, "SuHostSchema has no padding after the v1 fields");
 
@@ -727,7 +804,7 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
      * ending inside a field is refused. */
     if (desc_in == NULL || desc_in->struct_size < SU_HOST_WORLD_DESC_V1_SIZE ||
         (desc_in->struct_size != SU_HOST_WORLD_DESC_V1_SIZE && desc_in->struct_size != SU_HOST_WORLD_DESC_V2_SIZE &&
-         desc_in->struct_size < sizeof *desc_in)) {
+         desc_in->struct_size != SU_HOST_WORLD_DESC_V3_SIZE && desc_in->struct_size < sizeof *desc_in)) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
                        "descriptor: struct_size, capsules (1..%u), reserved0 or fixture is invalid",
                        (unsigned)SU_HOST_MAX_CAPSULES);
@@ -753,6 +830,38 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
                        "descriptor: struct_size, capsules (1..%u), reserved0 or fixture is invalid",
                        (unsigned)SU_HOST_MAX_CAPSULES);
     }
+    if (desc->table_count > SU_HOST_MAX_TABLES) {
+        return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX,
+                       "%u tables: a world has at most %u (issue 140)", (unsigned)desc->table_count,
+                       (unsigned)SU_HOST_MAX_TABLES);
+    }
+    if (desc->table_count > 1u) {
+        uint32_t t;
+        if (desc->table_reserved != 0u || desc->tables == NULL || desc->capsule_table == NULL ||
+            desc->schema != NULL || desc->fixture_json != NULL || desc->fixture_len != 0u) {
+            return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                           "descriptor: a world with tables needs tables and capsule_table, and no schema, fixture "
+                           "or reserved0 byte");
+        }
+        for (t = 0; t < desc->table_count; t++) {
+            const SuHostTableDesc *td = &desc->tables[t];
+            if (td->struct_size < SU_HOST_TABLE_DESC_V1_SIZE || td->reserved != 0u || td->schema == NULL ||
+                (td->fixture_json == NULL && td->fixture_len != 0u)) {
+                return set_err(err, SU_E_INVALID_ARGUMENT, t, UINT64_MAX,
+                               "table %u: struct_size, reserved, schema or fixture is invalid", (unsigned)t);
+            }
+        }
+        for (i = 0; i < desc->capsule_count; i++) {
+            if (desc->capsule_table[i] >= desc->table_count) {
+                return set_err(err, SU_E_INVALID_ARGUMENT, i, UINT64_MAX,
+                               "capsule %u: table %u does not exist (%u tables)", (unsigned)i,
+                               (unsigned)desc->capsule_table[i], (unsigned)desc->table_count);
+            }
+        }
+    } else if (desc->tables != NULL || desc->capsule_table != NULL || desc->table_reserved != 0u) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
+                       "descriptor: a single-table world takes no tables, capsule_table or table_reserved byte");
+    }
     if (desc->tick_rate_hz == 0u || desc->tick_rate_hz > SU_HOST_TICK_RATE_MAX) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "tick_rate_hz must be 1..%u",
                        (unsigned)SU_HOST_TICK_RATE_MAX);
@@ -769,10 +878,22 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
         su_host_world_destroy(hw);
         return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "allocation failed");
     }
-    if (desc->schema != NULL) {
-        st = declare_schema(hw, desc->schema, err);
-        if (st != SU_OK) {
-            goto fail;
+    if (desc->table_count > 1u) {
+        uint32_t t;
+        hw->table_count = desc->table_count;
+        for (t = 0; t < desc->table_count; t++) {
+            st = declare_schema(hw, t, desc->tables[t].schema, err);
+            if (st != SU_OK) {
+                goto fail;
+            }
+        }
+    } else {
+        hw->table_count = 1u;
+        if (desc->schema != NULL) {
+            st = declare_schema(hw, 0u, desc->schema, err);
+            if (st != SU_OK) {
+                goto fail;
+            }
         }
     }
     hw->hz = desc->tick_rate_hz;
@@ -783,6 +904,7 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
 
     for (i = 0; i < desc->capsule_count; i++) {
         const SuHostCapsule *c = &desc->capsules[i];
+        uint32_t table = desc->capsule_table != NULL ? desc->capsule_table[i] : 0u;
         SuLirModule *m;
         SuDiag diag;
         if (c->capsule_json != NULL && c->lir_json == NULL && c->lir_len == 0u &&
@@ -793,7 +915,7 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
                 set_err(err, st, i, UINT64_MAX, "capsule %u: %s", (unsigned)i, fwhy);
                 goto fail;
             }
-            st = add_host_record(hw, c, &facts[i], i, err);
+            st = add_host_record(hw, table, c, &facts[i], i, err);
             if (st != SU_OK) {
                 goto fail;
             }
@@ -824,13 +946,14 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
                     diag.json_pointer, diag.message);
             goto fail;
         }
-        st = check_declared_facts(hw, m->query, facts[i].schema_version, facts[i].layout_generation, i, err);
+        st = check_declared_facts(hw, table, m->query, facts[i].schema_version, facts[i].layout_generation, i, err);
         if (st != SU_OK) {
             su_lir_module_free(m);
             free(m);
             goto fail;
         }
-        st = su_sched_add(&hw->sched, m, facts[i].schema_version, facts[i].layout_generation, 0u, 1u, 0u);
+        st = su_sched_add_table(&hw->sched, table, m, facts[i].schema_version, facts[i].layout_generation, 0u, 1u,
+                                0u);
         if (st != SU_OK) {
             su_lir_module_free(m);
             free(m);
@@ -848,7 +971,7 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
         char why[512];
         uint32_t sys = UINT32_MAX;
         su_sched_explain_mismatch_ex(&hw->sched, why, sizeof why, &sys);
-        if (hw->sched.declared) {
+        if (hw->sched.declared || hw->table_count > 1u) {
             set_err(err, st, sys, UINT64_MAX, "a system does not bind the declared world schema%s%s",
                     why[0] != '\0' ? ": " : "", why);
         } else {
@@ -861,21 +984,55 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
     if (st != SU_OK) {
         goto fail;
     }
+    if (hw->table_count > 1u) {
+        for (i = 0; i < hw->sched.count; i++) {
+            if (hw->sched.sys[i].mod->uses_entity_ops) {
+                set_err(err, SU_E_CAPABILITY_DENIED, i, UINT64_MAX,
+                        "capsule %u (%s): IR entity operations are not supported in a world with tables "
+                        "(docs/MULTI_TABLE_WORLDS.md section 8)",
+                        (unsigned)i, hw->sched.sys[i].system_id);
+                st = SU_E_CAPABILITY_DENIED;
+                goto fail;
+            }
+        }
+    }
     st = su_sched_enable_entities(&hw->sched, hw->max_struct, hw->max_events, hw->log_max);
     if (st != SU_OK) {
         set_err(err, st, UINT32_MAX, UINT64_MAX, "entity runtime caps are out of range");
         goto fail;
     }
-    st = open_world(hw, desc, err);
-    if (st != SU_OK) {
-        goto fail;
+    {
+        uint64_t max_rows = 0;
+        uint64_t base = 0;
+        uint32_t t;
+        for (t = 0; t < hw->table_count; t++) {
+            const uint8_t *fx = desc->table_count > 1u ? desc->tables[t].fixture_json : desc->fixture_json;
+            size_t fx_len = desc->table_count > 1u ? desc->tables[t].fixture_len : desc->fixture_len;
+            uint64_t cap = desc->table_count > 1u ? desc->tables[t].max_entities : desc->max_entities;
+            st = open_table(hw, t, fx, fx_len, cap, err);
+            if (st != SU_OK) {
+                goto fail;
+            }
+            hw->tabs[t].rows = su_world_row_count(hw->tabs[t].w);
+            hw->tabs[t].base = base;
+            if (hw->tabs[t].rows > SU_LIMIT_ROWS - base) {
+                st = set_err(err, SU_E_RESOURCE_LIMIT, t, UINT64_MAX,
+                             "the tables' capacities exceed the row limit of %llu", (unsigned long long)SU_LIMIT_ROWS);
+                goto fail;
+            }
+            base += hw->tabs[t].rows;
+            if (hw->tabs[t].rows > max_rows) {
+                max_rows = hw->tabs[t].rows;
+            }
+        }
+        st = su_ent_budget(&hw->sched, max_rows, hw->max_struct, hw->max_events);
+        if (st != SU_OK) {
+            set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX,
+                    "entity tick buffers exceed the resource budget; lower the capacity or the systems");
+            goto fail;
+        }
     }
-    st = su_ent_budget(&hw->sched, su_world_row_count(hw->w), hw->max_struct, hw->max_events);
-    if (st != SU_OK) {
-        set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX,
-                "entity tick buffers exceed the resource budget; lower the capacity or the systems");
-        goto fail;
-    }
+    hw->w = hw->tabs[0].w;
     /* Host operators get their own scratch, sized for this world's capacity (never allocated in a tick). */
     for (i = 0; i < hw->sched.count; i++) {
         const HostOperator *op;
@@ -884,7 +1041,7 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
             continue;
         }
         op = su_host_operator_find(hw->sched.sys[i].system_id);
-        st = op != NULL ? op->create(op, su_world_row_count(hw->w), &inst) : SU_E_INTERNAL;
+        st = op != NULL ? op->create(op, hw->tabs[hw->sched.sys[i].table].rows, &inst) : SU_E_INTERNAL;
         if (st == SU_OK) {
             st = su_sched_set_host_instance(&hw->sched, i, inst, op->destroy);
             if (st != SU_OK) {
@@ -893,6 +1050,9 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
         }
         if (st == SU_OK) {
             hw->ops[i] = op;
+            if (op->set_base != NULL) {
+                op->set_base(hw->sched.sys[i].host_inst, hw->tabs[hw->sched.sys[i].table].base);
+            }
         }
         if (st == SU_OK) {
             /* A host operator that appends events (issue 172) runs through the entity tick, so its records join the
@@ -914,9 +1074,21 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
         }
         if (st != SU_OK) {
             set_err(err, st, i, UINT64_MAX, "host operator %s: no scratch for %llu rows%s", hw->sched.sys[i].system_id,
-                    (unsigned long long)su_world_row_count(hw->w),
+                    (unsigned long long)hw->tabs[hw->sched.sys[i].table].rows,
                     st == SU_E_RESOURCE_LIMIT ? " (capacity above the operator's row limit, or out of memory)" : "");
             goto fail;
+        }
+    }
+    if (hw->table_count > 1u) {
+        /* A host operator that appends events runs through the entity tick, which owns one table in this version. */
+        for (i = 0; i < hw->sched.count; i++) {
+            if (hw->sched.sys[i].host_event_cap != 0u) {
+                st = set_err(err, SU_E_CAPABILITY_DENIED, i, UINT64_MAX,
+                             "capsule %u (%s): operator events are not supported in a world with tables "
+                             "(docs/MULTI_TABLE_WORLDS.md section 8)",
+                             (unsigned)i, hw->sched.sys[i].system_id);
+                goto fail;
+            }
         }
     }
     /* Operator state (issue 139): owned by the instances; the world keeps the pointers for snapshots and steps. */
@@ -959,10 +1131,12 @@ void su_host_world_destroy(SuHostWorld *w) {
     free(w->recs);
     free(w->in_cells);
     free(w->in_vals);
-    free(w->in_col);
-    su_ents_destroy(w->rb_ents);
+    for (i = 0; i < SU_HOST_MAX_TABLES; i++) {
+        free(w->in_col[i]);
+        su_ents_destroy(w->rb_ents[i]);
+        su_world_destroy(w->tabs[i].w);
+    }
     su_evlog_destroy(w->rb_log);
-    su_world_destroy(w->w);
     su_sched_free(&w->sched);
     free(w);
 }
@@ -1006,43 +1180,70 @@ uint32_t su_host_set_tick_rate(SuHostWorld *w, uint32_t hz) {
 }
 
 uint32_t su_host_field_count(const SuHostWorld *w) {
-    return w != NULL ? w->sched.field_count : 0u;
+    return w != NULL ? w->sched.tables[0].field_count : 0u;
+}
+
+uint32_t su_host_field_count_in(const SuHostWorld *w, uint32_t table, uint32_t *count) {
+    if (w == NULL || table >= w->table_count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (count != NULL) {
+        *count = w->sched.tables[table].field_count;
+    }
+    return SU_OK;
 }
 
 uint32_t su_host_field_info(const SuHostWorld *w, uint32_t index, SuHostFieldInfo *out) {
-    if (w == NULL || out == NULL || index >= w->sched.field_count) {
+    return su_host_field_info_in(w, 0u, index, out);
+}
+
+uint32_t su_host_field_info_in(const SuHostWorld *w, uint32_t table, uint32_t index, SuHostFieldInfo *out) {
+    const SuSchedField *f;
+    if (w == NULL || out == NULL || table >= w->table_count || index >= w->sched.tables[table].field_count) {
         return SU_E_INVALID_ARGUMENT;
     }
-    out->id = w->sched.fields[index].id;
-    out->type = w->sched.fields[index].type;
-    out->access = w->sched.fields[index].access;
-    out->name = w->sched.fields[index].name;
+    f = &w->sched.tables[table].fields[index];
+    out->id = f->id;
+    out->type = f->type;
+    out->access = f->access;
+    out->name = f->name;
     return SU_OK;
 }
 
 uint32_t su_host_field_id(const SuHostWorld *w, const char *name, uint32_t *id) {
+    return su_host_field_id_in(w, 0u, name, id);
+}
+
+uint32_t su_host_field_id_in(const SuHostWorld *w, uint32_t table, const char *name, uint32_t *id) {
+    const SuSchedField *f;
     uint32_t i;
-    if (w == NULL || name == NULL || id == NULL) {
+    if (w == NULL || name == NULL || id == NULL || table >= w->table_count) {
         return SU_E_INVALID_ARGUMENT;
     }
-    for (i = 0; i < w->sched.field_count; i++) {
-        if (strcmp(w->sched.fields[i].name, name) == 0) {
-            *id = w->sched.fields[i].id;
+    f = w->sched.tables[table].fields;
+    for (i = 0; i < w->sched.tables[table].field_count; i++) {
+        if (strcmp(f[i].name, name) == 0) {
+            *id = f[i].id;
             return SU_OK;
         }
     }
     return SU_E_SCHEMA_MISMATCH;
 }
 
-static long field_index(const SuHostWorld *w, uint32_t id) {
+/* Index of field id in one table's field table (ascending ids), or -1. */
+static long field_index_in(const SuHostWorld *w, uint32_t table, uint32_t id) {
     uint32_t lo = 0;
-    uint32_t hi = w->sched.field_count;
+    uint32_t hi;
+    if (w == NULL || table >= w->table_count) {
+        return -1;
+    }
+    hi = w->sched.tables[table].field_count;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2u;
-        if (w->sched.fields[mid].id == id) {
+        if (w->sched.tables[table].fields[mid].id == id) {
             return (long)mid;
         }
-        if (w->sched.fields[mid].id < id) {
+        if (w->sched.tables[table].fields[mid].id < id) {
             lo = mid + 1u;
         } else {
             hi = mid;
@@ -1190,26 +1391,31 @@ static uint32_t log_record(SuHostWorld *w, uint32_t kind, uint32_t slot, uint32_
     return su_evlog_append(log, &ev, 1u);
 }
 
-uint32_t su_host_spawn(SuHostWorld *w, const SuHostValue *values, uint32_t count, uint32_t external_id,
-                       uint64_t *entity, SuHostError *err) {
+uint32_t su_host_spawn_in(SuHostWorld *w, uint32_t table, const SuHostValue *values, uint32_t count,
+                          uint32_t external_id, uint64_t *entity, SuHostError *err) {
     SuWorldSpawnValue sv[SU_LIMIT_FIELDS];
     SuEntity h = SU_ENTITY_INVALID;
+    uint64_t world_slot;
     uint32_t i;
     uint32_t st;
 
     clear_err(err);
-    if (w == NULL || entity == NULL || (values == NULL && count > 0u) || count > SU_LIMIT_FIELDS) {
+    if (w == NULL || entity == NULL || (values == NULL && count > 0u) || count > SU_LIMIT_FIELDS ||
+        table >= w->table_count) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "invalid arguments");
     }
     for (i = 0; i < count; i++) {
         sv[i].field_id = values[i].field_id;
         sv[i].value = values[i].value;
     }
-    st = su_world_spawn(w->w, sv, count, external_id, &h);
+    st = su_world_spawn(w->tabs[table].w, sv, count, external_id, &h);
     if (st != SU_OK) {
         return set_err(err, st, UINT32_MAX, UINT64_MAX, "spawn refused; world unchanged");
     }
-    st = log_record(w, SU_EVENT_SPAWNED, SU_ENTITY_SLOT(h), SU_ENTITY_SLOT(h), SU_ENTITY_GEN(h));
+    /* The world handle carries the table through the slot range (host.h, "tables"). */
+    world_slot = w->tabs[table].base + (uint64_t)SU_ENTITY_SLOT(h);
+    h = SU_ENTITY_MAKE((uint32_t)world_slot, SU_ENTITY_GEN(h));
+    st = log_record(w, SU_EVENT_SPAWNED, (uint32_t)world_slot, (uint32_t)world_slot, SU_ENTITY_GEN(h));
     if (st != SU_OK) {
         return set_err(err, SU_E_INTERNAL, UINT32_MAX, UINT64_MAX, "spawn record could not be appended");
     }
@@ -1217,13 +1423,26 @@ uint32_t su_host_spawn(SuHostWorld *w, const SuHostValue *values, uint32_t count
     return SU_OK;
 }
 
-uint32_t su_host_despawn(SuHostWorld *w, uint64_t entity, SuHostError *err) {
+uint32_t su_host_spawn(SuHostWorld *w, const SuHostValue *values, uint32_t count, uint32_t external_id,
+                       uint64_t *entity, SuHostError *err) {
+    return su_host_spawn_in(w, 0u, values, count, external_id, entity, err);
+}
+
+uint32_t su_host_despawn_in(SuHostWorld *w, uint32_t table, uint64_t entity, SuHostError *err) {
     uint32_t st;
+    uint32_t handle_table = 0u;
+    uint32_t local = 0u;
+    SuEntity local_handle;
+    uint64_t world_slot;
     clear_err(err);
-    if (w == NULL) {
-        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "world is NULL");
+    if (w == NULL || table >= w->table_count) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "world or table is invalid");
     }
-    st = su_world_despawn(w->w, (SuEntity)entity);
+    if (!table_of_slot(w, SU_ENTITY_SLOT(entity), &handle_table, &local) || handle_table != table) {
+        return set_err(err, SU_E_STALE_HANDLE, UINT32_MAX, UINT64_MAX, "entity handle is stale");
+    }
+    local_handle = SU_ENTITY_MAKE(local, SU_ENTITY_GEN(entity));
+    st = su_world_despawn(w->tabs[table].w, local_handle);
     if (st != SU_OK) {
         return set_err(err, st == SU_E_INVALID_ARGUMENT ? st : SU_E_STALE_HANDLE, UINT32_MAX, UINT64_MAX,
                        "entity handle is stale");
@@ -1236,30 +1455,99 @@ uint32_t su_host_despawn(SuHostWorld *w, uint64_t entity, SuHostError *err) {
             }
         }
     }
-    st = log_record(w, SU_EVENT_DESPAWNED, SU_ENTITY_SLOT(entity), SU_ENTITY_SLOT(entity), SU_ENTITY_GEN(entity));
+    world_slot = SU_ENTITY_SLOT(entity);
+    st = log_record(w, SU_EVENT_DESPAWNED, (uint32_t)world_slot, (uint32_t)world_slot, SU_ENTITY_GEN(entity));
     return st == SU_OK ? SU_OK
                        : set_err(err, SU_E_INTERNAL, UINT32_MAX, UINT64_MAX, "despawn record could not be appended");
 }
 
-uint32_t su_host_entity_at(const SuHostWorld *w, uint32_t slot, uint64_t *entity) {
+uint32_t su_host_despawn(SuHostWorld *w, uint64_t entity, SuHostError *err) {
+    uint32_t table = 0u;
+    clear_err(err);
+    if (w == NULL) {
+        return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "world is NULL");
+    }
+    if (!table_of_slot(w, SU_ENTITY_SLOT(entity), &table, NULL)) {
+        return set_err(err, SU_E_STALE_HANDLE, UINT32_MAX, UINT64_MAX, "entity handle is stale");
+    }
+    return su_host_despawn_in(w, table, entity, err);
+}
+
+uint32_t su_host_entity_at_in(const SuHostWorld *w, uint32_t table, uint32_t slot, uint64_t *entity) {
     SuEntity h = SU_ENTITY_INVALID;
     const SuEnts *e;
-    if (w == NULL || entity == NULL) {
+    if (w == NULL || entity == NULL || table >= w->table_count) {
         return SU_E_INVALID_ARGUMENT;
     }
-    e = su_world_entities_committed(w->w);
+    e = su_world_entities_committed(w->tabs[table].w);
     if (slot >= su_ents_capacity(e) || !su_ents_slot_alive(e, slot) || su_ents_handle_for_slot(e, slot, &h) != SU_OK) {
         return SU_E_STALE_HANDLE;
     }
-    *entity = h;
+    *entity = SU_ENTITY_MAKE((uint32_t)(w->tabs[table].base + slot), SU_ENTITY_GEN(h));
     return SU_OK;
 }
 
-uint32_t su_host_alive(const SuHostWorld *w, uint32_t base, uint32_t count, uint8_t *alive) {
-    if (w == NULL) {
+uint32_t su_host_entity_at(const SuHostWorld *w, uint32_t slot, uint64_t *entity) {
+    return su_host_entity_at_in(w, 0u, slot, entity);
+}
+
+uint32_t su_host_alive_in(const SuHostWorld *w, uint32_t table, uint32_t base, uint32_t count, uint8_t *alive) {
+    if (w == NULL || table >= w->table_count) {
         return SU_E_INVALID_ARGUMENT;
     }
-    return su_world_alive_view(w->w, base, count, alive);
+    return su_world_alive_view(w->tabs[table].w, base, count, alive);
+}
+
+uint32_t su_host_alive(const SuHostWorld *w, uint32_t base, uint32_t count, uint8_t *alive) {
+    return su_host_alive_in(w, 0u, base, count, alive);
+}
+
+/* ---------- tables (issue 140) ---------- */
+
+uint32_t su_host_table_count(const SuHostWorld *w) {
+    return w != NULL ? w->table_count : 0u;
+}
+
+uint32_t su_host_table_capacity(const SuHostWorld *w, uint32_t table, uint64_t *rows) {
+    if (w == NULL || table >= w->table_count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (rows != NULL) {
+        *rows = w->tabs[table].rows;
+    }
+    return SU_OK;
+}
+
+uint32_t su_host_table_schema_id(const SuHostWorld *w, uint32_t table, const char **schema_id) {
+    if (w == NULL || table >= w->table_count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (schema_id != NULL) {
+        *schema_id = w->sched.tables[table].schema_id;
+    }
+    return SU_OK;
+}
+
+uint32_t su_host_table_base(const SuHostWorld *w, uint32_t table, uint64_t *base) {
+    if (w == NULL || table >= w->table_count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (base != NULL) {
+        *base = w->tabs[table].base;
+    }
+    return SU_OK;
+}
+
+uint32_t su_host_table_of_handle(const SuHostWorld *w, uint64_t entity, uint32_t *table) {
+    uint32_t t = 0u;
+    if (w == NULL || table == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (!table_of_slot(w, SU_ENTITY_SLOT(entity), &t, NULL)) {
+        return SU_E_STALE_HANDLE;
+    }
+    *table = t;
+    return SU_OK;
 }
 
 /* ---------- inputs ---------- */
@@ -1300,6 +1588,23 @@ static void drop_record(SuHostWorld *w, HostRecord *r) {
     w->rec_count--;
 }
 
+/* The table a world slot belongs to, and its local slot. 0 when the slot is outside every table. */
+static int table_of_slot(const SuHostWorld *w, uint32_t slot, uint32_t *table, uint32_t *local) {
+    uint32_t t;
+    for (t = 0; t < w->table_count; t++) {
+        if ((uint64_t)slot >= w->tabs[t].base && (uint64_t)slot < w->tabs[t].base + w->tabs[t].rows) {
+            if (table != NULL) {
+                *table = t;
+            }
+            if (local != NULL) {
+                *local = slot - (uint32_t)w->tabs[t].base;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Merges count writes into tick's record. Nothing is queued on failure. */
 static uint32_t queue_writes(SuHostWorld *w, uint64_t tick, const SuHostInput *in, uint32_t count, SuHostError *err) {
     HostRecord *r;
@@ -1314,12 +1619,14 @@ static uint32_t queue_writes(SuHostWorld *w, uint64_t tick, const SuHostInput *i
                        (unsigned long long)(now + SU_HOST_INPUT_WINDOW));
     }
     for (i = 0; i < count; i++) {
-        if (field_index(w, in[i].field_id) < 0) {
+        uint32_t table = 0u;
+        if (in[i].entity == SU_HOST_ENTITY_NONE ||
+            !table_of_slot(w, SU_ENTITY_SLOT(in[i].entity), &table, NULL)) {
+            return set_err(err, SU_E_STALE_HANDLE, i, tick, "write %u names no slot of this world", (unsigned)i);
+        }
+        if (field_index_in(w, table, in[i].field_id) < 0) {
             return set_err(err, SU_E_SCHEMA_MISMATCH, i, tick, "write %u names unknown field %u", (unsigned)i,
                            (unsigned)in[i].field_id);
-        }
-        if (in[i].entity == SU_HOST_ENTITY_NONE || SU_ENTITY_SLOT(in[i].entity) >= su_world_row_count(w->w)) {
-            return set_err(err, SU_E_STALE_HANDLE, i, tick, "write %u names no slot of this world", (unsigned)i);
         }
     }
     r = find_record(w, tick);
@@ -1467,7 +1774,8 @@ uint32_t su_host_input_push_encoded(SuHostWorld *w, const uint8_t *buf, size_t l
 
 /* One field's saved cells, for undoing the input writes of a failed tick. */
 typedef struct UndoCell {
-    uint32_t slot;
+    uint32_t table;      /* table the slot belongs to (issue 140) */
+    uint32_t slot;       /* the table's local slot */
     uint32_t field_id;
     uint32_t old;
 } UndoCell;
@@ -1477,38 +1785,49 @@ typedef struct UndoCell {
  * SU_HOST_INPUT_MAX_WRITES (queue_writes refuses more), so it never has more than min(SU_HOST_INPUT_MAX_WRITES,
  * capacity x field count) writes. */
 static uint32_t input_storage_init(SuHostWorld *w) {
-    uint64_t rows = su_world_row_count(w->w);
-    uint64_t max = rows < SU_HOST_INPUT_MAX_WRITES ? rows : SU_HOST_INPUT_MAX_WRITES;
-    max *= su_world_field_count(w->w); /* <= 4096 x 2^32: no overflow */
-    if (max > SU_HOST_INPUT_MAX_WRITES) {
-        max = SU_HOST_INPUT_MAX_WRITES;
+    uint64_t total_cells = 0;
+    uint64_t max = 0;
+    uint32_t t;
+    for (t = 0; t < w->table_count; t++) {
+        uint64_t rows = w->tabs[t].rows;
+        uint64_t cells = rows * (uint64_t)w->sched.tables[t].field_count; /* <= 2^32 x 2^10: no overflow */
+        total_cells += cells;
+        w->in_col_rows[t] = rows;
+        w->in_col[t] = rows <= SIZE_MAX / sizeof *w->in_col[t]
+                           ? malloc((size_t)(rows > 0u ? rows : 1u) * sizeof *w->in_col[t])
+                           : NULL;
+        if (w->in_col[t] == NULL) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        if (rows > w->in_rows) {
+            w->in_rows = rows;
+        }
     }
+    max = total_cells < SU_HOST_INPUT_MAX_WRITES ? total_cells : SU_HOST_INPUT_MAX_WRITES;
     w->in_max = (uint32_t)max;
-    w->in_rows = rows;
     w->in_cells = malloc((size_t)(max > 0u ? max : 1u) * sizeof *w->in_cells);
     w->in_vals = malloc((size_t)(max > 0u ? max : 1u) * sizeof *w->in_vals);
-    w->in_col = rows <= SIZE_MAX / sizeof *w->in_col ? malloc((size_t)(rows > 0u ? rows : 1u) * sizeof *w->in_col)
-                                                     : NULL;
-    if (w->in_cells == NULL || w->in_vals == NULL || w->in_col == NULL) {
+    if (w->in_cells == NULL || w->in_vals == NULL) {
         return SU_E_RESOURCE_LIMIT;
     }
     return SU_OK;
 }
 
-/* Writes cells (sorted by slot, field) into the committed root, one column copy per touched field, through the
- * world's column buffer (w->in_col, w->in_rows cells). values[i] is written to (cells[i].slot, cells[i].field_id). */
+/* Writes cells (sorted by world slot, field) into the committed roots, one column copy per touched (table, field),
+ * through the table's column buffer (w->in_col[table], w->in_col_rows[table] cells). values[i] is written to
+ * (cells[i].table, cells[i].slot, cells[i].field_id); slot is the table's local slot. */
 static uint32_t write_cells(SuHostWorld *w, const UndoCell *cells, const uint32_t *values, uint32_t n) {
-    uint32_t *buf = w->in_col;
     uint32_t i;
     uint32_t st = SU_OK;
-    /* Fields in ascending order of first appearance; each field is written once. */
+    /* (table, field) pairs in ascending order of first appearance; each pair is written once. */
     for (i = 0; i < n && st == SU_OK; i++) {
         const uint32_t *col = NULL;
         uint64_t rows = 0;
         uint32_t k;
+        uint32_t *buf = w->in_col[cells[i].table];
         int seen = 0;
         for (k = 0; k < i; k++) {
-            if (cells[k].field_id == cells[i].field_id) {
+            if (cells[k].field_id == cells[i].field_id && cells[k].table == cells[i].table) {
                 seen = 1;
                 break;
             }
@@ -1516,30 +1835,29 @@ static uint32_t write_cells(SuHostWorld *w, const UndoCell *cells, const uint32_
         if (seen) {
             continue;
         }
-        st = su_world_read_committed(w->w, cells[i].field_id, &col, &rows);
+        st = su_world_read_committed(w->tabs[cells[i].table].w, cells[i].field_id, &col, &rows);
         if (st != SU_OK) {
             break;
         }
-        if (rows > w->in_rows) {
+        if (rows > w->in_col_rows[cells[i].table]) {
             st = SU_E_RESOURCE_LIMIT; /* not reached: the capacity is fixed at creation */
             break;
         }
         memcpy(buf, col, (size_t)rows * sizeof *buf);
         for (k = i; k < n; k++) {
-            if (cells[k].field_id == cells[i].field_id) {
+            if (cells[k].field_id == cells[i].field_id && cells[k].table == cells[i].table) {
                 buf[cells[k].slot] = values[k];
             }
         }
-        st = su_world_put_committed(w->w, cells[i].field_id, buf, rows);
+        st = su_world_put_committed(w->tabs[cells[i].table].w, cells[i].field_id, buf, rows);
     }
     return st;
 }
 
-/* Applies tick's record to the committed root. On SU_OK *undo_n cells of w->in_cells hold the old values (valid
+/* Applies tick's record to the committed roots. On SU_OK *undo_n cells of w->in_cells hold the old values (valid
  * until the next apply_record). A dead or stale entity is SU_E_STALE_HANDLE, and a record larger than the
  * world's input storage SU_E_RESOURCE_LIMIT; in both cases nothing is written. Allocates nothing. */
 static uint32_t apply_record(SuHostWorld *w, const HostRecord *r, uint32_t *undo_n, SuHostError *err) {
-    const SuEnts *ents = su_world_entities_committed(w->w);
     UndoCell *cells = w->in_cells;
     uint32_t *vals = w->in_vals;
     uint32_t i;
@@ -1558,15 +1876,25 @@ static uint32_t apply_record(SuHostWorld *w, const HostRecord *r, uint32_t *undo
     for (i = 0; i < r->count; i++) {
         const uint32_t *col = NULL;
         uint64_t rows = 0;
-        if (su_ents_validate(ents, (SuEntity)r->writes[i].entity) != SU_OK) {
+        uint32_t table = 0u;
+        uint32_t local = 0u;
+        SuEntity local_handle;
+        if (!table_of_slot(w, SU_ENTITY_SLOT(r->writes[i].entity), &table, &local)) {
             return set_err(err, SU_E_STALE_HANDLE, UINT32_MAX, r->tick,
                            "input for tick %llu names a dead or stale entity (slot %u)", (unsigned long long)r->tick,
                            (unsigned)SU_ENTITY_SLOT(r->writes[i].entity));
         }
-        (void)su_world_read_committed(w->w, r->writes[i].field_id, &col, &rows);
-        cells[i].slot = SU_ENTITY_SLOT(r->writes[i].entity);
+        local_handle = SU_ENTITY_MAKE(local, SU_ENTITY_GEN(r->writes[i].entity));
+        if (su_ents_validate(su_world_entities_committed(w->tabs[table].w), local_handle) != SU_OK) {
+            return set_err(err, SU_E_STALE_HANDLE, UINT32_MAX, r->tick,
+                           "input for tick %llu names a dead or stale entity (slot %u)", (unsigned long long)r->tick,
+                           (unsigned)SU_ENTITY_SLOT(r->writes[i].entity));
+        }
+        (void)su_world_read_committed(w->tabs[table].w, r->writes[i].field_id, &col, &rows);
+        cells[i].table = table;
+        cells[i].slot = local;
         cells[i].field_id = r->writes[i].field_id;
-        cells[i].old = col != NULL ? col[cells[i].slot] : 0u;
+        cells[i].old = col != NULL ? col[local] : 0u;
         vals[i] = r->writes[i].value;
     }
     st = write_cells(w, cells, vals, r->count);
@@ -1655,7 +1983,14 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
                 break;
             }
         }
-        st = su_sched_run_ticks_opt(w->w, &w->sched, 1u, NULL, NULL, NULL, &one, &failed);
+        {
+            SuWorld *ws[SU_HOST_MAX_TABLES];
+            uint32_t k;
+            for (k = 0; k < w->table_count; k++) {
+                ws[k] = w->tabs[k].w;
+            }
+            st = su_sched_run_ticks_tables(ws, w->table_count, &w->sched, 1u, NULL, NULL, NULL, &one, &failed);
+        }
         if (st != SU_OK || one != 1u) {
             uint32_t k;
             for (k = 0; k < w->sched.count; k++) {
@@ -1699,7 +2034,11 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
                     if (died) {
                         su_hstate_note_despawn(w->opstate[k]);
                     }
-                    su_hstate_commit(w->opstate[k], su_world_entities_committed(w->w));
+                    {
+                        uint32_t tt = w->sched.sys[k].table;
+                        su_hstate_commit(w->opstate[k], su_world_entities_committed(w->tabs[tt].w),
+                                         w->tabs[tt].base);
+                    }
                 }
             }
         }
@@ -1717,21 +2056,27 @@ uint32_t su_host_step(SuHostWorld *w, uint64_t ticks, uint64_t *done, SuHostErro
 
 /* ---------- reads ---------- */
 
-uint32_t su_host_column(const SuHostWorld *w, uint32_t field_id, const uint32_t **data, uint64_t *rows) {
-    if (w == NULL || data == NULL || rows == NULL) {
+uint32_t su_host_column_in(const SuHostWorld *w, uint32_t table, uint32_t field_id, const uint32_t **data,
+                           uint64_t *rows) {
+    if (w == NULL || data == NULL || rows == NULL || table >= w->table_count) {
         return SU_E_INVALID_ARGUMENT;
     }
-    return su_world_read_committed(w->w, field_id, data, rows);
+    return su_world_read_committed(w->tabs[table].w, field_id, data, rows);
 }
 
-uint32_t su_host_read(const SuHostWorld *w, uint32_t field_id, uint64_t first, uint64_t count, uint32_t *out) {
+uint32_t su_host_column(const SuHostWorld *w, uint32_t field_id, const uint32_t **data, uint64_t *rows) {
+    return su_host_column_in(w, 0u, field_id, data, rows);
+}
+
+uint32_t su_host_read_in(const SuHostWorld *w, uint32_t table, uint32_t field_id, uint64_t first, uint64_t count,
+                         uint32_t *out) {
     const uint32_t *col = NULL;
     uint64_t rows = 0;
     uint32_t st;
-    if (w == NULL || (out == NULL && count > 0u)) {
+    if (w == NULL || (out == NULL && count > 0u) || table >= w->table_count) {
         return SU_E_INVALID_ARGUMENT;
     }
-    st = su_world_read_committed(w->w, field_id, &col, &rows);
+    st = su_world_read_committed(w->tabs[table].w, field_id, &col, &rows);
     if (st != SU_OK) {
         return st;
     }
@@ -1742,6 +2087,10 @@ uint32_t su_host_read(const SuHostWorld *w, uint32_t field_id, uint64_t first, u
         memcpy(out, col + first, (size_t)count * sizeof *out);
     }
     return SU_OK;
+}
+
+uint32_t su_host_read(const SuHostWorld *w, uint32_t field_id, uint64_t first, uint64_t count, uint32_t *out) {
+    return su_host_read_in(w, 0u, field_id, first, count, out);
 }
 
 /* ---------- snapshots ---------- */
@@ -1830,62 +2179,155 @@ static void opstate_swap(SuHostWorld *w) {
     }
 }
 
-/* Splits a snapshot for w: header checks, then the state, log and operator state parts (version 2 only;
- * op_off and op_len 0 otherwise). Every part must be in range and the parts must cover len exactly. */
-static uint32_t snapshot_split(const SuHostWorld *w, const uint8_t *buf, size_t len, uint64_t *state_len,
-                               uint64_t *log_len, size_t *op_off, size_t *op_len, SuHostError *err) {
+/* Snapshot layout: the parts of a snapshot, in file order, for write, restore and in-place restore. A single-table
+ * world keeps versions 1 and 2 (state | log [| operator state]); a multi-table world uses version 3
+ * (u32 table count | per table: u64 state length | state | u64 log length | log [| operator state]). */
+typedef struct SnapLayout {
     uint32_t version;
-    uint64_t rest;
-    *op_off = 0;
-    *op_len = 0;
+    uint32_t table_count;
+    uint64_t state_len[SU_HOST_MAX_TABLES];
+    size_t state_off[SU_HOST_MAX_TABLES];
+    uint64_t log_len;
+    size_t log_off;
+    size_t op_off;
+    size_t op_len;
+} SnapLayout;
+
+/* Splits a snapshot for w: header checks, then the per-table states, the log and the operator state part (version 2
+ * and 3 only; op_off and op_len 0 otherwise). Every part must be in range and the parts must cover len exactly. */
+static uint32_t snapshot_split(const SuHostWorld *w, const uint8_t *buf, size_t len, SnapLayout *L, SuHostError *err) {
+    uint32_t version;
+    uint32_t want;
+    size_t pos = HOST_SNAP_HEADER;
+    size_t rest;
+    uint32_t t;
+
+    memset(L, 0, sizeof *L);
+    want = w->table_count > 1u ? HOST_SNAP_VERSION_TABLES
+                               : (w->opstate_count > 0u ? HOST_SNAP_VERSION_OPSTATE : HOST_SNAP_VERSION);
     if (len < HOST_SNAP_HEADER + 8u || memcmp(buf, HOST_SNAP_MAGIC, 8u) != 0 ||
-        ((version = rd_u32(buf + 8)) != HOST_SNAP_VERSION && version != HOST_SNAP_VERSION_OPSTATE)) {
+        ((version = rd_u32(buf + 8)) != HOST_SNAP_VERSION && version != HOST_SNAP_VERSION_OPSTATE &&
+         version != HOST_SNAP_VERSION_TABLES)) {
         return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "not a host snapshot (magic or version)");
     }
     if (memcmp(buf + 12, w->identity, 32u) != 0) {
         return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
-                       "snapshot belongs to a different world identity (schema, systems, capacity or caps)");
+                       "snapshot belongs to a different world identity (schema, systems, tables, capacity or caps)");
     }
-    if (version != (w->opstate_count > 0u ? HOST_SNAP_VERSION_OPSTATE : HOST_SNAP_VERSION)) {
+    if (version != want) {
+        if (w->table_count > 1u) {
+            return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX,
+                           "snapshot version %u does not match the world (version 3 exactly when it has tables)",
+                           (unsigned)version);
+        }
         return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX,
                        "snapshot version %u does not match the world (version 2 exactly when it has operator state)",
                        (unsigned)version);
     }
-    *state_len = rd_u64(buf + 52);
-    if (*state_len > len - HOST_SNAP_HEADER - 8u) {
-        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot state length is out of range");
+    L->version = version;
+    L->table_count = 1u;
+    if (version != HOST_SNAP_VERSION_TABLES) {
+        /* The state length is the last word of the fixed header (versions 1 and 2), as released. */
+        L->state_len[0] = rd_u64(buf + HOST_SNAP_HEADER - 8u);
+        pos = HOST_SNAP_HEADER;
+        if (L->state_len[0] > (uint64_t)(len - pos)) {
+            return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot state length is out of range");
+        }
+        L->state_off[0] = pos;
+        pos += (size_t)L->state_len[0];
+    } else {
+        /* Version 3: the table count takes the header word that versions 1 and 2 use for the state length. */
+        pos = HOST_SNAP_HEADER - 8u;
+        if (len - pos < 4u) {
+            return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot table count is out of range");
+        }
+        L->table_count = rd_u32(buf + pos);
+        pos += 4u;
+        if (L->table_count != w->table_count) {
+            return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
+                           "snapshot has %u tables, the world has %u", (unsigned)L->table_count,
+                           (unsigned)w->table_count);
+        }
+        for (t = 0; t < L->table_count; t++) {
+            if (len - pos < 8u) {
+                return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot table %u length is out of range",
+                               (unsigned)t);
+            }
+            L->state_len[t] = rd_u64(buf + pos);
+            pos += 8u;
+            if (L->state_len[t] > (uint64_t)(len - pos)) {
+                return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot table %u length is out of range",
+                               (unsigned)t);
+            }
+            L->state_off[t] = pos;
+            pos += (size_t)L->state_len[t];
+        }
     }
-    rest = len - HOST_SNAP_HEADER - 8u - *state_len;
-    *log_len = rd_u64(buf + HOST_SNAP_HEADER + *state_len);
+    if (len - pos < 8u) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+    }
+    L->log_len = rd_u64(buf + pos);
+    pos += 8u;
+    if (L->log_len > (uint64_t)(len - pos)) {
+        return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
+    }
+    L->log_off = pos;
+    pos += (size_t)L->log_len;
+    rest = len - pos;
     if (w->opstate_count == 0u) {
-        if (*log_len != rest) {
+        if (rest != 0u) {
             return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
         }
         return SU_OK;
     }
-    if (rest < 8u || *log_len > rest - 8u ||
-        rd_u64(buf + HOST_SNAP_HEADER + 8u + *state_len + *log_len) != rest - 8u - *log_len) {
+    if (rest < 8u || rd_u64(buf + pos) != (uint64_t)(rest - 8u)) {
         return set_err(err, SU_E_PARSE, UINT32_MAX, UINT64_MAX, "snapshot length does not match its parts");
     }
-    *op_off = (size_t)(HOST_SNAP_HEADER + 8u + *state_len + *log_len + 8u);
-    *op_len = (size_t)(rest - 8u - *log_len);
+    L->op_off = pos + 8u;
+    L->op_len = rest - 8u;
     return SU_OK;
 }
 
 static uint32_t snapshot_parts(const SuHostWorld *w, size_t *state_len, uint64_t *log_len, size_t *total) {
+    size_t sum = 0;
+    size_t per_table = 0;
+    size_t head;
+    uint32_t t;
     uint32_t st;
-    st = su_world_canonical_size(w->w, state_len);
-    if (st != SU_OK) {
-        return st;
+    *state_len = 0;
+    for (t = 0; t < w->table_count; t++) {
+        size_t sl = 0;
+        st = su_world_canonical_size(w->tabs[t].w, &sl);
+        if (st != SU_OK) {
+            return st;
+        }
+        if (sl > SIZE_MAX - sum - 8u) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        sum += sl;
+        per_table += 8u;
+    }
+    if (t == 1u) {
+        *state_len = sum;
     }
     st = su_evlog_dump(su_ent_rt_log(w->sched.ent), NULL, 0u, log_len);
     if (st != SU_OK) {
         return st;
     }
-    if (*log_len > (uint64_t)(SIZE_MAX - HOST_SNAP_HEADER - 8u - *state_len)) {
-        return SU_E_RESOURCE_LIMIT;
+    /* Versions 1 and 2 spend the header's last word on the state length; version 3 replaces it with a u32 table
+     * count, so its per-table parts start 4 bytes after that word. */
+    head = w->table_count > 1u ? (HOST_SNAP_HEADER - 8u + 4u) : HOST_SNAP_HEADER;
+    if (w->table_count > 1u) {
+        if (*log_len > (uint64_t)(SIZE_MAX - head - per_table - sum - 8u)) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        *total = head + per_table + sum + 8u + (size_t)*log_len;
+    } else {
+        if (*log_len > (uint64_t)(SIZE_MAX - head - sum - 8u)) {
+            return SU_E_RESOURCE_LIMIT;
+        }
+        *total = head + sum + 8u + (size_t)*log_len;
     }
-    *total = HOST_SNAP_HEADER + *state_len + 8u + (size_t)*log_len;
     if (w->opstate_count > 0u) {
         size_t op = opstate_size(w);
         if (op > SIZE_MAX - 8u - *total) {
@@ -1912,6 +2354,7 @@ uint32_t su_host_snapshot_write(const SuHostWorld *w, uint8_t *buf, size_t cap, 
     uint64_t log_got = 0;
     size_t total = 0;
     size_t off;
+    uint32_t t;
     uint32_t st;
 
     if (w == NULL || written == NULL) {
@@ -1926,16 +2369,36 @@ uint32_t su_host_snapshot_write(const SuHostWorld *w, uint8_t *buf, size_t cap, 
         return buf == NULL ? SU_E_INVALID_ARGUMENT : SU_E_RESOURCE_LIMIT;
     }
     memcpy(buf, HOST_SNAP_MAGIC, 8u);
-    put_u32(buf + 8, w->opstate_count > 0u ? HOST_SNAP_VERSION_OPSTATE : HOST_SNAP_VERSION);
+    put_u32(buf + 8, w->table_count > 1u ? HOST_SNAP_VERSION_TABLES
+                                         : (w->opstate_count > 0u ? HOST_SNAP_VERSION_OPSTATE : HOST_SNAP_VERSION));
     memcpy(buf + 12, w->identity, 32u);
     put_u64(buf + 44, su_world_tick(w->w));
-    put_u64(buf + 52, (uint64_t)state_len);
-    off = HOST_SNAP_HEADER;
-    st = su_world_canonical_write(w->w, buf + off, state_len, &got);
-    if (st != SU_OK || got != state_len) {
-        return st != SU_OK ? st : SU_E_INTERNAL;
+    if (w->table_count > 1u) {
+        put_u32(buf + 52, w->table_count);
+        off = 56u;
+        for (t = 0; t < w->table_count; t++) {
+            size_t sl = 0;
+            st = su_world_canonical_size(w->tabs[t].w, &sl);
+            if (st != SU_OK) {
+                return st;
+            }
+            put_u64(buf + off, (uint64_t)sl);
+            off += 8u;
+            st = su_world_canonical_write(w->tabs[t].w, buf + off, sl, &got);
+            if (st != SU_OK || got != sl) {
+                return st != SU_OK ? st : SU_E_INTERNAL;
+            }
+            off += sl;
+        }
+    } else {
+        put_u64(buf + 52, (uint64_t)state_len);
+        off = HOST_SNAP_HEADER;
+        st = su_world_canonical_write(w->tabs[0].w, buf + off, state_len, &got);
+        if (st != SU_OK || got != state_len) {
+            return st != SU_OK ? st : SU_E_INTERNAL;
+        }
+        off += state_len;
     }
-    off += state_len;
     put_u64(buf + off, log_len);
     off += 8u;
     st = su_evlog_dump(su_ent_rt_log(w->sched.ent), buf + off, log_len, &log_got);
@@ -1953,14 +2416,13 @@ uint32_t su_host_snapshot_write(const SuHostWorld *w, uint8_t *buf, size_t cap, 
 uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len, SuHostError *err) {
     SuWorldFieldDesc *fd = NULL;
     SuWorldDesc wd;
-    SuWorld *nw = NULL;
-    SuWorld *old_w;
+    SuWorld *nw[SU_HOST_MAX_TABLES];
+    SuWorld *old_w[SU_HOST_MAX_TABLES];
     SuEventLog *log = NULL;
     SuEvent *evs = NULL;
     SuEntRt *nrt = NULL;
     SuEntRt *old_rt;
-    uint64_t state_len;
-    uint64_t log_len;
+    SnapLayout L;
     uint64_t n = 0;
     uint64_t got = 0;
     uint64_t ms = 0;
@@ -1968,39 +2430,45 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
     uint64_t lm = 0;
     uint8_t *check = NULL;
     size_t check_len = 0;
-    size_t op_off = 0;
-    size_t op_len = 0;
     int op_loaded = 0;
+    uint32_t t;
     uint32_t st;
 
+    memset(nw, 0, sizeof nw);
     clear_err(err);
     if (w == NULL || buf == NULL) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "invalid arguments");
     }
-    st = snapshot_split(w, buf, len, &state_len, &log_len, &op_off, &op_len, err);
+    st = snapshot_split(w, buf, len, &L, err);
     if (st != SU_OK) {
         return st;
     }
-    fd = schedule_fields(&w->sched);
-    if (fd == NULL) {
-        return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "allocation failed");
+    for (t = 0; t < w->table_count; t++) {
+        fd = table_fields(&w->sched, t);
+        if (fd == NULL) {
+            st = set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "allocation failed");
+            goto fail;
+        }
+        memset(&wd, 0, sizeof wd);
+        wd.schema_id = w->sched.tables[t].schema_id;
+        wd.schema_version = w->sched.tables[t].schema_version;
+        wd.layout_generation = w->sched.tables[t].layout_generation;
+        wd.fields = fd;
+        wd.field_count = w->sched.tables[t].field_count;
+        st = su_world_restore_canonical(&wd, buf + L.state_off[t], (size_t)L.state_len[t], &nw[t]);
+        free(fd);
+        fd = NULL;
+        if (st != SU_OK) {
+            set_err(err, st, UINT32_MAX, UINT64_MAX, "world state does not restore (table %u)", (unsigned)t);
+            goto fail;
+        }
+        if (su_world_row_count(nw[t]) != w->tabs[t].rows || su_world_tick(nw[t]) != rd_u64(buf + 44)) {
+            st = set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
+                         "snapshot capacity or tick disagrees (table %u)", (unsigned)t);
+            goto fail;
+        }
     }
-    memset(&wd, 0, sizeof wd);
-    wd.schema_id = w->sched.schema_id;
-    wd.schema_version = w->sched.schema_version;
-    wd.layout_generation = w->sched.layout_generation;
-    wd.fields = fd;
-    wd.field_count = w->sched.field_count;
-    st = su_world_restore_canonical(&wd, buf + HOST_SNAP_HEADER, (size_t)state_len, &nw);
-    free(fd);
-    if (st != SU_OK) {
-        return set_err(err, st, UINT32_MAX, UINT64_MAX, "world state does not restore");
-    }
-    if (su_world_row_count(nw) != su_world_row_count(w->w) || su_world_tick(nw) != rd_u64(buf + 44)) {
-        st = set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX, "snapshot capacity or tick disagrees");
-        goto fail;
-    }
-    st = su_evlog_parse(buf + HOST_SNAP_HEADER + state_len + 8u, log_len, &log);
+    st = su_evlog_parse(buf + L.log_off, L.log_len, &log);
     if (st != SU_OK) {
         set_err(err, st, UINT32_MAX, UINT64_MAX, "event log does not parse");
         goto fail;
@@ -2024,7 +2492,7 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
     }
     if (w->opstate_count > 0u) {
         /* Operator state into the states' free sides (the committed states are untouched until the swap). */
-        st = opstate_load(w, buf + op_off, op_len, err);
+        st = opstate_load(w, buf + L.op_off, L.op_len, err);
         if (st != SU_OK) {
             goto fail;
         }
@@ -2032,11 +2500,14 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
     }
     /* Swap in the new state, then require the bytes to be canonical: the restored state must encode back to
      * exactly the input. Otherwise the old state is put back. */
-    old_w = w->w;
     old_rt = w->sched.ent;
-    w->w = nw;
+    for (t = 0; t < w->table_count; t++) {
+        old_w[t] = w->tabs[t].w;
+        w->tabs[t].w = nw[t];
+        nw[t] = NULL;
+    }
+    w->w = w->tabs[0].w;
     w->sched.ent = nrt;
-    nw = NULL;
     nrt = NULL;
     if (op_loaded) {
         opstate_swap(w);
@@ -2044,9 +2515,12 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
     check = malloc(len);
     if (check == NULL || su_host_snapshot_write(w, check, len, &check_len) != SU_OK || check_len != len ||
         memcmp(check, buf, len) != 0) {
-        nw = w->w;
+        for (t = 0; t < w->table_count; t++) {
+            nw[t] = w->tabs[t].w;
+            w->tabs[t].w = old_w[t];
+        }
+        w->w = w->tabs[0].w;
         nrt = w->sched.ent;
-        w->w = old_w;
         w->sched.ent = old_rt;
         if (op_loaded) {
             opstate_swap(w);
@@ -2055,7 +2529,9 @@ uint32_t su_host_snapshot_restore(SuHostWorld *w, const uint8_t *buf, size_t len
                      "snapshot bytes are not canonical");
         goto fail;
     }
-    su_world_destroy(old_w);
+    for (t = 0; t < w->table_count; t++) {
+        su_world_destroy(old_w[t]);
+    }
     su_ent_rt_destroy(old_rt);
     st = SU_OK;
 fail:
@@ -2063,7 +2539,9 @@ fail:
     free(evs);
     su_evlog_destroy(log);
     su_ent_rt_destroy(nrt);
-    su_world_destroy(nw);
+    for (t = 0; t < w->table_count; t++) {
+        su_world_destroy(nw[t]);
+    }
     return st;
 }
 
@@ -2242,12 +2720,15 @@ static uint32_t rollback_scratch(SuHostWorld *w) {
     uint64_t ms = 0;
     uint64_t me = 0;
     uint64_t lm = 0;
-    if (w->rb_ents == NULL) {
-        SuEntsDesc d;
-        memset(&d, 0, sizeof d);
-        d.max_entities = su_world_row_count(w->w);
-        if (su_ents_create(&d, &w->rb_ents) != SU_OK) {
-            return SU_E_RESOURCE_LIMIT;
+    uint32_t t;
+    for (t = 0; t < w->table_count; t++) {
+        if (w->rb_ents[t] == NULL) {
+            SuEntsDesc d;
+            memset(&d, 0, sizeof d);
+            d.max_entities = w->tabs[t].rows;
+            if (su_ents_create(&d, &w->rb_ents[t]) != SU_OK) {
+                return SU_E_RESOURCE_LIMIT;
+            }
         }
     }
     if (w->rb_log == NULL) {
@@ -2260,17 +2741,15 @@ static uint32_t rollback_scratch(SuHostWorld *w) {
 }
 
 uint32_t su_host_snapshot_restore_inplace(SuHostWorld *w, const uint8_t *buf, size_t len, SuHostError *err) {
-    uint64_t state_len;
-    uint64_t log_len;
-    size_t op_off = 0;
-    size_t op_len = 0;
+    SnapLayout L;
+    uint32_t t;
     uint32_t st;
 
     clear_err(err);
     if (w == NULL || buf == NULL) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX, "invalid arguments");
     }
-    st = snapshot_split(w, buf, len, &state_len, &log_len, &op_off, &op_len, err);
+    st = snapshot_split(w, buf, len, &L, err);
     if (st != SU_OK) {
         return st;
     }
@@ -2278,29 +2757,35 @@ uint32_t su_host_snapshot_restore_inplace(SuHostWorld *w, const uint8_t *buf, si
     if (st != SU_OK) {
         return set_err(err, st, UINT32_MAX, UINT64_MAX, "allocation of the rollback scratch failed");
     }
-    /* 1. Validate the world state into the scratch entity table (the world is untouched). */
-    st = su_world_restore_canonical_check(w->w, buf + HOST_SNAP_HEADER, (size_t)state_len, w->rb_ents);
-    if (st != SU_OK) {
-        return set_err(err, st, UINT32_MAX, UINT64_MAX, "world state does not restore");
-    }
-    if (rd_u64(buf + HOST_SNAP_HEADER + 13u) != rd_u64(buf + 44)) {
-        return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX, "snapshot capacity or tick disagrees");
+    /* 1. Validate each table's state into its scratch entity table (the world is untouched). */
+    for (t = 0; t < w->table_count; t++) {
+        st = su_world_restore_canonical_check(w->tabs[t].w, buf + L.state_off[t], (size_t)L.state_len[t],
+                                              w->rb_ents[t]);
+        if (st != SU_OK) {
+            return set_err(err, st, UINT32_MAX, UINT64_MAX, "world state does not restore (table %u)", (unsigned)t);
+        }
+        if (rd_u64(buf + L.state_off[t] + 13u) != rd_u64(buf + 44)) {
+            return set_err(err, SU_E_SCHEMA_MISMATCH, UINT32_MAX, UINT64_MAX,
+                           "snapshot capacity or tick disagrees (table %u)", (unsigned)t);
+        }
     }
     /* 2. Event log into the scratch log (validated, then filled; the live log is untouched). */
-    st = su_evlog_parse_into(w->rb_log, buf + HOST_SNAP_HEADER + state_len + 8u, log_len);
+    st = su_evlog_parse_into(w->rb_log, buf + L.log_off, L.log_len);
     if (st != SU_OK) {
         return set_err(err, st, UINT32_MAX, UINT64_MAX,
                        st == SU_E_SCHEMA_MISMATCH ? "event log capacity disagrees" : "event log does not parse");
     }
     /* 2b. Operator state into the states' free sides (allocated with the world; the committed states are untouched). */
     if (w->opstate_count > 0u) {
-        st = opstate_load(w, buf + op_off, op_len, err);
+        st = opstate_load(w, buf + L.op_off, L.op_len, err);
         if (st != SU_OK) {
             return st;
         }
     }
     /* 3. Commit: none of these steps can fail after the checks above. */
-    su_world_restore_canonical_commit(w->w, buf + HOST_SNAP_HEADER, w->rb_ents);
+    for (t = 0; t < w->table_count; t++) {
+        su_world_restore_canonical_commit(w->tabs[t].w, buf + L.state_off[t], w->rb_ents[t]);
+    }
     (void)su_evlog_swap(su_ent_rt_log(w->sched.ent), w->rb_log);
     if (w->opstate_count > 0u) {
         opstate_swap(w);
@@ -2334,63 +2819,71 @@ uint32_t su_host_digest_fast(const SuHostWorld *w, uint64_t *out) {
 
 /* ---------- IR 0.3 typed lanes (numeric-3d) ---------- */
 
-/* Value type and lane of the field at table index i. 64-bit fields are adjacent lane pairs (id, id + 1) in the
- * ascending table, so pairs are counted from the start. */
-static void lane_of(const SuHostWorld *w, uint32_t i, uint32_t *vt, uint32_t *lane) {
+/* Value type and lane of the field at index i of table's field table. 64-bit fields are adjacent lane pairs
+ * (id, id + 1) in the ascending table, so pairs are counted from the start. */
+static void lane_of(const SuHostWorld *w, uint32_t table, uint32_t i, uint32_t *vt, uint32_t *lane) {
+    const SuSchedField *f = w->sched.tables[table].fields;
     uint32_t k = 0;
-    *vt = w->sched.fields[i].value_type == 0u ? SU_TYPE_U32 : w->sched.fields[i].value_type;
+    *vt = f[i].value_type == 0u ? SU_TYPE_U32 : f[i].value_type;
     while (k < i) {
-        uint32_t t = w->sched.fields[k].value_type;
+        uint32_t t = f[k].value_type;
         k += (t == SU_TYPE_I64 || t == SU_TYPE_Q32) ? 2u : 1u;
     }
     *lane = k == i ? 0u : 1u;
 }
 
 /* Index of the lane-0 entry of a 64-bit (i64 or q32) field, or -1. */
-static long wide_index(const SuHostWorld *w, uint32_t field_id) {
-    long i = field_index(w, field_id);
+static long wide_index(const SuHostWorld *w, uint32_t table, uint32_t field_id) {
+    long i = field_index_in(w, table, field_id);
     uint32_t vt, lane;
     if (i < 0) {
         return -1;
     }
-    lane_of(w, (uint32_t)i, &vt, &lane);
-    if ((vt != SU_TYPE_I64 && vt != SU_TYPE_Q32) || lane != 0u || (uint32_t)i + 1u >= w->sched.field_count) {
+    lane_of(w, table, (uint32_t)i, &vt, &lane);
+    if ((vt != SU_TYPE_I64 && vt != SU_TYPE_Q32) || lane != 0u ||
+        (uint32_t)i + 1u >= w->sched.tables[table].field_count) {
         return -2;
     }
     return i;
 }
 
-uint32_t su_host_field_value_type(const SuHostWorld *w, uint32_t field_id, uint32_t *value_type, uint32_t *lane) {
+uint32_t su_host_field_value_type_in(const SuHostWorld *w, uint32_t table, uint32_t field_id, uint32_t *value_type,
+                                     uint32_t *lane) {
     long i;
-    if (w == NULL || value_type == NULL || lane == NULL) {
+    if (w == NULL || value_type == NULL || lane == NULL || table >= w->table_count) {
         return SU_E_INVALID_ARGUMENT;
     }
-    i = field_index(w, field_id);
+    i = field_index_in(w, table, field_id);
     if (i < 0) {
         return SU_E_SCHEMA_MISMATCH;
     }
-    lane_of(w, (uint32_t)i, value_type, lane);
+    lane_of(w, table, (uint32_t)i, value_type, lane);
     return SU_OK;
 }
 
-uint32_t su_host_read_i64(const SuHostWorld *w, uint32_t field_id, uint64_t first, uint64_t count, int64_t *out) {
+uint32_t su_host_field_value_type(const SuHostWorld *w, uint32_t field_id, uint32_t *value_type, uint32_t *lane) {
+    return su_host_field_value_type_in(w, 0u, field_id, value_type, lane);
+}
+
+uint32_t su_host_read_i64_in(const SuHostWorld *w, uint32_t table, uint32_t field_id, uint64_t first, uint64_t count,
+                             int64_t *out) {
     const uint32_t *lo = NULL, *hi = NULL;
     uint64_t rows = 0, k;
     long i;
     uint32_t st;
-    if (w == NULL || (out == NULL && count > 0u)) {
+    if (w == NULL || (out == NULL && count > 0u) || table >= w->table_count) {
         return SU_E_INVALID_ARGUMENT;
     }
-    i = wide_index(w, field_id);
+    i = wide_index(w, table, field_id);
     if (i == -1) {
         return SU_E_SCHEMA_MISMATCH;
     }
     if (i < 0) {
         return SU_E_TYPE;
     }
-    st = su_world_read_committed(w->w, field_id, &lo, &rows);
+    st = su_world_read_committed(w->tabs[table].w, field_id, &lo, &rows);
     if (st == SU_OK) {
-        st = su_world_read_committed(w->w, field_id + 1u, &hi, &rows);
+        st = su_world_read_committed(w->tabs[table].w, field_id + 1u, &hi, &rows);
     }
     if (st != SU_OK) {
         return st;
@@ -2405,15 +2898,23 @@ uint32_t su_host_read_i64(const SuHostWorld *w, uint32_t field_id, uint64_t firs
     return SU_OK;
 }
 
+uint32_t su_host_read_i64(const SuHostWorld *w, uint32_t field_id, uint64_t first, uint64_t count, int64_t *out) {
+    return su_host_read_i64_in(w, 0u, field_id, first, count, out);
+}
+
 uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint64_t entity, uint32_t field_id, int64_t value,
                                 SuHostError *err) {
     SuHostInput two[2];
+    uint32_t table = 0u;
     long i;
     clear_err(err);
     if (w == NULL) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, tick, "invalid arguments");
     }
-    i = wide_index(w, field_id);
+    if (!table_of_slot(w, SU_ENTITY_SLOT(entity), &table, NULL)) {
+        return set_err(err, SU_E_STALE_HANDLE, field_id, tick, "the entity names no slot of this world");
+    }
+    i = wide_index(w, table, field_id);
     if (i == -1) {
         return set_err(err, SU_E_SCHEMA_MISMATCH, field_id, tick, "field %u is not in the schema", (unsigned)field_id);
     }
@@ -2428,6 +2929,35 @@ uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint64_t entity, 
     two[1].field_id = field_id + 1u;
     two[1].value = (uint32_t)((uint64_t)value >> 32);
     return su_host_input_push(w, tick, two, 2u, err);
+}
+
+uint32_t su_host_memory(const SuHostWorld *w, SuHostMemory *out) {
+    uint32_t t;
+    if (w == NULL || out == NULL || out->struct_size < sizeof *out) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memset(out, 0, sizeof *out);
+    out->struct_size = (uint32_t)sizeof *out;
+    out->table_count = w->table_count;
+    for (t = 0; t < w->table_count; t++) {
+        SuWorldMemory m;
+        if (su_world_memory(w->tabs[t].w, &m) != SU_OK) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        out->table_total[t] = m.total;
+        out->tables_total += m.total;
+    }
+    /* The input application buffers of su_host_step: the undo cells and their values, and one column buffer per
+     * table (issue 149 storage, allocated at creation). */
+    out->input_storage = (uint64_t)w->in_max * (uint64_t)(sizeof(struct UndoCell) + sizeof(uint32_t));
+    for (t = 0; t < w->table_count; t++) {
+        out->input_storage += w->in_col_rows[t] * (uint64_t)sizeof(uint32_t);
+    }
+    /* The host world struct (it contains the schedule struct and the fixed per-entry arrays). The schedule's
+     * heap allocations (modules, VM contexts, operator instances, the event log) are not part of the world root. */
+    out->metadata = (uint64_t)sizeof *w;
+    out->total = out->tables_total + out->input_storage + out->metadata;
+    return SU_OK;
 }
 
 /* ---------- execution tiers (2026-10-18) ---------- */

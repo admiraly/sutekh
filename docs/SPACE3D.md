@@ -67,6 +67,14 @@ Evidence: `host_events`, `host_events_dll` and the cross-process `host_events_re
 
 Typed host lanes: `SuHostField.type` holds the lane's value type (`SU_TYPE_U32`, or `SU_TYPE_I32`/`I64`/`Q32` for a typed lane; a 64-bit field is two adjacent entries `I`, `I+1` named `<field>.lo`, `<field>.hi`). A descriptor with typed lanes has numeric profile `fixed_q32_v1` and operator family `<schema_id>_ops`. Descriptors with only u32 lanes (the RTS operators and their tests) keep `rts_ops_v<N>`, `u32_mod_v1`, and byte-identical declaration digests.
 
+**Cross-table movers and targets (planned; issue 140).** The operators of this family read one table: their movers,
+targets and results are lanes of the world's single table. A world with several tables (`host.h`, "tables") lets a
+game keep projectiles and ships apart, but a `space3d.query` entry bound to one table cannot yet take its targets
+from another. The first slice of issue 140 (per-table schemas, capacities, spawn/despawn, hash/commit, identity and
+snapshot) does not change the operators; the cross-table form is the recorded follow-up in
+[MULTI_TABLE_WORLDS.md](MULTI_TABLE_WORLDS.md) section 8: a second table selector in the operator descriptor and the
+target columns in a trailing field of `SuHostOperatorRun`, so existing operators keep their layout.
+
 ## 2. Schema `space3d` (profile `profiles/space3d`)
 
 A world that uses the operator has schema ID `space3d` and reserves these field IDs; games add their own fields at other IDs (100 and above by convention). Every q32 field occupies `ID` and `ID+1`.

@@ -137,6 +137,10 @@ uint64_t su_world_row_count(const SuWorld *w);
 uint32_t su_world_field_count(const SuWorld *w);
 uint32_t su_world_layout_generation(const SuWorld *w);
 uint64_t su_world_tick(const SuWorld *w);
+/* Sets the committed tick of an idle world (between ticks only; issue 140): a table with no scheduled system is
+ * never begun or published, and a world with several tables keeps one tick across all of them.
+ * SU_E_INVALID_ARGUMENT: NULL, or a tick is open. */
+uint32_t su_world_set_tick(SuWorld *w, uint64_t tick);
 /* Nonzero while a tick is open (between begin_tick and publish/abort). */
 int su_world_in_tick(const SuWorld *w);
 

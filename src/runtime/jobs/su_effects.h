@@ -53,6 +53,10 @@ typedef struct SuEffectInput {
     uint32_t host_declared;         /* M3-04a: nonzero for a host entry; its read/write sets are the
                                        declared access bits of mod->fields (no instructions to derive),
                                        and su_effects_check_declared is not applied to it */
+    uint32_t table;                 /* issue 140: the world table this system iterates (0 for every classic
+                                       schedule). Two systems in different tables never share columns, so they
+                                       cannot conflict on a field, whatever the field IDs; edges and cycles still
+                                       span the whole schedule. */
 } SuEffectInput;
 
 /* Derives the read/write sets from the IR. reads[i] and writes[i] (i is a field

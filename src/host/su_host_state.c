@@ -60,6 +60,7 @@ struct SuHostState {
     const uint8_t *alive;    /* run's working entity views (DROP_DEAD checks) */
     const uint32_t *gen;
     uint64_t rows;
+    uint64_t entity_base;    /* world slot of the operator's table's local slot 0 (issue 140; 0 before) */
 };
 
 static void put_u32(uint8_t *p, uint32_t v) {
@@ -301,7 +302,20 @@ static void compact(SuHostState *s, uint32_t skip) {
 static int entity_alive(const SuHostState *s, uint64_t entity) {
     uint32_t slot = SU_ENTITY_SLOT(entity);
     uint32_t gen = SU_ENTITY_GEN(entity);
+    if ((uint64_t)slot < s->entity_base) {
+        return 0;
+    }
+    slot -= (uint32_t)s->entity_base;
     return gen != 0u && slot < s->rows && s->alive != NULL && s->alive[slot] != 0u && s->gen[slot] == gen;
+}
+
+/* The table-local handle of a world handle, for su_ents_validate against the table's entity table. */
+static SuEntity local_handle(uint64_t entity, uint64_t base) {
+    return SU_ENTITY_MAKE(SU_ENTITY_SLOT(entity) - (uint32_t)base, SU_ENTITY_GEN(entity));
+}
+
+static int dead_in(const SuEnts *ents, uint64_t entity, uint64_t base) {
+    return (uint64_t)SU_ENTITY_SLOT(entity) < base || su_ents_validate(ents, local_handle(entity, base)) != SU_OK;
 }
 
 /* Inserts or replaces (entity, sub) with len uninitialized bytes; *out = the bytes. */
@@ -350,10 +364,11 @@ static int writable(const SuHostState *s) {
 
 /* ---------- engine side ---------- */
 
-void su_hstate_begin_run(SuHostState *s, const uint8_t *alive, const uint32_t *gen, uint64_t rows) {
+void su_hstate_begin_run(SuHostState *s, const uint8_t *alive, const uint32_t *gen, uint64_t rows, uint64_t base) {
     s->alive = alive;
     s->gen = gen;
     s->rows = rows;
+    s->entity_base = base;
     s->cap_refusals = 0u;
     s->writable = 1;
 }
@@ -373,14 +388,14 @@ void su_hstate_note_despawn(SuHostState *s) {
     s->maybe_dead = 1;
 }
 
-void su_hstate_commit(SuHostState *s, const SuEnts *ents) {
+void su_hstate_commit(SuHostState *s, const SuEnts *ents, uint64_t base) {
     HsSide t;
     if ((s->flags & SU_HOST_STATE_DROP_DEAD) != 0u && ents != NULL && s->maybe_dead) {
         s->maybe_dead = 0;
         const HsSide *d = cur(s);
         uint32_t i, first = NONE;
         for (i = 0; i < d->n; i++) {
-            if (su_ents_validate(ents, (SuEntity)d->e[i].entity) != SU_OK) {
+            if (dead_in(ents, d->e[i].entity, base)) {
                 first = i;
                 break;
             }
@@ -397,7 +412,7 @@ void su_hstate_commit(SuHostState *s, const SuEnts *ents) {
             for (i = first; i < w->n; i++) {
                 if (i == first || w->e[i].entity != last) {
                     last = w->e[i].entity;
-                    last_dead = su_ents_validate(ents, (SuEntity)last) != SU_OK;
+                    last_dead = dead_in(ents, last, base);
                 }
                 if (last_dead) {
                     w->live -= w->e[i].len;
