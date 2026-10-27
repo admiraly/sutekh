@@ -556,3 +556,26 @@ then nearest), found by the sweep or, in dense scenes, a hierarchical grid; the 
 is part of the constants and cuts only the most crowded rows (flag 4). `su_host_operator_counters` reports truncation
 and budget counters for both families. Evidence: `docs/SPACE3D.md` section 3 "Broadphase v2" (`space3d_ops`,
 `space3d_dense`, determinism workload `s3_dense`). Handoff: `planning/handoffs/2026-10-26-pair-budget.md`.
+
+## Non-Windows audio output over SDL3 (27 October 2026)
+
+Issue 174. `su_audio_device_open` had only the WASAPI backend, so on Linux it returned `SU_E_UNSUPPORTED_METHOD` and
+the mixer rendered to nowhere. Implemented and tested: `src/audio/su_audio_sdl3.c` (new) adds the non-Windows
+backend: SDL3's default playback device, float32 stereo at the mixer's rate with SDL converting to the device's
+format and rate, driven by SDL's audio thread, which calls back once per device period (no render thread of ours).
+The SDL3 library is opened at run time with `dlopen` (`SUTEKH_SDL3_LIBRARY` overrides the name), so nothing links
+against SDL and only the pinned 3.2 headers are needed at configure time; a build without them keeps
+`src/audio/su_audio_nodevice.c`, and the header search now serves the window and audio backends alike
+(`SUTEKH_WINDOW=OFF` no longer hides it from audio). The SDL stream is the render-ahead buffer: each callback tops it
+up to two device periods so one stays queued, a callback that finds it empty counts as `empty_buffers` and gets the
+same 64-frame de-click fade as the WASAPI path, and the callback allocates nothing. `SuAudioDeviceStats` keeps the
+WASAPI contract (`wait_timeouts` is 0: no event wait; `latency_ms` is the device buffer plus the queued period).
+`include/sutekh/audio.h`, `docs/AUDIO_DEVICE_LATENCY.md`, `docs/BACKENDS_AND_DEPENDENCIES.md` (section 8 and the
+ledger) and `README.md` document it. New tests: `audio_device_backend` (missing library, no device: the defined
+refusal, no crash), `audio_device_backend_no_driver` (a driver that does not exist), `audio_device_sdl3`
+(open/render/stats/close on `SDL_AUDIO_DRIVER=dummy`, mixer and PULL) and `audio_device_sdl3_alloc` (the callback
+allocates nothing, counting allocators). `audio_device` now waits for the first rendered block before measuring its
+0.4 s, which a PipeWire node needs, and runs on the session's PipeWire device. Linux GCC 16.2.1 Release and Clang
+22.1.8 Release `-Werror`: 198 tests, 0 failures, 0 skips. Clang `-DSUTEKH_SANITIZE=address,undefined` (Debug): 197
+of 198, the failure being the pre-existing `window_swapchain_xvfb` LeakSanitizer report inside libSDL3's X11 path
+(reproduced at the base commit). Handoff: `planning/handoffs/2026-10-27-sutekh-174.md`.

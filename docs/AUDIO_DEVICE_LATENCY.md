@@ -1,9 +1,10 @@
 # Device callback timing and underrun recovery
 
-The Windows WASAPI backend reports `SuAudioDeviceStats` through
-`su_audio_device_stats`, `SuAudioSystemStats.device`, and the integrated
-`audio.inspect` response's `device` object. This applies to OWNER render-ahead
-(RING) and PULL rendering, as well as the standalone mixer device.
+Two output backends report `SuAudioDeviceStats` through `su_audio_device_stats`,
+`SuAudioSystemStats.device`, and the integrated `audio.inspect` response's
+`device` object: WASAPI on Windows and SDL3 on other platforms (Linux, and
+wherever the SDL3 headers were found at configure time). This applies to OWNER
+render-ahead (RING) and PULL rendering, as well as the standalone mixer device.
 Stats are cumulative, bounded, allocation-free atomic counters. Concurrent
 reads are approximate: individual counters are race-free, but the snapshot is
 not a transaction. Inspect a PULL system under its owner lock, as usual.
@@ -34,6 +35,42 @@ The API returns zeroed stats for a null device or the unsupported backend.
   command-to-speaker latency. The C stats also identify endpoint name, sample
   rate, and device buffer size. Clock resolution, OS scheduling, backend latency,
   render-ahead occupancy and acoustic latency are different quantities.
+
+## The SDL3 backend (non-Windows)
+
+`src/audio/su_audio_sdl3.c` opens the default playback device through SDL3 and
+lets SDL convert float32 stereo at the mixer's rate to the device's format and
+rate. SDL owns the audio thread: it calls the backend's stream callback once per
+device period, so there is no render thread of ours. The SDL audio stream is the
+render-ahead buffer this backend owns, the counterpart of the WASAPI device
+buffer's padding.
+
+- Each callback tops the stream up to two device periods of input, so one
+  period stays queued while the device consumes one. `additional_amount` is not
+  used; `SDL_GetAudioStreamQueued` gives the queue directly, so a device whose
+  period changes after open is handled without reallocating the render buffer
+  (allocated once at open, sized four periods plus the recovery fade).
+- `callbacks`, `callback_us`, `callback_max_us`, `callback_over_budget` and
+  `frames` count submissions: time from callback entry through
+  `SDL_PutAudioStreamData`, compared against the audio duration submitted, as on
+  WASAPI. `interval_us` samples the interval between callback entries, so a
+  stalled device thread or SDL's own scheduling shows up there.
+- `empty_buffers` counts a callback that found the stream empty (startup
+  included) — the same starvation signal as zero WASAPI padding. A partially
+  drained stream is not counted, as WASAPI does not count a partial buffer.
+- `wait_timeouts` is always 0: this backend waits on no event, SDL's thread
+  does the pacing. `backend_errors` counts a failed stream write and a device
+  buffer that outgrew the render buffer allocated at open.
+- `buffer_frames` and `stream_latency_ms` are in the stream's (the mixer's)
+  frames, so `buffer_frames / sample_rate` is a duration. SDL reports no latency,
+  so `latency_ms` is the device buffer plus the one period kept queued, computed
+  at open; it is not a measured command-to-speaker latency. The endpoint name
+  carries SDL's audio driver in parentheses (`pipewire`, `pulseaudio`, `alsa`,
+  or `dummy`), which is what identifies the path a run took.
+- The recovery policy below applies unchanged: a callback that finds the stream
+  empty fades the newly rendered block in from zero, in mixer and PULL mode
+  alike. Nothing is allocated, locked (beyond the stream's own reentrant lock) or
+  blocked inside the callback.
 
 ## Recovery policy
 
@@ -120,7 +157,9 @@ then `0x80070490`), so the profile returned 77. Run it on real hardware.
 
 ## Remaining platform work
 
-Linux and macOS output backends remain unimplemented. Their offline paths and
+Linux output is implemented (SDL3, above) and exercised on PipeWire and on SDL's
+dummy driver; PulseAudio, ALSA, JACK and sndio go through the same SDL path but
+were not run here. macOS uses the same backend and is untested. Offline paths and
 zero-valued unsupported-device stats remain available. Physical loopback/acoustic
 latency, endpoint-loss recovery, and multi-hour qualification on multiple device
 drivers are not established by this profile.

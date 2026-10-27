@@ -149,6 +149,12 @@ and keyboard, mouse and gamepad input in the `sutekh/input.h` model. The SDL 3 l
 at run time, so nothing links against it; without it or without a display, window creation fails with a reason
 and offscreen rendering still works.
 
+**Non-Windows audio output.** The same pinned headers give `su_audio` an SDL 3 output device
+(`su_audio_device_open`, `sutekh/audio.h`): SDL's default playback device, float32 stereo at the mixer's rate, with
+SDL converting and calling back once per device period. The library is opened at run time too, so headless builds
+need nothing, and without it (or without a device) opening reports `SU_E_UNSUPPORTED_METHOD` with a reason. Windows
+keeps WASAPI.
+
 ### Licensing and commercial use
 
 Copyright (c) 2026 **admiraly**, the current project owner. Sutekh is
