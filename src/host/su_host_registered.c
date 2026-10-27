@@ -24,6 +24,7 @@
 
 #include "host/su_xxh64.h"
 #include "ir/su_lir.h"
+#include "ir/su_ops03.h"
 #include "ir/su_sha256.h"
 #include "platform/su_thread.h"
 #include "runtime/rts/host_decl.h"
@@ -36,8 +37,10 @@ struct HostRegOp {
     HostOperator op;              /* what lookups return */
     SuHostOpDesc desc;            /* internal descriptor; run = reg_run, host_ctx NULL (every entry has an instance) */
     SuHostField *fields;          /* desc.fields */
+    SuHostField *tfields;         /* desc.target_fields (issue 140; NULL when the operator has no target set) */
     SuHostOperatorDesc pub;       /* the caller's descriptor, strings and fields pointing at the copies below */
     SuHostOperatorField *pub_fields;
+    SuHostOperatorField *pub_tfields;
     char *system_id;
     char *schema_id;
     char *operator_name;
@@ -54,12 +57,16 @@ typedef struct RegInst {
     const HostRegOp *reg;
     uint64_t rows;
     SuHostOperatorColumn *cols;   /* field_count; field_id and access fixed, pointers set per call */
+    SuHostOperatorColumn *tcols;  /* target_field_count (issue 140), or NULL */
+    uint64_t trows;               /* rows of the target table */
+    uint64_t tbase;               /* world slot of the target table's local slot 0 */
     uint64_t *in_hash;            /* field_count */
     uint8_t *alive;               /* rows */
     uint32_t *gen;                /* rows */
     void *scratch;
     size_t scratch_bytes;
     uint64_t base;                /* world slot of the table's local slot 0 (issue 140; 0 for table 0) */
+    uint64_t world_slots;         /* world slots of every table together (see su_hstate_begin_run) */
     RegData *data;
     SuHostState *state;           /* operator state (issue 139), NULL when the descriptor declares none */
     SuEvent *ev;                  /* max_events_per_tick records of this tick (issue 172), or NULL */
@@ -80,11 +87,17 @@ _Static_assert(SU_HOST_OPERATOR_DESC_V2_SIZE == (sizeof(void *) == 8u ? 136u : 1
 /* Version 3 appends two u32 without padding (issue 172). */
 _Static_assert(SU_HOST_OPERATOR_DESC_V3_SIZE == (sizeof(void *) == 8u ? 144u : 108u),
                "SU_HOST_OPERATOR_DESC_V3_SIZE moved");
-_Static_assert(sizeof(SuHostOperatorDesc) == SU_HOST_OPERATOR_DESC_V3_SIZE, "descriptor has trailing padding");
+/* Version 4 appends two u32 and a pointer (issue 140, the target set). */
+_Static_assert(SU_HOST_OPERATOR_DESC_V4_SIZE == (sizeof(void *) == 8u ? 160u : 120u),
+               "SU_HOST_OPERATOR_DESC_V4_SIZE moved");
+_Static_assert(sizeof(SuHostOperatorDesc) == SU_HOST_OPERATOR_DESC_V4_SIZE, "descriptor has trailing padding");
 /* SuHostOperatorRun through `state` (the layout an operator built against the 2026-10-26 header reads). */
 _Static_assert(SU_HOST_OPERATOR_RUN_STATE_SIZE == (sizeof(void *) == 8u ? 120u : 84u),
                "SU_HOST_OPERATOR_RUN_STATE_SIZE moved: the run struct's released fields may not change");
-_Static_assert(sizeof(SuHostOperatorRun) == (sizeof(void *) == 8u ? 136u : 92u), "run struct has trailing padding");
+_Static_assert(SU_HOST_OPERATOR_RUN_EVENTS_SIZE == (sizeof(void *) == 8u ? 136u : 92u),
+               "SU_HOST_OPERATOR_RUN_EVENTS_SIZE moved");
+/* The 2026-10-27 layout with the world handle space and target sets (issue 140). */
+_Static_assert(sizeof(SuHostOperatorRun) == SU_HOST_OPERATOR_RUN_TARGETS_SIZE, "run struct has trailing padding");
 _Static_assert(offsetof(SuHostOperatorDesc, constants_hash) == (sizeof(void *) == 8u ? 48u : 32u),
                "v1 descriptor layout changed");
 
@@ -188,7 +201,14 @@ static void reg_entry_free(HostRegOp *r) {
         }
     }
     free(r->fields);
+    if (r->tfields != NULL) {
+        for (i = 0; i < r->desc.target_field_count; i++) {
+            free((char *)r->tfields[i].name);
+        }
+    }
+    free(r->tfields);
     free(r->pub_fields);
+    free(r->pub_tfields);
     free(r->system_id);
     free(r->schema_id);
     free(r->operator_name);
@@ -214,6 +234,7 @@ static void reg_destroy(void *p) {
     data_unref(ri->data);
     su_hstate_destroy(ri->state);
     free(ri->cols);
+    free(ri->tcols);
     free(ri->in_hash);
     free(ri->alive);
     free(ri->gen);
@@ -240,6 +261,7 @@ static uint32_t reg_create(const HostOperator *op, uint64_t rows, void **inst) {
     }
     ri->reg = r;
     ri->rows = rows;
+    ri->world_slots = rows; /* a single-table world: world slots are the rows; su_host sets the real count */
     ri->cols = calloc(n, sizeof *ri->cols);
     ri->in_hash = calloc(n, sizeof *ri->in_hash);
     ri->alive = malloc((size_t)rows);
@@ -251,6 +273,17 @@ static uint32_t reg_create(const HostOperator *op, uint64_t rows, void **inst) {
     for (i = 0; i < n; i++) {
         ri->cols[i].field_id = r->desc.fields[i].id;
         ri->cols[i].access = r->desc.fields[i].access;
+    }
+    if (r->desc.target_field_count != 0u) {
+        ri->tcols = calloc(r->desc.target_field_count, sizeof *ri->tcols);
+        if (ri->tcols == NULL) {
+            reg_destroy(ri);
+            return SU_E_RESOURCE_LIMIT;
+        }
+        for (i = 0; i < r->desc.target_field_count; i++) {
+            ri->tcols[i].field_id = r->desc.target_fields[i].id;
+            ri->tcols[i].access = SU_ACCESS_READ;
+        }
     }
     if (r->pub.state_max_entries != 0u) {
         uint32_t st = su_hstate_create(r->pub.state_max_entries, r->pub.state_max_bytes, r->pub.state_flags,
@@ -302,7 +335,9 @@ static uint32_t reg_emit_event(void *ctx, uint32_t slot, uint32_t kind, uint32_t
         ri->ev_refused = SU_E_TYPE;
         return SU_E_TYPE;
     }
-    if ((uint64_t)slot >= ri->rows) {
+    if ((uint64_t)slot >= ri->world_slots) {
+        /* A multi-table world's event slot is a WORLD slot (issue 140): any slot of any table, so an operator can
+         * report a row of the table it queried. A single-table world's world_slots is its row count. */
         ri->ev_refused = SU_E_INVALID_ARGUMENT;
         return SU_E_INVALID_ARGUMENT;
     }
@@ -350,20 +385,25 @@ void su_host_operator_event_config(const HostOperator *op, uint32_t *cap, SuHost
 
 /* The schedule's host-entry call (schedule.c run_host): in holds the declared readable lanes (working columns),
  * out the declared writable lanes (staging; read-write lanes already hold their working values), both under the
- * descriptor's IDs. Allocates nothing. */
-static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
+ * descriptor's IDs; t (issue 140) holds the target set of a cross-table operator, or NULL. Allocates nothing. */
+static uint32_t reg_run_impl(const SuWorld *w, const SuInvocation *in, SuOutputs *out, const SuHostOpTargets *t,
+                             void *host_ctx) {
     RegInst *ri = (RegInst *)host_ctx;
     const HostRegOp *r;
     SuHostOperatorRun run;
+    uint64_t own;
     size_t bytes;
     int check_inputs;
     uint32_t i, st;
 
-    if (ri == NULL || w == NULL || in == NULL || out == NULL || in->row_count != ri->rows) {
+    /* The instance's capacity is the own table's rows, plus the target table's rows for a cross-table entry (so one
+     * scratch can cover both); the run itself iterates the own table, whose row count the invocation carries. */
+    if (ri == NULL || w == NULL || in == NULL || out == NULL || in->row_count > ri->rows) {
         return SU_E_INTERNAL;
     }
+    own = in->row_count;
     r = ri->reg;
-    bytes = (size_t)ri->rows * sizeof(uint32_t);
+    bytes = (size_t)own * sizeof(uint32_t);
     check_inputs = (r->pub.flags & SU_HOST_OPERATOR_TRUST_INPUTS) == 0u;
     ri->why[0] = '\0';
     for (i = 0; i < r->desc.field_count; i++) {
@@ -373,7 +413,7 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
         c->out = NULL;
         if ((f->access & SU_ACCESS_READ) != 0u) {
             const SuColumnBinding *b = su_world_find_binding(in->bindings, in->binding_count, f->id);
-            if (b == NULL || b->row_count != ri->rows) {
+            if (b == NULL || b->row_count != own) {
                 return SU_E_INTERNAL;
             }
             c->in = (const uint32_t *)b->data;
@@ -383,7 +423,7 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
         }
         if ((f->access & SU_ACCESS_WRITE) != 0u) {
             const SuColumnBinding *b = su_world_find_binding(out->bindings, out->binding_count, f->id);
-            if (b == NULL || b->row_count != ri->rows) {
+            if (b == NULL || b->row_count != own) {
                 return SU_E_INTERNAL;
             }
             c->out = (uint32_t *)b->data;
@@ -392,9 +432,9 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
             }
         }
     }
-    st = su_world_alive_view(w, 0u, (uint32_t)ri->rows, ri->alive);
+    st = su_world_alive_view(w, 0u, (uint32_t)own, ri->alive);
     if (st == SU_OK) {
-        st = su_world_generation_view(w, 0u, (uint32_t)ri->rows, ri->gen);
+        st = su_world_generation_view(w, 0u, (uint32_t)own, ri->gen);
     }
     if (st != SU_OK) {
         return SU_E_INTERNAL;
@@ -409,9 +449,9 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
     run.struct_size = (uint32_t)sizeof run;
     run.column_count = r->desc.field_count;
     run.columns = ri->cols;
-    run.rows = ri->rows;
+    run.rows = own;
     run.row_begin = 0u;
-    run.row_end = ri->rows;
+    run.row_end = own;
     run.chunk_index = 0u;
     run.chunk_count = 1u;
     run.tick = su_world_tick(w);
@@ -425,8 +465,33 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
     run.state = ri->state;
     run.emit_event = ri->ev != NULL ? reg_emit_event : NULL;
     run.emit_ctx = ri->ev != NULL ? ri : NULL;
+    run.table_base = ri->base;
+    run.target_table = t != NULL ? t->table : SU_HOST_TABLE_NONE;
+    run.target_column_count = 0u;
+    run.target_columns = NULL;
+    run.target_rows = 0u;
+    run.target_base = 0u;
+    run.target_alive = NULL;
+    run.target_generation = NULL;
+    if (t != NULL) {
+        if (ri->tcols == NULL || t->column_count != r->desc.target_field_count) {
+            return SU_E_INTERNAL;
+        }
+        for (i = 0; i < t->column_count; i++) {
+            ri->tcols[i].in = t->columns[i].in;
+            ri->tcols[i].out = NULL;
+        }
+        ri->trows = t->rows;
+        ri->tbase = t->base;
+        run.target_column_count = t->column_count;
+        run.target_columns = ri->tcols;
+        run.target_rows = t->rows;
+        run.target_base = t->base;
+        run.target_alive = t->alive;
+        run.target_generation = t->generation;
+    }
     if (ri->state != NULL) {
-        su_hstate_begin_run(ri->state, ri->alive, ri->gen, ri->rows, ri->base);
+        su_hstate_begin_run(ri->state, ri->alive, ri->gen, own, ri->base, ri->world_slots);
     }
     st = r->pub.run(&run, r->pub.user);
     if (ri->state != NULL) {
@@ -461,6 +526,15 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
         }
     }
     return SU_OK;
+}
+
+static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out, void *host_ctx) {
+    return reg_run_impl(w, in, out, NULL, host_ctx);
+}
+
+static uint32_t reg_run_targets(const SuWorld *w, const SuInvocation *in, SuOutputs *out, const SuHostOpTargets *t,
+                                void *host_ctx) {
+    return reg_run_impl(w, in, out, t, host_ctx);
 }
 
 /* The world-specific part of a registered system's semantic hash: the descriptor flags and the scratch size for
@@ -523,11 +597,13 @@ static const char *reg_last_error(const void *inst) {
 }
 
 /* Called by su_host_step before every tick, so a reason can only belong to this tick's attempt. */
-/* The world slot of the operator's table's local slot 0 (issue 140; 0 for table 0). */
-static void reg_set_base(void *inst, uint64_t base) {
+/* The world slot of the operator's table's local slot 0 and the world's slot count (issue 140; 0 and the table's
+ * rows for table 0 of a single-table world). */
+static void reg_set_base(void *inst, uint64_t base, uint64_t world_slots) {
     RegInst *ri = inst;
     if (ri != NULL) {
         ri->base = base;
+        ri->world_slots = world_slots;
     }
 }
 
@@ -761,6 +837,31 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError
     if (st != SU_OK) {
         return st;
     }
+    /* Cross-table target set (version 4 fields; all zero for an earlier descriptor). */
+    if (desc->target_reserved != 0u || (desc->target_field_count == 0u) != (desc->target_fields == NULL) ||
+        desc->target_field_count > SU_LIMIT_FIELDS) {
+        return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX,
+                       "target: target_field_count and target_fields must be both empty (no target set) or both set "
+                       "(1..%u lanes), target_reserved 0",
+                       (unsigned)SU_LIMIT_FIELDS);
+    }
+    for (i = 0; i < desc->target_field_count; i++) {
+        const SuHostOperatorField *f = &desc->target_fields[i];
+        if (!ident_ok(f->name, SU_WORLD_NAME_MAX) || f->reserved != 0u || f->access != SU_ACCESS_READ ||
+            su_type_lanes(f->type) == 0u || f->id == 0u ||
+            (i > 0u && f->id <= desc->target_fields[i - 1u].id)) {
+            return reg_err(err, SU_E_INVALID_ARGUMENT, i,
+                           "target field %u must be a read-only lane: id >= 1, ascending, a known type, "
+                           "access read, reserved 0 and a name of [A-Za-z0-9_.-]", (unsigned)i);
+        }
+        if (su_type_lanes(f->type) == 2u &&
+            (i + 1u >= desc->target_field_count || desc->target_fields[i + 1u].id != f->id + 1u ||
+             desc->target_fields[i + 1u].type != f->type)) {
+            return reg_err(err, SU_E_INVALID_ARGUMENT, i,
+                           "target field %u is a 64-bit lane: the next entry must be id + 1 with the same type",
+                           (unsigned)i);
+        }
+    }
     if (su_host_builtin_find(desc->system_id) != NULL) {
         return reg_err(err, SU_E_DUPLICATE_KEY, UINT32_MAX, "system_id %s names an operator built into this library",
                        desc->system_id);
@@ -799,8 +900,12 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError
     r->fields = calloc(desc->field_count, sizeof *r->fields);
     r->pub_fields = calloc(desc->field_count, sizeof *r->pub_fields);
     r->desc.field_count = desc->field_count; /* reg_entry_free walks the names */
+    if (desc->target_field_count != 0u) {
+        r->tfields = calloc(desc->target_field_count, sizeof *r->tfields);
+        r->pub_tfields = calloc(desc->target_field_count, sizeof *r->pub_tfields);
+    }
     if (r->system_id == NULL || r->schema_id == NULL || r->operator_name == NULL || r->fields == NULL ||
-        r->pub_fields == NULL) {
+        r->pub_fields == NULL || (desc->target_field_count != 0u && (r->tfields == NULL || r->pub_tfields == NULL))) {
         reg_entry_free(r);
         return reg_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, "out of memory");
     }
@@ -817,11 +922,26 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError
         r->pub_fields[i] = desc->fields[i];
         r->pub_fields[i].name = nm;
     }
+    r->desc.target_field_count = desc->target_field_count; /* reg_entry_free walks the names */
+    for (i = 0; i < desc->target_field_count; i++) {
+        char *nm = dup_str(desc->target_fields[i].name);
+        if (nm == NULL) {
+            reg_entry_free(r);
+            return reg_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, "out of memory");
+        }
+        r->tfields[i].id = desc->target_fields[i].id;
+        r->tfields[i].type = desc->target_fields[i].type;
+        r->tfields[i].access = SU_ACCESS_READ;
+        r->tfields[i].name = nm;
+        r->pub_tfields[i] = desc->target_fields[i];
+        r->pub_tfields[i].name = nm;
+    }
     r->pub = *desc;
     r->pub.system_id = r->system_id;
     r->pub.schema_id = r->schema_id;
     r->pub.operator_name = r->operator_name;
     r->pub.fields = r->pub_fields;
+    r->pub.target_fields = desc->target_field_count != 0u ? r->pub_tfields : NULL;
     r->desc.system_id = r->system_id;
     r->desc.schema_id = r->schema_id;
     r->desc.operator_version = desc->operator_version;
@@ -829,6 +949,8 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError
     r->desc.fields = r->fields;
     r->desc.run = reg_run;
     r->desc.host_ctx = NULL;
+    r->desc.target_fields = desc->target_field_count != 0u ? r->tfields : NULL;
+    r->desc.run_targets = desc->target_field_count != 0u ? reg_run_targets : NULL;
     if (su_host_desc_validate(&r->desc) != SU_OK) {
         reg_entry_free(r);
         return reg_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, "descriptor refused by the host declaration rules");

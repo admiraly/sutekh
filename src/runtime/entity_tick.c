@@ -13,11 +13,13 @@
 #include "world/su_world.h"
 
 /* Per-chunk emission target: the writer of (system, chunk). One per worker; `chunk` is set before
- * each chunk runs on that worker. */
+ * each chunk runs on that worker. base is the world slot of the table's local slot 0 (issue 140): the VM emits
+ * world slots (slot_u32 = base + row), and the queue indexes rows by local slot, so the writer subtracts it. */
 typedef struct EntEmit {
     SuCmdQ *q;
     uint32_t sys;
     uint64_t chunk;
+    uint64_t base;
 } EntEmit;
 
 /* State of one entity system for one run call. Column views are rebuilt per tick (publish swaps the
@@ -27,6 +29,8 @@ typedef struct EntSys {
     SuWorld *w;
     SuCmdQ *q;
     uint32_t sys;
+    uint32_t table;             /* table this entry iterates (issue 140; 0 for a classic world) */
+    uint64_t base;              /* world slot of that table's local slot 0 */
     uint64_t rows;
     uint32_t tick_low;
     uint32_t layout_generation;
@@ -48,17 +52,23 @@ typedef struct EntSys {
     uint32_t *status;           /* one per chunk of this run */
 } EntSys;
 
-/* Per-call state kept between su_ent_run_ticks calls (2026-10-18): the command queue, job pool, per-system VM
- * contexts (with their plans) and scratch arrays depend only on the key below, so a caller that steps one tick
+/* Per-call state kept between su_ent_run_ticks_tables calls (2026-10-18): the command queue, job pool, per-system
+ * VM contexts (with their plans) and scratch arrays depend only on the key below, so a caller that steps one tick
  * per call (or re-simulates K ticks after a rollback) does not rebuild them every call. The key holds every
  * input of their construction; any difference rebuilds. Results do not depend on reuse: every tick resets the
- * queue, rebinds the column views and sets each chunk's entity view, exactly as a fresh call does. */
+ * queue, rebinds the column views and sets each chunk's entity view, exactly as a fresh call does.
+ *
+ * Tables (issue 140): one queue for the whole world (so a tick's records merge in schedule order across tables)
+ * sized for the largest table, one entry per schedule system with its own table's world, rows, layout generation
+ * and base. The key covers the table count, every table's rows and layout generation, and every entry as before. */
 typedef struct EntCache {
     int valid;
     const SuSchedule *s;
     uint32_t count;
-    uint32_t layout_generation;
-    uint64_t rows;
+    uint32_t nw;
+    uint32_t layout_generation[SU_SCHED_MAX_TABLES];
+    uint64_t rows[SU_SCHED_MAX_TABLES];
+    uint64_t base[SU_SCHED_MAX_TABLES];
     uint32_t wk;
     uint32_t vm_tier;
     const SuLirModule *mods[SU_SCHED_MAX_SYSTEMS];
@@ -110,15 +120,24 @@ static void ent_cache_drop(EntCache *c) {
 
 static int ent_emit_despawn(void *user, uint32_t slot, uint32_t seq, uint64_t expected_handle) {
     EntEmit *e = user;
-    return su_cmdq_append_struct(e->q, e->sys, e->chunk, slot, seq, SU_STRUCT_DESPAWN, expected_handle,
-                                 0u, 0u) == SU_OK
+    if ((uint64_t)slot < e->base) {
+        return -1;
+    }
+    return su_cmdq_append_struct(e->q, e->sys, e->chunk, (uint32_t)((uint64_t)slot - e->base), seq,
+                                 SU_STRUCT_DESPAWN, expected_handle, 0u, 0u) == SU_OK
                ? 0
                : -1;
 }
 
 static int ent_emit_event(void *user, uint32_t slot, uint32_t seq, uint32_t kind, uint32_t a, uint32_t b) {
     EntEmit *e = user;
-    return su_cmdq_append_event(e->q, e->sys, e->chunk, slot, seq, kind, a, b) == SU_OK ? 0 : -1;
+    if ((uint64_t)slot < e->base) {
+        return -1;
+    }
+    return su_cmdq_append_event(e->q, e->sys, e->chunk, (uint32_t)((uint64_t)slot - e->base), seq, kind, a, b) ==
+                   SU_OK
+               ? 0
+               : -1;
 }
 
 /* ---- lifecycle ---- */
@@ -292,8 +311,11 @@ static void ent_chunk(uint32_t chunk, uint32_t worker, void *argp) {
     e->emit[worker].q = e->q;
     e->emit[worker].sys = e->sys;
     e->emit[worker].chunk = chunk;
-    st = su_vm_context_set_entity_view(e->ctx[worker], e->alive[worker], e->gen[worker], (uint32_t)begin,
-                                       e->tick_low, &e->vem[worker]);
+    e->emit[worker].base = e->base;
+    /* slot_u32, despawn_self and emit_event name WORLD slots (issue 140): the base of the table plus the row. A
+     * single-table world's base is 0, so its slots are the row indices, as before. */
+    st = su_vm_context_set_entity_view(e->ctx[worker], e->alive[worker], e->gen[worker],
+                                       (uint32_t)(e->base + begin), e->tick_low, &e->vem[worker]);
     if (st != SU_OK) {
         e->status[chunk] = st;
         return;
@@ -316,7 +338,8 @@ static void ent_chunk(uint32_t chunk, uint32_t worker, void *argp) {
     outs.reserved = 0u;
     outs.bindings = so;
     if (e->mod->uses_gather) {
-        /* IR 0.4 cross-row reads see the whole table (entry state), never just this chunk. */
+        /* IR 0.4 cross-row reads see the whole table (entry state), never just this chunk. Their slot operands stay
+         * row indices of this table (host.h, "tables": gather_* and find_eq_u32 never cross a table). */
         SuInvocation whole = inv;
         whole.bindings = e->base_in;
         whole.row_count = e->rows;
@@ -328,8 +351,9 @@ static void ent_chunk(uint32_t chunk, uint32_t worker, void *argp) {
     }
     if (e->mod->uses_handle_live) {
         /* IR 0.4 handle_live answers from the whole entity table of the tick start (structural changes apply only
-         * at the boundary), never just this chunk. */
-        st = su_vm_context_set_entity_table(e->ctx[worker], e->all_alive, e->all_gen, e->rows);
+         * at the boundary), never just this chunk. Its slot operand is a world slot. */
+        st = su_vm_context_set_entity_table_base(e->ctx[worker], e->all_alive, e->all_gen, e->rows,
+                                                 (uint32_t)e->base);
         if (st != SU_OK) {
             e->status[chunk] = st;
             return;
@@ -371,7 +395,8 @@ static void ent_sys_free(EntSys *e) {
 }
 
 static uint32_t ent_sys_create(EntSys *e, const SuSchedule *s, uint32_t i, SuWorld *w, SuCmdQ *q,
-                               uint32_t wk, uint64_t rows, uint32_t *status) {
+                               uint32_t wk, uint64_t rows, uint64_t base, uint32_t layout_generation,
+                               uint32_t *status) {
     const SuLirModule *m = s->sys[i].mod;
     uint32_t k;
     uint32_t st = SU_E_RESOURCE_LIMIT;
@@ -382,8 +407,12 @@ static uint32_t ent_sys_create(EntSys *e, const SuSchedule *s, uint32_t i, SuWor
     e->w = w;
     e->q = q;
     e->sys = i;
+    e->table = s->sys[i].table;
+    e->base = base;
     e->rows = rows;
-    e->layout_generation = s->layout_generation;
+    /* The system's own table's layout generation (issue 140): a table's systems are verified against that
+     * table's schema, which may have a different generation from table 0's. */
+    e->layout_generation = layout_generation;
     e->wk = wk;
     e->status = status;
     e->base_in = calloc(nf, sizeof *e->base_in);
@@ -414,7 +443,7 @@ static uint32_t ent_sys_create(EntSys *e, const SuSchedule *s, uint32_t i, SuWor
         if (e->alive[k] == NULL || e->gen[k] == NULL) {
             goto fail;
         }
-        st = su_vm_context_create(m, s->layout_generation, &e->ctx[k]);
+        st = su_vm_context_create(m, layout_generation, &e->ctx[k]);
         if (st == SU_OK && s->sys[i].vm_tier != 0u) {
             st = su_vm_context_set_tier(e->ctx[k], s->sys[i].vm_tier);
         }
@@ -505,9 +534,21 @@ static uint32_t ent_sys_run(EntSys *e, SuJobPool *pool, uint64_t chunks, const u
 
 /* ---- boundary ---- */
 
+/* One table's despawn target (issue 140): the working entity table and the world slot of its local slot 0, so a
+ * world handle from an emitter becomes the table-local handle the entity table knows. */
+typedef struct EntDespawn {
+    SuEnts *ents;
+    uint64_t base;
+} EntDespawn;
+
 static uint32_t despawn_cb(void *ctx, uint64_t handle, uint32_t *old_gen) {
-    SuEnts *t = ctx;
-    uint32_t st = su_ents_despawn(t, handle);
+    EntDespawn *d = ctx;
+    uint32_t slot = SU_ENTITY_SLOT(handle);
+    uint32_t st;
+    if ((uint64_t)slot < d->base) {
+        return SU_E_STALE_HANDLE;
+    }
+    st = su_ents_despawn(d->ents, SU_ENTITY_MAKE(slot - (uint32_t)d->base, SU_ENTITY_GEN(handle)));
     if (st == SU_OK && old_gen != NULL) {
         *old_gen = SU_ENTITY_GEN(handle);
     }
@@ -515,7 +556,8 @@ static uint32_t despawn_cb(void *ctx, uint64_t handle, uint32_t *old_gen) {
 }
 
 /* Copies one host entry's records into the tick's host event buffer (issue 172), numbering them by system so the
- * commit can interleave them with the IR systems' events. */
+ * commit can interleave them with the IR systems' events. The records carry the world slot the operator named
+ * (issue 140); the engine checks it against the world's slots at creation of the buffer's cap, never here. */
 static uint32_t cache_host_events(EntCache *c, uint32_t sys, const SuHostOpEvents *ev) {
     uint64_t k;
     if (ev->count == 0u) {
@@ -532,50 +574,97 @@ static uint32_t cache_host_events(EntCache *c, uint32_t sys, const SuHostOpEvent
     return SU_OK;
 }
 
-/* Merge, apply to the working table, log, zero the despawned columns. The caller publishes. */
-static uint32_t boundary(SuWorld *w, SuCmdQ *q, SuEventLog *log, uint64_t tick, const SuEvent *hev,
-                         uint64_t hev_n) {
-    SuCmdCallbacks cb;
+/* Merge, apply to each table's working entity table, log, zero the despawned columns. The caller publishes. */
+static uint32_t boundary(SuWorld *const *ws, uint32_t nw, const int *begun, const SuSchedule *s, SuCmdQ *q,
+                         SuEventLog *log, const EntCache *c, uint64_t tick) {
+    SuCmdCallbacks cb[SU_SCHED_MAX_TABLES];
+    EntDespawn ctx[SU_SCHED_MAX_TABLES];
+    uint32_t sys_table[SU_SCHED_MAX_SYSTEMS];
+    uint64_t base[SU_SCHED_MAX_TABLES];
+    SuCmdTables t;
     SuCommitReport rep;
     uint32_t st;
-    /* The working table belongs to the world and is mutated only inside the open tick, which the
-     * caller guarantees. The cast drops const only for this boundary call. */
-    cb.ctx = (SuEnts *)su_world_entities_working(w);
-    cb.despawn = despawn_cb;
-    memset(&rep, 0, sizeof rep);
-    if (cb.ctx == NULL) {
-        return SU_E_INTERNAL;
+    uint32_t i;
+
+    memset(cb, 0, sizeof cb);
+    memset(&t, 0, sizeof t);
+    for (i = 0; i < nw; i++) {
+        /* The working table belongs to the world and is mutated only inside the open tick, which the caller
+         * guarantees. The cast drops const only for this boundary call. */
+        ctx[i].ents = (SuEnts *)su_world_entities_working(ws[i]);
+        ctx[i].base = c->base[i];
+        if (ctx[i].ents == NULL) {
+            return SU_E_INTERNAL;
+        }
+        cb[i].ctx = &ctx[i];
+        cb[i].despawn = despawn_cb;
+        base[i] = c->base[i];
     }
-    st = su_cmdq_commit_with_events(q, &cb, tick, log, hev, hev_n, &rep);
+    for (i = 0; i < s->count; i++) {
+        sys_table[i] = s->sys[i].table;
+    }
+    t.cb = cb;
+    t.sys_table = sys_table;
+    t.base = base;
+    t.table_count = nw;
+    memset(&rep, 0, sizeof rep);
+    st = su_cmdq_commit_tables(q, &t, tick, log, c->hev, c->hev_n, &rep);
     if (st != SU_OK) {
         return st;
     }
-    return su_world_zero_dead(w);
+    for (i = 0; i < nw; i++) {
+        if (begun[i]) {
+            st = su_world_zero_dead(ws[i]);
+            if (st != SU_OK) {
+                return st;
+            }
+        }
+    }
+    return SU_OK;
 }
 
 /* ---- tick loop ---- */
 
-uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks, SuSchedFault fault,
-                          void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
-                          uint32_t *failed_index) {
+static uint64_t max_chunks(const uint64_t *rows, uint32_t nw) {
+    uint64_t chunks = 0u;
+    uint32_t i;
+    for (i = 0; i < nw; i++) {
+        uint64_t n = (rows[i] + SU_CHUNK_SLOTS - 1u) / SU_CHUNK_SLOTS;
+        chunks = n > chunks ? n : chunks;
+    }
+    return chunks;
+}
+
+uint32_t su_ent_run_ticks_tables(SuWorld *const *ws, uint32_t nw, SuSchedule *s, SuEntRt *rt, uint64_t ticks,
+                                 SuSchedFault fault, void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
+                                 uint32_t *failed_index) {
     SuCmdQ *q = NULL;
     SuJobPool *pool = NULL;
     EntSys *es = NULL;
     EntCache *c = NULL;
     int hit;
     uint32_t *perm = NULL; /* test seam: forced chunk completion order (opt->seeded_completion) */
-    uint64_t rows;
+    uint64_t rows[SU_SCHED_MAX_TABLES];
+    uint64_t base[SU_SCHED_MAX_TABLES];
+    uint32_t gen[SU_SCHED_MAX_TABLES];
+    int begun[SU_SCHED_MAX_TABLES];
+    int has[SU_SCHED_MAX_TABLES];
     uint64_t chunks;
     uint64_t t;
     uint32_t ps[SU_SCHED_MAX_SYSTEMS];
     uint32_t pe[SU_SCHED_MAX_SYSTEMS];
     uint32_t wk = 1u;
     uint32_t i;
+    uint32_t j;
     uint32_t st = SU_OK;
 
+    if (done == NULL || failed_index == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
     *done = 0u;
     *failed_index = UINT32_MAX;
-    if (w == NULL || s == NULL || rt == NULL || (ticks > 0u && s->count == 0u)) {
+    if (ws == NULL || s == NULL || rt == NULL || nw == 0u || nw > SU_SCHED_MAX_TABLES ||
+        nw < su_sched_table_count(s) || (ticks > 0u && s->count == 0u)) {
         return SU_E_INVALID_ARGUMENT;
     }
     if (opt != NULL) {
@@ -584,15 +673,38 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
     if (wk == 0u || wk > SU_JOBS_MAX_WORKERS) {
         return SU_E_INVALID_ARGUMENT;
     }
-    rows = su_world_row_count(w);
-    chunks = (rows + SU_CHUNK_SLOTS - 1u) / SU_CHUNK_SLOTS;
+    memset(has, 0, sizeof has);
+    for (i = 0; i < s->count; i++) {
+        if (s->sys[i].table >= nw) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        has[s->sys[i].table] = 1;
+    }
+    for (i = 0; i < nw; i++) {
+        if (ws[i] == NULL) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        rows[i] = su_world_row_count(ws[i]);
+        base[i] = 0u;
+        gen[i] = su_world_layout_generation(ws[i]);
+    }
+    for (i = 1; i < nw; i++) {
+        if (rows[i - 1u] > SU_LIMIT_ROWS - base[i - 1u]) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        base[i] = base[i - 1u] + rows[i - 1u];
+    }
+    chunks = max_chunks(rows, nw);
     if (ticks == 0u) {
         return SU_OK;
     }
     sys_row_caps(s, ps, pe);
     c = &rt->cache;
-    hit = c->valid && c->s == s && c->count == s->count && c->layout_generation == s->layout_generation &&
-          c->rows == rows && c->wk == wk && c->vm_tier == su_vm_default_tier();
+    hit = c->valid && c->s == s && c->count == s->count && c->nw == nw && c->wk == wk &&
+          c->vm_tier == su_vm_default_tier();
+    for (i = 0; hit && i < nw; i++) {
+        hit = c->rows[i] == rows[i] && c->layout_generation[i] == gen[i] && c->base[i] == base[i];
+    }
     for (i = 0; hit && i < s->count; i++) {
         const SuSysEntry *e = &s->sys[i];
         hit = c->mods[i] == e->mod && memcmp(c->sem[i], e->mod->semantic_hash, 32u) == 0 &&
@@ -600,8 +712,12 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
               c->tier[i] == e->vm_tier;
     }
     if (!hit) {
+        uint64_t qrows = 0u;
+        for (i = 0; i < nw; i++) {
+            qrows = rows[i] > qrows ? rows[i] : qrows;
+        }
         ent_cache_drop(c);
-        st = su_cmdq_create_ex_checked(s->count, rows, SU_CHUNK_SLOTS,
+        st = su_cmdq_create_ex_checked(s->count, qrows, SU_CHUNK_SLOTS,
                                       ps, SU_SCHED_MAX_SYSTEMS, pe, SU_SCHED_MAX_SYSTEMS,
                                       rt->max_struct_tick, rt->max_events_tick, &c->q);
         if (st == SU_OK) {
@@ -631,12 +747,20 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
             }
         }
         c->count = s->count;
+        c->nw = nw;
+        for (i = 0; i < nw; i++) {
+            c->rows[i] = rows[i];
+            c->base[i] = base[i];
+            c->layout_generation[i] = gen[i];
+        }
         for (i = 0; i < s->count; i++) {
             c->mods[i] = s->sys[i].mod;
         }
         for (i = 0; st == SU_OK && i < s->count; i++) {
+            uint32_t table = s->sys[i].table;
             if (s->sys[i].mod->uses_entity_ops) {
-                st = ent_sys_create(&c->es[i], s, i, w, c->q, wk, rows, c->status);
+                st = ent_sys_create(&c->es[i], s, i, ws[table], c->q, wk, rows[table], base[table],
+                                    gen[table], c->status);
                 c->has_es[i] = st == SU_OK; /* on failure ent_sys_create freed its own state */
             }
         }
@@ -645,8 +769,6 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
             return st;
         }
         c->s = s;
-        c->layout_generation = s->layout_generation;
-        c->rows = rows;
         c->wk = wk;
         c->vm_tier = su_vm_default_tier();
         for (i = 0; i < s->count; i++) {
@@ -664,7 +786,7 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
     es = c->es;
     for (i = 0; i < s->count; i++) {
         if (s->sys[i].mod->uses_entity_ops) {
-            es[i].w = w; /* the world may be a different object between calls (restore) */
+            es[i].w = ws[s->sys[i].table]; /* the world may be a different object between calls (restore) */
         }
     }
     if (opt != NULL && opt->seeded_completion && chunks > 0u) {
@@ -673,42 +795,74 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
             return SU_E_RESOURCE_LIMIT;
         }
     }
+    /* The worlds of the tick, so a host entry bound to a target table can read it (issue 140). */
+    s->tick_worlds = ws;
+    s->tick_nw = nw;
 
     for (t = 0; t < ticks; t++) {
-        uint32_t tick_low = (uint32_t)(su_world_tick(w) + 1u);
-        uint64_t next_tick = su_world_tick(w) + 1u;
-        st = su_world_begin_tick(w);
-        if (st != SU_OK) {
-            goto out;
+        /* The world's tick is the tick of the first table that has a system (a table with no system is only kept
+         * in step, never stepped: issue 140). */
+        uint64_t tick = 0u;
+        uint32_t first = UINT32_MAX;
+        uint32_t tick_low;
+        uint64_t next_tick;
+        for (i = 0; i < nw; i++) {
+            if (has[i]) {
+                first = i;
+                break;
+            }
+        }
+        if (first == UINT32_MAX) {
+            s->tick_worlds = NULL;
+            s->tick_nw = 0u;
+            free(perm);
+            return SU_E_INVALID_ARGUMENT;
+        }
+        tick = su_world_tick(ws[first]);
+        tick_low = (uint32_t)(tick + 1u);
+        next_tick = tick + 1u;
+        memset(begun, 0, sizeof begun);
+        for (j = 0; j < nw; j++) {
+            if (has[j]) {
+                st = su_world_begin_tick(ws[j]);
+                if (st != SU_OK) {
+                    *failed_index = UINT32_MAX;
+                    goto fail;
+                }
+                begun[j] = 1;
+            }
         }
         su_cmdq_reset(q);
         c->hev_n = 0u;
         for (i = 0; i < s->count && st == SU_OK; i++) {
+            uint32_t table = s->sys[i].table;
             if (fault != NULL && fault(i, fault_ctx) != 0) {
                 st = SU_E_CANDIDATE_FAILED;
                 break;
             }
             if (s->sys[i].mod->uses_entity_ops) {
                 const uint32_t *order = NULL;
+                uint64_t n = (rows[table] + SU_CHUNK_SLOTS - 1u) / SU_CHUNK_SLOTS;
                 es[i].tick_low = tick_low;
                 if (perm != NULL) {
                     /* A different seeded completion order for every (tick, system): the merge must not care. */
-                    su_jobs_seeded_permutation((uint32_t)chunks, opt->completion_seed + t * 1000003u + i * 7919u,
+                    su_jobs_seeded_permutation((uint32_t)n, opt->completion_seed + t * 1000003u + i * 7919u,
                                                perm);
                     order = perm;
                 }
-                st = ent_sys_run(&es[i], pool, chunks, order);
+                st = ent_sys_run(&es[i], pool, n, order);
             } else if (s->sys[i].host_event_cap != 0u) {
                 SuHostOpEvents hev;
-                st = su_sched_run_system_events(w, s, i, opt, &hev);
+                st = su_sched_run_system_events(ws[table], s, i, opt, &hev);
                 if (st == SU_OK) {
                     st = cache_host_events(c, i, &hev);
                 }
             } else {
-                st = su_sched_run_system(w, s, i, opt);
+                st = su_sched_run_system(ws[table], s, i, opt);
             }
             if (st == SU_OK) {
-                st = su_world_zero_dead(w);
+                /* Dead rows are canonically zero after every system's commit (contract B1), per table. */
+                st = su_world_zero_dead(ws[table]);
             }
             if (st != SU_OK) {
                 break; /* keep i at the failing system */
@@ -718,26 +872,52 @@ uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks
             st = SU_E_RESOURCE_LIMIT;
         }
         if (st != SU_OK) {
-            su_world_abort(w);
             *failed_index = i < s->count ? i : UINT32_MAX;
-            goto out;
+            goto fail;
         }
-        st = boundary(w, q, rt->log, next_tick, c->hev, c->hev_n);
+        st = boundary(ws, nw, begun, s, q, rt->log, c, next_tick);
         if (st != SU_OK) {
-            su_world_abort(w);
             *failed_index = UINT32_MAX;
-            goto out;
+            goto fail;
         }
-        st = su_world_publish(w);
-        if (st != SU_OK) {
-            su_world_abort(w);
-            *failed_index = UINT32_MAX;
-            goto out;
+        for (j = 0; j < nw; j++) {
+            if (begun[j]) {
+                st = su_world_publish(ws[j]);
+                if (st != SU_OK) {
+                    *failed_index = UINT32_MAX;
+                    goto fail; /* the failing table is still open: fail aborts every begun table */
+                }
+                begun[j] = 0;
+            }
+        }
+        /* A table with no scheduled system was not begun or published; it keeps the world's one tick. */
+        for (j = 0; j < nw; j++) {
+            if (!has[j]) {
+                (void)su_world_set_tick(ws[j], next_tick);
+            }
         }
         *done = t + 1u;
     }
     st = SU_OK;
-out:
+    s->tick_worlds = NULL;
+    s->tick_nw = 0u;
     free(perm);
     return st;
+
+fail:
+    for (j = 0; j < nw; j++) {
+        if (begun[j]) {
+            (void)su_world_abort(ws[j]);
+        }
+    }
+    s->tick_worlds = NULL;
+    s->tick_nw = 0u;
+    free(perm);
+    return st;
+}
+
+uint32_t su_ent_run_ticks(SuWorld *w, SuSchedule *s, SuEntRt *rt, uint64_t ticks, SuSchedFault fault,
+                          void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
+                          uint32_t *failed_index) {
+    return su_ent_run_ticks_tables(&w, 1u, s, rt, ticks, fault, fault_ctx, opt, done, failed_index);
 }

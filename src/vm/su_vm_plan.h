@@ -82,10 +82,12 @@ typedef struct SuVmPlanRun {
     /* IR 0.4: whole-table columns of gather_* / find_eq_u32 (per table index) and their row count. */
     uint32_t *const *gather_cols;
     uint64_t gather_rows;
-    /* IR 0.4: entity table of handle_live (su_handle_live arguments). */
+    /* IR 0.4: entity table of handle_live (su_handle_live arguments). ents_base is the world slot of the table's
+     * local slot 0 (issue 140): a handle_live slot operand is a world slot. */
     const uint8_t *ents_alive;
     const uint32_t *ents_gen;
     uint64_t ents_slots;
+    uint32_t ents_base;
     /* IR 0.4 row filter: NULL filter_col = none. A live row with (filter_col[r] & mask) != value copies the
      * writable lanes filter_lanes[0..n) from input to staging and runs nothing. */
     const uint32_t *filter_col;

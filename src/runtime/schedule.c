@@ -31,10 +31,62 @@ void su_sched_entry_destroy(SuSysEntry *e) {
         free(e->mod);
     }
     free(e->host_bind);
+    free(e->target_bind);
+    free(e->target_alive);
+    free(e->target_gen);
     if (e->host_inst != NULL && e->host_inst_free != NULL) {
         e->host_inst_free(e->host_inst);
     }
     memset(e, 0, sizeof *e);
+}
+
+uint32_t su_sched_set_host_target(SuSchedule *s, uint32_t idx, uint32_t target_table, uint64_t own_base,
+                                  uint64_t target_base, uint64_t target_rows, const uint32_t *bind) {
+    SuSysEntry *e;
+    uint32_t n;
+    uint32_t *copy;
+    if (s == NULL || idx >= s->count || s->sys[idx].kind != SU_SYS_KIND_HOST || bind == NULL ||
+        target_table >= su_sched_table_count(s) || s->sys[idx].host == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    e = &s->sys[idx];
+    n = e->host->target_field_count;
+    if (n == 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    copy = malloc((size_t)n * sizeof *copy);
+    if (copy == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memcpy(copy, bind, (size_t)n * sizeof *copy);
+    if (target_rows > 0u) {
+        /* Allocated once, here (never in a tick). Fresh blocks, so a failed second call leaves the entry intact. */
+        uint8_t *alive = malloc((size_t)target_rows);
+        uint32_t *gen = malloc((size_t)target_rows * sizeof *gen);
+        if (alive == NULL || gen == NULL) {
+            free(alive);
+            free(gen);
+            free(copy);
+            return SU_E_RESOURCE_LIMIT;
+        }
+        free(e->target_alive);
+        free(e->target_gen);
+        e->target_alive = alive;
+        e->target_gen = gen;
+    } else {
+        free(e->target_alive);
+        free(e->target_gen);
+        e->target_alive = NULL;
+        e->target_gen = NULL;
+    }
+    free(e->target_bind);
+    e->target_bind = copy;
+    e->target_bind_count = n;
+    e->target_table = target_table;
+    e->own_base = own_base;
+    e->target_base = target_base;
+    e->target_rows = target_rows;
+    return SU_OK;
 }
 
 uint32_t su_sched_set_host_instance(SuSchedule *s, uint32_t idx, void *inst, void (*free_fn)(void *inst)) {
@@ -266,6 +318,7 @@ uint32_t su_sched_add_table(SuSchedule *s, uint32_t table, SuLirModule *mod, uin
     snprintf(e->capsule_hash, sizeof e->capsule_hash, "%s", mod->capsule_hash_hex);
     snprintf(e->semantic_hash, sizeof e->semantic_hash, "%s", mod->semantic_hash_hex);
     e->table = table;
+    e->target_table = UINT32_MAX; /* no target set unless su_sched_set_host_target names one */
     st = su_vm_context_create(mod, gen, &e->ctx);
     if (st != SU_OK) {
         memset(e, 0, sizeof *e);
@@ -380,6 +433,7 @@ uint32_t su_sched_add_host_bound_table(SuSchedule *s, uint32_t table, const SuHo
     snprintf(e->semantic_hash, sizeof e->semantic_hash, "%s", decl->semantic_hash_hex);
     e->kind = SU_SYS_KIND_HOST;
     e->table = table;
+    e->target_table = UINT32_MAX; /* no target set unless su_sched_set_host_target names one */
     e->host = d;
     e->host_bind = copy;
     e->mod = decl;
@@ -439,6 +493,7 @@ uint32_t su_sched_add_host_table(SuSchedule *s, uint32_t table, const SuHostOpDe
     snprintf(e->semantic_hash, sizeof e->semantic_hash, "%s", decl->semantic_hash_hex);
     e->kind = SU_SYS_KIND_HOST;
     e->table = table;
+    e->target_table = UINT32_MAX; /* no target set unless su_sched_set_host_target names one */
     e->host = d;
     e->mod = decl;
     e->ctx = NULL;
@@ -739,22 +794,28 @@ uint32_t su_sched_check_candidate(const SuSchedule *s, const SuLirModule *m, uin
 /* Host entry (M3-04a, section 3.1). The operator sees only its declared reads and writes: the bindings of
  * other fields are dropped from the views it is given. Staging of a declared write is committed for whole
  * columns, so the operator must store every row of each declared write (copy working to staging first).
- * A failed run commits nothing. ev (optional) receives the events the run appended (issue 172). */
-static uint32_t run_host(SuWorld *w, const SuSysEntry *e, SuHostOpEvents *ev) {
+ * A failed run commits nothing. ev (optional) receives the events the run appended (issue 172).
+ * A cross-table entry (su_sched_set_host_target) also receives its descriptor's target lanes from the target
+ * table's working columns and that table's alive/generation views, filled here for this run (issue 140). */
+static uint32_t run_host(SuSchedule *s, SuWorld *w, const SuSysEntry *e, SuHostOpEvents *ev) {
     const SuHostOpDesc *d = e->host;
     SuInvocation inv;
     SuOutputs out;
     SuColumnBinding rb[SU_LIMIT_FIELDS];
     SuColumnBinding wb[SU_LIMIT_FIELDS];
+    SuHostTargetColumn tcol[SU_LIMIT_FIELDS];
     uint32_t wid[SU_LIMIT_FIELDS];
     uint32_t nr = 0;
     uint32_t nw = 0;
+    uint32_t nt = 0;
     uint32_t i;
     uint32_t st;
     SuInvocation full_inv;
     SuOutputs full_out;
+    SuInvocation tgt_inv;
     uint32_t cur_in = 0;
     uint32_t cur_out = 0;
+    uint32_t cur_tgt = 0;
     void *inst = e->host_inst != NULL ? e->host_inst : d->host_ctx;
 
     if (ev != NULL) {
@@ -769,6 +830,37 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e, SuHostOpEvents *ev) {
     st = su_world_build_outputs(w, &full_out);
     if (st != SU_OK) {
         return st;
+    }
+    if (e->target_table != UINT32_MAX) {
+        SuWorld *tw = NULL;
+        if (s->tick_worlds == NULL || e->target_table >= s->tick_nw ||
+            (tw = s->tick_worlds[e->target_table]) == NULL) {
+            return SU_E_INTERNAL; /* a target-bound entry runs only inside a table tick */
+        }
+        st = su_world_build_read_invocation(tw, &tgt_inv);
+        if (st != SU_OK) {
+            return st;
+        }
+        if (e->target_rows > 0u) {
+            st = su_world_alive_view(tw, 0u, (uint32_t)e->target_rows, e->target_alive);
+            if (st == SU_OK) {
+                st = su_world_generation_view(tw, 0u, (uint32_t)e->target_rows, e->target_gen);
+            }
+            if (st != SU_OK) {
+                return st;
+            }
+        }
+        for (i = 0; i < d->target_field_count; i++) {
+            const SuHostField *f = &d->target_fields[i];
+            const SuColumnBinding *b =
+                su_world_find_binding_from(tgt_inv.bindings, tgt_inv.binding_count, e->target_bind[i], &cur_tgt);
+            if (b == NULL) {
+                return SU_E_SCHEMA_MISMATCH;
+            }
+            tcol[nt].field_id = f->id;
+            tcol[nt].in = (const uint32_t *)b->data;
+            nt++;
+        }
     }
     for (i = 0; i < d->field_count; i++) {
         const SuHostField *f = &d->fields[i];
@@ -801,7 +893,23 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e, SuHostOpEvents *ev) {
     out = full_out;
     out.bindings = wb;
     out.binding_count = nw;
-    st = d->run(w, &inv, &out, inst);
+    if (e->target_table != UINT32_MAX) {
+        SuHostOpTargets t;
+        if (d->run_targets == NULL || d->target_field_count == 0u) {
+            return SU_E_CAPABILITY_DENIED;
+        }
+        t.table = e->target_table;
+        t.rows = e->target_rows;
+        t.base = e->target_base;
+        t.own_base = e->own_base;
+        t.column_count = nt;
+        t.columns = tcol;
+        t.alive = e->target_alive;
+        t.generation = e->target_gen;
+        st = d->run_targets(w, &inv, &out, &t, inst);
+    } else {
+        st = d->run(w, &inv, &out, inst);
+    }
     if (st != SU_OK) {
         return st;
     }
@@ -818,27 +926,33 @@ static uint32_t run_host(SuWorld *w, const SuSysEntry *e, SuHostOpEvents *ev) {
 static uint32_t run_one_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt,
                                SuHostOpEvents *ev) {
     if (s->sys[i].kind == SU_SYS_KIND_HOST) {
-        return run_host(w, &s->sys[i], ev);
+        return run_host(s, w, &s->sys[i], ev);
     }
+    /* The entry's own table's layout generation (issue 140): a table's systems are verified against that table's
+     * schema, whose generation may differ from table 0's. */
+    {
+        uint32_t gen = s->tables[s->sys[i].table].layout_generation;
 #ifdef SU_HAVE_NATIVE
-    if (s->sys[i].native_seq != 0u) {
-        if (opt != NULL && opt->workers > 1u && su_world_row_count(w) >= opt->chunk_min_rows) {
-            return su_nv_run_system_chunked(s->sys[i].native_seq, w, opt->workers, opt->chunk_fault, opt->chunk_ctx);
+        if (s->sys[i].native_seq != 0u) {
+            if (opt != NULL && opt->workers > 1u && su_world_row_count(w) >= opt->chunk_min_rows) {
+                return su_nv_run_system_chunked(s->sys[i].native_seq, w, opt->workers, opt->chunk_fault,
+                                                opt->chunk_ctx);
+            }
+            return su_nv_run_system(s->sys[i].native_seq, w);
         }
-        return su_nv_run_system(s->sys[i].native_seq, w);
-    }
 #endif
-    if (opt != NULL && opt->workers > 1u && su_world_row_count(w) >= opt->chunk_min_rows) {
-        SuJobsOptions jo;
-        SuJobsReport rep;
-        uint32_t st;
-        memset(&jo, 0, sizeof jo);
-        jo.workers = opt->workers;
-        jo.fault = opt->chunk_fault;
-        jo.fault_ctx = opt->chunk_ctx;
-        st = su_jobs_run_system_chunked(w, s->sys[i].mod, s->layout_generation, &jo, &rep);
-        su_jobs_report_free(&rep);
-        return st;
+        if (opt != NULL && opt->workers > 1u && su_world_row_count(w) >= opt->chunk_min_rows) {
+            SuJobsOptions jo;
+            SuJobsReport rep;
+            uint32_t st;
+            memset(&jo, 0, sizeof jo);
+            jo.workers = opt->workers;
+            jo.fault = opt->chunk_fault;
+            jo.fault_ctx = opt->chunk_ctx;
+            st = su_jobs_run_system_chunked(w, s->sys[i].mod, gen, &jo, &rep);
+            su_jobs_report_free(&rep);
+            return st;
+        }
     }
     return su_vm_run_system(w, s->sys[i].ctx);
 }
@@ -943,14 +1057,22 @@ uint32_t su_sched_run_ticks_tables(SuWorld *const *ws, uint32_t nw, SuSchedule *
         if (s->sys[i].table >= nw) {
             return SU_E_INVALID_ARGUMENT;
         }
-        /* The entity tick owns one table's chunk cache, entity table and event buffer in this version (host.h,
-         * "tables"). */
+    }
+    /* A system with entity operations, or a host operator that appends events, runs through the table-aware entity
+     * tick (issue 140): one chunk cache, entity view and command/event queue per table, one log for the world. */
+    for (i = 0; i < s->count; i++) {
         if (s->sys[i].mod->uses_entity_ops || s->sys[i].host_event_cap != 0u) {
-            return SU_E_CAPABILITY_DENIED;
+            if (s->ent == NULL) {
+                return SU_E_INVALID_ARGUMENT;
+            }
+            return su_ent_run_ticks_tables(ws, nw, s, s->ent, ticks, fault, fault_ctx, opt, done, failed_index);
         }
     }
     *done = 0u;
     *failed_index = UINT32_MAX;
+    /* The worlds of the tick, so a host entry bound to a target table can read it (issue 140). */
+    s->tick_worlds = ws;
+    s->tick_nw = nw;
     memset(has, 0, sizeof has);
     for (i = 0; i < s->count; i++) {
         has[s->sys[i].table] = 1;
@@ -1011,8 +1133,12 @@ uint32_t su_sched_run_ticks_tables(SuWorld *const *ws, uint32_t nw, SuSchedule *
                 (void)su_world_abort(ws[j]);
             }
         }
+        s->tick_worlds = NULL;
+        s->tick_nw = 0u;
         return st;
     }
+    s->tick_worlds = NULL;
+    s->tick_nw = 0u;
     return SU_OK;
 }
 

@@ -67,6 +67,11 @@ uint32_t su_vm_context_set_table_view(SuExecContext *ctx, const SuInvocation *ta
  * SU_E_INVALID_ARGUMENT). Returns SU_E_INVALID_ARGUMENT on NULL ctx. */
 uint32_t su_vm_context_set_entity_table(SuExecContext *ctx, const uint8_t *alive, const uint32_t *generations,
                                         uint64_t slot_count);
+/* As su_vm_context_set_entity_table for a table whose local slot 0 is world slot base_slot (issue 140): the slot
+ * operand of handle_live is then a world slot (base_slot + local slot), so handles stored in columns match the
+ * host's. base_slot 0 is exactly the call above. */
+uint32_t su_vm_context_set_entity_table_base(SuExecContext *ctx, const uint8_t *alive, const uint32_t *generations,
+                                             uint64_t slot_count, uint32_t base_slot);
 
 /* Row limit used by the wrapper (default SU_LIMIT_ROWS). Returns
  * SU_E_INVALID_ARGUMENT on NULL ctx. */

@@ -174,6 +174,11 @@ uint32_t su_world_abort(SuWorld *w);
  * READ fields (ascending field ID); writes are staging columns for WRITE fields
  * (ascending field ID). SuOutputs.failed_insn is set to UINT32_MAX. */
 uint32_t su_world_build_invocation(SuWorld *w, SuInvocation *out);
+/* Read views of a table that is not necessarily inside its tick (issue 140): a cross-table operator's target
+ * set reads another table's rows, and a table with no scheduled system is never begun. During a tick this is
+ * exactly su_world_build_invocation (working columns); between ticks it is the committed columns, which is the
+ * tick-start state. A target table's lanes are read-only, so the phase only picks the root. */
+uint32_t su_world_build_read_invocation(SuWorld *w, SuInvocation *out);
 uint32_t su_world_build_outputs(SuWorld *w, SuOutputs *out);
 /* The binding of field id among n bindings without repeated IDs, or NULL. Binary search over the ascending field
  * IDs the two builders produce, then a linear scan when that misses (so an unsorted array gives the same answer

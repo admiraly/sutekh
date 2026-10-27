@@ -302,8 +302,8 @@ static uint32_t exec1(const SuVmPlanInsn *p, int64_t *R, SuVmPlanRun *run, size_
         return SU_OK;
     }
     case SU_OP_HANDLE_LIVE:
-        R[p->d] = (int64_t)su_handle_live(run->ents_alive, run->ents_gen, run->ents_slots, (uint32_t)R[p->a],
-                                          (uint32_t)R[p->b]);
+        R[p->d] = (int64_t)su_handle_live_base(run->ents_alive, run->ents_gen, run->ents_slots, run->ents_base,
+                                               (uint32_t)R[p->a], (uint32_t)R[p->b]);
         return SU_OK;
     case SU_OP_FIND_EQ_U32: {
         const uint32_t *col = run->gather_cols[p->a];

@@ -72,9 +72,11 @@ struct SuExecContext {
     const uint8_t *ents_alive;     /* borrowed; NULL = all slots alive */
     const uint32_t *ents_gen;      /* borrowed; NULL = generation 1 */
     uint64_t ents_slots;
+    uint32_t ents_base;            /* world slot of the table's local slot 0 (issue 140; 0 for table 0) */
     const uint8_t *hl_alive;
     const uint32_t *hl_gen;
     uint64_t hl_slots;
+    uint32_t hl_base;
 };
 
 /* Process default tier for new contexts: 0 = not set (environment SUTEKH_VM_TIER, else planned). */
@@ -509,7 +511,8 @@ static uint32_t su_exec_insn03(SuExecContext *ctx, const SuInsn *ins, size_t r) 
         if (!su_read_u32(ctx, ins->a, &u) || !su_read_u32(ctx, ins->b, &g)) {
             return SU_E_INTERNAL;
         }
-        su_write_reg(ctx, ins->dst, SU_TYPE_BOOL, su_handle_live(ctx->hl_alive, ctx->hl_gen, ctx->hl_slots, u, g));
+        su_write_reg(ctx, ins->dst, SU_TYPE_BOOL,
+                     su_handle_live_base(ctx->hl_alive, ctx->hl_gen, ctx->hl_slots, ctx->hl_base, u, g));
         return SU_OK;
     }
     case SU_OP_FIND_EQ_U32: {
@@ -996,6 +999,11 @@ uint32_t su_vm_context_set_table_view(SuExecContext *ctx, const SuInvocation *ta
 
 uint32_t su_vm_context_set_entity_table(SuExecContext *ctx, const uint8_t *alive, const uint32_t *generations,
                                         uint64_t slot_count) {
+    return su_vm_context_set_entity_table_base(ctx, alive, generations, slot_count, 0u);
+}
+
+uint32_t su_vm_context_set_entity_table_base(SuExecContext *ctx, const uint8_t *alive, const uint32_t *generations,
+                                             uint64_t slot_count, uint32_t base_slot) {
     if (ctx == NULL) {
         return SU_E_INVALID_ARGUMENT;
     }
@@ -1003,6 +1011,7 @@ uint32_t su_vm_context_set_entity_table(SuExecContext *ctx, const uint8_t *alive
     ctx->ents_alive = alive;
     ctx->ents_gen = generations;
     ctx->ents_slots = slot_count;
+    ctx->ents_base = base_slot;
     return SU_OK;
 }
 
@@ -1229,6 +1238,7 @@ static uint32_t su_bind_ents(SuExecContext *ctx, uint64_t rows) {
         ctx->hl_alive = ctx->ents_alive;
         ctx->hl_gen = ctx->ents_gen;
         ctx->hl_slots = ctx->ents_slots;
+        ctx->hl_base = ctx->ents_base;
         return SU_OK;
     }
     if (ctx->base_slot != 0u) {
@@ -1237,6 +1247,7 @@ static uint32_t su_bind_ents(SuExecContext *ctx, uint64_t rows) {
     ctx->hl_alive = ctx->alive;
     ctx->hl_gen = ctx->generations;
     ctx->hl_slots = rows;
+    ctx->hl_base = 0u;
     return SU_OK;
 }
 
@@ -1374,6 +1385,7 @@ static int su_exec_rows_planned(SuExecContext *ctx, uint64_t rows, SuOutputs *ou
     run.ents_alive = ctx->hl_alive;
     run.ents_gen = ctx->hl_gen;
     run.ents_slots = ctx->hl_slots;
+    run.ents_base = ctx->hl_base;
     if (ctx->module->has_row_filter) {
         run.filter_col = ctx->in_cols[ctx->module->row_filter_field];
         run.filter_mask = ctx->module->row_filter_mask;

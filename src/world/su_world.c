@@ -682,6 +682,39 @@ uint32_t su_world_build_invocation(SuWorld *w, SuInvocation *out) {
     return SU_OK;
 }
 
+uint32_t su_world_build_read_invocation(SuWorld *w, SuInvocation *out) {
+    uint32_t i;
+    uint32_t k = 0;
+    if (w == NULL || out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (w->phase == SU_WORLD_PHASE_TICK) {
+        return su_world_build_invocation(w, out);
+    }
+    for (i = 0; i < w->field_count; i++) {
+        SuColumnBinding *b;
+        if ((w->fields[i].access & SU_ACCESS_READ) == 0u) {
+            continue;
+        }
+        b = &w->inv_bindings[k++];
+        b->struct_size = (uint32_t)sizeof(SuColumnBinding);
+        b->field_id = w->fields[i].id;
+        b->elem_type = SU_TYPE_U32;
+        b->access = SU_ACCESS_READ;
+        b->layout_generation = w->layout_generation;
+        b->stride_bytes = SU_WORLD_ELEM_BYTES;
+        b->row_count = w->row_count;
+        b->data = w->committed[i];
+    }
+    out->struct_size = (uint32_t)sizeof(SuInvocation);
+    out->abi_version = SU_ABI_VERSION;
+    out->layout_generation = w->layout_generation;
+    out->binding_count = k;
+    out->row_count = w->row_count;
+    out->bindings = w->inv_bindings;
+    return SU_OK;
+}
+
 const SuColumnBinding *su_world_find_binding(const SuColumnBinding *b, uint32_t n, uint32_t id) {
     uint32_t lo = 0;
     uint32_t hi = n;

@@ -40,6 +40,9 @@ const SuHostOpDesc g_rts_scatter_desc = {
     k_scatter_fields,
     scatter_run,
     &g_scatter_ctx,
+    0u,       /* no target set (issue 140) */
+    NULL,
+    NULL,
 };
 
 RtsOpsCtx *rts_scatter_ctx(void) {
