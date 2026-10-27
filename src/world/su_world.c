@@ -516,6 +516,16 @@ uint64_t su_world_tick(const SuWorld *w) {
     return w != NULL ? w->tick : 0u;
 }
 
+uint32_t su_world_set_tick(SuWorld *w, uint64_t tick) {
+    /* Between ticks only: a multi-table world keeps one tick across its tables, and a table with no system is
+     * never begun or published, so the host advances its tick when the world publishes (issue 140). */
+    if (w == NULL || w->phase == SU_WORLD_PHASE_TICK) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    w->tick = tick;
+    return SU_OK;
+}
+
 int su_world_in_tick(const SuWorld *w) {
     return w != NULL && w->phase == SU_WORLD_PHASE_TICK;
 }

@@ -21,6 +21,13 @@ typedef struct HostRecord {
 
 typedef struct HostRegOp HostRegOp; /* a registered operator (su_host_registered.c) */
 
+/* One table of a host world (issue 140): an independent SuWorld plus its place in the world handle space. */
+typedef struct HostTable {
+    SuWorld *w;
+    uint64_t base;      /* world slot of local slot 0 (0 for table 0) */
+    uint64_t rows;      /* capacity */
+} HostTable;
+
 /* A host operator the in-process API can run: built in (su_host_operators.c) or registered
  * (su_host_registered.c, su_host_register_operator). Its descriptor, the record's operator name, and the
  * per-world scratch constructor and destructor (rows = the world's capacity). Every callback receives the operator
@@ -54,6 +61,9 @@ typedef struct HostOperator {
     /* Built-in operators with counters (the space3d family, issue 163; NULL otherwise): fills *out (struct_size and
      * reserved already checked) from the instance. */
     void (*counters)(const void *inst, SuHostOperatorCounters *out);
+    /* Registered operators: the world slot of the operator's table's local slot 0 (issue 140; 0 for table 0), set
+     * once at world creation. NULL for built-in operators, which have no operator state. */
+    void (*set_base)(void *inst, uint64_t base);
 } HostOperator;
 
 /* Built-in operators first, then registered ones. NULL when system_id names neither. */
@@ -75,7 +85,9 @@ void su_host_operator_event_config(const HostOperator *op, uint32_t *cap, SuHost
 
 struct SuHostWorld {
     SuSchedule sched;              /* owns the modules, VM contexts and the entity runtime */
-    SuWorld *w;
+    SuWorld *w;                    /* table 0's world (== tabs[0].w); every single-table path uses it */
+    uint32_t table_count;          /* 1 for every classic world (issue 140) */
+    HostTable tabs[SU_HOST_MAX_TABLES];
     uint32_t hz;
     uint64_t seed;
     uint64_t max_struct;
@@ -85,7 +97,7 @@ struct SuHostWorld {
     HostRecord *recs;              /* ascending tick */
     uint32_t rec_count;
     uint32_t rec_cap;
-    SuEnts *rb_ents;               /* scratch for su_host_snapshot_restore_inplace (allocated on first use) */
+    SuEnts *rb_ents[SU_HOST_MAX_TABLES]; /* scratch for su_host_snapshot_restore_inplace (allocated on first use) */
     SuEventLog *rb_log;
     uint32_t stepped;              /* su_host_step ran at least one tick */
     uint64_t opdata_mask;          /* bit i: schedule entry i received operator data (SU_HOST_MAX_CAPSULES <= 64) */
@@ -94,12 +106,14 @@ struct SuHostWorld {
     uint32_t opstate_count;        /* entries with state; 0 = version 1 snapshots */
     /* Input application storage (issue 149), allocated at creation so su_host_step allocates nothing: in_max
      * cells and values (the most writes one record can hold: SU_HOST_INPUT_MAX_WRITES, or fewer when the world
-     * has fewer distinct (slot, field) cells), and one column of in_rows cells. */
+     * has fewer distinct (slot, field) cells), and one column of in_rows cells per table (issue 140: a record can
+     * touch several tables). */
     struct UndoCell *in_cells;
     uint32_t *in_vals;
-    uint32_t *in_col;
+    uint32_t *in_col[SU_HOST_MAX_TABLES];
     uint32_t in_max;
-    uint64_t in_rows;
+    uint64_t in_rows;              /* the largest table capacity (in_col[t] holds in_col_rows[t] cells) */
+    uint64_t in_col_rows[SU_HOST_MAX_TABLES];
 };
 
 #endif

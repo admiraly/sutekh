@@ -27,8 +27,9 @@ uint32_t su_hstate_create(uint32_t max_entries, uint32_t max_bytes, uint32_t fla
 void su_hstate_destroy(SuHostState *s);
 
 /* Around the operator's run: changes are allowed in between. alive and gen are the run's working entity views
- * (rows entries), used by SU_HOST_STATE_DROP_DEAD. */
-void su_hstate_begin_run(SuHostState *s, const uint8_t *alive, const uint32_t *gen, uint64_t rows);
+ * (rows entries), used by SU_HOST_STATE_DROP_DEAD. base is the world slot of the table's local slot 0 (issue 140;
+ * 0 for every single-table world), so an entity key, which is a world handle, maps to the table's local slot. */
+void su_hstate_begin_run(SuHostState *s, const uint8_t *alive, const uint32_t *gen, uint64_t rows, uint64_t base);
 void su_hstate_end_run(SuHostState *s);
 /* Refusals at a cap since the last begin_run (for the step's error message). */
 uint32_t su_hstate_cap_refusals(const SuHostState *s);
@@ -39,7 +40,7 @@ void su_hstate_note_despawn(SuHostState *s);
 /* The tick published: with SU_HOST_STATE_DROP_DEAD, and only when an entity may have died since the last purge
  * (su_hstate_note_despawn), erase entries whose entity is not alive in ents (the committed table after the tick);
  * then W becomes C. Cannot fail. */
-void su_hstate_commit(SuHostState *s, const SuEnts *ents);
+void su_hstate_commit(SuHostState *s, const SuEnts *ents, uint64_t base);
 /* The tick failed (or a loaded state is discarded): C stays, W is dropped. */
 void su_hstate_abort(SuHostState *s);
 

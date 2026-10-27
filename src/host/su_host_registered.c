@@ -59,6 +59,7 @@ typedef struct RegInst {
     uint32_t *gen;                /* rows */
     void *scratch;
     size_t scratch_bytes;
+    uint64_t base;                /* world slot of the table's local slot 0 (issue 140; 0 for table 0) */
     RegData *data;
     SuHostState *state;           /* operator state (issue 139), NULL when the descriptor declares none */
     SuEvent *ev;                  /* max_events_per_tick records of this tick (issue 172), or NULL */
@@ -425,7 +426,7 @@ static uint32_t reg_run(const SuWorld *w, const SuInvocation *in, SuOutputs *out
     run.emit_event = ri->ev != NULL ? reg_emit_event : NULL;
     run.emit_ctx = ri->ev != NULL ? ri : NULL;
     if (ri->state != NULL) {
-        su_hstate_begin_run(ri->state, ri->alive, ri->gen, ri->rows);
+        su_hstate_begin_run(ri->state, ri->alive, ri->gen, ri->rows, ri->base);
     }
     st = r->pub.run(&run, r->pub.user);
     if (ri->state != NULL) {
@@ -522,6 +523,14 @@ static const char *reg_last_error(const void *inst) {
 }
 
 /* Called by su_host_step before every tick, so a reason can only belong to this tick's attempt. */
+/* The world slot of the operator's table's local slot 0 (issue 140; 0 for table 0). */
+static void reg_set_base(void *inst, uint64_t base) {
+    RegInst *ri = inst;
+    if (ri != NULL) {
+        ri->base = base;
+    }
+}
+
 static void reg_clear_error(void *inst) {
     RegInst *ri = (RegInst *)inst;
     if (ri != NULL) {
@@ -835,6 +844,7 @@ uint32_t su_host_register_operator(const SuHostOperatorDesc *caller, SuHostError
     r->op.identity = reg_identity;
     r->op.clear_error = reg_clear_error;
     r->op.state = reg_state;
+    r->op.set_base = reg_set_base;
     r->op.record_name = r->operator_name;
 
     su_mutex_lock(&g_lock);

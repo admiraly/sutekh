@@ -109,20 +109,34 @@ typedef struct SuHostWorldDesc {
      * su_host_world_create admits the world, never how the world behaves: it is not part of the world identity,
      * snapshots or replays, so peers may use different budgets. */
     uint64_t state_budget_bytes;
+    /* Appended 2026-10-27 (issue 140); read only when struct_size covers it (v1, v2 and v3 descriptors do not,
+     * and get the single-table default). 0 or 1: the classic single-table world above. 2..SU_HOST_MAX_TABLES: a
+     * world with several tables, described by `tables`; desc->schema, desc->fixture_json and desc->fixture_len
+     * must then be NULL/0. See "tables" below. */
+    uint32_t table_count;
+    uint32_t table_reserved;             /* 0 */
+    const struct SuHostTableDesc *tables; /* table_count entries; the array index is the table index */
+    /* capsule_count entries: the table of each capsule (0..table_count-1). NULL: every capsule is in table 0
+     * (the only legal value for a single-table world). */
+    const uint32_t *capsule_table;
 } SuHostWorldDesc;
 
 #define SU_HOST_STATE_BUDGET_DEFAULT UINT64_C(1073741824) /* 1 GiB of reserved operator state per world */
 
 /* Size of the first released SuHostWorldDesc (through seed): 80 bytes with 8-byte pointers (LP64, LLP64; pinned at
- * compile time), and of the second (through schema, issue 144): 88 bytes with 8-byte pointers. Versioning as for
- * SuHostOperatorDesc: struct_size may be SU_HOST_WORLD_DESC_V1_SIZE, SU_HOST_WORLD_DESC_V2_SIZE, or
- * sizeof(SuHostWorldDesc) (96 bytes with 8-byte pointers) or larger, in which case every byte beyond the library's
- * sizeof(SuHostWorldDesc) must be zero (a nonzero unknown byte is SU_E_INVALID_ARGUMENT, so a request this library
- * cannot honour fails instead of being ignored). Only struct_size bytes are read; fields beyond it are zero (no
- * schema, the default state budget). A size below the v1 size, or any other size below sizeof(SuHostWorldDesc)
- * (one that ends inside a field), is SU_E_INVALID_ARGUMENT. Zero the whole descriptor (memset) before filling it. */
+ * compile time), of the second (through schema, issue 144): 88 bytes, and of the third (through capsule_table, issue
+ * 140): 120 bytes. Versioning as for
+ * SuHostOperatorDesc: struct_size may be SU_HOST_WORLD_DESC_V1_SIZE, SU_HOST_WORLD_DESC_V2_SIZE,
+ * SU_HOST_WORLD_DESC_V3_SIZE, or sizeof(SuHostWorldDesc) (120 bytes with 8-byte pointers) or larger, in which case
+ * every byte beyond the library's sizeof(SuHostWorldDesc) must be zero (a nonzero unknown byte is
+ * SU_E_INVALID_ARGUMENT, so a request this library cannot honour fails instead of being ignored). Only struct_size
+ * bytes are read; fields beyond it are zero (no schema, the default state budget, one table). A size below the v1
+ * size, or any other size below sizeof(SuHostWorldDesc) (one that ends inside a field), is SU_E_INVALID_ARGUMENT.
+ * Zero the whole descriptor (memset) before filling it. */
 #define SU_HOST_WORLD_DESC_V1_SIZE (offsetof(SuHostWorldDesc, seed) + sizeof(uint64_t))
 #define SU_HOST_WORLD_DESC_V2_SIZE (offsetof(SuHostWorldDesc, state_budget_bytes))
+/* Version 3 (2026-10-27, issue 140; through capsule_table): the multi-table fields, and sizeof(SuHostWorldDesc). */
+#define SU_HOST_WORLD_DESC_V3_SIZE (offsetof(SuHostWorldDesc, capsule_table) + sizeof(void *))
 
 /* Creates a world. Capsules are verified (any SU_E_* of su_lir_verify, err->index = capsule index), joined
  * into one schedule (SU_E_SCHEMA_MISMATCH when they disagree on schema or a field) and checked by the effect
@@ -921,6 +935,114 @@ typedef struct SuHostSchema {
 
 /* Size of the first released SuHostSchema: 32 bytes with 8-byte pointers, 24 with 4-byte pointers (pinned). */
 #define SU_HOST_SCHEMA_V1_SIZE (offsetof(SuHostSchema, layout_generation) + sizeof(uint32_t))
+
+/* ---- tables: several entity kinds in one world (additive, API version 1; 2026-10-27, issue 140) ----
+ *
+ * A world is one table unless it says otherwise. A table is an independent fixed-capacity world of its own
+ * schema, capacity and entity table; one host world owns 1..SU_HOST_MAX_TABLES of them and steps them as one:
+ * one tick counter, one input record stream, one event log, one snapshot, one digest and one identity. A
+ * schedule entry names the table it iterates (SuHostWorldDesc.capsule_table, by capsule index) and pays the
+ * begin/commit/publish cost of that table only, so a system over a small table no longer pays for a large one.
+ * This is the cost model change of the issue; see docs/MULTI_TABLE_WORLDS.md for the decision and the formats.
+ *
+ * Creation: SuHostWorldDesc.table_count >= 2 selects it, `tables` describes every table (index = table index)
+ * and `capsule_table` assigns the capsules. Every table declares its schema (SuHostTableDesc.schema; the
+ * SuHostSchema rules above), because a table's lanes are not necessarily the union of its systems' fields.
+ * The capacities must sum to at most SU_LIMIT_ROWS. A table with no system is legal and costs nothing per
+ * tick. A multi-table world refuses a capsule that uses IR entity operations (spawn, despawn_self,
+ * emit_event) with SU_E_CAPABILITY_DENIED at creation: the entity tick owns one table in this version (see
+ * docs/MULTI_TABLE_WORLDS.md section 8). Host spawn and despawn work in every table.
+ *
+ * Handles: a handle keeps its 64-bit layout (generation << 32 | slot), and the slot is the table's local slot
+ * plus the table's base, where the base of table 0 is 0 and the base of table t is the sum of the capacities
+ * of tables 0..t-1. So a handle carries its table (the slot ranges are disjoint and fixed at creation), a
+ * single-table world's handles are unchanged, and the generation range is unchanged. A table-qualified call
+ * rejects a handle of another table with SU_E_STALE_HANDLE, like a dead or retired handle.
+ *
+ * Identity: a single-table world's identity is exactly that of earlier releases. A multi-table world folds its
+ * table descriptors into it, so a snapshot or replay loads only into a world with the same tables, capacities,
+ * schemas and order:
+ *   identity = SHA-256("SUHTABLES" 0x00 || identity_without_tables || u32 table_count ||
+ *                      per table: u32 schema-ID length | schema ID | u32 schema_version |
+ *                      u32 layout_generation | u64 capacity | u32 lane count |
+ *                      per lane ascending ID: u32 id | u32 value type | u32 name length | name)
+ * Snapshot: a multi-table world writes version 3 ("SUHSNAP" 0x00 | u32 3 | identity | u64 tick |
+ * u32 table_count | per table: u64 state length | canonical world state (SUWSTATE) | u64 log length | event log
+ * (SUEL) | operator state as in version 2 when the world has any). A single-table world keeps version 1 or 2
+ * byte for byte, so its snapshots, digests and replays do not change. su_host_digest hashes the snapshot bytes,
+ * so it covers every table and the shared log by construction.
+ *
+ * Host spawn/despawn event records of a multi-table world carry the WORLD slot in slot and a (and the
+ * generation in b), so a record names its table; an IR system's events carry the emitting row's local slot and
+ * their system_index, which names the table through the schedule. */
+
+#define SU_HOST_MAX_TABLES 8u
+
+typedef struct SuHostTableDesc {
+    uint32_t struct_size;            /* sizeof(SuHostTableDesc), >= SU_HOST_TABLE_DESC_V1_SIZE */
+    uint32_t reserved;               /* 0 */
+    const struct SuHostSchema *schema; /* required: the table's declared schema (see "declared world schemas") */
+    uint64_t max_entities;           /* capacity; 0 = the table fixture's row count (an empty table needs >= 1) */
+    const uint8_t *fixture_json;     /* optional: this table's initial state, the world fixture format */
+    size_t fixture_len;
+} SuHostTableDesc;
+
+/* Size of the first released SuHostTableDesc: 40 bytes with 8-byte pointers (pinned at compile time). */
+#define SU_HOST_TABLE_DESC_V1_SIZE (offsetof(SuHostTableDesc, fixture_len) + sizeof(size_t))
+
+/* Tables of a world: 1 for every world created without tables. SU_E_INVALID_ARGUMENT for an unknown table. */
+SU_HOST_API uint32_t su_host_table_count(const SuHostWorld *w);
+/* Capacity (rows) of table. */
+SU_HOST_API uint32_t su_host_table_capacity(const SuHostWorld *w, uint32_t table, uint64_t *rows);
+/* Declared schema ID of table (owned by the world). */
+SU_HOST_API uint32_t su_host_table_schema_id(const SuHostWorld *w, uint32_t table, const char **schema_id);
+/* World slot of the table's local slot 0 (0 for table 0; the sum of the capacities of the lower tables
+ * otherwise). A handle's table is the one whose [base, base + capacity) holds SU_ENTITY_SLOT(handle). */
+SU_HOST_API uint32_t su_host_table_base(const SuHostWorld *w, uint32_t table, uint64_t *base);
+/* The table a handle belongs to, or SU_E_STALE_HANDLE when its slot is outside every table's range. */
+SU_HOST_API uint32_t su_host_table_of_handle(const SuHostWorld *w, uint64_t entity, uint32_t *table);
+
+/* Table-qualified spawn: as su_host_spawn, into `table`. The handle it returns names its table. */
+SU_HOST_API uint32_t su_host_spawn_in(SuHostWorld *w, uint32_t table, const SuHostValue *values, uint32_t count,
+                                      uint32_t external_id, uint64_t *entity, SuHostError *err);
+/* As su_host_despawn, requiring the handle to belong to `table` (SU_E_STALE_HANDLE otherwise). su_host_despawn
+ * routes by the handle's table instead. */
+SU_HOST_API uint32_t su_host_despawn_in(SuHostWorld *w, uint32_t table, uint64_t entity, SuHostError *err);
+/* As su_host_entity_at and su_host_alive for `table`. */
+SU_HOST_API uint32_t su_host_entity_at_in(const SuHostWorld *w, uint32_t table, uint32_t slot, uint64_t *entity);
+SU_HOST_API uint32_t su_host_alive_in(const SuHostWorld *w, uint32_t table, uint32_t base, uint32_t count,
+                                      uint8_t *alive);
+/* As su_host_column, su_host_read, su_host_field_count, su_host_field_info, su_host_field_id,
+ * su_host_field_value_type and su_host_read_i64 for `table`. */
+SU_HOST_API uint32_t su_host_column_in(const SuHostWorld *w, uint32_t table, uint32_t field_id,
+                                       const uint32_t **data, uint64_t *rows);
+SU_HOST_API uint32_t su_host_read_in(const SuHostWorld *w, uint32_t table, uint32_t field_id, uint64_t first,
+                                     uint64_t count, uint32_t *out);
+SU_HOST_API uint32_t su_host_field_count_in(const SuHostWorld *w, uint32_t table, uint32_t *count);
+SU_HOST_API uint32_t su_host_field_info_in(const SuHostWorld *w, uint32_t table, uint32_t index,
+                                           SuHostFieldInfo *out);
+SU_HOST_API uint32_t su_host_field_id_in(const SuHostWorld *w, uint32_t table, const char *name, uint32_t *id);
+SU_HOST_API uint32_t su_host_field_value_type_in(const SuHostWorld *w, uint32_t table, uint32_t field_id,
+                                                 uint32_t *value_type, uint32_t *lane);
+SU_HOST_API uint32_t su_host_read_i64_in(const SuHostWorld *w, uint32_t table, uint32_t field_id, uint64_t first,
+                                         uint64_t count, int64_t *out);
+
+/* Exact heap accounting of the world (M3-08a, contract 9.3, OD-10), per table and in total: the sum of the
+ * bytes the world asked its allocator for and still holds, with the categories of su_world_memory summed into
+ * table_total[t]. input_storage is the per-tick input application buffers (allocated at creation, issue 149);
+ * metadata is the host world struct, its per-table table and the capsule schedule. Event log, spool and
+ * snapshot bytes are not owned by the world root (see su_evlog_memory_bytes and the snapshot owner).
+ * SU_E_INVALID_ARGUMENT: NULL w or out, or out->struct_size < sizeof(SuHostMemory). */
+typedef struct SuHostMemory {
+    uint32_t struct_size;            /* in: sizeof(SuHostMemory) */
+    uint32_t table_count;            /* out: tables of the world */
+    uint64_t tables_total;           /* out: sum of table_total */
+    uint64_t input_storage;          /* out: su_host_step's input application buffers */
+    uint64_t metadata;               /* out: the world struct and its per-table arrays */
+    uint64_t total;                  /* out: tables_total + input_storage + metadata */
+    uint64_t table_total[SU_HOST_MAX_TABLES]; /* out: per table, 0 beyond table_count */
+} SuHostMemory;
+SU_HOST_API uint32_t su_host_memory(const SuHostWorld *w, SuHostMemory *out);
 
 /* ---- execution tiers (additive, API version 1; 2026-10-18) ----
  * Every tier gives bit-identical results (states, events, digests): the tiers are differential-tested against

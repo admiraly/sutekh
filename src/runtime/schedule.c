@@ -67,10 +67,43 @@ void su_sched_free(SuSchedule *s) {
     for (i = 0; i < s->count; i++) {
         su_sched_entry_destroy(&s->sys[i]);
     }
-    free(s->fields);
-    free(s->declared_fields);
+    /* tables[0].fields/declared_fields are the s->fields/s->declared_fields aliases: freed once, here. */
+    for (i = 0; i < SU_SCHED_MAX_TABLES; i++) {
+        free(s->tables[i].fields);
+        free(s->tables[i].declared_fields);
+    }
     su_ent_rt_destroy(s->ent);
     memset(s, 0, sizeof *s);
+}
+
+/* Mirrors table 0 into the SuSchedule fields of the same names, so every caller written before issue 140 reads
+ * table 0 exactly as before. The aliases are borrowed: the storage belongs to tables[0]. */
+static void table0_sync(SuSchedule *s) {
+    s->fields = s->tables[0].fields;
+    s->field_count = s->tables[0].field_count;
+    s->declared = s->tables[0].declared;
+    s->declared_count = s->tables[0].declared_count;
+    s->declared_fields = s->tables[0].declared_fields;
+    snprintf(s->schema_id, sizeof s->schema_id, "%s", s->tables[0].schema_id);
+    s->schema_version = s->tables[0].schema_version;
+    s->layout_generation = s->tables[0].layout_generation;
+}
+
+uint32_t su_sched_table_count(const SuSchedule *s) {
+    return s != NULL && s->table_count != 0u ? s->table_count : 1u;
+}
+
+const SuSchedField *su_sched_table_fields(const SuSchedule *s, uint32_t table, uint32_t *count) {
+    if (s == NULL || table >= su_sched_table_count(s)) {
+        if (count != NULL) {
+            *count = 0u;
+        }
+        return NULL;
+    }
+    if (count != NULL) {
+        *count = s->tables[table].field_count;
+    }
+    return s->tables[table].fields;
 }
 
 uint32_t su_sched_max_systems(const SuSchedule *s) {
@@ -96,13 +129,19 @@ static int name_ok(const char *name) {
     return n >= 1u && n <= SU_WORLD_NAME_MAX;
 }
 
-uint32_t su_sched_declare_schema(SuSchedule *s, const char *schema_id, uint32_t schema_version, uint32_t gen,
-                                 const SuSchedField *lanes, uint32_t n) {
+uint32_t su_sched_declare_table(SuSchedule *s, uint32_t table, const char *schema_id, uint32_t schema_version,
+                                uint32_t gen, const SuSchedField *lanes, uint32_t n) {
     SuSchedField *tab;
     uint32_t i, j;
-    if (s == NULL || s->count != 0u || s->declared || lanes == NULL || n == 0u || n > SU_LIMIT_FIELDS ||
-        !name_ok(schema_id) || schema_version == 0u || gen == 0u) {
+    if (s == NULL || table >= SU_SCHED_MAX_TABLES || table > s->table_count || s->tables[table].declared ||
+        lanes == NULL || n == 0u || n > SU_LIMIT_FIELDS || !name_ok(schema_id) || schema_version == 0u ||
+        gen == 0u) {
         return SU_E_INVALID_ARGUMENT;
+    }
+    for (i = 0; i < s->count; i++) {
+        if (s->sys[i].table == table) {
+            return SU_E_INVALID_ARGUMENT; /* the table already has systems: its schema is fixed */
+        }
     }
     for (i = 0; i < n; i++) {
         uint32_t vt = lanes[i].value_type;
@@ -130,13 +169,22 @@ uint32_t su_sched_declare_schema(SuSchedule *s, const char *schema_id, uint32_t 
         }
         tab[j] = key;
     }
-    snprintf(s->schema_id, sizeof s->schema_id, "%s", schema_id);
-    s->schema_version = schema_version;
-    s->layout_generation = gen;
-    s->declared = 1u;
-    s->declared_count = n;
-    s->declared_fields = tab;
+    snprintf(s->tables[table].schema_id, sizeof s->tables[table].schema_id, "%s", schema_id);
+    s->tables[table].schema_version = schema_version;
+    s->tables[table].layout_generation = gen;
+    s->tables[table].declared = 1u;
+    s->tables[table].declared_count = n;
+    s->tables[table].declared_fields = tab;
+    if (table >= s->table_count) {
+        s->table_count = table + 1u;
+    }
+    table0_sync(s);
     return SU_OK;
+}
+
+uint32_t su_sched_declare_schema(SuSchedule *s, const char *schema_id, uint32_t schema_version, uint32_t gen,
+                                 const SuSchedField *lanes, uint32_t n) {
+    return su_sched_declare_table(s, 0u, schema_id, schema_version, gen, lanes, n);
 }
 
 uint32_t su_sched_enable_entities(SuSchedule *s, uint64_t max_struct_tick, uint64_t max_events_tick,
@@ -180,23 +228,32 @@ static void fill_entry_ids(SuSysEntry *e, uint64_t txid, uint64_t system_rev, ui
     e->installed_tick = tick;
 }
 
-uint32_t su_sched_add(SuSchedule *s, SuLirModule *mod, uint32_t schema_version, uint32_t gen,
-                      uint64_t txid, uint64_t system_rev, uint64_t tick) {
+uint32_t su_sched_add_table(SuSchedule *s, uint32_t table, SuLirModule *mod, uint32_t schema_version, uint32_t gen,
+                            uint64_t txid, uint64_t system_rev, uint64_t tick) {
     SuSysEntry *e;
+    SuSchedTable *t;
     uint32_t st;
 
-    if (mod == NULL) {
+    if (mod == NULL || s == NULL || table >= SU_SCHED_MAX_TABLES) {
         return SU_E_INVALID_ARGUMENT;
     }
     if (s->count >= su_sched_max_systems(s)) {
         return SU_E_RESOURCE_LIMIT;
     }
-    if (s->count == 0 && !s->declared) {
-        snprintf(s->schema_id, sizeof s->schema_id, "%s", mod->query);
-        s->schema_version = schema_version;
-        s->layout_generation = gen;
-    } else if (strcmp(s->schema_id, mod->query) != 0 || s->schema_version != schema_version ||
-               s->layout_generation != gen) {
+    t = &s->tables[table];
+    if (table > s->table_count) {
+        return SU_E_INVALID_ARGUMENT; /* tables are created in order: declare or add table table-1 first */
+    }
+    if (!t->declared && t->field_count == 0u && t->schema_id[0] == '\0') {
+        snprintf(t->schema_id, sizeof t->schema_id, "%s", mod->query);
+        t->schema_version = schema_version;
+        t->layout_generation = gen;
+        if (table >= s->table_count) {
+            s->table_count = table + 1u;
+        }
+        table0_sync(s);
+    } else if (strcmp(t->schema_id, mod->query) != 0 || t->schema_version != schema_version ||
+               t->layout_generation != gen) {
         return SU_E_SCHEMA_MISMATCH;
     }
     if (su_sched_find(s, mod->system_id) >= 0) {
@@ -208,6 +265,7 @@ uint32_t su_sched_add(SuSchedule *s, SuLirModule *mod, uint32_t schema_version, 
     snprintf(e->source_hash, sizeof e->source_hash, "%s", mod->source_hash_hex);
     snprintf(e->capsule_hash, sizeof e->capsule_hash, "%s", mod->capsule_hash_hex);
     snprintf(e->semantic_hash, sizeof e->semantic_hash, "%s", mod->semantic_hash_hex);
+    e->table = table;
     st = su_vm_context_create(mod, gen, &e->ctx);
     if (st != SU_OK) {
         memset(e, 0, sizeof *e);
@@ -217,6 +275,11 @@ uint32_t su_sched_add(SuSchedule *s, SuLirModule *mod, uint32_t schema_version, 
     fill_entry_ids(e, txid, system_rev, tick);
     s->count++;
     return SU_OK;
+}
+
+uint32_t su_sched_add(SuSchedule *s, SuLirModule *mod, uint32_t schema_version, uint32_t gen,
+                      uint64_t txid, uint64_t system_rev, uint64_t tick) {
+    return su_sched_add_table(s, 0u, mod, schema_version, gen, txid, system_rev, tick);
 }
 
 /* Host entry (M3-04a). The declaration must describe d exactly; no VM context is created. */
@@ -264,15 +327,16 @@ static int decl_matches_bound(const SuLirModule *decl, const SuHostOpDesc *d, co
     return 1;
 }
 
-uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, const uint32_t *bind,
-                                 uint32_t schema_version, uint32_t gen, uint64_t txid, uint64_t system_rev,
-                                 uint64_t tick) {
+uint32_t su_sched_add_host_bound_table(SuSchedule *s, uint32_t table, const SuHostOpDesc *d, SuLirModule *decl,
+                                       const uint32_t *bind, uint32_t schema_version, uint32_t gen, uint64_t txid,
+                                       uint64_t system_rev, uint64_t tick) {
     SuSysEntry *e;
+    SuSchedTable *t;
     uint32_t *copy;
     if (bind == NULL) {
-        return su_sched_add_host(s, d, decl, schema_version, gen, txid, system_rev, tick);
+        return su_sched_add_host_table(s, table, d, decl, schema_version, gen, txid, system_rev, tick);
     }
-    if (s == NULL || decl == NULL || su_host_desc_validate(d) != SU_OK) {
+    if (s == NULL || decl == NULL || table >= SU_SCHED_MAX_TABLES || su_host_desc_validate(d) != SU_OK) {
         return SU_E_INVALID_ARGUMENT;
     }
     if (decl->insn_count != 0u || decl->fields == NULL || decl->system_id == NULL || decl->query == NULL) {
@@ -284,12 +348,20 @@ uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModu
     if (s->count >= su_sched_max_systems(s)) {
         return SU_E_RESOURCE_LIMIT;
     }
-    if (s->count == 0 && !s->declared) {
-        snprintf(s->schema_id, sizeof s->schema_id, "%s", decl->query);
-        s->schema_version = schema_version;
-        s->layout_generation = gen;
-    } else if (strcmp(s->schema_id, decl->query) != 0 || s->schema_version != schema_version ||
-               s->layout_generation != gen) {
+    if (table > s->table_count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    t = &s->tables[table];
+    if (!t->declared && t->schema_id[0] == '\0') {
+        snprintf(t->schema_id, sizeof t->schema_id, "%s", decl->query);
+        t->schema_version = schema_version;
+        t->layout_generation = gen;
+        if (table >= s->table_count) {
+            s->table_count = table + 1u;
+        }
+        table0_sync(s);
+    } else if (strcmp(t->schema_id, decl->query) != 0 || t->schema_version != schema_version ||
+               t->layout_generation != gen) {
         return SU_E_SCHEMA_MISMATCH;
     }
     if (su_sched_find(s, d->system_id) >= 0) {
@@ -307,6 +379,7 @@ uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModu
     snprintf(e->capsule_hash, sizeof e->capsule_hash, "%s", decl->capsule_hash_hex);
     snprintf(e->semantic_hash, sizeof e->semantic_hash, "%s", decl->semantic_hash_hex);
     e->kind = SU_SYS_KIND_HOST;
+    e->table = table;
     e->host = d;
     e->host_bind = copy;
     e->mod = decl;
@@ -316,10 +389,18 @@ uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModu
     return SU_OK;
 }
 
-uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, uint32_t schema_version,
-                           uint32_t gen, uint64_t txid, uint64_t system_rev, uint64_t tick) {
+uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, const uint32_t *bind,
+                                 uint32_t schema_version, uint32_t gen, uint64_t txid, uint64_t system_rev,
+                                 uint64_t tick) {
+    return su_sched_add_host_bound_table(s, 0u, d, decl, bind, schema_version, gen, txid, system_rev, tick);
+}
+
+uint32_t su_sched_add_host_table(SuSchedule *s, uint32_t table, const SuHostOpDesc *d, SuLirModule *decl,
+                                 uint32_t schema_version, uint32_t gen, uint64_t txid, uint64_t system_rev,
+                                 uint64_t tick) {
     SuSysEntry *e;
-    if (s == NULL || decl == NULL || su_host_desc_validate(d) != SU_OK) {
+    SuSchedTable *t;
+    if (s == NULL || decl == NULL || table >= SU_SCHED_MAX_TABLES || su_host_desc_validate(d) != SU_OK) {
         return SU_E_INVALID_ARGUMENT;
     }
     if (decl->insn_count != 0u || decl->fields == NULL || decl->system_id == NULL || decl->query == NULL) {
@@ -331,12 +412,20 @@ uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *de
     if (s->count >= su_sched_max_systems(s)) {
         return SU_E_RESOURCE_LIMIT;
     }
-    if (s->count == 0 && !s->declared) {
-        snprintf(s->schema_id, sizeof s->schema_id, "%s", d->schema_id);
-        s->schema_version = schema_version;
-        s->layout_generation = gen;
-    } else if (strcmp(s->schema_id, d->schema_id) != 0 || s->schema_version != schema_version ||
-               s->layout_generation != gen) {
+    if (table > s->table_count) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    t = &s->tables[table];
+    if (!t->declared && t->schema_id[0] == '\0') {
+        snprintf(t->schema_id, sizeof t->schema_id, "%s", d->schema_id);
+        t->schema_version = schema_version;
+        t->layout_generation = gen;
+        if (table >= s->table_count) {
+            s->table_count = table + 1u;
+        }
+        table0_sync(s);
+    } else if (strcmp(t->schema_id, d->schema_id) != 0 || t->schema_version != schema_version ||
+               t->layout_generation != gen) {
         return SU_E_SCHEMA_MISMATCH;
     }
     if (su_sched_find(s, d->system_id) >= 0) {
@@ -349,12 +438,18 @@ uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *de
     snprintf(e->capsule_hash, sizeof e->capsule_hash, "%s", decl->capsule_hash_hex);
     snprintf(e->semantic_hash, sizeof e->semantic_hash, "%s", decl->semantic_hash_hex);
     e->kind = SU_SYS_KIND_HOST;
+    e->table = table;
     e->host = d;
     e->mod = decl;
     e->ctx = NULL;
     fill_entry_ids(e, txid, system_rev, tick);
     s->count++;
     return SU_OK;
+}
+
+uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, uint32_t schema_version,
+                           uint32_t gen, uint64_t txid, uint64_t system_rev, uint64_t tick) {
+    return su_sched_add_host_table(s, 0u, d, decl, schema_version, gen, txid, system_rev, tick);
 }
 
 /* Adds one field to the union table, or checks it against an existing row. */
@@ -412,20 +507,24 @@ static int lane_suffix(const char *name) {
     return n > 3u && (strcmp(name + n - 3u, ".lo") == 0 || strcmp(name + n - 3u, ".hi") == 0);
 }
 
-/* A declared schema: the first system field that is not a declared lane, or disagrees with one. */
-static int explain_declared(const SuSchedule *s, char *msg, size_t cap, uint32_t *system) {
+/* A declared schema: the first system field of table t that is not a declared lane, or disagrees with one. */
+static int explain_declared(const SuSchedule *s, uint32_t table, char *msg, size_t cap, uint32_t *system) {
+    const SuSchedTable *t = &s->tables[table];
     uint32_t a, i, k;
     for (a = 0; a < s->count; a++) {
         const SuLirModule *m = s->sys[a].mod;
+        if (s->sys[a].table != table) {
+            continue;
+        }
         for (i = 0; i < m->field_count; i++) {
             const SuLirField *f = &m->fields[i];
             const SuSchedField *by_id = NULL, *by_name = NULL;
-            for (k = 0; k < s->declared_count; k++) {
-                if (s->declared_fields[k].id == f->id) {
-                    by_id = &s->declared_fields[k];
+            for (k = 0; k < t->declared_count; k++) {
+                if (t->declared_fields[k].id == f->id) {
+                    by_id = &t->declared_fields[k];
                 }
-                if (strcmp(s->declared_fields[k].name, f->name) == 0) {
-                    by_name = &s->declared_fields[k];
+                if (strcmp(t->declared_fields[k].name, f->name) == 0) {
+                    by_name = &t->declared_fields[k];
                 }
             }
             if (by_id != NULL && by_id == by_name && by_id->type == f->type &&
@@ -458,46 +557,61 @@ void su_sched_explain_mismatch(const SuSchedule *s, char *msg, size_t cap) {
 }
 
 void su_sched_explain_mismatch_ex(const SuSchedule *s, char *msg, size_t cap, uint32_t *system) {
-    uint32_t a, b, i, j;
+    uint32_t table, a, b, i, j;
     *system = UINT32_MAX;
     if (msg == NULL || cap == 0u) {
         return;
     }
     msg[0] = '\0';
-    if (s->declared && explain_declared(s, msg, cap, system)) {
-        return;
+    for (table = 0; table < su_sched_table_count(s); table++) {
+        if (s->tables[table].declared && explain_declared(s, table, msg, cap, system)) {
+            return;
+        }
     }
-    for (a = 0; a < s->count; a++) {
-        const SuLirModule *ma = s->sys[a].mod;
-        for (b = a; b < s->count; b++) {
-            const SuLirModule *mb = s->sys[b].mod;
-            for (i = 0; i < ma->field_count; i++) {
-                const SuLirField *fa = &ma->fields[i];
-                for (j = (a == b ? i + 1u : 0u); j < mb->field_count; j++) {
-                    const SuLirField *fb = &mb->fields[j];
-                    int same_id = fa->id == fb->id, same_name = strcmp(fa->name, fb->name) == 0;
-                    const char *hint = "";
-                    if (same_id == same_name && (!same_id || (fa->type == fb->type &&
-                                                              SU_LIR_VALUE_TYPE(fa) == SU_LIR_VALUE_TYPE(fb)))) {
-                        continue;
+    /* A derived table: two of its systems disagree on a field. Systems of different tables never share columns,
+     * so only pairs within one table are compared (for a single-table world that is every pair, as before). */
+    for (table = 0; table < su_sched_table_count(s); table++) {
+        for (a = 0; a < s->count; a++) {
+            const SuLirModule *ma = s->sys[a].mod;
+            if (s->sys[a].table != table) {
+                continue;
+            }
+            for (b = a; b < s->count; b++) {
+                const SuLirModule *mb = s->sys[b].mod;
+                if (s->sys[b].table != table) {
+                    continue;
+                }
+                for (i = 0; i < ma->field_count; i++) {
+                    const SuLirField *fa = &ma->fields[i];
+                    for (j = (a == b ? i + 1u : 0u); j < mb->field_count; j++) {
+                        const SuLirField *fb = &mb->fields[j];
+                        int same_id = fa->id == fb->id, same_name = strcmp(fa->name, fb->name) == 0;
+                        const char *hint = "";
+                        if (same_id == same_name && (!same_id || (fa->type == fb->type &&
+                                                                  SU_LIR_VALUE_TYPE(fa) == SU_LIR_VALUE_TYPE(fb)))) {
+                            continue;
+                        }
+                        if (!same_name && (lane_suffix(fa->name) || lane_suffix(fb->name))) {
+                            hint = "; a q32/i64 IR field \"x\" at ID J binds lanes \"x.lo\" (J), \"x.hi\" (J+1)";
+                        } else if (same_id && same_name) {
+                            hint = "; every system binding a lane must agree on its value type";
+                        }
+                        snprintf(msg, cap,
+                                 "field mismatch: %s has id %u \"%s\" (%s), %s has id %u \"%s\" (%s)%s",
+                                 s->sys[a].system_id, (unsigned)fa->id, fa->name, vtype_name(SU_LIR_VALUE_TYPE(fa)),
+                                 s->sys[b].system_id, (unsigned)fb->id, fb->name, vtype_name(SU_LIR_VALUE_TYPE(fb)),
+                                 hint);
+                        return;
                     }
-                    if (!same_name && (lane_suffix(fa->name) || lane_suffix(fb->name))) {
-                        hint = "; a q32/i64 IR field \"x\" at ID J binds lanes \"x.lo\" (J), \"x.hi\" (J+1)";
-                    } else if (same_id && same_name) {
-                        hint = "; every system binding a lane must agree on its value type";
-                    }
-                    snprintf(msg, cap,
-                             "field mismatch: %s has id %u \"%s\" (%s), %s has id %u \"%s\" (%s)%s",
-                             s->sys[a].system_id, (unsigned)fa->id, fa->name, vtype_name(SU_LIR_VALUE_TYPE(fa)),
-                             s->sys[b].system_id, (unsigned)fb->id, fb->name, vtype_name(SU_LIR_VALUE_TYPE(fb)), hint);
-                    return;
                 }
             }
         }
     }
 }
 
-uint32_t su_sched_finalize(SuSchedule *s) {
+/* Builds table t's union field table from its declared lanes and its systems' fields. */
+static uint32_t finalize_table(SuSchedule *s, uint32_t table) {
+    SuSchedTable *t = &s->tables[table];
     SuSchedField *tab = NULL;
     uint32_t n = 0;
     uint32_t cap = 0;
@@ -505,18 +619,22 @@ uint32_t su_sched_finalize(SuSchedule *s) {
     uint32_t j;
     uint32_t st = SU_OK;
 
-    if (s->declared) {
-        tab = malloc((size_t)s->declared_count * sizeof *tab);
+    if (t->declared) {
+        tab = malloc((size_t)t->declared_count * sizeof *tab);
         if (tab == NULL) {
             return SU_E_RESOURCE_LIMIT;
         }
-        memcpy(tab, s->declared_fields, (size_t)s->declared_count * sizeof *tab);
-        n = cap = s->declared_count;
+        memcpy(tab, t->declared_fields, (size_t)t->declared_count * sizeof *tab);
+        n = cap = t->declared_count;
     }
     for (i = 0; i < s->count && st == SU_OK; i++) {
-        const SuLirModule *m = s->sys[i].mod;
+        const SuLirModule *m;
+        if (s->sys[i].table != table) {
+            continue;
+        }
+        m = s->sys[i].mod;
         for (j = 0; j < m->field_count && st == SU_OK; j++) {
-            st = union_add(&tab, &n, &cap, &m->fields[j], s->declared != 0u);
+            st = union_add(&tab, &n, &cap, &m->fields[j], t->declared != 0u);
         }
     }
     if (st != SU_OK) {
@@ -533,40 +651,70 @@ uint32_t su_sched_finalize(SuSchedule *s) {
         }
         tab[j] = key;
     }
-    free(s->fields);
-    s->fields = tab;
-    s->field_count = n;
+    free(t->fields);
+    t->fields = tab;
+    t->field_count = n;
+    return SU_OK;
+}
+
+uint32_t su_sched_finalize(SuSchedule *s) {
+    uint32_t table;
+    uint32_t st;
+    if (s == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (s->table_count == 0u) {
+        s->table_count = 1u;
+    }
+    for (table = 0; table < s->table_count; table++) {
+        st = finalize_table(s, table);
+        if (st != SU_OK) {
+            return st;
+        }
+    }
+    table0_sync(s);
     return SU_OK;
 }
 
 uint32_t su_sched_check_candidate(const SuSchedule *s, const SuLirModule *m, uint32_t schema_version,
                                   uint32_t gen, char *why, size_t cap) {
     uint32_t i;
+    uint32_t table = 0u;
+    const SuSchedField *fields;
+    uint32_t field_count;
     int idx = su_sched_find(s, m->system_id);
     if (idx >= 0 && s->sys[idx].kind == SU_SYS_KIND_HOST) {
         snprintf(why, cap, "system %s is a host entry and cannot be replaced by a candidate", m->system_id);
         return SU_E_CAPABILITY_DENIED;
     }
-    if (strcmp(s->schema_id, m->query) != 0) {
-        snprintf(why, cap, "candidate query %s does not match world schema %s", m->query, s->schema_id);
+    if (idx >= 0) {
+        table = s->sys[idx].table;
+    }
+    if (table >= su_sched_table_count(s)) {
+        snprintf(why, cap, "candidate's table %u does not exist", (unsigned)table);
         return SU_E_SCHEMA_MISMATCH;
     }
-    if (schema_version != s->schema_version) {
+    fields = su_sched_table_fields(s, table, &field_count);
+    if (strcmp(s->tables[table].schema_id, m->query) != 0) {
+        snprintf(why, cap, "candidate query %s does not match world schema %s", m->query, s->tables[table].schema_id);
+        return SU_E_SCHEMA_MISMATCH;
+    }
+    if (schema_version != s->tables[table].schema_version) {
         snprintf(why, cap, "candidate schema version %u does not match world %u", (unsigned)schema_version,
-                 (unsigned)s->schema_version);
+                 (unsigned)s->tables[table].schema_version);
         return SU_E_SCHEMA_MISMATCH;
     }
-    if (gen != s->layout_generation) {
+    if (gen != s->tables[table].layout_generation) {
         snprintf(why, cap, "candidate layout_generation %u does not match world %u", (unsigned)gen,
-                 (unsigned)s->layout_generation);
+                 (unsigned)s->tables[table].layout_generation);
         return SU_E_SCHEMA_MISMATCH;
     }
     for (i = 0; i < m->field_count; i++) {
         const SuLirField *f = &m->fields[i];
         uint32_t k;
         int found = 0;
-        for (k = 0; k < s->field_count; k++) {
-            const SuSchedField *w = &s->fields[k];
+        for (k = 0; k < field_count; k++) {
+            const SuSchedField *w = &fields[k];
             if (w->id != f->id) {
                 continue;
             }
@@ -773,6 +921,99 @@ uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSch
 uint32_t su_sched_run_ticks(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
                             void *fault_ctx, uint64_t *done, uint32_t *failed_index) {
     return su_sched_run_ticks_opt(w, s, ticks, fault, fault_ctx, NULL, done, failed_index);
+}
+
+uint32_t su_sched_run_ticks_tables(SuWorld *const *ws, uint32_t nw, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
+                                   void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
+                                   uint32_t *failed_index) {
+    int begun[SU_SCHED_MAX_TABLES];
+    int has[SU_SCHED_MAX_TABLES];
+    uint64_t t;
+    uint32_t i;
+    uint32_t st = SU_OK;
+
+    if (done == NULL || failed_index == NULL || ws == NULL || s == NULL || nw == 0u || nw > SU_SCHED_MAX_TABLES ||
+        nw < su_sched_table_count(s)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (nw == 1u) {
+        return su_sched_run_ticks_opt(ws[0], s, ticks, fault, fault_ctx, opt, done, failed_index);
+    }
+    for (i = 0; i < s->count; i++) {
+        if (s->sys[i].table >= nw) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+        /* The entity tick owns one table's chunk cache, entity table and event buffer in this version (host.h,
+         * "tables"). */
+        if (s->sys[i].mod->uses_entity_ops || s->sys[i].host_event_cap != 0u) {
+            return SU_E_CAPABILITY_DENIED;
+        }
+    }
+    *done = 0u;
+    *failed_index = UINT32_MAX;
+    memset(has, 0, sizeof has);
+    for (i = 0; i < s->count; i++) {
+        has[s->sys[i].table] = 1;
+    }
+    for (t = 0; t < ticks; t++) {
+        uint32_t j;
+        memset(begun, 0, sizeof begun);
+        for (j = 0; j < nw; j++) {
+            if (has[j]) {
+                st = su_world_begin_tick(ws[j]);
+                if (st != SU_OK) {
+                    *failed_index = UINT32_MAX;
+                    goto fail;
+                }
+                begun[j] = 1;
+            }
+        }
+        for (i = 0; i < s->count; i++) {
+            uint32_t table = s->sys[i].table;
+            if (fault != NULL && fault(i, fault_ctx) != 0) {
+                st = SU_E_CANDIDATE_FAILED;
+            } else {
+                st = run_one_system(ws[table], s, i, opt, NULL);
+            }
+            if (st == SU_OK) {
+                /* Dead rows are canonically zero after every system's commit (contract B1), per table. */
+                st = su_world_zero_dead(ws[table]);
+            }
+            if (st != SU_OK) {
+                *failed_index = i;
+                goto fail;
+            }
+        }
+        for (j = 0; j < nw; j++) {
+            if (begun[j]) {
+                st = su_world_publish(ws[j]);
+                if (st != SU_OK) {
+                    *failed_index = UINT32_MAX;
+                    goto fail;
+                }
+                begun[j] = 0;
+            }
+        }
+        /* A table with no scheduled system was not begun or published; it keeps the world's one tick (issue 140). */
+        if (s->count > 0u) {
+            uint64_t nt = su_world_tick(ws[s->sys[0].table]);
+            for (j = 0; j < nw; j++) {
+                if (!has[j]) {
+                    (void)su_world_set_tick(ws[j], nt);
+                }
+            }
+        }
+        *done = t + 1u;
+        continue;
+    fail:
+        for (j = 0; j < nw; j++) {
+            if (begun[j]) {
+                (void)su_world_abort(ws[j]);
+            }
+        }
+        return st;
+    }
+    return SU_OK;
 }
 
 void su_sched_swap(SuSchedule *s, uint32_t idx, SuSysEntry *fresh, SuSysEntry *old) {

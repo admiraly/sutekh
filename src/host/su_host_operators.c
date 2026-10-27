@@ -64,22 +64,22 @@ static void space3d_counters(const void *inst, SuHostOperatorCounters *out) {
 
 static const HostOperator k_operators[] = {
     {&g_space3d_query_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters, NULL},
     {&g_space3d_query_prox_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters, NULL},
     {&g_space3d_query_shape_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters, NULL},
     {&g_space3d_query_compound_desc, "space3d_ops_v1", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters, NULL},
     /* space3d_ops_v2 (issue 163): the same variants with the grid broadphase and the local pair budget. */
     {&g_space3d_query2_desc, "space3d_ops_v2", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters, NULL},
     {&g_space3d_query2_prox_desc, "space3d_ops_v2", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters, NULL},
     {&g_space3d_query2_shape_desc, "space3d_ops_v2", space3d_create, space3d_query_instance_destroy, space3d_data,
-     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+     space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters, NULL},
     {&g_space3d_query2_compound_desc, "space3d_ops_v2", space3d_create, space3d_query_instance_destroy,
-     space3d_data, space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters},
+     space3d_data, space3d_data_release, NULL, NULL, NULL, NULL, NULL, NULL, space3d_counters, NULL},
 };
 
 #define HOST_OPERATOR_COUNT (sizeof k_operators / sizeof k_operators[0])

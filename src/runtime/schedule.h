@@ -31,6 +31,10 @@
  * once at its usual cost. */
 #define SU_SCHED_MAX_SYSTEMS 64u
 #define SU_SCHED_DEFAULT_SYSTEMS 8u
+/* Tables per schedule (issue 140): 1 for every classic world, up to this many for a world with several entity
+ * kinds. Table 0 is the schedule's own field table (SuSchedule.fields); tables 1..table_count-1 have their own
+ * union tables in SuSchedule.tables[]. */
+#define SU_SCHED_MAX_TABLES 8u
 
 /* Entry kinds (M3-04a, OD-1b, contract M3_RTS_CONTRACT section 3.1). IR entries are the default
  * (kind 0, so every existing entry keeps its meaning). A host entry is an operator compiled into
@@ -88,6 +92,7 @@ typedef struct SuSysEntry {
     SuLirModule *mod;        /* owned, heap; for a host entry, the declaration module (no instructions) */
     SuExecContext *ctx;      /* owned; borrows mod; NULL for a host entry */
     uint32_t kind;           /* SU_SYS_KIND_IR or SU_SYS_KIND_HOST */
+    uint32_t table;          /* table this entry iterates (issue 140); 0 for every classic schedule */
     const SuHostOpDesc *host; /* host entries only (static, borrowed); NULL for IR entries */
     uint32_t *host_bind;     /* owned; host entries bound to another schema (su_sched_add_host_bound): the world
                               * field ID of each descriptor field, in descriptor order. NULL = the descriptor's IDs. */
@@ -109,6 +114,20 @@ typedef struct SuSysEntry {
 #endif
 } SuSysEntry;
 
+/* One table's schema (issue 140). Table 0's values are mirrored into the SuSchedule fields of the same names
+ * (schema_id, schema_version, layout_generation, declared*, fields/field_count) by su_sched_declare_table and
+ * su_sched_finalize, so every earlier caller reads table 0 exactly as before. */
+typedef struct SuSchedTable {
+    char schema_id[SU_WORLD_NAME_MAX + 1u];
+    uint32_t schema_version;
+    uint32_t layout_generation;
+    uint32_t declared;         /* 1: the table's schema was declared, not derived from its systems */
+    uint32_t declared_count;
+    SuSchedField *declared_fields; /* owned; ascending id, access 0 */
+    uint32_t field_count;
+    SuSchedField *fields;      /* owned union table, ascending field id */
+} SuSchedTable;
+
 typedef struct SuSchedule {
     char schema_id[SU_WORLD_NAME_MAX + 1u];
     uint32_t schema_version;
@@ -122,6 +141,8 @@ typedef struct SuSchedule {
     uint32_t declared;       /* 1: the world schema was declared (su_sched_declare_schema), not derived */
     uint32_t declared_count;
     SuSchedField *declared_fields; /* owned; the declared lanes, ascending id, access 0 */
+    uint32_t table_count;    /* 1..SU_SCHED_MAX_TABLES; 1 for every classic schedule */
+    SuSchedTable tables[SU_SCHED_MAX_TABLES]; /* per table; tables[0] mirrors the fields above */
 } SuSchedule;
 
 /* Test seam: called before each system of a tick. Returns nonzero to fail that system
@@ -162,6 +183,16 @@ uint32_t su_sched_set_max_systems(SuSchedule *s, uint32_t max_systems);
  * when memory runs out. */
 uint32_t su_sched_declare_schema(SuSchedule *s, const char *schema_id, uint32_t schema_version, uint32_t gen,
                                  const SuSchedField *lanes, uint32_t n);
+/* As su_sched_declare_schema for any table (issue 140). table 0 is exactly su_sched_declare_schema. A table must
+ * be declared before its first entry when it is not table 0 (its schema cannot be derived from nothing when the
+ * table has no systems); declaring it later is SU_E_INVALID_ARGUMENT. table_count grows to table + 1.
+ * SU_E_RESOURCE_LIMIT when table >= SU_SCHED_MAX_TABLES or memory runs out. */
+uint32_t su_sched_declare_table(SuSchedule *s, uint32_t table, const char *schema_id, uint32_t schema_version,
+                                uint32_t gen, const SuSchedField *lanes, uint32_t n);
+/* Tables the schedule has: 1 unless su_sched_declare_table / su_sched_add_table named a later one. */
+uint32_t su_sched_table_count(const SuSchedule *s);
+/* The table's union field table (built by su_sched_finalize; table 0 is the schedule's own). NULL before finalize. */
+const SuSchedField *su_sched_table_fields(const SuSchedule *s, uint32_t table, uint32_t *count);
 
 /* Appends a system. Takes ownership of mod on SU_OK only. Fails with
  * SU_E_SCHEMA_MISMATCH when query, schema_version or layout_generation differ from the
@@ -169,6 +200,10 @@ uint32_t su_sched_declare_schema(SuSchedule *s, const char *schema_id, uint32_t 
  * SU_E_RESOURCE_LIMIT when the schedule is full (su_sched_max_systems) or the VM context cannot be created. */
 uint32_t su_sched_add(SuSchedule *s, SuLirModule *mod, uint32_t schema_version, uint32_t gen,
                       uint64_t txid, uint64_t system_rev, uint64_t tick);
+/* As su_sched_add for a table other than 0 (issue 140): the module's query, schema_version and generation must
+ * equal that table's declared schema. table 0 is exactly su_sched_add. */
+uint32_t su_sched_add_table(SuSchedule *s, uint32_t table, SuLirModule *mod, uint32_t schema_version, uint32_t gen,
+                            uint64_t txid, uint64_t system_rev, uint64_t tick);
 /* Appends a host entry (M3-04a, section 3.1). decl is the declaration module built for d by
  * su_host_decl_build (or su_host_load); it must have no instructions and must match d in system ID,
  * query and field table, else SU_E_SCHEMA_MISMATCH (SU_E_INVALID_ARGUMENT for a malformed descriptor
@@ -184,6 +219,14 @@ uint32_t su_sched_add_host(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *de
 uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModule *decl, const uint32_t *bind,
                                  uint32_t schema_version, uint32_t gen, uint64_t txid, uint64_t system_rev,
                                  uint64_t tick);
+/* As su_sched_add_host and su_sched_add_host_bound for a table other than 0 (issue 140); table 0 is exactly the
+ * calls above. The declaration must match the table's declared schema. */
+uint32_t su_sched_add_host_table(SuSchedule *s, uint32_t table, const SuHostOpDesc *d, SuLirModule *decl,
+                                 uint32_t schema_version, uint32_t gen, uint64_t txid, uint64_t system_rev,
+                                 uint64_t tick);
+uint32_t su_sched_add_host_bound_table(SuSchedule *s, uint32_t table, const SuHostOpDesc *d, SuLirModule *decl,
+                                       const uint32_t *bind, uint32_t schema_version, uint32_t gen, uint64_t txid,
+                                       uint64_t system_rev, uint64_t tick);
 /* Gives host entry idx its own operator scratch (2026-10-18, in-process host API): run receives inst instead of
  * the descriptor's static host_ctx, so worlds in one process do not share operator state. The entry owns inst
  * and releases it with free_fn (may be NULL) when it is destroyed or replaced by another instance.
@@ -227,6 +270,14 @@ uint32_t su_sched_run_ticks(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFa
 uint32_t su_sched_run_ticks_opt(SuWorld *w, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
                                 void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
                                 uint32_t *failed_index);
+/* As su_sched_run_ticks_opt for a world with several tables (issue 140): ws[t] is table t's world, nw =
+ * su_sched_table_count. Each entry runs on its table, and every table that has at least one entry is begun and
+ * published once per tick; a failure aborts every open table. nw == 1 is exactly su_sched_run_ticks_opt. A
+ * schedule with an entity-operations system needs nw == 1 (SU_E_CAPABILITY_DENIED otherwise): the entity tick
+ * owns one table's chunk cache and entity table in this version. */
+uint32_t su_sched_run_ticks_tables(SuWorld *const *ws, uint32_t nw, SuSchedule *s, uint64_t ticks, SuSchedFault fault,
+                                   void *fault_ctx, const SuSchedTickOpts *opt, uint64_t *done,
+                                   uint32_t *failed_index);
 
 /* Enables entity state for this schedule: an event log of event_log_max records and per-tick caps.
  * Required before a schedule with uses_entity_ops systems can run (SU_E_INVALID_ARGUMENT otherwise).

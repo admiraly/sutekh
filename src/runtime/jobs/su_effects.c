@@ -23,7 +23,8 @@ struct SuEffectGraph {
     uint8_t *wr;           /* n * SU_LIMIT_FIELDS: derived writes */
     uint8_t *adj;          /* n * n: adj[a*n+b] = a must run before b */
     uint8_t *reach;        /* n * n: transitive closure of adj */
-    uint8_t *conf;         /* n * n: effects conflict on some field */
+    uint8_t *conf;         /* n * n: effects conflict on some field (within one table) */
+    uint32_t *tab;         /* n: table of each system (issue 140) */
     uint32_t *order;       /* canonical serial order */
 };
 
@@ -251,6 +252,9 @@ static int merge_conflicts(SuEffectGraph *g) {
     for (i = 0; i < n; i++) {
         for (j = i + 1u; j < n; j++) {
             const uint32_t *oi = &ord[(size_t)i * SU_LIMIT_FIELDS];
+            if (g->tab[i] != g->tab[j]) {
+                continue; /* different tables never share columns */
+            }
             const uint32_t *oj = &ord[(size_t)j * SU_LIMIT_FIELDS];
             uint32_t a = 0, b = 0;
             while (a < g->nf[i] && b < g->nf[j]) {
@@ -313,9 +317,10 @@ uint32_t su_effects_build(const SuEffectInput *in, uint32_t n, SuEffectGraph **o
     g->reach = calloc((size_t)(n > 0u ? n * n : 1u), 1u);
     g->conf = calloc((size_t)(n > 0u ? n * n : 1u), 1u);
     g->order = calloc(n > 0u ? n : 1u, sizeof *g->order);
+    g->tab = calloc(n > 0u ? n : 1u, sizeof *g->tab);
     if (g->ids == NULL || g->rank == NULL || g->priority == NULL || g->parallel == NULL ||
         g->nf == NULL || g->fid == NULL || g->rd == NULL || g->wr == NULL || g->adj == NULL ||
-        g->reach == NULL || g->conf == NULL || g->order == NULL) {
+        g->reach == NULL || g->conf == NULL || g->order == NULL || g->tab == NULL) {
         su_effects_free(g);
         return SU_E_RESOURCE_LIMIT;
     }
@@ -346,6 +351,7 @@ uint32_t su_effects_build(const SuEffectInput *in, uint32_t n, SuEffectGraph **o
         memcpy(g->ids[i], e->system_id, len + 1u);
         g->priority[i] = e->priority;
         g->parallel[i] = e->declared_parallel != 0u ? 1u : 0u;
+        g->tab[i] = e->table;
         if (e->mod->field_count > SU_LIMIT_FIELDS) {
             st = SU_E_RESOURCE_LIMIT;
             break;
@@ -472,6 +478,9 @@ uint32_t su_effects_build(const SuEffectInput *in, uint32_t n, SuEffectGraph **o
         for (i = 0; i < n; i++) {
             for (j = i + 1u; j < n; j++) {
                 uint32_t a;
+                if (g->tab[i] != g->tab[j]) {
+                    continue; /* different tables never share columns */
+                }
                 for (a = 0; a < g->nf[i]; a++) {
                     uint32_t b;
                     uint32_t id = g->fid[(size_t)i * SU_LIMIT_FIELDS + a];
@@ -619,6 +628,7 @@ void su_effects_free(SuEffectGraph *g) {
     free(g->adj);
     free(g->reach);
     free(g->conf);
+    free(g->tab);
     free(g->order);
     free(g);
 }
