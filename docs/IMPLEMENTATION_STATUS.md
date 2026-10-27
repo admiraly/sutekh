@@ -11,10 +11,15 @@ keeps `generation << 32 | slot` with the slot offset by the table's base, so it 
 are unchanged, and a table-qualified call rejects another table's handle with `SU_E_STALE_HANDLE`. Single-table
 worlds are byte-identical to the parent revision (identity, snapshot versions 1 and 2, digests, fast digests,
 replays); multi-table worlds fold their table descriptors into the identity and write snapshot version 3. The
-decision, the API and the formats are in [MULTI_TABLE_WORLDS.md](MULTI_TABLE_WORLDS.md); the first slice refuses IR
-entity operations and operator events in multi-table worlds and leaves the space3d cross-table form to the recorded
-follow-up. Evidence: `host_tables`, `host_tables_dll` (`tests/host/test_host_tables.c`) and
-`bench/host/bench_host_tables.c`; the handoff is `planning/handoffs/2026-10-27-issue-140.md`.
+decision, the API and the formats are in [MULTI_TABLE_WORLDS.md](MULTI_TABLE_WORLDS.md). The entity tick is
+table-aware (slice 2): `despawn_self` and `emit_event` run in every table, host-operator events join the same log
+with a world slot, `slot_u32`/`gen_u32`/`handle_live` use world slots, `space3d.query` can take its movers from one
+table and its targets from another, and a stateful registered operator works in any table (its DROP_DEAD purge
+checks each key against the table that owns it). In-tick spawning by an operator into a named table is the recorded
+follow-up (section 8.3 of the design note). Evidence: `host_tables`, `host_tables_dll`
+(`tests/host/test_host_tables.c`), `host_tables_entities`, `host_tables_entities_dll`
+(`tests/host/test_host_tables_entities.c`) and `bench/host/bench_host_tables.c`; the handoff is
+`planning/handoffs/2026-10-27-issue-140b.md`.
 
 ## Current checkpoint — 14 October 2026
 
