@@ -745,8 +745,8 @@ _Static_assert(SU_HOST_SCHEMA_MAX_LANES == SU_LIMIT_FIELDS, "declared schemas us
 _Static_assert(SU_HOST_WORLD_DESC_V1_SIZE == offsetof(SuHostWorldDesc, schema), "v1 descriptor ends at seed");
 _Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V1_SIZE == 80u, "first-release SuHostWorldDesc is 80 bytes");
 _Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V2_SIZE == 88u, "v2 SuHostWorldDesc (schema) is 88 bytes");
-_Static_assert(SU_HOST_WORLD_DESC_V3_SIZE == sizeof(SuHostWorldDesc), "v3 descriptor is the whole descriptor");
-_Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V3_SIZE == 120u, "v3 SuHostWorldDesc (tables) is 120 bytes");
+_Static_assert(sizeof(void *) != 8u || SU_HOST_WORLD_DESC_V3_SIZE == 96u, "v3 SuHostWorldDesc is 96 bytes");
+_Static_assert(sizeof(void *) != 8u || sizeof(SuHostWorldDesc) == 120u, "v4 SuHostWorldDesc (tables) is 120 bytes");
 _Static_assert(sizeof(void *) != 8u || sizeof(SuHostTableDesc) == 40u, "SuHostTableDesc is 40 bytes");
 _Static_assert(SU_HOST_SCHEMA_V1_SIZE == (sizeof(void *) == 8u ? 32u : 24u), "first-release SuHostSchema size");
 _Static_assert(sizeof(SuHostSchema) == SU_HOST_SCHEMA_V1_SIZE, "SuHostSchema has no padding after the v1 fields");
@@ -804,7 +804,7 @@ uint32_t su_host_world_create(const SuHostWorldDesc *desc_in, SuHostWorld **out,
      * ending inside a field is refused. */
     if (desc_in == NULL || desc_in->struct_size < SU_HOST_WORLD_DESC_V1_SIZE ||
         (desc_in->struct_size != SU_HOST_WORLD_DESC_V1_SIZE && desc_in->struct_size != SU_HOST_WORLD_DESC_V2_SIZE &&
-         desc_in->struct_size < sizeof *desc_in)) {
+         desc_in->struct_size != SU_HOST_WORLD_DESC_V3_SIZE && desc_in->struct_size < sizeof *desc_in)) {
         return set_err(err, SU_E_INVALID_ARGUMENT, UINT32_MAX, UINT64_MAX,
                        "descriptor: struct_size, capsules (1..%u), reserved0 or fixture is invalid",
                        (unsigned)SU_HOST_MAX_CAPSULES);

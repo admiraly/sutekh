@@ -214,6 +214,8 @@ Deferred, each independently useful:
 3. **Per-table operator state.** A stateful registered operator is bound to its entry's table: `run->state`
    sees that table's alive/generation views, its keys are world handles, and the DROP_DEAD purge validates
    them against that table's entity table (the instance learns its table's base at creation). A state that
-   should span tables needs a key convention of its own, which this slice does not define.
+   should span tables needs a key convention of its own, which this slice does not define. The existing
+   operator-state tests all run in table 0 (base 0); a stateful operator in a later table is implemented but
+   not covered by a test in this slice.
 4. **Table-level rollback.** `su_host_snapshot_restore_inplace` restores every table (scratch entity tables are
    allocated per table), but there is no "restore table t only" call.

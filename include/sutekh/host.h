@@ -125,8 +125,8 @@ typedef struct SuHostWorldDesc {
 #define SU_HOST_STATE_BUDGET_DEFAULT UINT64_C(1073741824) /* 1 GiB of reserved operator state per world */
 
 /* Size of the first released SuHostWorldDesc (through seed): 80 bytes with 8-byte pointers (LP64, LLP64; pinned at
- * compile time), of the second (through schema, issue 144): 88 bytes, and of the third (through capsule_table, issue
- * 140): 120 bytes. Versioning as for
+ * compile time), of the second (through schema, issue 144): 88 bytes, of the third (through state_budget_bytes, issue
+ * 153): 96 bytes, and of the fourth (through capsule_table, issue 140): 120 bytes. Versioning as for
  * SuHostOperatorDesc: struct_size may be SU_HOST_WORLD_DESC_V1_SIZE, SU_HOST_WORLD_DESC_V2_SIZE,
  * SU_HOST_WORLD_DESC_V3_SIZE, or sizeof(SuHostWorldDesc) (120 bytes with 8-byte pointers) or larger, in which case
  * every byte beyond the library's sizeof(SuHostWorldDesc) must be zero (a nonzero unknown byte is
@@ -136,8 +136,9 @@ typedef struct SuHostWorldDesc {
  * Zero the whole descriptor (memset) before filling it. */
 #define SU_HOST_WORLD_DESC_V1_SIZE (offsetof(SuHostWorldDesc, seed) + sizeof(uint64_t))
 #define SU_HOST_WORLD_DESC_V2_SIZE (offsetof(SuHostWorldDesc, state_budget_bytes))
-/* Version 3 (2026-10-27, issue 140; through capsule_table): the multi-table fields, and sizeof(SuHostWorldDesc). */
-#define SU_HOST_WORLD_DESC_V3_SIZE (offsetof(SuHostWorldDesc, capsule_table) + sizeof(void *))
+/* Version 3 (2026-10-26, issue 153; through state_budget_bytes): the last size before the multi-table fields. */
+#define SU_HOST_WORLD_DESC_V3_SIZE (offsetof(SuHostWorldDesc, state_budget_bytes) + sizeof(uint64_t))
+/* Version 4 (2026-10-27, issue 140; through capsule_table) is sizeof(SuHostWorldDesc). */
 
 /* Creates a world. Capsules are verified (any SU_E_* of su_lir_verify, err->index = capsule index), joined
  * into one schedule (SU_E_SCHEMA_MISMATCH when they disagree on schema or a field) and checked by the effect

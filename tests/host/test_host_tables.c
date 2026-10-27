@@ -701,6 +701,39 @@ static void test_large_idle_table(void) {
     su_host_world_destroy(one);
 }
 
+/* Descriptor versioning: the 96-byte descriptor of the previous release is still a valid single-table world
+ * (fields beyond struct_size read as zero, so no tables), and a size that ends inside a field is refused. */
+static void test_descriptor_versions(void) {
+    SuHostWorld *w3 = NULL;
+    SuHostWorld *w4 = NULL;
+    SuHostWorldDesc d;
+    SuHostError e;
+    uint8_t id3[32], id4[32];
+    uint32_t st;
+
+    memset(&d, 0, sizeof d);
+    d.struct_size = SU_HOST_WORLD_DESC_V3_SIZE;
+    d.capsule_count = 1;
+    d.capsules = &g_ship;
+    d.tick_rate_hz = 120;
+    d.max_entities = 2u;
+    CHECK(su_host_world_create(&d, &w3, &e) == SU_OK);
+    CHECK(su_host_table_count(w3) == 1u);
+    d.struct_size = (uint32_t)sizeof d;
+    CHECK(su_host_world_create(&d, &w4, &e) == SU_OK);
+    CHECK(su_host_table_count(w4) == 1u);
+    CHECK(su_host_world_identity(w3, id3) == SU_OK && su_host_world_identity(w4, id4) == SU_OK &&
+          memcmp(id3, id4, 32) == 0);
+    {
+        SuHostWorld *bad = NULL;
+        d.struct_size = SU_HOST_WORLD_DESC_V3_SIZE + 4u; /* ends inside the tables pointer */
+        st = su_host_world_create(&d, &bad, &e);
+        CHECK(st == SU_E_INVALID_ARGUMENT && bad == NULL);
+    }
+    su_host_world_destroy(w3);
+    su_host_world_destroy(w4);
+}
+
 int main(void) {
     g_cap = slurp("examples/movement.capsule.json");
     g_lir = slurp("examples/movement.lir.json");
@@ -725,6 +758,7 @@ int main(void) {
     test_memory_accounting();
     test_refusals();
     test_large_idle_table();
+    test_descriptor_versions();
     printf("test_host_tables: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
