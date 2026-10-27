@@ -34,7 +34,8 @@
  * its pair budget degrades locally (docs/SPACE3D.md "Broadphase v2"). */
 #define SPACE3D_OPS_VERSION2 2u
 #define SPACE3D_PAIR_BUDGET_MIN (1u << 22)  /* v2 pair budget: max(this, SPACE3D_PAIR_BUDGET_PER_ROW * rows) */
-#define SPACE3D_PAIR_BUDGET_PER_ROW 1024u   /* grid entries visited per row of world capacity */
+#define SPACE3D_PAIR_BUDGET_PER_ROW 1024u   /* grid entries visited per row indexed (movers, plus a cross-table
+                                             * query's target rows) */
 #define SPACE3D_SWEEP_TRY_PER_ROW 512u      /* v2 tries the sweep first, up to this many pairs per entry */
 
 /* kind values */

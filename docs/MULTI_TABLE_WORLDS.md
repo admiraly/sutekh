@@ -119,6 +119,8 @@ The one slot rule, for IR and host records alike:
 | `slot_u32` | the row's world slot: the system's table base plus its local row |
 | `gen_u32` | the row's generation in its own table |
 | `handle_live(slot, gen)` | `slot` is a world slot of the system's own table; another table's slot is not live |
+| `gather_*` `slot` | a world slot of the system's own table (the base is subtracted, then range-checked: out of range = 0) |
+| `find_eq_u32` result | a world slot of the system's own table (the table base plus the lowest matching local row) |
 | `despawn_self` / `emit_event` `slot` | the emitting row's world slot |
 | `run->table_base` | the operator's table base; an operator reports `table_base + local row` |
 | `run->emit_event(slot, ...)` | `slot` is any world slot of the world (`0..world_slots-1`) |
@@ -262,8 +264,10 @@ the motivating benchmark. It refused IR entity operations and operator events in
 - **Operator events (#172) in a multi-table world.** A host operator's `emit_event` records join the same merge
   as the IR records, ordered by schedule position, with a world slot. `run->table_base` gives the operator's
   table base; `emit_event` accepts any world slot of the world.
-- **World-slot semantics.** `slot_u32`, `gen_u32`, `handle_live`, `despawn_self`, `emit_event` and operator
-  events all follow the one slot rule in section 3.3; a column handle stored by a system matches a host handle.
+- **World-slot semantics.** `slot_u32`, `gen_u32`, `handle_live`, `gather_*`, `find_eq_u32`, `despawn_self`,
+  `emit_event` and operator events all follow the one slot rule in section 3.3; a column handle stored by a system
+  matches a host handle, and the claim pattern of `LIVE_IR_SPEC.md` (a `find_eq_u32` result gathered back) works
+  inside any table.
 - **Cross-table `space3d`.** The operator descriptor declares target lanes (descriptor version 4), the world
   descriptor names each capsule's target table (version 5), and `SuHostOperatorRun` carries the target table,
   columns, rows, base and entity views. `space3d.query` takes its movers from its own table and its collidables

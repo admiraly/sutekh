@@ -440,7 +440,9 @@ those of the v1 variant of the same suffix. Only candidate selection and the bud
   both sides by the finer row's query. Cells are looked up by a 64-bit hash with an exact cell check. Both methods
   give the same result unless the grid's budget cuts.
 - *Budget (declared capacity, part of the identity).* The pair budget is max(2^22, 1024 x capacity) grid entries
-  visited per tick (capacity: the world's row count; 67,108,864 at 65,536 rows). When the grid's per-row entry counts
+  visited per tick (capacity: the world's row count; 67,108,864 at 65,536 rows). A cross-table query (section 1,
+  issue 140) counts the mover table's rows plus its target table's, the rows it indexes. When the grid's per-row
+  entry counts
   sum to more than the budget, every row's query visits at most `cut` entries, the largest value with
   sum(min(count, cut)) <= budget, in a fixed order (coarser levels first, so large bodies are kept; in each level the
   cell of the row's centre first, then by z, y, x; entries in slot order). Only the most crowded rows are cut. A cut

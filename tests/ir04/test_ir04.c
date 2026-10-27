@@ -467,6 +467,100 @@ static void test_table_view(void) {
     destroy(&x);
 }
 
+/* A staged (output) column of the call, by field ID. */
+static uint32_t staged_at(const SuColumnBinding *b, uint32_t n, uint32_t id, uint32_t r) {
+    uint32_t j;
+    for (j = 0; j < n; j++) {
+        if (b[j].field_id == id) {
+            return ((const uint32_t *)b[j].data)[r];
+        }
+    }
+    return 0xDEADBEEFu;
+}
+
+/* The whole-table view with a table base (issue 140): gather_* takes a world slot (base subtracted, out of range =
+ * 0) and find_eq_u32 returns one (base + local row), so the claim pattern works in a table other than 0. */
+static void test_table_view_base(void) {
+    enum { BASE = 3 }; /* world slot of the view's local row 0 */
+    World x;
+    SuInvocation wi, inv, tab;
+    SuOutputs wo, outs;
+    SuColumnBinding in[NF_MAX], out[NF_MAX];
+    SuExecContext *c = NULL;
+    uint32_t i, j, r, nin = 0, nout = 0;
+    if (!build(&x, "")) {
+        CHECK(0);
+        return;
+    }
+    CHECK(su_world_begin_tick(x.w) == SU_OK);
+    CHECK(su_world_build_invocation(x.w, &wi) == SU_OK);
+    CHECK(su_world_build_outputs(x.w, &wo) == SU_OK);
+    for (i = 0; i < x.m.field_count; i++) {
+        for (j = 0; j < wi.binding_count && (x.m.fields[i].access & SU_ACCESS_READ) != 0u; j++) {
+            if (wi.bindings[j].field_id == x.m.fields[i].id) {
+                in[nin++] = wi.bindings[j];
+            }
+        }
+        for (j = 0; j < wo.binding_count && (x.m.fields[i].access & SU_ACCESS_WRITE) != 0u; j++) {
+            if (wo.bindings[j].field_id == x.m.fields[i].id) {
+                out[nout++] = wo.bindings[j];
+            }
+        }
+    }
+    inv = wi;
+    inv.bindings = in;
+    inv.binding_count = nin;
+    outs = wo;
+    outs.bindings = out;
+    outs.binding_count = nout;
+    CHECK(su_vm_context_create(&x.m, 1u, &c) == SU_OK);
+    /* The call is a chunk at the table's local row 0, whose world slot is BASE; the gather view is the whole table. */
+    CHECK(su_vm_context_set_entity_view(c, NULL, NULL, (uint32_t)BASE, 0u, NULL) == SU_OK);
+    tab = inv;
+    CHECK(su_vm_context_set_table_view_base(c, &tab, (uint32_t)BASE) == SU_OK);
+    CHECK(su_vm_invoke_v1(c, &inv, &outs) == SU_OK);
+    for (r = 0; r < NROWS; r++) {
+        uint32_t t = IN_TGT[r];
+        uint32_t want_gather = 0u, want_find = 0xFFFFFFFFu, s, got_g, got_f;
+        if (t >= (uint32_t)BASE && t - (uint32_t)BASE < NROWS) {
+            want_gather = IN_A[t - (uint32_t)BASE];
+        }
+        for (s = 0; s < NROWS; s++) {
+            if (IN_B[s] == IN_A[r]) {
+                want_find = (uint32_t)BASE + s;
+                break;
+            }
+        }
+        got_g = staged_at(out, nout, 18u, r);
+        got_f = staged_at(out, nout, 19u, r);
+        g_checks++;
+        if (got_g != want_gather) {
+            g_failures++;
+            fprintf(stderr, "row %u: gather_u32 at world slot %u: got 0x%08X want 0x%08X\n", (unsigned)r,
+                    (unsigned)t, (unsigned)got_g, (unsigned)want_gather);
+        }
+        g_checks++;
+        if (got_f != want_find) {
+            g_failures++;
+            fprintf(stderr, "row %u: find_eq_u32: got %u want %u\n", (unsigned)r, (unsigned)got_f, (unsigned)want_find);
+        }
+    }
+    /* base 0 is the released rule: the same call with a zero base reads local rows and returns local slots. */
+    CHECK(su_vm_context_set_entity_view(c, NULL, NULL, 0u, 0u, NULL) == SU_OK);
+    CHECK(su_vm_context_set_table_view(c, &tab) == SU_OK);
+    CHECK(su_vm_invoke_v1(c, &inv, &outs) == SU_OK);
+    for (r = 0; r < NROWS; r++) {
+        g_checks++;
+        if (staged_at(out, nout, 18u, r) != want_at(18u, r, 0) || staged_at(out, nout, 19u, r) != want_at(19u, r, 0)) {
+            g_failures++;
+            fprintf(stderr, "row %u: base 0 is not the released rule\n", (unsigned)r);
+        }
+    }
+    su_vm_context_destroy(c);
+    su_world_abort(x.w);
+    destroy(&x);
+}
+
 /* The op table: 0.4 rows are known only from 0.4 on, codes unique. */
 static void test_table(void) {
     size_t i, n04 = 0;
@@ -488,6 +582,7 @@ int main(void) {
     test_hash();
     test_exec();
     test_table_view();
+    test_table_view_base();
     printf("test_ir04: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

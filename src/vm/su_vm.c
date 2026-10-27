@@ -64,8 +64,10 @@ struct SuExecContext {
     /* IR 0.4 whole-table view for gather_* / find_eq_u32 (su_vm_context_set_table_view). */
     int has_table;
     SuInvocation table;            /* copied; bindings borrowed until replaced */
+    uint32_t table_base;           /* world slot of the view's local slot 0 (issue 140; 0 for table 0) */
     uint32_t **gather_cols;        /* per table index, filled per invocation (whole-table columns) */
     uint64_t gather_rows;
+    uint32_t gather_base;          /* bound per invocation: world slot of gather row 0 */
     uint32_t *filter_copy;         /* writable lane indices copied on a filtered-out row */
     /* IR 0.4 entity table for handle_live (su_vm_context_set_entity_table), and the one bound per invocation. */
     int has_ents;
@@ -491,10 +493,15 @@ static uint32_t su_exec_insn03(SuExecContext *ctx, const SuInsn *ins, size_t r) 
             (two && ctx->gather_cols[ins->a + 1u] == NULL)) {
             return SU_E_INTERNAL;
         }
-        if ((uint64_t)s < ctx->gather_rows) {
-            bits = ctx->gather_cols[ins->a][s];
-            if (two) {
-                bits |= (uint64_t)ctx->gather_cols[ins->a + 1u][s] << 32;
+        /* The slot operand is a world slot (issue 140): subtract the table base, then range-check against the
+         * table. A single-table world's base is 0, so the result is the released one byte for byte. */
+        if (s >= ctx->gather_base) {
+            uint64_t row = (uint64_t)(s - ctx->gather_base);
+            if (row < ctx->gather_rows) {
+                bits = ctx->gather_cols[ins->a][row];
+                if (two) {
+                    bits |= (uint64_t)ctx->gather_cols[ins->a + 1u][row] << 32;
+                }
             }
         }
         if (op == SU_OP_GATHER_U32) {
@@ -527,7 +534,7 @@ static uint32_t su_exec_insn03(SuExecContext *ctx, const SuInsn *ins, size_t r) 
         }
         for (s = 0; s < n; s++) {
             if (col[s] == u) {
-                found = (uint32_t)s;
+                found = ctx->gather_base + (uint32_t)s; /* a world slot (issue 140; base 0 is the released rule) */
                 break;
             }
         }
@@ -984,15 +991,21 @@ uint32_t su_vm_context_set_entity_view(SuExecContext *ctx, const uint8_t *alive,
 }
 
 uint32_t su_vm_context_set_table_view(SuExecContext *ctx, const SuInvocation *table) {
+    return su_vm_context_set_table_view_base(ctx, table, 0u);
+}
+
+uint32_t su_vm_context_set_table_view_base(SuExecContext *ctx, const SuInvocation *table, uint32_t base_slot) {
     if (ctx == NULL) {
         return SU_E_INVALID_ARGUMENT;
     }
     if (table == NULL) {
         ctx->has_table = 0;
+        ctx->table_base = 0u;
         memset(&ctx->table, 0, sizeof ctx->table);
         return SU_OK;
     }
     ctx->table = *table;
+    ctx->table_base = base_slot;
     ctx->has_table = 1;
     return SU_OK;
 }
@@ -1195,6 +1208,7 @@ static uint32_t su_bind_table(SuExecContext *ctx, const SuOutputs *out, uint64_t
         }
         memcpy(ctx->gather_cols, ctx->in_cols, sizeof *ctx->gather_cols * fc);
         ctx->gather_rows = rows;
+        ctx->gather_base = 0u;
         return SU_OK;
     }
     if (t->struct_size != (uint32_t)sizeof(SuInvocation) || t->abi_version != SU_ABI_VERSION ||
@@ -1224,6 +1238,7 @@ static uint32_t su_bind_table(SuExecContext *ctx, const SuOutputs *out, uint64_t
         }
     }
     ctx->gather_rows = t->row_count;
+    ctx->gather_base = ctx->table_base;
     return SU_OK;
 }
 
@@ -1382,6 +1397,7 @@ static int su_exec_rows_planned(SuExecContext *ctx, uint64_t rows, SuOutputs *ou
     run.emits = ctx->needs_emitter;
     run.gather_cols = ctx->gather_cols;
     run.gather_rows = ctx->gather_rows;
+    run.gather_base = ctx->gather_base;
     run.ents_alive = ctx->hl_alive;
     run.ents_gen = ctx->hl_gen;
     run.ents_slots = ctx->hl_slots;
@@ -1615,13 +1631,17 @@ uint32_t su_vm_run_system(SuWorld *w, SuExecContext *ctx) {
     outs.bindings = ctx->scr_out;
 
     if (m->uses_gather) {
-        /* The invocation is the whole table: it is also the gather view for this call (IR 0.4). */
+        /* The invocation is the whole table: it is also the gather view for this call (IR 0.4). Its local slot 0 is
+         * world slot 0 (su_vm_run_system is the single-table world helper). */
         int had = ctx->has_table;
         SuInvocation prev = ctx->table;
+        uint32_t prev_base = ctx->table_base;
         ctx->table = inv;
+        ctx->table_base = 0u;
         ctx->has_table = 1;
         st = su_vm_invoke_v1(ctx, &inv, &outs);
         ctx->table = prev;
+        ctx->table_base = prev_base;
         ctx->has_table = had;
     } else {
         st = su_vm_invoke_v1(ctx, &inv, &outs);

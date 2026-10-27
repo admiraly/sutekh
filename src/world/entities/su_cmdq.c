@@ -809,16 +809,6 @@ static uint32_t commit_core(SuCmdQ *q, const SuCmdCallbacks *cb, const SuCmdTabl
             n_rejected++;
         }
     }
-    if (t != NULL) {
-        /* World slots (issue 140): a system's command and event records name the row in the world handle space. */
-        for (i = 0u; i < v.n_cmds; i++) {
-            uint32_t table = t->sys_table[q->rec[i].system_index];
-            if (table >= t->table_count) {
-                return SU_E_INTERNAL;
-            }
-            q->rec[i].slot += (uint32_t)t->base[table];
-        }
-    }
     base = su_evlog_next_seq(log);
     i = 0u;
     j = 0u;
@@ -856,7 +846,18 @@ static uint32_t commit_core(SuCmdQ *q, const SuCmdCallbacks *cb, const SuCmdTabl
                 q->fin[k].slot += (uint32_t)t->base[table];
             }
         } else {
+            /* World slots (issue 140): a record names its row in the world handle space. The base is added here,
+             * after the comparison, so the merge compares local slots with local slots (both sides of a system
+             * carry its table's local slot); adding it before the merge would sort a table >= 1 system's events
+             * ahead of its despawns. */
             q->fin[k] = q->rec[j++];
+            if (t != NULL) {
+                uint32_t table = t->sys_table[q->fin[k].system_index];
+                if (table >= t->table_count) {
+                    return SU_E_INTERNAL;
+                }
+                q->fin[k].slot += (uint32_t)t->base[table];
+            }
         }
         q->fin[k].tick = tick;
         q->fin[k].event_seq = base + k;

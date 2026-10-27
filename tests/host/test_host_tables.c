@@ -928,13 +928,30 @@ static void test_memory_categories(void) {
     CHECK(su_host_memory(w, &m) == SU_OK);
     CHECK(m.restore_scratch > 0u);
     CHECK(m.total == m.tables_total + m.input_storage + m.queued_inputs + m.restore_scratch + m.metadata);
-    /* A caller that passes the first released size gets the fields it covers, and the full total. */
+    /* A caller that passes the first released size gets the fields it covers, and the full total; the size it is
+     * given back is its own, never one larger than its struct (a caller may trust it). */
     {
-        SuHostMemory v1;
-        memset(&v1, 0, sizeof v1);
-        v1.struct_size = SU_HOST_MEMORY_V1_SIZE;
-        CHECK(su_host_memory(w, &v1) == SU_OK);
-        CHECK(v1.total == m.total && v1.tables_total == m.tables_total);
+        enum { GUARD = 16 };
+        uint8_t buf[SU_HOST_MEMORY_V1_SIZE + GUARD];
+        SuHostMemory *v1 = (SuHostMemory *)(void *)buf;
+        size_t k;
+        memset(buf, 0xAA, sizeof buf);
+        v1->struct_size = SU_HOST_MEMORY_V1_SIZE;
+        CHECK(su_host_memory(w, v1) == SU_OK);
+        CHECK(v1->total == m.total && v1->tables_total == m.tables_total);
+        CHECK(v1->struct_size == SU_HOST_MEMORY_V1_SIZE);
+        /* Nothing past the caller's size was written: the guard keeps its fill. */
+        for (k = (size_t)SU_HOST_MEMORY_V1_SIZE; k < sizeof buf; k++) {
+            CHECK(buf[k] == 0xAAu);
+        }
+    }
+    /* A current-size caller gets sizeof(SuHostMemory) back. */
+    {
+        SuHostMemory cur;
+        memset(&cur, 0, sizeof cur);
+        cur.struct_size = (uint32_t)sizeof cur;
+        CHECK(su_host_memory(w, &cur) == SU_OK);
+        CHECK(cur.struct_size == (uint32_t)sizeof(SuHostMemory));
     }
     su_host_world_destroy(w);
 }

@@ -126,9 +126,10 @@
  *   u32 bit and division ops (dst a b): shl/shr by n >= 32 give 0; div by 0 gives 0, rem by 0 gives a.
  *   i64 bit ops (dst a b).
  *   gather_u32/_i32/_i64/_q32 (dst = reg, a = field index, b = slot reg): the field of the row at slot b in the
- *     system's entry state; 0 when b is not a row of the table (b >= row count). A v3 is three gather_q32.
+ *     system's entry state; 0 when b is not a row of the table (b >= row count). A v3 is three gather_q32. In a
+ *     world with tables (2026-10-27) b is a world slot of the system's own table: the base is subtracted first.
  *   find_eq_u32 (dst = reg, a = field index, b = key reg, c = span constant 1..4096): lowest slot s < span with
- *     field[s] == key in the entry state, else 0xFFFFFFFF.
+ *     field[s] == key in the entry state, else 0xFFFFFFFF. In a world with tables the result is a world slot.
  *   handle_live (dst = bool reg, a = slot reg, b = generation reg; 2026-10-26): true when slot a is a slot of the
  *     entity table, alive, and its generation equals b, in the system's entry state (the tick-start entity table);
  *     false otherwise, and always false for generation 0. Reads no field. */

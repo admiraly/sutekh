@@ -1013,7 +1013,8 @@ typedef struct SuHostSchema {
  * World slots (one rule for IR and host records): a record's slot is the WORLD slot of its row, the table's
  * base plus the table's local slot. slot_u32, despawn_self and emit_event name world slots in the system's own
  * table; gen_u32 is the row's generation in that table; handle_live takes a world slot of the system's own
- * table, so another table's slot is not live for it. An operator's run->table_base is its table's base, so an
+ * table, so another table's slot is not live for it; gather_* takes a world slot of the system's own table
+ * (out of its range = 0) and find_eq_u32 returns one. An operator's run->table_base is its table's base, so an
  * operator reports table_base + local row, and its emit_event slot (0..world slots - 1) is a world slot too. A
  * record's table therefore follows from its slot. Table 0's base is 0, so single-table worlds are unchanged.
  *

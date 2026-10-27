@@ -163,8 +163,10 @@ uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_
  * base[t] is the world slot of table t's local slot 0. A command or event record of system i then carries
  * slot + base[sys_table[i]] in `slot` (a SU_EVENT_DESPAWNED record's `a` is already the world slot of the
  * expected handle the emitter queued), so every record names its row in the world handle space and the records
- * stay ordered by (system_index, slot, seq) exactly as for one table. base all zero with one table is
- * su_cmdq_commit_with_events byte for byte. */
+ * stay ordered by (system_index, slot, seq) exactly as for one table. The base is added after the merge, not
+ * before it: the merge compares a system's events with its command records, and both carry the table's LOCAL slot
+ * there, so a table >= 1 system's records interleave by row and emission order as they do in table 0. base all
+ * zero with one table is su_cmdq_commit_with_events byte for byte. */
 typedef struct SuCmdTables {
     const SuCmdCallbacks *cb;   /* table_count entries */
     const uint32_t *sys_table;  /* nsystems entries, indexed by system_index */

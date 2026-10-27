@@ -1563,12 +1563,14 @@ static int s3_sweep(Space3dScratch *s, const RowSet *rs, uint32_t n, uint64_t li
     return 1;
 }
 
-/* The v2 broadphase over coll[0..ncoll) (ascending slot; reordered here). Fills cand/ncand/flags and the stats. */
-static void v2_broadphase(Space3dScratch *s, const RowSet *rs, uint32_t ncoll, uint64_t rows, Space3dStats *st) {
+/* The v2 broadphase over coll[0..ncoll) (ascending slot; reordered here). Fills cand/ncand/flags and the stats.
+ * budget_rows is every row the query indexes (movers, plus the target table's rows for a cross-table query). */
+static void v2_broadphase(Space3dScratch *s, const RowSet *rs, uint32_t ncoll, uint64_t budget_rows,
+                          Space3dStats *st) {
     S3Grid g;
     uint64_t total = 0, budget;
     uint32_t i, a, n = 0, cut = UINT32_MAX, maxc = 0;
-    budget = (uint64_t)SPACE3D_PAIR_BUDGET_PER_ROW * rows;
+    budget = (uint64_t)SPACE3D_PAIR_BUDGET_PER_ROW * budget_rows;
     budget = budget > SPACE3D_PAIR_BUDGET_MIN ? budget : SPACE3D_PAIR_BUDGET_MIN;
     st->pair_budget = budget;
     g.s = s;
@@ -2012,7 +2014,9 @@ static uint32_t query_core(const SuWorld *w, const SuInvocation *in, SuOutputs *
         /* Test seam: no broadphase; the narrow phase below takes every other collidable (s->coll stays in
          * ascending slot order) with no candidate cap and no budget. */
     } else if (v2) {
-        v2_broadphase(s, &rs, ncoll, rows64, &st);
+        /* The budget counts every row the query indexes: the mover table's rows and, for a cross-table query (issue
+         * 140), the target table's too. Single-table: total == rows, so the budget is the released one. */
+        v2_broadphase(s, &rs, ncoll, (uint64_t)total, &st);
     } else if (ncoll > 1u) {
         /* Sweep axis: largest spread of bound centres (lo + hi, saturating), ties to the lower axis. */
         int64_t best = -1;

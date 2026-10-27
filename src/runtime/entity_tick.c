@@ -338,12 +338,14 @@ static void ent_chunk(uint32_t chunk, uint32_t worker, void *argp) {
     outs.reserved = 0u;
     outs.bindings = so;
     if (e->mod->uses_gather) {
-        /* IR 0.4 cross-row reads see the whole table (entry state), never just this chunk. Their slot operands stay
-         * row indices of this table (host.h, "tables": gather_* and find_eq_u32 never cross a table). */
+        /* IR 0.4 cross-row reads see the whole table (entry state), never just this chunk. Their slot operands are
+         * WORLD slots of this table (issue 140, host.h "tables"): the view's local row 0 is the table's base, so
+         * gather_* subtracts it and find_eq_u32 adds it. Table 0's base is 0, so a single-table world is
+         * unchanged. */
         SuInvocation whole = inv;
         whole.bindings = e->base_in;
         whole.row_count = e->rows;
-        st = su_vm_context_set_table_view(e->ctx[worker], &whole);
+        st = su_vm_context_set_table_view_base(e->ctx[worker], &whole, (uint32_t)e->base);
         if (st != SU_OK) {
             e->status[chunk] = st;
             return;

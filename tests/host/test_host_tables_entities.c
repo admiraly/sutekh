@@ -201,7 +201,7 @@ static const SField k_proj_schema[] = {
     U(43, "c0_gen"),    Q(44, "c0_toi"),    Q(46, "c0_nx"),     Q(48, "c0_ny"),     Q(50, "c0_nz"),
     U(52, "c1_slot"),   U(53, "c1_gen"),    Q(54, "c1_toi"),    Q(56, "c1_nx"),     Q(58, "c1_ny"),
     Q(60, "c1_nz"),     U(62, "gate_dir"),  U(63, "gate_slot"), Q(64, "gate_toi"),  U(200, "ttl"),
-    Q(202, "vel_x"),
+    U(201, "active"),   Q(202, "vel_x"),    U(208, "fire"),     Q(210, "fire_x"),   Q(212, "fire_v"),
 };
 
 /* The ship table: the space3d target set's lanes (kind, gate_index, pose, radius, half extents) plus the lanes the
@@ -261,31 +261,68 @@ static const char k_ship_die_lir[] =
     "{\"op\":\"emit_event\",\"cond\":\"dead\",\"kind\":3,\"a\":\"s\",\"b\":\"h\"},"
     "{\"op\":\"despawn_self\",\"cond\":\"dead\"}]}";
 
-/* game.proj_move (schema space3d): prev = pos; pos_x += vel_x. */
+/* game.proj_fire (schema space3d): a pool row the host asked to fire (fire == 1, set through an input record)
+ * becomes a live projectile: kind 1 (a mover), active, ttl 30, and the position and velocity of the request. Rows
+ * that are not asked keep their entry values (the row filter copies every writable lane). */
+static const IrField k_proj_fire_fields[] = {
+    {1, "kind", "u32", 1, 1},
+    {10, "pos_x", "q32", 1, 1},
+    {16, "prev_x", "q32", 1, 1},
+    {40, "hit_count", "u32", 1, 1},
+    {200, "ttl", "u32", 1, 1},
+    {201, "active", "u32", 1, 1},
+    {202, "vel_x", "q32", 1, 1},
+    {208, "fire", "u32", 1, 1},
+    {210, "fire_x", "q32", 1, 0},
+    {212, "fire_v", "q32", 1, 0},
+};
+static const char k_proj_fire_lir[] =
+    "{\"ir_version\":\"0.4\",\"system_id\":\"game.proj_fire\",\"numeric_profile\":\"fixed_q32_v1\","
+    "\"query\":\"space3d\",\"row_filter\":{\"field\":\"fire\",\"equals\":1},\"instructions\":["
+    "{\"op\":\"load_q32\",\"dst\":\"x\",\"field\":\"fire_x\"},"
+    "{\"op\":\"store_q32\",\"field\":\"pos_x\",\"src\":\"x\"},"
+    "{\"op\":\"store_q32\",\"field\":\"prev_x\",\"src\":\"x\"},"
+    "{\"op\":\"load_q32\",\"dst\":\"v\",\"field\":\"fire_v\"},"
+    "{\"op\":\"store_q32\",\"field\":\"vel_x\",\"src\":\"v\"},"
+    "{\"op\":\"const_u32\",\"dst\":\"one\",\"value\":1},"
+    "{\"op\":\"store_u32\",\"field\":\"active\",\"src\":\"one\"},"
+    "{\"op\":\"store_u32\",\"field\":\"kind\",\"src\":\"one\"},"
+    "{\"op\":\"const_u32\",\"dst\":\"life\",\"value\":30},"
+    "{\"op\":\"store_u32\",\"field\":\"ttl\",\"src\":\"life\"},"
+    "{\"op\":\"const_u32\",\"dst\":\"z\",\"value\":0},"
+    "{\"op\":\"store_u32\",\"field\":\"hit_count\",\"src\":\"z\"},"
+    "{\"op\":\"store_u32\",\"field\":\"fire\",\"src\":\"z\"}]}";
+
+/* game.proj_move (schema space3d): an active projectile's prev = pos; pos_x += vel_x. */
 static const IrField k_proj_move_fields[] = {
     {10, "pos_x", "q32", 1, 1},
-    {16, "prev_x", "q32", 0, 1},
+    {16, "prev_x", "q32", 1, 1},
+    {201, "active", "u32", 1, 0},
     {202, "vel_x", "q32", 1, 0},
 };
 static const char k_proj_move_lir[] =
-    "{\"ir_version\":\"0.3\",\"system_id\":\"game.proj_move\",\"numeric_profile\":\"fixed_q32_v1\","
-    "\"query\":\"space3d\",\"instructions\":["
+    "{\"ir_version\":\"0.4\",\"system_id\":\"game.proj_move\",\"numeric_profile\":\"fixed_q32_v1\","
+    "\"query\":\"space3d\",\"row_filter\":{\"field\":\"active\",\"equals\":1},\"instructions\":["
     "{\"op\":\"load_q32\",\"dst\":\"p\",\"field\":\"pos_x\"},"
     "{\"op\":\"store_q32\",\"field\":\"prev_x\",\"src\":\"p\"},"
     "{\"op\":\"load_q32\",\"dst\":\"v\",\"field\":\"vel_x\"},"
     "{\"op\":\"add_q32\",\"dst\":\"n\",\"a\":\"p\",\"b\":\"v\"},"
     "{\"op\":\"store_q32\",\"field\":\"pos_x\",\"src\":\"n\"}]}";
 
-/* game.proj_hit (schema space3d): a projectile that space3d reported a contact for emits one event about the row it
- * hit (the contact slot, a world slot of the target table) and despawns itself. */
+/* game.proj_hit (schema space3d): an active projectile that space3d reported a contact for emits one event about
+ * the row it hit (the contact slot, a world slot of the target table) and returns to the pool: active and kind 0,
+ * ttl 0, so the next fire request can reuse the row. */
 static const IrField k_proj_hit_fields[] = {
+    {1, "kind", "u32", 1, 1},
     {40, "hit_count", "u32", 1, 0},
     {42, "c0_slot", "u32", 1, 0},
     {43, "c0_gen", "u32", 1, 0},
+    {200, "ttl", "u32", 1, 1},
+    {201, "active", "u32", 1, 1},
 };
 static const char k_proj_hit_lir[] =
-    "{\"ir_version\":\"0.3\",\"system_id\":\"game.proj_hit\",\"numeric_profile\":\"fixed_q32_v1\","
-    "\"query\":\"space3d\",\"instructions\":["
+    "{\"ir_version\":\"0.4\",\"system_id\":\"game.proj_hit\",\"numeric_profile\":\"fixed_q32_v1\","
+    "\"query\":\"space3d\",\"row_filter\":{\"field\":\"active\",\"equals\":1},\"instructions\":["
     "{\"op\":\"load_u32\",\"dst\":\"n\",\"field\":\"hit_count\"},"
     "{\"op\":\"const_u32\",\"dst\":\"z\",\"value\":0},"
     "{\"op\":\"eq_u32\",\"dst\":\"none\",\"a\":\"n\",\"b\":\"z\"},"
@@ -293,9 +330,43 @@ static const char k_proj_hit_lir[] =
     "{\"op\":\"load_u32\",\"dst\":\"s\",\"field\":\"c0_slot\"},"
     "{\"op\":\"load_u32\",\"dst\":\"g\",\"field\":\"c0_gen\"},"
     "{\"op\":\"emit_event\",\"cond\":\"hit\",\"kind\":10,\"a\":\"s\",\"b\":\"g\"},"
-    "{\"op\":\"despawn_self\",\"cond\":\"hit\"}]}";
+    "{\"op\":\"load_u32\",\"dst\":\"a\",\"field\":\"active\"},"
+    "{\"op\":\"select_u32\",\"dst\":\"na\",\"cond\":\"hit\",\"on_true\":\"z\",\"on_false\":\"a\"},"
+    "{\"op\":\"store_u32\",\"field\":\"active\",\"src\":\"na\"},"
+    "{\"op\":\"load_u32\",\"dst\":\"k\",\"field\":\"kind\"},"
+    "{\"op\":\"select_u32\",\"dst\":\"nk\",\"cond\":\"hit\",\"on_true\":\"z\",\"on_false\":\"k\"},"
+    "{\"op\":\"store_u32\",\"field\":\"kind\",\"src\":\"nk\"},"
+    "{\"op\":\"load_u32\",\"dst\":\"t\",\"field\":\"ttl\"},"
+    "{\"op\":\"select_u32\",\"dst\":\"nt\",\"cond\":\"hit\",\"on_true\":\"z\",\"on_false\":\"t\"},"
+    "{\"op\":\"store_u32\",\"field\":\"ttl\",\"src\":\"nt\"}]}";
 
-/* game.proj_life (schema space3d): ttl -= 1; at 0 the projectile emits one event about its own row and despawns. */
+/* game.proj_expire (schema space3d): an active projectile's ttl -= 1; at 0 it emits one event about its own row
+ * and returns to the pool. */
+static const IrField k_proj_expire_fields[] = {
+    {1, "kind", "u32", 1, 1},
+    {200, "ttl", "u32", 1, 1},
+    {201, "active", "u32", 1, 1},
+};
+static const char k_proj_expire_lir[] =
+    "{\"ir_version\":\"0.4\",\"system_id\":\"game.proj_expire\",\"numeric_profile\":\"fixed_q32_v1\","
+    "\"query\":\"space3d\",\"row_filter\":{\"field\":\"active\",\"equals\":1},\"instructions\":["
+    "{\"op\":\"load_u32\",\"dst\":\"t\",\"field\":\"ttl\"},"
+    "{\"op\":\"const_u32\",\"dst\":\"one\",\"value\":1},"
+    "{\"op\":\"const_u32\",\"dst\":\"z\",\"value\":0},"
+    "{\"op\":\"sub_u32\",\"dst\":\"n\",\"a\":\"t\",\"b\":\"one\"},"
+    "{\"op\":\"store_u32\",\"field\":\"ttl\",\"src\":\"n\"},"
+    "{\"op\":\"eq_u32\",\"dst\":\"out\",\"a\":\"n\",\"b\":\"z\"},"
+    "{\"op\":\"slot_u32\",\"dst\":\"s\"},"
+    "{\"op\":\"emit_event\",\"cond\":\"out\",\"kind\":9,\"a\":\"s\",\"b\":\"n\"},"
+    "{\"op\":\"load_u32\",\"dst\":\"a\",\"field\":\"active\"},"
+    "{\"op\":\"select_u32\",\"dst\":\"na\",\"cond\":\"out\",\"on_true\":\"z\",\"on_false\":\"a\"},"
+    "{\"op\":\"store_u32\",\"field\":\"active\",\"src\":\"na\"},"
+    "{\"op\":\"load_u32\",\"dst\":\"k\",\"field\":\"kind\"},"
+    "{\"op\":\"select_u32\",\"dst\":\"nk\",\"cond\":\"out\",\"on_true\":\"z\",\"on_false\":\"k\"},"
+    "{\"op\":\"store_u32\",\"field\":\"kind\",\"src\":\"nk\"}]}";
+
+/* game.proj_life (schema space3d): the same expire rule for a projectile that is not pooled: ttl -= 1 and at 0 it
+ * emits one event about its own row and despawns itself (the B1 ordering test's system). */
 static const IrField k_proj_life_fields[] = {
     {200, "ttl", "u32", 1, 1},
 };
@@ -315,10 +386,15 @@ static const char k_proj_life_lir[] =
 /* ---------- the example world ---------- */
 
 #define SHIP_ROWS 8u
-#define PROJ_ROWS 32u
+#define PROJ_ROWS 24u /* the fixed projectile pool: one table-1 row per pool slot */
 #define SHIP_BASE 0u
 #define PROJ_BASE SHIP_ROWS
-#define NSYS 6u
+#define NSYS 7u
+#define TICKS 60u        /* the end-to-end run */
+#define RESTORE_TICK 30u /* the snapshot the restore tests replay from */
+#define SHIP_HP 50u
+#define HIT_DAMAGE 10u
+#define EV_PER_TICK 128u /* a tick's event list in a trace; the tests assert it is never truncated */
 
 /* Q32.32 raw value of an integer. */
 #define Q32_ONE INT64_C(4294967296)
@@ -359,32 +435,44 @@ static void example_free(Example *x) {
 static SuHostWorld *example_world(Example *x, SuHostError *err) {
     SuHostWorld *w = NULL;
     uint32_t i;
-    static const char *const ids[NSYS] = {"game.ship_move", "game.ship_die", "game.proj_move", "space3d.query",
-                                          "game.proj_hit", "game.proj_life"};
-    static const char *const lirs[NSYS] = {k_ship_move_lir, k_ship_die_lir, k_proj_move_lir, NULL, k_proj_hit_lir,
-                                           k_proj_life_lir};
-    static const IrField *const flds[NSYS] = {k_ship_move_fields, k_ship_die_fields, k_proj_move_fields, NULL,
-                                              k_proj_hit_fields, k_proj_life_fields};
+    static const char *const ids[NSYS] = {"game.ship_move", "game.ship_die", "game.proj_fire", "game.proj_move",
+                                          "space3d.query", "game.proj_hit", "game.proj_expire"};
+    static const char *const lirs[NSYS] = {k_ship_move_lir,   k_ship_die_lir,   k_proj_fire_lir, k_proj_move_lir,
+                                           NULL,              k_proj_hit_lir,   k_proj_expire_lir};
+    static const IrField *const flds[NSYS] = {k_ship_move_fields, k_ship_die_fields, k_proj_fire_fields,
+                                              k_proj_move_fields, NULL, k_proj_hit_fields, k_proj_expire_fields};
     static const uint32_t nf[NSYS] = {
         (uint32_t)(sizeof k_ship_move_fields / sizeof k_ship_move_fields[0]),
         (uint32_t)(sizeof k_ship_die_fields / sizeof k_ship_die_fields[0]),
+        (uint32_t)(sizeof k_proj_fire_fields / sizeof k_proj_fire_fields[0]),
         (uint32_t)(sizeof k_proj_move_fields / sizeof k_proj_move_fields[0]), 0u,
         (uint32_t)(sizeof k_proj_hit_fields / sizeof k_proj_hit_fields[0]),
-        (uint32_t)(sizeof k_proj_life_fields / sizeof k_proj_life_fields[0])};
-    static const char *const after[NSYS] = {"", "", "", "\"game.proj_move\"", "\"space3d.query\"", ""};
+        (uint32_t)(sizeof k_proj_expire_fields / sizeof k_proj_expire_fields[0])};
+    static const char *const after[NSYS] = {"",
+                                            "",
+                                            "",
+                                            "\"game.proj_fire\"",
+                                            "\"game.proj_fire\",\"game.proj_move\"",
+                                            "\"game.proj_fire\",\"game.proj_move\",\"space3d.query\"",
+                                            "\"game.proj_fire\",\"game.proj_move\",\"game.proj_hit\""};
+    static const char *const vers[NSYS] = {"0.3", "0.3", "0.4", "0.4", "0.3", "0.4", "0.4"};
 
     memset(x, 0, sizeof *x);
     x->query = slurp("profiles/space3d/space3d_query.capsule.json");
     for (i = 0; i < NSYS; i++) {
-        if (i == 3u) {
+        if (i == 4u) {
             x->caps[i].capsule_json = x->query.data; /* the space3d.query record, unmodified */
             x->caps[i].capsule_len = x->query.len;
             continue;
         }
-        x->cap[i] = ir_capsule(ids[i], i < 2u ? "game.ship" : "space3d", "simulate", after[i], flds[i], nf[i],
-                               "0.3", "fixed_q32_v1",
-                               i == 0u || i == 2u ? "" : "\"despawn_self\",\"emit_event\"", i == 0u || i == 2u ? 0u : 1u,
-                               i == 0u || i == 2u ? 0u : 1u);
+        {
+            /* ship_die, proj_hit and proj_expire emit events; ship_die also despawns itself. */
+            int entity_ops = i == 1u || i == 5u || i == 6u;
+            x->cap[i] = ir_capsule(ids[i], i < 2u ? "game.ship" : "space3d", "simulate", after[i], flds[i], nf[i],
+                                   vers[i], "fixed_q32_v1",
+                                   entity_ops ? "\"despawn_self\",\"emit_event\"" : "", entity_ops ? 1u : 0u,
+                                   entity_ops ? 1u : 0u);
+        }
         x->caps[i].capsule_json = (const uint8_t *)x->cap[i].p;
         x->caps[i].capsule_len = x->cap[i].n;
         x->caps[i].lir_json = (const uint8_t *)lirs[i];
@@ -403,7 +491,7 @@ static SuHostWorld *example_world(Example *x, SuHostError *err) {
         x->tables[i] = i < 2u ? 0u : 1u;
         x->targets[i] = SU_HOST_TABLE_NONE;
     }
-    x->targets[3] = 0u; /* space3d.query reads table 0 (the ships) as its target set */
+    x->targets[4] = 0u; /* space3d.query reads table 0 (the ships) as its target set */
     memset(&x->desc, 0, sizeof x->desc);
     x->desc.struct_size = (uint32_t)sizeof x->desc;
     x->desc.capsule_count = NSYS;
@@ -439,9 +527,9 @@ static uint64_t spawn_ship(SuHostWorld *w, int32_t x, int32_t vx, uint32_t hp, S
     return h;
 }
 
-/* Spawns one projectile: kind 1 (a mover) at x moving by vx, radius 1/8, ttl. */
+/* Spawns one live projectile: kind 1 (a mover), active, at x moving by vx, radius 1/8, ttl. */
 static uint64_t spawn_proj(SuHostWorld *w, int32_t x, int32_t vx, uint32_t ttl, SuHostError *err) {
-    SuHostValue v[12];
+    SuHostValue v[14];
     uint64_t h = 0;
     uint32_t n = 0;
     v[n].field_id = 1u; /* kind: a mover */
@@ -452,8 +540,33 @@ static uint64_t spawn_proj(SuHostWorld *w, int32_t x, int32_t vx, uint32_t ttl, 
     n = put_q32(v, n, 202u, q32(vx));        /* vel_x */
     v[n].field_id = 200u; /* ttl */
     v[n++].value = ttl;
+    v[n].field_id = 201u; /* active */
+    v[n++].value = 1u;
     if (su_host_spawn_in(w, 1u, v, n, 0u, &h, err) != SU_OK) {
         check(0, "projectile spawn: %s", err->message);
+    }
+    return h;
+}
+
+/* Spawns one pool row: an inactive projectile (kind 0, active 0, ttl 0, no fire request) at the origin. */
+static uint64_t spawn_pool_row(SuHostWorld *w, SuHostError *err) {
+    SuHostValue v[12];
+    uint64_t h = 0;
+    uint32_t n = 0;
+    v[n].field_id = 1u; /* kind: not a collidable while the row is idle */
+    v[n++].value = 0u;
+    n = put_q32(v, n, 10u, 0);              /* pos_x */
+    n = put_q32(v, n, 16u, 0);              /* prev_x */
+    n = put_q32(v, n, 30u, q32(1) / 8);     /* radius */
+    n = put_q32(v, n, 202u, 0);             /* vel_x */
+    v[n].field_id = 200u; /* ttl */
+    v[n++].value = 0u;
+    v[n].field_id = 201u; /* active */
+    v[n++].value = 0u;
+    v[n].field_id = 208u; /* fire */
+    v[n++].value = 0u;
+    if (su_host_spawn_in(w, 1u, v, n, 0u, &h, err) != SU_OK) {
+        check(0, "pool spawn: %s", err->message);
     }
     return h;
 }
@@ -480,113 +593,272 @@ static void collect_events(SuHostWorld *w, EvList *l) {
     }
 }
 
-/* The end-to-end world of the issue: two kinds, spawns, IR events and self-despawns in both tables, cross-table
- * queries, a snapshot and a replay round trip. */
-static void test_end_to_end(void) {
-    Example x, xr, xp;
-    SuHostWorld *w;
-    SuHostWorld *rw;
-    SuHostError e;
-    EvList ev;
-    uint64_t ships[SHIP_ROWS];
-    uint64_t projs[4];
-    uint64_t done = 0;
-    uint64_t t;
-    uint32_t i, n10 = 0, n9 = 0, n3 = 0;
-    uint8_t d1[32], d2[32];
-    uint32_t hit_ships[SHIP_ROWS];
+/* A tick's digest and its complete event list. */
+typedef struct TickTrace {
+    uint8_t digest[32];
+    uint32_t n;
+    SuHostEvent ev[EV_PER_TICK];
+} TickTrace;
 
-    memset(&ev, 0, sizeof ev);
-    memset(hit_ships, 0, sizeof hit_ships);
+/* Pushes this tick's fire request: every other tick, the lowest free pool row (active 0 and no pending fire) becomes
+ * a live projectile on the next tick. The choice is a function of the committed state only, so a restored world makes
+ * the same ones. fired[] counts the requests per pool row. */
+static void fire_one(SuHostWorld *w, uint64_t t, const uint64_t *pool, uint32_t *fired, SuHostError *e) {
+    uint32_t active[PROJ_ROWS], fire[PROJ_ROWS];
+    uint32_t r;
+    if ((t % 2u) != 0u) {
+        return;
+    }
+    if (su_host_read_in(w, 1u, 201u, 0u, PROJ_ROWS, active) != SU_OK ||
+        su_host_read_in(w, 1u, 208u, 0u, PROJ_ROWS, fire) != SU_OK) {
+        check(0, "reading the pool: %s", e->message);
+        return;
+    }
+    for (r = 0; r < PROJ_ROWS; r++) {
+        if (active[r] == 0u && fire[r] == 0u) {
+            break;
+        }
+    }
+    if (r == PROJ_ROWS) {
+        return; /* the pool is full this tick */
+    }
+    {
+        SuHostInput req;
+        int64_t vx = q32((int64_t)(2u + (t % 3u)));
+        /* Every fourth shot starts beyond the ships, so it flies away and expires instead of hitting. */
+        int64_t fx = ((t % 4u) == 0u) ? q32(100) : q32(-4);
+        req.entity = pool[r];
+        req.field_id = 208u; /* fire */
+        req.value = 1u;
+        check(su_host_input_push(w, t, &req, 1u, e) == SU_OK, "fire request: %s", e->message);
+        check(su_host_input_push_i64(w, t, pool[r], 210u, fx, e) == SU_OK, "fire position: %s", e->message);
+        check(su_host_input_push_i64(w, t, pool[r], 212u, vx, e) == SU_OK, "fire velocity: %s", e->message);
+        if (fired != NULL) {
+            fired[r]++;
+        }
+    }
+}
+
+/* The ship damage the next tick applies, computed from this tick's hit events: a ship loses HIT_DAMAGE per hit and
+ * despawns itself in the next tick's ship_die when its hp reaches 0. Ships that are already gone are skipped, and one
+ * ship takes at most one record per tick. A queued input record is not world state (host.h, "snapshots"), so the
+ * list is the test's own pending record: it is pushed at the start of the tick it belongs to, and re-pushed after a
+ * restore, exactly as the rollback protocol in host.h describes. */
+typedef struct Pending {
+    uint32_t n;
+    SuHostInput wr[SHIP_ROWS];
+} Pending;
+
+static void damage_from_hits(SuHostWorld *w, const TickTrace *tr, Pending *pend, SuHostError *e) {
+    uint32_t hp[SHIP_ROWS], hits[SHIP_ROWS];
+    uint32_t i;
+    pend->n = 0u;
+    if (su_host_read_in(w, 0u, 210u, 0u, SHIP_ROWS, hp) != SU_OK) {
+        check(0, "reading ship hp: %s", e->message);
+        return;
+    }
+    memset(hits, 0, sizeof hits);
+    for (i = 0; i < tr->n; i++) {
+        if (tr->ev[i].kind == 10u && tr->ev[i].a < SHIP_ROWS) {
+            hits[tr->ev[i].a]++;
+        }
+    }
+    for (i = 0; i < SHIP_ROWS; i++) {
+        uint64_t h = 0;
+        uint32_t dmg = hits[i] * HIT_DAMAGE;
+        if (dmg == 0u || su_host_entity_at_in(w, 0u, i, &h) != SU_OK) {
+            continue;
+        }
+        if (dmg > hp[i]) {
+            dmg = hp[i];
+        }
+        hp[i] -= dmg;
+        pend->wr[pend->n].entity = h;
+        pend->wr[pend->n].field_id = 210u; /* hp */
+        pend->wr[pend->n].value = hp[i];
+        pend->n++;
+    }
+}
+
+/* Pushes the pending damage record for tick (empty when the previous tick hit nothing). */
+static void push_pending(SuHostWorld *w, uint64_t tick, const Pending *pend, SuHostError *e) {
+    if (pend->n > 0u) {
+        check(su_host_input_push(w, tick, pend->wr, pend->n, e) == SU_OK, "damage record of tick %llu: %s",
+              (unsigned long long)tick, e->message);
+    }
+}
+
+/* One tick of the example world: fire, push the damage the previous tick computed, step (through the replay writer
+ * when one is attached), read the tick's events, compute the next tick's damage, and record the digest and the
+ * events. */
+static void run_one(SuHostWorld *w, uint64_t t, const uint64_t *pool, uint32_t *fired, TickTrace *tr,
+                    SuReplayWriter *rw, Pending *pend, SuHostError *e) {
+    uint64_t done = 0;
+    uint32_t n = 0, total = 0, complete = 0;
+    uint32_t st;
+    fire_one(w, t, pool, fired, e);
+    push_pending(w, t, pend, e);
+    st = rw != NULL ? su_replay_writer_step(rw, w, 1u, &done, e) : su_host_step(w, 1u, &done, e);
+    check(st == SU_OK && done == 1u, "tick %llu: %s", (unsigned long long)t, e->message);
+    memset(tr->ev, 0, sizeof tr->ev);
+    check(su_host_events_for_tick(w, t, tr->ev, EV_PER_TICK, &n, &total, &complete) == SU_OK,
+          "events of tick %llu: %s", (unsigned long long)t, e->message);
+    check(complete == 1u && n == total && n < EV_PER_TICK, "tick %llu has a complete event list (%u of %u)",
+          (unsigned long long)t, (unsigned)n, (unsigned)total);
+    tr->n = n;
+    check(su_host_digest(w, tr->digest) == SU_OK, "digest of tick %llu", (unsigned long long)t);
+    damage_from_hits(w, tr, pend, e);
+}
+
+/* Two runs of the same world from RESTORE_TICK to TICKS agree tick by tick: state digest and event list. */
+static void compare_traces(const TickTrace *a, const TickTrace *b, const char *label) {
+    uint64_t t;
+    uint32_t i;
+    for (t = RESTORE_TICK; t < TICKS; t++) {
+        check(memcmp(a[t].digest, b[t].digest, 32u) == 0, "%s: tick %llu has the same digest", label,
+              (unsigned long long)t);
+        check(a[t].n == b[t].n, "%s: tick %llu has %u events, the other run %u", label, (unsigned long long)t,
+              (unsigned)a[t].n, (unsigned)b[t].n);
+        for (i = 0; i < a[t].n && i < b[t].n; i++) {
+            check(memcmp(&a[t].ev[i], &b[t].ev[i], sizeof(SuHostEvent)) == 0, "%s: tick %llu event %u matches",
+                  label, (unsigned long long)t, (unsigned)i);
+        }
+    }
+}
+
+/* Spawns the world's fixed rows: 8 ships (one at 0 hp, which despawns on the first tick) and the 24 pool rows. */
+static void spawn_example(SuHostWorld *w, uint64_t *ships, uint64_t *pool, SuHostError *e) {
+    uint32_t i;
+    for (i = 0; i < SHIP_ROWS; i++) {
+        ships[i] = spawn_ship(w, (int32_t)i * 4, 0, i == 3u ? 0u : SHIP_HP, e);
+        check(SU_ENTITY_SLOT(ships[i]) == i, "ship %u is table 0's local slot %u", (unsigned)i, (unsigned)i);
+    }
+    for (i = 0; i < PROJ_ROWS; i++) {
+        pool[i] = spawn_pool_row(w, e);
+        check(SU_ENTITY_SLOT(pool[i]) == PROJ_BASE + i, "pool row %u is table 1's local slot %u (world slot %u)",
+              (unsigned)i, (unsigned)i, (unsigned)(PROJ_BASE + i));
+    }
+}
+
+/* The end-to-end world of the issue: two kinds, a fixed projectile pool with an active flag, IR fire/move/hit/
+ * expire and ship death, cross-table queries, ship damage through input records, 60 ticks, a snapshot restored into
+ * a fresh world and in place (both continued to the end and compared tick by tick), and a replay with a seek. */
+static void test_end_to_end(void) {
+    Example x, xf, xp;
+    SuHostWorld *w = NULL, *fresh = NULL, *rw = NULL;
+    SuHostError e;
+    uint64_t ships[SHIP_ROWS], pool[PROJ_ROWS];
+    TickTrace *run_tr = NULL, *fresh_tr = NULL, *inplace_tr = NULL, *rep_tr = NULL;
+    uint32_t fired[PROJ_ROWS];
+    Pending pend, pend30;
+    uint8_t *snap = NULL;
+    size_t snap_size = 0;
+    uint64_t t, done;
+    uint32_t i, n3 = 0, n9 = 0, n10 = 0, max_fired = 0;
+
+    memset(&e, 0, sizeof e);
+    memset(fired, 0, sizeof fired);
+    memset(&pend, 0, sizeof pend);
+    run_tr = calloc(TICKS + 1u, sizeof *run_tr);
+    fresh_tr = calloc(TICKS + 1u, sizeof *fresh_tr);
+    inplace_tr = calloc(TICKS + 1u, sizeof *inplace_tr);
+    rep_tr = calloc(TICKS + 1u, sizeof *rep_tr);
+    check(run_tr != NULL && fresh_tr != NULL && inplace_tr != NULL && rep_tr != NULL, "the traces allocate");
+    if (run_tr == NULL || fresh_tr == NULL || inplace_tr == NULL || rep_tr == NULL) {
+        goto out;
+    }
     w = example_world(&x, &e);
     check(w != NULL, "the two-kind world creates: %s", e.message);
     if (w == NULL) {
-        example_free(&x);
-        return;
+        goto out;
     }
     check(su_host_table_count(w) == 2u, "two tables");
-    for (i = 0; i < SHIP_ROWS; i++) {
-        ships[i] = spawn_ship(w, (int32_t)i * 4, 0, i == 3u ? 0u : 100u, &e);
-        check(SU_ENTITY_SLOT(ships[i]) == i, "ship %u is table 0's local slot %u", (unsigned)i, (unsigned)i);
-    }
-    projs[0] = spawn_proj(w, -4, 2, 100, &e);
-    projs[1] = spawn_proj(w, -4, 3, 100, &e);
-    projs[2] = spawn_proj(w, -4, 100, 100, &e);
-    projs[3] = spawn_proj(w, -100, 0, 3, &e);
-    check(SU_ENTITY_SLOT(projs[0]) == PROJ_BASE, "the first projectile is table 1's local slot 0 (world slot %u)",
-          (unsigned)SU_ENTITY_SLOT(projs[0]));
-    check(su_host_step(w, 12u, &done, &e) == SU_OK && done == 12u, "twelve ticks: %s", e.message);
-    /* Ship 3 (hp 0) despawned itself from its table-0 IR system. */
-    {
+    spawn_example(w, ships, pool, &e);
+    /* The pool is a fixed set of rows: 24 table-1 entities, none of them active. */
+    for (i = 0; i < PROJ_ROWS; i++) {
         uint64_t h = 0;
-        check(su_host_entity_at_in(w, 0u, 3u, &h) == SU_E_STALE_HANDLE, "the dead ship's slot is free");
+        check(su_host_entity_at_in(w, 1u, i, &h) == SU_OK && h == pool[i], "pool row %u is a live entity", (unsigned)i);
     }
-    collect_events(w, &ev);
-    for (i = 0; i < ev.n; i++) {
-        const SuHostEvent *v = &ev.ev[i];
-        if (v->kind == 3u) {
-            n3++;
-            check(v->a == 3u && v->b == 0u && v->system_index == 1u,
-                  "ship_die event: slot %u a %u b %u system %u (world slot of table 0 row 3)", (unsigned)v->slot,
-                  (unsigned)v->a, (unsigned)v->b, (unsigned)v->system_index);
-            check(v->slot == 3u, "the event's slot is the world slot of the emitting row (%u)", (unsigned)v->slot);
-        } else if (v->kind == 10u) {
-            n10++;
-            check(v->a < SHIP_ROWS, "a hit names a ship's world slot (%u)", (unsigned)v->a);
-            check(v->b == 1u, "the contact's generation is the ship's (%u)", (unsigned)v->b);
-            check(v->slot >= PROJ_BASE && v->slot < PROJ_BASE + PROJ_ROWS,
-                  "the hit event's slot is the projectile's world slot (%u)", (unsigned)v->slot);
-            check(v->system_index == 4u, "the hit event comes from game.proj_hit (system %u)",
-                  (unsigned)v->system_index);
-            hit_ships[v->a % SHIP_ROWS]++;
-        } else if (v->kind == 9u) {
-            n9++;
-            check(v->a >= PROJ_BASE && v->a < PROJ_BASE + PROJ_ROWS,
-                  "the ttl event names a projectile world slot (%u)", (unsigned)v->a);
-            check(v->a == v->slot, "slot_u32 in table 1 is the world slot (a %u, slot %u)", (unsigned)v->a,
-                  (unsigned)v->slot);
-            check(v->system_index == 5u, "the ttl event comes from game.proj_life (system %u)",
-                  (unsigned)v->system_index);
-        }
+    /* 0..RESTORE_TICK, then a snapshot of the world at RESTORE_TICK. pend holds the damage tick 30 applies, which a
+     * restored world has to be given again: a queued input record is not part of the snapshot. */
+    for (t = 0; t < RESTORE_TICK; t++) {
+        run_one(w, t, pool, fired, &run_tr[t], NULL, &pend, &e);
     }
-    check(n3 == 1u, "one ship died (%u)", n3);
-    check(n10 >= 2u, "the cross-table query found the ships (%u contacts)", n10);
-    check(n9 == 1u, "one projectile expired (%u)", n9);
-    check(hit_ships[0] > 0u, "ship 0 was hit");
-    /* A tick's events are ordered by the schedule position of the system that produced them. */
-    for (i = 1; i < ev.n; i++) {
-        if (ev.ev[i].tick == ev.ev[i - 1u].tick) {
-            check(ev.ev[i].system_index >= ev.ev[i - 1u].system_index, "events of tick %llu are in system order",
-                  (unsigned long long)ev.ev[i].tick);
-        }
-    }
-    /* Every hit projectile despawned itself; the expired one too. */
-    for (i = 0; i < 3u; i++) {
-        uint64_t h = 0;
-        uint32_t local = (uint32_t)SU_ENTITY_SLOT(projs[i]) - PROJ_BASE;
-        check(su_host_entity_at_in(w, 1u, local, &h) == SU_E_STALE_HANDLE, "projectile %u is gone", (unsigned)i);
-    }
-    /* Snapshot: the same bytes restore to the same digest, and a restore in place too. */
-    {
-        uint8_t *snap;
-        size_t size = 0;
-        check(su_host_digest(w, d1) == SU_OK, "check failed at line %d", __LINE__);
-        check(su_host_snapshot_size(w, &size) == SU_OK && size > 0u, "check failed at line %d", __LINE__);
-        snap = malloc(size);
-        check(snap != NULL && su_host_snapshot_write(w, snap, size, &size) == SU_OK, "check failed at line %d", __LINE__);
+    pend30 = pend;
+    check(su_host_tick(w) == RESTORE_TICK, "the world is at tick %u (%llu)", (unsigned)RESTORE_TICK,
+          (unsigned long long)su_host_tick(w));
+    check(su_host_snapshot_size(w, &snap_size) == SU_OK && snap_size > 0u, "the snapshot has a size");
+    snap = malloc(snap_size);
+    check(snap != NULL && su_host_snapshot_write(w, snap, snap_size, &snap_size) == SU_OK, "the snapshot writes");
+    if (snap != NULL) {
         /* A multi-table world writes snapshot version 3 (host.h, "tables"). */
-        check(snap != NULL && memcmp(snap, "SUHSNAP", 7u) == 0 && snap[7] == 0u, "the snapshot magic");
-        check(snap != NULL && snap[8] == 3u && snap[9] == 0u && snap[10] == 0u && snap[11] == 0u,
+        check(memcmp(snap, "SUHSNAP", 7u) == 0 && snap[7] == 0u, "the snapshot magic");
+        check(snap[8] == 3u && snap[9] == 0u && snap[10] == 0u && snap[11] == 0u,
               "the multi-table snapshot is version 3");
-        check(su_host_step(w, 3u, &done, &e) == SU_OK && done == 3u, "check failed at line %d", __LINE__);
-        check(su_host_snapshot_restore(w, snap, size, &e) == SU_OK, "restore: %s", e.message);
-        check(su_host_digest(w, d2) == SU_OK && memcmp(d1, d2, 32u) == 0, "the restored world is the snapshot");
-        check(su_host_step(w, 3u, &done, &e) == SU_OK && done == 3u, "check failed at line %d", __LINE__);
-        check(su_host_snapshot_restore_inplace(w, snap, size, &e) == SU_OK, "in-place restore: %s", e.message);
-        check(su_host_digest(w, d2) == SU_OK && memcmp(d1, d2, 32u) == 0, "in-place restore is the snapshot");
-        free(snap);
     }
-    /* Replay: record six ticks, then play them into a fresh world with the same spawns. */
+    /* The rest of the run, in the original world. */
+    for (t = RESTORE_TICK; t < TICKS; t++) {
+        run_one(w, t, pool, fired, &run_tr[t], NULL, &pend, &e);
+    }
+    /* The same ticks from a fresh world restored from the snapshot: same digests and event lists. */
+    fresh = example_world(&xf, &e);
+    check(fresh != NULL, "the restore world creates: %s", e.message);
+    if (fresh != NULL && snap != NULL) {
+        check(su_host_snapshot_restore(fresh, snap, snap_size, &e) == SU_OK, "restore into a fresh world: %s",
+              e.message);
+        check(su_host_tick(fresh) == RESTORE_TICK, "the restored world is at tick %u",
+              (unsigned)RESTORE_TICK);
+        pend = pend30; /* the record tick 30 applies is the test's, not the snapshot's */
+        for (t = RESTORE_TICK; t < TICKS; t++) {
+            run_one(fresh, t, pool, NULL, &fresh_tr[t], NULL, &pend, &e);
+        }
+        compare_traces(run_tr, fresh_tr, "fresh restore");
+    }
+    /* The same ticks from the snapshot restored in place, in the world that already ran to TICKS. */
+    if (snap != NULL) {
+        check(su_host_snapshot_restore_inplace(w, snap, snap_size, &e) == SU_OK, "in-place restore: %s", e.message);
+        check(su_host_tick(w) == RESTORE_TICK, "the in-place restored world is at tick %u", (unsigned)RESTORE_TICK);
+        /* Rollback protocol (host.h, "snapshots and digest"): drop the records queued for the ticks the restore puts
+         * back in the future, then push the one tick 30 applies. */
+        su_host_input_clear(w, RESTORE_TICK);
+        pend = pend30;
+        for (t = RESTORE_TICK; t < TICKS; t++) {
+            run_one(w, t, pool, NULL, &inplace_tr[t], NULL, &pend, &e);
+        }
+        compare_traces(run_tr, inplace_tr, "in-place restore");
+    }
+    /* Content: the run exercised every path of the world. */
+    for (t = 0; t < TICKS; t++) {
+        for (i = 0; i < run_tr[t].n; i++) {
+            const SuHostEvent *v = &run_tr[t].ev[i];
+            if (v->kind == 3u) {
+                n3++;
+                check(v->slot == v->a && v->a < SHIP_ROWS, "the dead ship's event names its world slot (%u, %u)",
+                      (unsigned)v->slot, (unsigned)v->a);
+                check(v->system_index == 1u, "the death event comes from game.ship_die (%u)", (unsigned)v->system_index);
+            } else if (v->kind == 9u) {
+                n9++;
+                check(v->a == v->slot && v->slot >= PROJ_BASE && v->slot < PROJ_BASE + PROJ_ROWS,
+                      "an expiry names the projectile's world slot (%u, %u)", (unsigned)v->a, (unsigned)v->slot);
+                check(v->system_index == 6u, "the expiry comes from game.proj_expire (%u)", (unsigned)v->system_index);
+            } else if (v->kind == 10u) {
+                n10++;
+                check(v->a < SHIP_ROWS, "a hit names a ship's world slot (%u)", (unsigned)v->a);
+                check(v->b == 1u, "the contact's generation is the ship's (%u)", (unsigned)v->b);
+                check(v->slot >= PROJ_BASE && v->slot < PROJ_BASE + PROJ_ROWS,
+                      "the hit's slot is the projectile's world slot (%u)", (unsigned)v->slot);
+                check(v->system_index == 5u, "the hit comes from game.proj_hit (%u)", (unsigned)v->system_index);
+            }
+        }
+    }
+    for (i = 0; i < PROJ_ROWS; i++) {
+        max_fired = fired[i] > max_fired ? fired[i] : max_fired;
+    }
+    check(n3 >= 1u, "at least one ship died through despawn_self (%u)", (unsigned)n3);
+    check(n9 >= 1u, "at least one projectile expired (%u)", (unsigned)n9);
+    check(n10 >= 1u, "the cross-table query reported hits (%u)", (unsigned)n10);
+    check(max_fired >= 2u, "the pool is reused: one row was fired %u times", (unsigned)max_fired);
+    /* Replay: record the same 60 ticks of a fresh world, then seek to tick 45 and play to the end. */
     {
         SuReplayOptions opt;
         SuReplayWriter *wr = NULL;
@@ -594,60 +866,243 @@ static void test_end_to_end(void) {
         SuReplayInfo info;
         uint8_t *bytes = NULL;
         size_t len = 0;
-        uint8_t before[32], after[32];
+        uint8_t end_digest[32];
 
-        memset(&opt, 0, sizeof opt);
-        opt.struct_size = (uint32_t)sizeof opt;
-        opt.keyframe_interval = 2u;
-        opt.digest_interval = 1u;
-        /* Record from tick 0 of a fresh world: the host's spawns are not part of the input record stream, so the
-         * recording starts after them (as in the single-table host tests). */
-        rw = example_world(&xr, &e);
-        check(rw != NULL, "the recording world creates");
-        if (rw == NULL) {
-            example_free(&xr);
-            return;
-        }
-        for (i = 0; i < SHIP_ROWS; i++) {
-            spawn_ship(rw, (int32_t)i * 4, 0, i == 3u ? 0u : 100u, &e);
-        }
-        spawn_proj(rw, -4, 2, 100, &e);
-        spawn_proj(rw, -4, 3, 100, &e);
-        spawn_proj(rw, -4, 100, 100, &e);
-        spawn_proj(rw, -100, 0, 3, &e);
-        check(su_replay_writer_begin(rw, &opt, &wr, &e) == SU_OK, "record: %s", e.message);
-        for (t = 0; t < 6u; t++) {
-            check(su_replay_writer_step(wr, rw, 1u, &done, &e) == SU_OK && done == 1u, "record tick: %s", e.message);
-        }
-        check(su_host_digest(rw, before) == SU_OK, "check failed at line %d", __LINE__);
-        check(su_replay_writer_finish(wr, rw, &bytes, &len) == SU_OK, "check failed at line %d", __LINE__);
-        su_replay_writer_destroy(wr);
-        check(bytes != NULL && len > 0u, "the recording has bytes");
-        check(su_replay_open(bytes, len, &r, &e) == SU_OK, "open: %s", e.message);
-        check(su_replay_info(r, &info) == SU_OK && info.end_tick == 6u, "six recorded ticks");
-        su_host_world_destroy(rw);
-        example_free(&xr);
         rw = example_world(&xp, &e);
-        check(rw != NULL, "the replay world creates");
+        check(rw != NULL, "the recording world creates: %s", e.message);
         if (rw != NULL) {
-            for (i = 0; i < SHIP_ROWS; i++) {
-                spawn_ship(rw, (int32_t)i * 4, 0, i == 3u ? 0u : 100u, &e);
+            spawn_example(rw, ships, pool, &e);
+            memset(&opt, 0, sizeof opt);
+            opt.struct_size = (uint32_t)sizeof opt;
+            opt.keyframe_interval = 5u;
+            opt.digest_interval = 1u;
+            check(su_replay_writer_begin(rw, &opt, &wr, &e) == SU_OK, "record: %s", e.message);
+            memset(&pend, 0, sizeof pend);
+            for (t = 0; wr != NULL && t < TICKS; t++) {
+                run_one(rw, t, pool, NULL, &rep_tr[t], wr, &pend, &e);
             }
-            spawn_proj(rw, -4, 2, 100, &e);
-            spawn_proj(rw, -4, 3, 100, &e);
-            spawn_proj(rw, -4, 100, 100, &e);
-            spawn_proj(rw, -100, 0, 3, &e);
-            check(su_replay_play(r, rw, 6u, &done, &e) == SU_OK && done == 6u, "play: %s", e.message);
-            check(su_host_digest(rw, after) == SU_OK && memcmp(before, after, 32u) == 0,
-                  "the replay reproduces the recorded state");
+            check(wr != NULL && su_replay_writer_finish(wr, rw, &bytes, &len) == SU_OK, "the recording finishes");
+            if (wr != NULL) {
+                su_replay_writer_destroy(wr);
+            }
+            /* The recording is the same run: every tick's digest and event list matches the original. */
+            for (t = 0; t < TICKS; t++) {
+                check(memcmp(rep_tr[t].digest, run_tr[t].digest, 32u) == 0,
+                      "the recorded run matches at tick %llu", (unsigned long long)t);
+            }
+            check(bytes != NULL && len > 0u, "the recording has bytes");
+            check(bytes != NULL && su_replay_open(bytes, len, &r, &e) == SU_OK, "open: %s", e.message);
+            if (r != NULL) {
+                check(su_replay_info(r, &info) == SU_OK && info.end_tick == TICKS && info.keyframe_count > 1u,
+                      "the replay covers %u ticks with keyframes", (unsigned)TICKS);
+                check(su_replay_seek(r, rw, 45u, &e) == SU_OK, "seek to tick 45: %s", e.message);
+                check(su_host_tick(rw) == 45u, "the seeked world is at tick 45 (%llu)",
+                      (unsigned long long)su_host_tick(rw));
+                check(su_replay_play(r, rw, TICKS - 45u, &done, &e) == SU_OK && done == TICKS - 45u,
+                      "play to the end: %s", e.message);
+                check(su_host_digest(rw, end_digest) == SU_OK && memcmp(end_digest, run_tr[TICKS - 1u].digest, 32u) == 0,
+                      "the replay's end state is the recorded one");
+                su_replay_close(r);
+            }
+            su_replay_free(bytes);
             su_host_world_destroy(rw);
         }
         example_free(&xp);
-        su_replay_close(r);
-        su_replay_free(bytes);
     }
+    su_host_world_destroy(fresh);
+    example_free(&xf);
     su_host_world_destroy(w);
     example_free(&x);
+out:
+    free(snap);
+    free(run_tr);
+    free(fresh_tr);
+    free(inplace_tr);
+    free(rep_tr);
+}
+
+/* ---------- B1: log order inside a system in table 1 or higher ---------- */
+
+/* A table-1 system whose two live rows each emit an event (seq 0) and despawn themselves (seq 1) in the same tick.
+ * The tick's records must stay ordered by (system_index, world slot, seq): row 8's pair before row 9's. Adding the
+ * table base before the merge instead sorted both events (local slots 0, 1) ahead of both despawn records (world
+ * slots 8, 9), which is the bug this test pins. */
+static void test_table1_event_order(void) {
+    SuHostSchemaField zf[1], pf[N_PROJ];
+    SuHostSchema zs, ps;
+    SuHostTableDesc td[2];
+    SuHostWorldDesc d;
+    SuHostCapsule cap;
+    SuHostWorld *w = NULL;
+    SuHostError e;
+    Buf c = ir_capsule("game.proj_life", "space3d", "simulate", "", k_proj_life_fields,
+                       (uint32_t)(sizeof k_proj_life_fields / sizeof k_proj_life_fields[0]), "0.3", "fixed_q32_v1",
+                       "\"despawn_self\",\"emit_event\"", 1u, 1u);
+    uint32_t tables[1] = {1u};
+    uint64_t done = 0;
+    EvList ev;
+    uint32_t i, n = 0;
+    static const uint32_t want_slot[4] = {8u, 8u, 9u, 9u};
+    static const uint32_t want_seq[4] = {0u, 1u, 0u, 1u};
+    static const uint32_t want_kind[4] = {9u, SU_HOST_EVENT_DESPAWNED, 9u, SU_HOST_EVENT_DESPAWNED};
+
+    fill_schema(&zs, zf, (const SField[]){U(1, "unused")}, 1u, "demo.zero");
+    fill_schema(&ps, pf, k_proj_schema, (uint32_t)N_PROJ, "space3d");
+    memset(td, 0, sizeof td);
+    td[0].struct_size = (uint32_t)sizeof td[0];
+    td[0].schema = &zs;
+    td[0].max_entities = 8u; /* table 0's capacity is table 1's base: world slots 8.. */
+    td[1].struct_size = (uint32_t)sizeof td[1];
+    td[1].schema = &ps;
+    td[1].max_entities = 4u;
+    memset(&cap, 0, sizeof cap);
+    cap.capsule_json = (const uint8_t *)c.p;
+    cap.capsule_len = c.n;
+    cap.lir_json = (const uint8_t *)k_proj_life_lir;
+    cap.lir_len = sizeof k_proj_life_lir - 1u;
+    memset(&d, 0, sizeof d);
+    d.struct_size = (uint32_t)sizeof d;
+    d.capsule_count = 1;
+    d.capsules = &cap;
+    d.tick_rate_hz = 120;
+    d.max_events_per_tick = 16;
+    d.table_count = 2;
+    d.tables = td;
+    d.capsule_table = tables;
+    check(su_host_world_create(&d, &w, &e) == SU_OK, "event-order world: %s", e.message);
+    free(c.p);
+    if (w == NULL) {
+        return;
+    }
+    (void)spawn_proj(w, 0, 0, 1u, &e); /* both expire on the first tick */
+    (void)spawn_proj(w, 0, 0, 1u, &e);
+    check(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u, "event-order tick: %s", e.message);
+    collect_events(w, &ev);
+    for (i = 0; i < ev.n; i++) {
+        const SuHostEvent *v = &ev.ev[i];
+        if (v->system_index == SU_HOST_EVENT_SYSTEM_HOST) {
+            continue;
+        }
+        check(n < 4u, "at most four records from the system (%u)", (unsigned)n);
+        if (n >= 4u) {
+            break;
+        }
+        check(v->slot == want_slot[n], "record %u: slot %u, want %u", (unsigned)n, (unsigned)v->slot,
+              (unsigned)want_slot[n]);
+        check(v->seq == want_seq[n], "record %u: seq %u, want %u", (unsigned)n, (unsigned)v->seq,
+              (unsigned)want_seq[n]);
+        check(v->kind == want_kind[n], "record %u: kind %u, want %u", (unsigned)n, (unsigned)v->kind,
+              (unsigned)want_kind[n]);
+        check(v->a == want_slot[n], "record %u: a is the row's world slot (%u)", (unsigned)n, (unsigned)v->a);
+        n++;
+    }
+    check(n == 4u, "the tick logged four records, two per row (%u)", (unsigned)n);
+    su_host_world_destroy(w);
+}
+
+/* ---------- B2: gather_* and find_eq_u32 in table 1 use world slots ---------- */
+
+/* Table 0 has 4 rows and no system, so table 1's base is 4. The claim pattern of LIVE_IR_SPEC.md runs in table 1:
+ * every row gathers its own `want` through slot_u32, finds the lowest row that wants its own slot, and reads a
+ * table-0 slot (out of range) as 0. */
+static const SField k_claim_lanes[] = {U(1, "want"), U(2, "got"), U(3, "owner"), U(4, "outside"), U(5, "first")};
+
+static const char k_claim_capsule[] =
+    "{\"capsule_format\":\"0.1\",\"system_id\":\"game.claim\",\"source\":\"inline.lir.json\","
+    "\"schema\":{\"id\":\"demo.claim\",\"version\":1,\"layout_generation\":1},"
+    "\"numeric_profile\":\"fixed_q32_v1\",\"ir_version\":\"0.4\",\"capabilities\":[],\"fields\":["
+    "{\"id\":1,\"name\":\"want\",\"type\":\"u32\",\"read\":true,\"write\":false},"
+    "{\"id\":2,\"name\":\"got\",\"type\":\"u32\",\"read\":false,\"write\":true},"
+    "{\"id\":3,\"name\":\"owner\",\"type\":\"u32\",\"read\":false,\"write\":true},"
+    "{\"id\":4,\"name\":\"outside\",\"type\":\"u32\",\"read\":false,\"write\":true},"
+    "{\"id\":5,\"name\":\"first\",\"type\":\"u32\",\"read\":false,\"write\":true}],"
+    "\"schedule\":{\"phase\":\"simulate\",\"after\":[],\"before\":[],\"parallel\":\"serial\"},"
+    "\"limits\":{\"max_instructions\":4096,\"max_rows\":1000000,\"allocation\":\"forbidden\"},"
+    "\"tests\":[\"tests/host/test_host_tables_entities.c\"]}";
+
+static const char k_claim_lir[] =
+    "{\"ir_version\":\"0.4\",\"system_id\":\"game.claim\",\"numeric_profile\":\"fixed_q32_v1\","
+    "\"query\":\"demo.claim\",\"instructions\":["
+    "{\"op\":\"load_u32\",\"dst\":\"w\",\"field\":\"want\"},"
+    "{\"op\":\"slot_u32\",\"dst\":\"s\"},"
+    "{\"op\":\"gather_u32\",\"dst\":\"g\",\"field\":\"want\",\"slot\":\"s\"},"
+    "{\"op\":\"store_u32\",\"field\":\"got\",\"src\":\"g\"},"
+    "{\"op\":\"find_eq_u32\",\"dst\":\"o\",\"field\":\"want\",\"key\":\"s\",\"span\":4},"
+    "{\"op\":\"store_u32\",\"field\":\"owner\",\"src\":\"o\"},"
+    "{\"op\":\"const_u32\",\"dst\":\"t0\",\"value\":1},"
+    "{\"op\":\"gather_u32\",\"dst\":\"x\",\"field\":\"want\",\"slot\":\"t0\"},"
+    "{\"op\":\"store_u32\",\"field\":\"outside\",\"src\":\"x\"},"
+    "{\"op\":\"const_u32\",\"dst\":\"k4\",\"value\":4},"
+    "{\"op\":\"find_eq_u32\",\"dst\":\"f\",\"field\":\"want\",\"key\":\"k4\",\"span\":4},"
+    "{\"op\":\"store_u32\",\"field\":\"first\",\"src\":\"f\"}]}";
+
+/* want = [4, 5, 4, 7]: rows 0, 1 and 3 want their own world slot (base 4 plus their local row), row 2 wants row
+ * 0's slot, so row 2's own slot (6) has no claimant. */
+static const char k_claim_fixture[] =
+    "{\"fixture_format\":\"0.1\",\"schema_id\":\"demo.claim\",\"schema_version\":1,\"tick\":0,"
+    "\"entity_ids\":[1,2,3,4],\"columns\":{\"want\":[4,5,4,7],\"got\":[0,0,0,0],\"owner\":[0,0,0,0],"
+    "\"outside\":[0,0,0,0],\"first\":[0,0,0,0]}}";
+
+static void test_claim_table1(void) {
+    SuHostSchemaField zf[1];
+    SuHostSchema zs, cs;
+    SuHostSchemaField cf[5];
+    SuHostTableDesc td[2];
+    SuHostWorldDesc d;
+    SuHostCapsule cap;
+    SuHostWorld *w = NULL;
+    SuHostError e;
+    uint32_t tables[1] = {1u};
+    uint64_t done = 0;
+    uint32_t got[4], owner[4], outside[4], first[4];
+    static const uint32_t want_got[4] = {4u, 5u, 4u, 7u};
+    static const uint32_t want_owner[4] = {4u, 5u, 0xFFFFFFFFu, 7u};
+    uint32_t i;
+
+    fill_schema(&zs, zf, (const SField[]){U(1, "unused")}, 1u, "demo.zero");
+    fill_schema(&cs, cf, k_claim_lanes, 5u, "demo.claim");
+    memset(td, 0, sizeof td);
+    td[0].struct_size = (uint32_t)sizeof td[0];
+    td[0].schema = &zs;
+    td[0].max_entities = 4u; /* table 1's base */
+    td[1].struct_size = (uint32_t)sizeof td[1];
+    td[1].schema = &cs;
+    td[1].max_entities = 4u;
+    td[1].fixture_json = (const uint8_t *)k_claim_fixture;
+    td[1].fixture_len = sizeof k_claim_fixture - 1u;
+    memset(&cap, 0, sizeof cap);
+    cap.capsule_json = (const uint8_t *)k_claim_capsule;
+    cap.capsule_len = sizeof k_claim_capsule - 1u;
+    cap.lir_json = (const uint8_t *)k_claim_lir;
+    cap.lir_len = sizeof k_claim_lir - 1u;
+    memset(&d, 0, sizeof d);
+    d.struct_size = (uint32_t)sizeof d;
+    d.capsule_count = 1;
+    d.capsules = &cap;
+    d.tick_rate_hz = 120;
+    d.table_count = 2;
+    d.tables = td;
+    d.capsule_table = tables;
+    check(su_host_world_create(&d, &w, &e) == SU_OK, "claim world: %s", e.message);
+    if (w == NULL) {
+        return;
+    }
+    check(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u, "claim tick: %s", e.message);
+    check(su_host_read_in(w, 1u, 2u, 0u, 4u, got) == SU_OK, "check failed at line %d", __LINE__);
+    check(su_host_read_in(w, 1u, 3u, 0u, 4u, owner) == SU_OK, "check failed at line %d", __LINE__);
+    check(su_host_read_in(w, 1u, 4u, 0u, 4u, outside) == SU_OK, "check failed at line %d", __LINE__);
+    check(su_host_read_in(w, 1u, 5u, 0u, 4u, first) == SU_OK, "check failed at line %d", __LINE__);
+    for (i = 0; i < 4u; i++) {
+        check(got[i] == want_got[i], "row %u: gather_u32(slot_u32) = %u, want %u", (unsigned)i, (unsigned)got[i],
+              (unsigned)want_got[i]);
+        check(owner[i] == want_owner[i], "row %u: find_eq_u32 returns world slot %u, want %u", (unsigned)i,
+              (unsigned)owner[i], (unsigned)want_owner[i]);
+        check(outside[i] == 0u, "row %u: a table-0 world slot reads 0 through gather_u32 (%u)", (unsigned)i,
+              (unsigned)outside[i]);
+        check(first[i] == 4u, "row %u: the lowest claimant of world slot 4 is row 0's slot (%u)", (unsigned)i,
+              (unsigned)first[i]);
+    }
+    su_host_world_destroy(w);
 }
 
 /* ---------- world-slot semantics: slot_u32, gen_u32, handle_live ---------- */
@@ -1049,20 +1504,24 @@ static void test_operator_events(void) {
 }
 
 /* A stateful registered operator in table 1 with SU_HOST_STATE_DROP_DEAD: entries keyed by another table's live
- * handle survive, entries whose handle died in either table are erased. */
+ * handle survive, entries whose handle died in either table are erased, a table-0 handle and a table-1 entity at the
+ * same LOCAL slot are told apart, and the state survives a snapshot round trip. */
 static void test_stateful_operator_table1(void) {
     SuHostOperatorDesc kd;
-    OpWorld o;
+    OpWorld o, of;
     SuHostWorld *w = NULL;
+    SuHostWorld *fresh = NULL;
     SuHostError e;
     Bytes ac, al;
     uint64_t done = 0;
     const SuHostState *st = NULL;
     uint8_t data[8 + 16];
     uint32_t count = 0, slot0 = 1u, gen0 = 1u, slot1 = 2u, gen1 = 1u;
-    uint64_t ship0 = 0, ship1 = 0;
+    uint64_t ship1 = 0;
     const void *p = NULL;
     uint32_t len = 0;
+    uint8_t *snap = NULL;
+    size_t snap_size = 0;
 
     keep_desc(&kd);
     check(su_host_register_operator(&kd, &e) == SU_OK || e.code == SU_E_DUPLICATE_KEY, "register game.keep: %s",
@@ -1070,17 +1529,18 @@ static void test_stateful_operator_table1(void) {
     ac = slurp("tests/fixtures/entities/despawn_move.capsule.json");
     al = slurp("tests/fixtures/entities/despawn_move.lir.json");
     memset(&o, 0, sizeof o);
+    /* Table 0 has 3 rows (base 0), table 1 has 2 rows (base 3): table 0's local slot 1 is world slot 1, table 1's
+     * local slot 1 is world slot 4. */
     w = op_world(&o, &kd, &ac, &al, 3u, 2u, (uint32_t)sizeof(SuHostWorldDesc), SU_HOST_TABLE_NONE, &e);
     check(w != NULL, "state world: %s", e.message);
-    free(ac.data);
-    free(al.data);
     if (w == NULL) {
+        free(ac.data);
+        free(al.data);
         free(o.record.p);
         return;
     }
     spawn_pool(w, 2u, &e);
     memcpy(data, "HKEY", 4u);
-    memcpy(data + 4, &count, 4u);
     /* The data names two handles of table 0 (slots 1 and 2, generation 1: the fixture's row 0 despawns itself on
      * tick 1, so its handle would be stale). */
     count = 2u;
@@ -1093,24 +1553,70 @@ static void test_stateful_operator_table1(void) {
     check(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u, "state tick: %s", e.message);
     check(su_host_operator_state(w, 1u, &st) == SU_OK && st != NULL, "the operator has state");
     if (st == NULL) {
+        free(ac.data);
+        free(al.data);
         su_host_world_destroy(w);
         free(o.record.p);
         return;
     }
-    /* Two own entries (table 1's slots 3 and 4) and two of table 0's (slots 1 and 2), keyed by world handle. */
+    /* Two own entries (table 1's world slots 3 and 4) and two of table 0's (slots 1 and 2), keyed by world handle. */
     check(su_host_state_count(st) == 4u, "four entries (%u)", (unsigned)su_host_state_count(st));
     check(su_host_state_get(st, H(1u, 1u), 1u, &p, &len) == SU_OK && p != NULL, "the table-0 handle 1 is kept");
     check(su_host_state_get(st, H(2u, 1u), 1u, &p, &len) == SU_OK && p != NULL, "the table-0 handle 2 is kept");
     check(su_host_state_get(st, H(3u, 1u), 0u, &p, &len) == SU_OK && p != NULL, "the operator's own row 0 is kept");
-    /* Despawn table 0's slot 2: its entry is erased, the live table-0 handle 1 and table 1's entries stay. */
-    check(su_host_entity_at_in(w, 0u, 2u, &ship1) == SU_OK, "table 0 slot 2 is alive");
-    (void)ship0;
+    check(su_host_state_get(st, H(4u, 1u), 0u, &p, &len) == SU_OK && p != NULL, "the operator's own row 1 is kept");
+    /* Despawn table 0's row 1 (world slot 1). Table 1's row 1 is the same LOCAL slot and stays alive, so its entry
+     * (world slot 4) must survive: the purge validates a key against the table its slot belongs to. */
+    check(su_host_entity_at_in(w, 0u, 1u, &ship1) == SU_OK, "table 0 slot 1 is alive");
     check(su_host_despawn(w, ship1, &e) == SU_OK, "despawn: %s", e.message);
     check(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u, "state tick 2: %s", e.message);
-    check(su_host_state_get(st, H(2u, 1u), 1u, &p, &len) == SU_OK && p == NULL, "the dead table-0 handle is purged");
-    check(su_host_state_get(st, H(1u, 1u), 1u, &p, &len) == SU_OK && p != NULL, "the live table-0 handle survives");
+    check(su_host_state_get(st, H(1u, 1u), 1u, &p, &len) == SU_OK && p == NULL, "the dead table-0 handle is purged");
+    check(su_host_state_get(st, H(4u, 1u), 0u, &p, &len) == SU_OK && p != NULL,
+          "table 1's row at the same local slot survives");
+    check(su_host_state_get(st, H(2u, 1u), 1u, &p, &len) == SU_OK && p != NULL, "the live table-0 handle survives");
     check(su_host_state_get(st, H(3u, 1u), 0u, &p, &len) == SU_OK && p != NULL, "the operator's own row 0 survives");
-    /* Despawn table 1's row 0 (world slot 3): its own entry is purged. */
+    /* The state is part of the snapshot: a fresh world restored from it has the same entries and values. */
+    check(su_host_snapshot_size(w, &snap_size) == SU_OK && snap_size > 0u, "the state world has a snapshot");
+    snap = malloc(snap_size);
+    check(snap != NULL && su_host_snapshot_write(w, snap, snap_size, &snap_size) == SU_OK, "the snapshot writes");
+    memset(&of, 0, sizeof of);
+    fresh = op_world(&of, &kd, &ac, &al, 3u, 2u, (uint32_t)sizeof(SuHostWorldDesc), SU_HOST_TABLE_NONE, &e);
+    check(fresh != NULL, "the state restore world creates: %s", e.message);
+    if (fresh != NULL && snap != NULL) {
+        const SuHostState *fs = NULL;
+        /* The operator's data joins the world identity (host.h, "operator state"), so the fresh world takes the same
+         * data before the snapshot can load into it. */
+        check(su_host_set_operator_data(fresh, "game.keep", data, sizeof data, &e) == SU_OK,
+              "operator data on the restore world: %s", e.message);
+        check(su_host_snapshot_restore(fresh, snap, snap_size, &e) == SU_OK, "restore the state world: %s",
+              e.message);
+        check(su_host_operator_state(fresh, 1u, &fs) == SU_OK && fs != NULL, "the restored operator has state");
+        check(fs != NULL && su_host_state_count(fs) == 3u, "three entries survive the snapshot (%u)",
+              fs != NULL ? (unsigned)su_host_state_count(fs) : 0u);
+        check(fs != NULL && su_host_state_get(fs, H(1u, 1u), 1u, &p, &len) == SU_OK && p == NULL,
+              "the purged entry stays purged");
+        check(fs != NULL && su_host_state_get(fs, H(4u, 1u), 0u, &p, &len) == SU_OK && p != NULL,
+              "table 1's entry survives the snapshot");
+        check(fs != NULL && su_host_state_get(fs, H(2u, 1u), 1u, &p, &len) == SU_OK && p != NULL,
+              "table 0's live entry survives the snapshot");
+        /* And it keeps working: despawn table 1's row 0 (world slot 3) and only its own entry goes. */
+        {
+            uint64_t h = 0;
+            check(su_host_entity_at_in(fresh, 1u, 0u, &h) == SU_OK, "table 1 slot 0 is alive in the restored world");
+            check(su_host_despawn(fresh, h, &e) == SU_OK, "despawn in the restored world: %s", e.message);
+        }
+        check(su_host_step(fresh, 1u, &done, &e) == SU_OK && done == 1u, "restored state tick: %s", e.message);
+        check(fs != NULL && su_host_state_get(fs, H(3u, 1u), 0u, &p, &len) == SU_OK && p == NULL,
+              "the operator's dead row is purged");
+        check(fs != NULL && su_host_state_get(fs, H(4u, 1u), 0u, &p, &len) == SU_OK && p != NULL,
+              "its live row survives");
+        check(fs != NULL && su_host_state_get(fs, H(2u, 1u), 1u, &p, &len) == SU_OK && p != NULL,
+              "the table-0 entry survives");
+    }
+    su_host_world_destroy(fresh);
+    free(of.record.p);
+    free(snap);
+    /* The same despawn in the original world: table 1's row 0 (world slot 3) loses its own entry only. */
     {
         uint64_t h = 0;
         check(su_host_entity_at_in(w, 1u, 0u, &h) == SU_OK, "table 1 slot 0 is alive");
@@ -1120,6 +1626,8 @@ static void test_stateful_operator_table1(void) {
     check(su_host_state_get(st, H(3u, 1u), 0u, &p, &len) == SU_OK && p == NULL, "the operator's dead row is purged");
     check(su_host_state_get(st, H(4u, 1u), 0u, &p, &len) == SU_OK && p != NULL, "its live row survives");
     su_host_world_destroy(w);
+    free(ac.data);
+    free(al.data);
     free(o.record.p);
 }
 
@@ -1198,6 +1706,63 @@ static void idle_target_case(const char *capsule_path, const char *label) {
 static void test_idle_target_table(void) {
     idle_target_case("profiles/space3d/space3d_query.capsule.json", "query");
     idle_target_case("profiles/space3d/space3d_query2.capsule.json", "query2");
+}
+
+/* ---------- the v2 pair budget counts the target table's rows too ---------- */
+
+/* The v2 pair budget is max(2^22, 1024 x rows indexed). A cross-table query indexes the mover table's rows and its
+ * target table's, so with 5000 movers and 3000 targets the budget is 1024 x 8000, not 1024 x 5000 (5000 rows put the
+ * mover-only budget above the 2^22 floor, so the two differ). No row is spawned: the budget follows the capacities
+ * the query iterates. */
+static void test_pair_budget_cross_table(void) {
+    SuHostSchemaField ship_fields[N_SHIP], proj_fields[N_PROJ];
+    SuHostSchema ship_s, proj_s;
+    SuHostTableDesc td[2];
+    SuHostWorldDesc d;
+    SuHostCapsule cap;
+    SuHostWorld *w = NULL;
+    SuHostError e;
+    Bytes q = slurp("profiles/space3d/space3d_query2.capsule.json");
+    uint32_t tables[1] = {1u};
+    uint32_t targets[1] = {0u};
+    uint64_t done = 0;
+    SuHostOperatorCounters c;
+
+    fill_schema(&ship_s, ship_fields, k_ship_schema, (uint32_t)N_SHIP, "game.ship");
+    fill_schema(&proj_s, proj_fields, k_proj_schema, (uint32_t)N_PROJ, "space3d");
+    memset(td, 0, sizeof td);
+    td[0].struct_size = (uint32_t)sizeof td[0];
+    td[0].schema = &ship_s;
+    td[0].max_entities = 3000u;
+    td[1].struct_size = (uint32_t)sizeof td[1];
+    td[1].schema = &proj_s;
+    td[1].max_entities = 5000u;
+    memset(&cap, 0, sizeof cap);
+    cap.capsule_json = q.data;
+    cap.capsule_len = q.len;
+    memset(&d, 0, sizeof d);
+    d.struct_size = (uint32_t)sizeof d;
+    d.capsule_count = 1;
+    d.capsules = &cap;
+    d.tick_rate_hz = 120;
+    d.seed = 11;
+    d.table_count = 2;
+    d.tables = td;
+    d.capsule_table = tables;
+    d.capsule_target_table = targets;
+    check(su_host_world_create(&d, &w, &e) == SU_OK, "pair-budget world: %s", e.message);
+    free(q.data);
+    if (w == NULL) {
+        return;
+    }
+    check(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u, "pair-budget tick: %s", e.message);
+    memset(&c, 0, sizeof c);
+    c.struct_size = (uint32_t)sizeof c;
+    check(su_host_operator_counters(w, 0u, &c) == SU_OK, "the operator reports counters");
+    check(c.runs == 1u, "the operator ran once (%llu)", (unsigned long long)c.runs);
+    check(c.pair_budget == 1024ull * 8000ull, "the budget counts movers and targets (%llu)",
+          (unsigned long long)c.pair_budget);
+    su_host_world_destroy(w);
 }
 
 /* ---------- a registered operator with a target set (table 1 reads table 0) ---------- */
@@ -1386,21 +1951,21 @@ static void test_refusals(void) {
         check(w != NULL, "the example world creates");
         su_host_world_destroy(w);
         w = NULL;
-        x.targets[3] = 1u;
+        x.targets[4] = 1u;
         check(su_host_world_create(&x.desc, &w, &e) == SU_E_INVALID_ARGUMENT && w == NULL,
               "the target table must differ from the capsule's table (%s)", e.message);
-        x.targets[3] = 7u;
+        x.targets[4] = 7u;
         check(su_host_world_create(&x.desc, &w, &e) == SU_E_INVALID_ARGUMENT && w == NULL,
               "the target table must exist (%s)", e.message);
         /* A capsule that takes no target set cannot name one. */
-        x.targets[3] = SU_HOST_TABLE_NONE;
+        x.targets[4] = SU_HOST_TABLE_NONE;
         x.targets[0] = 1u;
         check(su_host_world_create(&x.desc, &w, &e) == SU_E_INVALID_ARGUMENT && w == NULL,
               "an IR system takes no target set (%s)", e.message);
         x.targets[0] = SU_HOST_TABLE_NONE;
         /* The target table's declared schema must carry every target lane. */
         x.ship_fields[4].name = "pos_z_x";
-        x.targets[3] = 0u;
+        x.targets[4] = 0u;
         check(su_host_world_create(&x.desc, &w, &e) == SU_E_SCHEMA_MISMATCH && w == NULL,
               "a missing target lane is a schema mismatch (%s)", e.message);
         check(strstr(e.message, "target lane") != NULL, "the message names the target lane: %s", e.message);
@@ -1456,10 +2021,13 @@ static void test_no_allocation_in_tick(void) {
 
 int main(void) {
     test_end_to_end();
+    test_table1_event_order();
+    test_claim_table1();
     test_world_slots();
     test_idle_target_table();
     test_operator_events();
     test_registered_target();
+    test_pair_budget_cross_table();
     test_stateful_operator_table1();
     test_descriptor_sizes();
     test_refusals();

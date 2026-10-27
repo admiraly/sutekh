@@ -79,9 +79,12 @@ typedef struct SuVmPlanRun {
     void *emit_user;
     int (*emit_despawn)(void *user, uint32_t slot, uint32_t seq, uint64_t expected_handle);
     int (*emit_event)(void *user, uint32_t slot, uint32_t seq, uint32_t kind, uint32_t a, uint32_t b);
-    /* IR 0.4: whole-table columns of gather_* / find_eq_u32 (per table index) and their row count. */
+    /* IR 0.4: whole-table columns of gather_* / find_eq_u32 (per table index) and their row count. gather_base is
+     * the world slot of gather row 0 (issue 140): a gather slot operand is a world slot and find_eq_u32 returns
+     * one. */
     uint32_t *const *gather_cols;
     uint64_t gather_rows;
+    uint32_t gather_base;
     /* IR 0.4: entity table of handle_live (su_handle_live arguments). ents_base is the world slot of the table's
      * local slot 0 (issue 140): a handle_live slot operand is a world slot. */
     const uint8_t *ents_alive;

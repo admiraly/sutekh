@@ -3132,9 +3132,11 @@ uint32_t su_host_memory(const SuHostWorld *w, SuHostMemory *out) {
      * world root. */
     m.metadata = (uint64_t)sizeof *w;
     m.total = m.tables_total + m.input_storage + m.queued_inputs + m.restore_scratch + m.metadata;
+    /* Never report a size larger than the caller's struct: a v1 caller gets the fields it covers and its own size
+     * back (host.h, SU_HOST_MEMORY_V1_SIZE), a current caller sizeof(SuHostMemory). */
     sz = out->struct_size < sizeof m ? (size_t)out->struct_size : sizeof m;
     memcpy(out, &m, sz);
-    out->struct_size = (uint32_t)sizeof m;
+    out->struct_size = (uint32_t)sz;
     return SU_OK;
 }
 
