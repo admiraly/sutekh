@@ -1,5 +1,21 @@
 # Implementation status
 
+## Multi-table worlds — 27 October 2026 (issue 140)
+
+The in-process host API (`include/sutekh/host.h`) can now run a world with up to `SU_HOST_MAX_TABLES` tables, each an
+independent `SuWorld` with its own declared schema, capacity, fixture and entity table, stepped as one world: one
+tick, one input record stream, one event log, one snapshot, one digest and one identity. A schedule entry names the
+table it iterates (`SuHostWorldDesc.capsule_table`), and a tick begins, commits and publishes only the tables that
+have systems, so a system over a small table no longer pays the per-row hash/commit cost of a large one. A handle
+keeps `generation << 32 | slot` with the slot offset by the table's base, so it carries its table, table 0's handles
+are unchanged, and a table-qualified call rejects another table's handle with `SU_E_STALE_HANDLE`. Single-table
+worlds are byte-identical to the parent revision (identity, snapshot versions 1 and 2, digests, fast digests,
+replays); multi-table worlds fold their table descriptors into the identity and write snapshot version 3. The
+decision, the API and the formats are in [MULTI_TABLE_WORLDS.md](MULTI_TABLE_WORLDS.md); the first slice refuses IR
+entity operations and operator events in multi-table worlds and leaves the space3d cross-table form to the recorded
+follow-up. Evidence: `host_tables`, `host_tables_dll` (`tests/host/test_host_tables.c`) and
+`bench/host/bench_host_tables.c`; the handoff is `planning/handoffs/2026-10-27-issue-140.md`.
+
 ## Current checkpoint — 14 October 2026
 
 M0–M2 are owner-accepted with the caveats retained in `planning/status.json`. M3 remains in progress. Current work includes the six-system RTS runtime, atomic batch control methods, per-system structural queues, and replacement-worker recovery after actual host faults.

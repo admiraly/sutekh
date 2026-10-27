@@ -6,8 +6,9 @@
  * verifier, schedule, VM and world code.
  *
  * Model
- *   A world is a schema (the union of the fields its capsules bind, or a schema declared at creation, see
- *   "declared world schemas") plus an ordered schedule of verified IR systems and host operators
+ *   A world is one or more tables ("tables" below; one unless the descriptor says otherwise), each a schema
+ *   (the union of the fields its capsules bind, or a schema declared at creation, see "declared world schemas")
+ *   at its own capacity, plus an ordered schedule of verified IR systems and host operators
  *   (1..SU_HOST_MAX_CAPSULES = 64 entries, schedule order = array order, effect analysis as in world.create;
  *   the out-of-process control plane keeps its limit of 8). Its state is
  *   the committed root: fixed-capacity 32-bit columns, the generational entity table, the event log and the
@@ -153,6 +154,10 @@ typedef struct SuHostWorldDesc {
  * operations are admitted together (SU_E_RESOURCE_LIMIT "entity tick buffers exceed the resource budget"), so a
  * larger schedule reaches that budget at a smaller capacity. Native kernels are a process-wide resource of at most
  * 32 (su_host_system_set_tier refuses the next one).
+ *
+ * Tables (2026-10-27, issue 140): see "tables" below. A multi-table world declares every table's schema, refuses a
+ * capsule that uses IR entity operations or an operator that declares events (the entity tick owns one table in
+ * this version), and keeps one identity, one tick, one input stream, one log, one snapshot and one digest.
  *
  * Operator-state budget (2026-10-26, issue 153): once the capsules are parsed and before any operator state, column
  * or operator scratch is allocated, the reservations of the stateful operators ("operator state", Bounds) are summed
@@ -1030,8 +1035,9 @@ SU_HOST_API uint32_t su_host_read_i64_in(const SuHostWorld *w, uint32_t table, u
 /* Exact heap accounting of the world (M3-08a, contract 9.3, OD-10), per table and in total: the sum of the
  * bytes the world asked its allocator for and still holds, with the categories of su_world_memory summed into
  * table_total[t]. input_storage is the per-tick input application buffers (allocated at creation, issue 149);
- * metadata is the host world struct, its per-table table and the capsule schedule. Event log, spool and
- * snapshot bytes are not owned by the world root (see su_evlog_memory_bytes and the snapshot owner).
+ * metadata is the host world struct (which contains the schedule struct and its fixed entry array). The
+ * schedule's heap allocations (modules, VM contexts, operator instances, the event log), spool and snapshot
+ * bytes are not part of the world root (see su_evlog_memory_bytes and the snapshot owner).
  * SU_E_INVALID_ARGUMENT: NULL w or out, or out->struct_size < sizeof(SuHostMemory). */
 typedef struct SuHostMemory {
     uint32_t struct_size;            /* in: sizeof(SuHostMemory) */

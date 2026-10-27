@@ -247,7 +247,10 @@ static void test_spawn_despawn_both_tables(void) {
     CHECK(su_host_entity_at_in(w, 0u, 0u, &t) == SU_OK && t == ships[0]);
     CHECK(su_host_entity_at_in(w, 0u, 4u, &t) == SU_E_STALE_HANDLE);
     /* Table-qualified reads. */
-    CHECK(su_host_read_in(w, 0u, 1u, 0u, 2u, &val) == SU_OK && val == 10u);
+    {
+        uint32_t vals[2] = {0u, 0u};
+        CHECK(su_host_read_in(w, 0u, 1u, 0u, 2u, vals) == SU_OK && vals[0] == 10u && vals[1] == 11u);
+    }
     CHECK(su_host_read_in(w, 1u, 2u, 0u, 1u, &val) == SU_OK && val == 7u);
     /* A tick runs both tables' systems (position += velocity; remaining = damage). */
     CHECK(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u);

@@ -306,8 +306,7 @@ static uint32_t open_table(SuHostWorld *hw, uint32_t table, const uint8_t *fixtu
     uint32_t i;
     uint32_t st;
 
-    (void)su_sched_table_fields(s, table, &field_count);
-    fields = su_sched_table_fields(s, table, NULL);
+    fields = su_sched_table_fields(s, table, &field_count);
     memset(&doc, 0, sizeof doc);
     if (fd == NULL) {
         return set_err(err, SU_E_RESOURCE_LIMIT, UINT32_MAX, UINT64_MAX, "allocation failed");

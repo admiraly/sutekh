@@ -123,6 +123,13 @@ A tick is: apply the tick's input record to the committed roots (routing each wr
 begin every table that has at least one scheduled system, run the schedule in order with each entry on its
 table, zero the dead rows of the table a system just committed to, publish every begun table, increment the
 tick. A failure in any system aborts every open table, so the committed root of the whole world is unchanged.
+A table with no scheduled system is never begun, committed or published: its rows cost nothing per tick, and
+only its tick counter is advanced with the world's (so its canonical state, and a snapshot of it, carries the
+world tick and restores). Host spawn, despawn and input writes still work on such a table between ticks.
+
+The effect analysis knows tables: two systems in different tables never share a column, so they cannot
+conflict on a field whatever their field IDs; ordering edges and cycle detection still span the whole
+schedule, which is what orders a tick.
 
 Order is canonical: table order is the descriptor array order and schedule order is the schedule array order.
 Neither depends on a thread count, and the future chunked tick (issue 142) splits rows inside one table without
@@ -198,12 +205,15 @@ Deferred, each independently useful:
    another: the operator descriptor needs a second table selector and `SuHostOperatorRun` needs the target
    columns (a trailing field, so existing operators keep their layout). The single-table operator path is
    unchanged in this slice, and a multi-table world cannot yet bind an operator to a table other than its own
-   with a cross-table target set.
+   with a cross-table target set. docs/SPACE3D.md records the same follow-up.
 2. **IR entity operations in multi-table worlds.** `spawn`, `despawn_self` and `emit_event` run through the
    entity tick, which today owns one world's chunk cache and one entity table. Multi-table worlds refuse a
-   capsule that uses entity operations (`SU_E_CAPABILITY_DENIED` at creation, named in the message) until the
-   entity tick is table-aware. Host spawn/despawn works in every table today.
-3. **Per-table operator state.** State keys are world handles already; the DROP_DEAD purge is per table in this
-   slice, and a stateful operator may only be scheduled in table 0.
+   capsule that uses entity operations, and a host operator that declares events, with
+   `SU_E_CAPABILITY_DENIED` at creation (named in the message) until the entity tick is table-aware. Host
+   spawn/despawn works in every table today.
+3. **Per-table operator state.** A stateful registered operator is bound to its entry's table: `run->state`
+   sees that table's alive/generation views, its keys are world handles, and the DROP_DEAD purge validates
+   them against that table's entity table (the instance learns its table's base at creation). A state that
+   should span tables needs a key convention of its own, which this slice does not define.
 4. **Table-level rollback.** `su_host_snapshot_restore_inplace` restores every table (scratch entity tables are
    allocated per table), but there is no "restore table t only" call.
