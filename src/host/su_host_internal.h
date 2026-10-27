@@ -68,6 +68,10 @@ const HostOperator *su_host_registered_at(uint32_t index);
 /* Bytes the operator's state reserves in each world (su_hstate_reservation of its declaration; 0 for built-in
  * operators and registered ones without state). Allocates nothing. */
 uint64_t su_host_operator_state_reservation(const HostOperator *op);
+/* Registered operators: the declared per-tick event cap (issue 172) and the callback that returns the records of the
+ * instance's last run. 0 and NULL for built-in operators, which emit no events, and for operators that declare
+ * none. Allocates nothing. */
+void su_host_operator_event_config(const HostOperator *op, uint32_t *cap, SuHostEventDrain *drain);
 
 struct SuHostWorld {
     SuSchedule sched;              /* owns the modules, VM contexts and the entity runtime */

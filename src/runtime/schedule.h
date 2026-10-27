@@ -72,6 +72,17 @@ typedef struct SuSchedField {
                            * the field must agree on it, like on type and name */
 } SuSchedField;
 
+/* Events a host entry's operator emitted in its last run (issue 172). events is count records in the operator's
+ * emission order, owned by the operator's instance and valid until its next run; system_index, tick and event_seq
+ * are the engine's to fill at commit. */
+typedef struct SuHostOpEvents {
+    SuEvent *events;
+    uint32_t count;
+} SuHostOpEvents;
+
+/* Returns the records of the instance's last run (see SuHostOpEvents); writes the count. */
+typedef SuEvent *(*SuHostEventDrain)(void *inst, uint32_t *count);
+
 typedef struct SuSysEntry {
     char system_id[SU_DIAG_SYSTEM_BYTES];
     SuLirModule *mod;        /* owned, heap; for a host entry, the declaration module (no instructions) */
@@ -83,6 +94,8 @@ typedef struct SuSysEntry {
     void *host_inst;         /* owned; host entries only: per-entry operator scratch passed to run instead of the
                               * descriptor's static host_ctx (su_sched_set_host_instance). NULL = d->host_ctx. */
     void (*host_inst_free)(void *inst); /* releases host_inst when the entry is destroyed */
+    uint32_t host_event_cap; /* host entries: the operator's declared per-tick event cap (issue 172), 0 = none */
+    SuHostEventDrain host_event_drain; /* host entries with host_event_cap: the events of the last run */
     uint32_t vm_tier;        /* IR entries: SU_VM_TIER_* of every VM context the entry runs on (its own ctx, and the
                               * entity runtime's per-call contexts); 0 = the process default (su_vm_default_tier) */
     uint64_t txid;          /* registry transaction that made this module live; 0 = creation */
@@ -176,6 +189,12 @@ uint32_t su_sched_add_host_bound(SuSchedule *s, const SuHostOpDesc *d, SuLirModu
  * and releases it with free_fn (may be NULL) when it is destroyed or replaced by another instance.
  * SU_E_INVALID_ARGUMENT when idx is not a host entry or inst is NULL. */
 uint32_t su_sched_set_host_instance(SuSchedule *s, uint32_t idx, void *inst, void (*free_fn)(void *inst));
+/* Declares that host entry idx appends events (issue 172): cap is its declared per-tick cap and drain returns the
+ * records of the instance's last run (SuHostOpEvents). Set at world creation, before the first tick; the entry is
+ * then run through the entity tick, so its records join the log in schedule order with the IR systems' events and
+ * count toward the per-tick event cap. SU_E_INVALID_ARGUMENT when idx is not a host entry, cap is 0 or drain is
+ * NULL. A host entry without this call keeps the plain path (no events, no entity runtime needed). */
+uint32_t su_sched_set_host_events(SuSchedule *s, uint32_t idx, uint32_t cap, SuHostEventDrain drain);
 /* Builds the union field table from the current entries. Conflicting ID/name/type for
  * one field is SU_E_SCHEMA_MISMATCH. Call after the last su_sched_add. */
 uint32_t su_sched_finalize(SuSchedule *s);
@@ -218,6 +237,10 @@ uint32_t su_sched_enable_entities(SuSchedule *s, uint64_t max_struct_tick, uint6
 uint32_t su_sched_adopt_entities(SuSchedule *s, SuEntRt *rt);
 /* Runs one system of the schedule on the serial or chunked non-entity path (M0/M1 semantics). */
 uint32_t su_sched_run_system(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt);
+/* As su_sched_run_system; a host entry with events (su_sched_set_host_events) also hands back the records its run
+ * appended (issue 172). ev->count is 0 for every other entry, and on failure. */
+uint32_t su_sched_run_system_events(SuWorld *w, SuSchedule *s, uint32_t i, const SuSchedTickOpts *opt,
+                                    SuHostOpEvents *ev);
 
 /* Swaps entry idx with *fresh (ownership of its module and context moves into the
  * schedule) and returns the replaced entry in *old for the caller to destroy. */

@@ -149,6 +149,14 @@ uint32_t su_cmdq_apply(const SuStructCmd *cmds, uint64_t n, const SuCmdCallbacks
  * run no callback and leave the log unchanged. */
 uint32_t su_cmdq_commit(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEventLog *log,
                         SuCommitReport *rep);
+/* As su_cmdq_commit, with host operator events (issue 172): host_ev[0..host_n) are records an operator
+ * appended in this tick, ordered by non-decreasing system_index (each system's records keep the operator's
+ * emission order; the engine fills kind, slot, seq and the payloads). They count toward the per-tick event
+ * cap with the system events and command records, are interleaved with them by system index, and are
+ * appended to the log like any other event. Nothing depends on the order the engine produced them in beyond
+ * that index. */
+uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEventLog *log,
+                                    const SuEvent *host_ev, uint64_t host_n, SuCommitReport *rep);
 
 /* ---- bounded event log (ring) ---- */
 

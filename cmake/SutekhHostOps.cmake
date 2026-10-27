@@ -139,6 +139,45 @@ foreach(check "dll:same" "static:same" "static:entries" "dll:bytes" "static:flag
 endforeach()
 endif() # SUTEKH_BUILD_TESTS
 
+# Events from host operators (include/sutekh/host.h, "events from host operators"; issue 172): a registered
+# operator appends IR-format records to the world's event log, static and DLL. In-process: emission order between IR
+# systems, the declared per-tick cap (refused tick, nothing committed), the world's per-tick event cap, the log in
+# snapshots and both digests, snapshot + re-simulation, replay, and an operator built against the shorter run
+# struct. Cross-process: record, then verify with the same declaration (DLL) and with another cap (refused: world
+# identity).
+if(SUTEKH_BUILD_TESTS)
+foreach(variant "" "_dll")
+    add_executable(test_host_events${variant} "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/test_host_events.c")
+    if(variant STREQUAL "_dll")
+        target_link_libraries(test_host_events${variant} PRIVATE sutekh_host)
+    else()
+        target_link_libraries(test_host_events${variant} PRIVATE su_host)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_compile_definitions(test_host_events${variant} PRIVATE SU_TEST_WRAP_ALLOC)
+            target_link_options(test_host_events${variant} PRIVATE "LINKER:--wrap=malloc,--wrap=calloc,--wrap=realloc")
+        endif()
+    endif()
+    sutekh_apply_warnings(test_host_events${variant})
+    add_test(NAME host_events${variant} COMMAND test_host_events${variant})
+endforeach()
+set(SU_HOST_EVENTS_DIR "${CMAKE_CURRENT_BINARY_DIR}/host_events")
+file(MAKE_DIRECTORY "${SU_HOST_EVENTS_DIR}")
+add_test(NAME host_events_record COMMAND test_host_events record "${SU_HOST_EVENTS_DIR}")
+set_tests_properties(host_events_record PROPERTIES FIXTURES_SETUP host_events_files)
+foreach(check "dll:same" "static:same" "static:cap")
+    string(REPLACE ":" ";" parts "${check}")
+    list(GET parts 0 build)
+    list(GET parts 1 what)
+    if(build STREQUAL "dll")
+        set(exe test_host_events_dll)
+    else()
+        set(exe test_host_events)
+    endif()
+    add_test(NAME host_events_verify_${what}_${build} COMMAND ${exe} verify "${SU_HOST_EVENTS_DIR}" ${what})
+    set_tests_properties(host_events_verify_${what}_${build} PROPERTIES FIXTURES_REQUIRED host_events_files)
+endforeach()
+endif() # SUTEKH_BUILD_TESTS
+
 # Embedded space3d example: a game schema of its own with space3d.query bound schema-relatively, run through the DLL.
 # Also driven by the space3d_serve test (cmake/SutekhNumeric3D.cmake).
 if(SUTEKH_BUILD_EXAMPLES OR SUTEKH_BUILD_TESTS)

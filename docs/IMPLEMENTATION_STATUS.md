@@ -471,6 +471,26 @@ stateful operator (4 x `state_max_bytes` + 52 x `state_max_entries` + a header) 
 refuses the first one that crosses the budget with `SU_E_RESOURCE_LIMIT`. Not part of the identity. Evidence:
 `tests/host/test_host_opstate.c` section 11, handoff `planning/handoffs/2026-10-26-state-budget.md`.
 
+## Events from host operators (27 October 2026)
+
+Downstream request work outside the milestone order (issue 172; M3 gates unchanged). Implemented and tested: a
+registered host operator appends events to the world's event log from `run` through `SuHostOperatorRun.emit_event`
+(appended to the run struct, so an operator built against the shorter struct keeps running;
+`SU_HOST_OPERATOR_RUN_STATE_SIZE` pins that layout). The records are the IR `emit_event` records: the same 40-byte
+`SuEvent`/`SuHostEvent` layout, the same kind range, the operator's schedule position as `system_index`, and `seq`
+numbering its emissions in the run. A tick's log is ordered by schedule position and then by the order each system
+produced its records, so an operator's records keep their emission order between the IR systems before and after it,
+with no dependence on thread timing (`run` is one serial call per tick). The operator declares `max_events_per_tick`
+(`SuHostOperatorDesc` version 3, 1..1048576); past it an append is refused with `SU_E_RESOURCE_LIMIT` and the refusal
+is sticky, so the tick fails in that system and nothing of it is committed, the same outcome the IR path gives; the
+world's own per-tick event cap counts the operator's records too. The records are in the event log, so they are in
+the canonical snapshot, both digests, both restores and replay keyframes, and re-simulation re-emits them with the
+same sequence numbers; the declared cap joins the world identity. An operator without a declared cap gets
+`emit_event == NULL` and its worlds keep the identity, snapshots, digests and replays of earlier releases. Evidence:
+`tests/host/test_host_events.c` (`host_events`, `host_events_dll`, `host_events_record`,
+`host_events_verify_*`; cross-process identity check), handoff `planning/handoffs/2026-10-27-issue-172.md`.
+
+
 ## Schedule size and declared world schemas (26 October 2026)
 
 Downstream request work outside the milestone order (issue 144; M3 gates unchanged). Implemented and tested: an

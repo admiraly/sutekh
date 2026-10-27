@@ -711,16 +711,22 @@ uint32_t su_cmdq_apply(const SuStructCmd *cmds, uint64_t n, const SuCmdCallbacks
 
 uint32_t su_cmdq_commit(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEventLog *log,
                         SuCommitReport *rep) {
+    return su_cmdq_commit_with_events(q, cb, tick, log, NULL, 0u, rep);
+}
+
+uint32_t su_cmdq_commit_with_events(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEventLog *log,
+                                    const SuEvent *host_ev, uint64_t host_n, SuCommitReport *rep) {
     SuCmdView v;
     uint32_t st;
     uint64_t base;
     uint64_t i = 0u;
     uint64_t j = 0u;
     uint64_t k = 0u;
+    uint64_t h = 0u;
     uint64_t n_despawned = 0u;
     uint64_t n_rejected = 0u;
 
-    if (q == NULL || cb == NULL || log == NULL) {
+    if (q == NULL || cb == NULL || log == NULL || (host_n != 0u && host_ev == NULL)) {
         return SU_E_INVALID_ARGUMENT;
     }
     st = su_cmdq_merge(q, &v);
@@ -729,7 +735,7 @@ uint32_t su_cmdq_commit(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEv
     }
     /* Every command yields one record that counts toward the per-tick event cap. Checked before
      * any callback runs. */
-    if (v.n_events + v.n_cmds > q->per_tick_e) {
+    if (v.n_events + v.n_cmds + host_n > q->per_tick_e) {
         return SU_E_RESOURCE_LIMIT;
     }
     st = su_cmdq_apply(v.cmds, v.n_cmds, cb, tick, q->rec, q->per_tick_s);
@@ -747,8 +753,10 @@ uint32_t su_cmdq_commit(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEv
     base = su_evlog_next_seq(log);
     i = 0u;
     j = 0u;
-    while (i < v.n_events || j < v.n_cmds) {
+    h = 0u;
+    while (i < v.n_events || j < v.n_cmds || h < host_n) {
         int take_sys;
+        int take_host = 0;
         if (i >= v.n_events) {
             take_sys = 0;
         } else if (j >= v.n_cmds) {
@@ -756,7 +764,20 @@ uint32_t su_cmdq_commit(SuCmdQ *q, const SuCmdCallbacks *cb, uint64_t tick, SuEv
         } else {
             take_sys = rec_cmp(&v.events[i], &q->rec[j], &E_LAYOUT) <= 0;
         }
-        if (take_sys) {
+        if (h < host_n) {
+            /* Host records carry one system's records in emission order, so only their system index decides where
+             * the next one goes. A host system's index is its own (a host entry never queues IR events or command
+             * records), so the strict comparison never ties. */
+            if (i >= v.n_events && j >= v.n_cmds) {
+                take_host = 1;
+            } else {
+                uint32_t other = take_sys ? v.events[i].system_index : q->rec[j].system_index;
+                take_host = host_ev[h].system_index < other;
+            }
+        }
+        if (take_host) {
+            q->fin[k] = host_ev[h++];
+        } else if (take_sys) {
             q->fin[k] = v.events[i++];
         } else {
             q->fin[k] = q->rec[j++];

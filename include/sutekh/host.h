@@ -275,12 +275,15 @@ SU_HOST_API void su_host_hex(const uint8_t digest[32], char out[65]);
 /* ---- events (additive, API version 1) ----
  *
  * The world's event log is part of its state (it is in snapshots and the digest). Systems append events
- * with emit_event; the boundary of a tick appends one record per structural command (despawn applied or
- * refused); su_host_spawn and su_host_despawn append a record each. Every event has a sequence number
- * (event_seq) that increases by one per event for the life of the world, so (event_seq) orders events
- * exactly as the engine committed them: by tick, then system, then slot, then per-row emission order, with
- * host records where the host made them. The log is a ring of SuHostWorldDesc.event_log_max events: older
- * events are evicted, and readers are told how many they missed. Reading never changes the world.
+ * with emit_event; host operators append events with SuHostOperatorRun.emit_event (the same records, see
+ * "events from host operators" below); the boundary of a tick appends one record per structural command
+ * (despawn applied or refused); su_host_spawn and su_host_despawn append a record each. Every event has a
+ * sequence number (event_seq) that increases by one per event for the life of the world, so (event_seq)
+ * orders events exactly as the engine committed them: by tick, then the schedule position of the emitting
+ * system, then the order that system produced its records (an IR system: slot, then per-row emission order;
+ * a host operator: its emission order), with host records where the host made them. The log is a ring of
+ * SuHostWorldDesc.event_log_max events: older events are evicted, and readers are told how many they missed.
+ * Reading never changes the world.
  *
  * tick of an event: a system event or command record carries the tick that step published (a step from
  * tick T to T + 1 emits events with tick T + 1); a host spawn or despawn record carries the committed tick
@@ -294,8 +297,8 @@ typedef struct SuHostEvent {
     uint64_t tick;
     uint32_t kind;
     uint32_t system_index;  /* schedule position of the emitting system; SU_HOST_EVENT_SYSTEM_HOST for host records */
-    uint32_t slot;          /* emitting row */
-    uint32_t seq;           /* emission order within the row */
+    uint32_t slot;          /* emitting row (host operator records: the row the event is about) */
+    uint32_t seq;           /* emission order within the row (host operator records: within its run, from 0) */
     uint32_t a;
     uint32_t b;
 } SuHostEvent;
@@ -372,9 +375,10 @@ SU_HOST_API uint32_t su_host_input_push_i64(SuHostWorld *w, uint64_t tick, uint6
  * State: an operator's results are ordinary columns of the world (its declared writes), stored for every row
  * every tick, so they are in snapshots, su_host_digest, su_host_digest_fast, in-place restore and replays
  * exactly like IR results, and re-simulation after a restore reproduces them bit for bit. Events derived from
- * them are emitted by IR systems that read them. The record's semantic hash (covering the binding) is part of
- * the world identity. Each world owns its operator's scratch (allocated at creation for the world's capacity,
- * never in a tick), so distinct worlds stay independent. */
+ * them are emitted by IR systems that read them, or by the operator itself through SuHostOperatorRun.emit_event
+ * (see "events from host operators"). The record's semantic hash (covering the binding) is part of the world
+ * identity. Each world owns its operator's scratch (allocated at creation for the world's capacity, never in a
+ * tick), so distinct worlds stay independent. */
 
 /* Operators of this library, by index (0..count-1): system id (for example "space3d.query") and operator name (for
  * example "space3d_ops_v1"). The operators built into the library come first; operators registered with
@@ -484,6 +488,37 @@ SU_HOST_API uint32_t su_host_operator_counters(const SuHostWorld *w, uint32_t in
  *     threads at once, so run and parse_data must be reentrant across worlds (user is shared). Use only
  *     run->scratch for temporary memory (never a global): it is private to the call.
  *
+ * Events from host operators (2026-10-27, issue 172). An operator may append events to the world's event log while
+ * it runs, for example one record per resolved hit, through SuHostOperatorRun.emit_event. It declares how many it may
+ * append in one tick (SuHostOperatorDesc.max_events_per_tick); with 0 the operator appends none and emit_event is
+ * NULL. This is the IR emit_event facility for native operators: the same record, the same log, the same coverage.
+ *   - Record: the engine's event record, a SuEvent/SuHostEvent (40 bytes), exactly as an IR system's emit_event
+ *     writes it: kind, system_index, slot, seq and the payload words a and b. kind is any value below
+ *     SU_EVENT_KIND_RESERVED_MIN, as an IR kind constant (a larger value is refused with SU_E_TYPE). system_index
+ *     is the operator's schedule position, so su_host_events_read, su_host_events_for_tick, replay, presentation and
+ *     audio cannot tell an operator's record from an IR system's. slot is the row the event is about (0..rows - 1;
+ *     anything else is SU_E_INVALID_ARGUMENT). seq numbers the operator's emissions in its run, from 0: a host
+ *     operator's run is one serial call, so seq is also its emission order.
+ *   - Order: a tick's records are ordered by the schedule position of the system that produced them, and within one
+ *     system by the order it produced them (for an IR system: slot, then per-row emission order; for a host
+ *     operator: its emission order). Nothing depends on thread arrival order; run is called serially, once per tick.
+ *   - Cap: once the operator has appended max_events_per_tick records in a tick, emit_event appends nothing and
+ *     returns SU_E_RESOURCE_LIMIT. The refusal is sticky, as the IR path's overflow flag is: also when run ignores
+ *     the code and returns SU_OK, the tick fails with SU_E_RESOURCE_LIMIT in this system and nothing of the tick is
+ *     committed (no column, no operator state, no event). SU_E_TYPE (reserved kind) and SU_E_INVALID_ARGUMENT (slot
+ *     out of range) behave the same way. The world's own per-tick cap (SuHostWorldDesc.max_events_per_tick) bounds
+ *     the tick's total, host records included, and refuses an over-cap tick the same way.
+ *   - Coverage: the records are the log, so they are in the canonical snapshot, in su_host_digest, in
+ *     su_host_digest_fast, in both restores and in replay keyframes, and re-simulating the same ticks re-emits them
+ *     with the same sequence numbers, exactly like IR events (see "events" above).
+ *   - Memory: one buffer of max_events_per_tick records (40 bytes each) per operator per world, allocated at world
+ *     creation (never in a tick; a world whose allocation fails is refused with SU_E_RESOURCE_LIMIT), plus 40 bytes
+ *     per appended record in the entity tick's merge buffer, which is allocated once per world with the tick's other
+ *     buffers.
+ *   - Identity: a nonzero max_events_per_tick joins the system's semantic hash (and so the world identity), so a
+ *     snapshot or replay only loads into a world whose process registered the operator with the same cap. An
+ *     operator without events keeps the identity of earlier releases.
+ *
  * State and identity: the operator's results are ordinary columns (in snapshots, su_host_digest, the fast digest,
  * in-place restore and replays). The system's semantic hash (su_host_system_info) covers system ID, schema,
  * operator_name, operator_version, constants_hash, the field table, any binding, the descriptor flags and the
@@ -509,7 +544,8 @@ SU_HOST_API uint32_t su_host_operator_counters(const SuHostWorld *w, uint32_t in
  * byte-based, so callers must zero the whole descriptor (memset, or SU_HOST_OPERATOR_DESC_INIT) before filling it,
  * padding included; the same holds for any later versioned struct of this section. Fields added later are laid out
  * without padding (each at an offset aligned for its type, the struct size a multiple of 8). The library fills
- * SuHostOperatorRun.struct_size; an operator reads only the fields that size covers. Fields are only ever appended.
+ * SuHostOperatorRun.struct_size; an operator reads only the fields that size covers. Fields are only ever appended,
+ * in the descriptor and in SuHostOperatorRun (state 2026-10-26, emit_event and emit_ctx 2026-10-27).
  * SuHostOperatorColumn stays as it is (no stride, no growth): per-lane additions arrive as new trailing
  * SuHostOperatorRun fields (parallel arrays indexed like columns). Unknown flag bits are refused.
  *
@@ -577,7 +613,18 @@ typedef struct SuHostOperatorRun {
     /* Added 2026-10-26 (issue 139; present when struct_size covers it): the operator's state, mutable during this
      * call (see "operator state"), or NULL when the descriptor declares none. */
     SuHostState *state;
+    /* Added 2026-10-27 (issue 172; present when struct_size covers it): appends one event to the world's event log
+     * for the tick being computed, or NULL when the descriptor declares no events (max_events_per_tick 0). It is
+     * called with emit_ctx and the record's slot, kind and payload words; see "events from host operators" above
+     * for the record, the order, the declared cap and the refusals. */
+    uint32_t (*emit_event)(void *emit_ctx, uint32_t slot, uint32_t kind, uint32_t a, uint32_t b);
+    void *emit_ctx;
 } SuHostOperatorRun;
+
+/* Size of SuHostOperatorRun through `state` (the 2026-10-26 layout): 120 bytes with 8-byte pointers, 84 with
+ * 4-byte pointers. A run function built against that header checks struct_size and reads only the fields it knows;
+ * the library only appends, so it keeps working unchanged. */
+#define SU_HOST_OPERATOR_RUN_STATE_SIZE (offsetof(SuHostOperatorRun, state) + sizeof(void *))
 
 typedef struct SuHostOperatorDesc {
     uint32_t struct_size;                 /* >= SU_HOST_OPERATOR_DESC_V1_SIZE; normally sizeof(SuHostOperatorDesc) */
@@ -615,6 +662,11 @@ typedef struct SuHostOperatorDesc {
     uint32_t state_max_entries;           /* 1..SU_HOST_STATE_MAX_ENTRIES: most entries the state can hold */
     uint32_t state_max_bytes;             /* 1..SU_HOST_STATE_MAX_BYTES: most value bytes (sum of lengths) */
     uint32_t state_reserved;              /* 0 */
+    /* Version 3 (2026-10-27, issue 172): events (see "events from host operators"). Both zero: the operator emits
+     * no events, and its identity is that of a version 2 descriptor. max_events_per_tick is 1..1048576, the most
+     * events run may append in one tick (SU_E_RESOURCE_LIMIT past it). event_reserved must be 0. */
+    uint32_t max_events_per_tick;
+    uint32_t event_reserved;              /* 0 */
 } SuHostOperatorDesc;
 
 /* Size of the first released SuHostOperatorDesc (through user): 120 bytes with 8-byte pointers (LP64, LLP64), 84
@@ -622,6 +674,8 @@ typedef struct SuHostOperatorDesc {
 #define SU_HOST_OPERATOR_DESC_V1_SIZE (offsetof(SuHostOperatorDesc, user) + sizeof(void *))
 /* Version 2 (through state_reserved): 136 bytes with 8-byte pointers, 100 with 4-byte pointers. */
 #define SU_HOST_OPERATOR_DESC_V2_SIZE (offsetof(SuHostOperatorDesc, state_reserved) + sizeof(uint32_t))
+/* Version 3 (through event_reserved): 144 bytes with 8-byte pointers, 108 with 4-byte pointers. */
+#define SU_HOST_OPERATOR_DESC_V3_SIZE (offsetof(SuHostOperatorDesc, event_reserved) + sizeof(uint32_t))
 
 /* Zeroes *d (padding included) and sets struct_size: use it before filling a descriptor. */
 #define SU_HOST_OPERATOR_DESC_INIT(d) \
