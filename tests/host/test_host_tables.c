@@ -18,6 +18,33 @@
 static long g_checks = 0;
 static long g_fail = 0;
 
+/* Allocation counting for the "no allocation in a tick" check (static Linux build: -Wl,--wrap=malloc,...). */
+#ifdef SU_TEST_WRAP_ALLOC
+static volatile int g_count_alloc;
+static unsigned long g_allocs;
+void *__real_malloc(size_t n);
+void *__real_calloc(size_t n, size_t m);
+void *__real_realloc(void *p, size_t n);
+void *__wrap_malloc(size_t n) {
+    if (g_count_alloc) {
+        g_allocs++;
+    }
+    return __real_malloc(n);
+}
+void *__wrap_calloc(size_t n, size_t m) {
+    if (g_count_alloc) {
+        g_allocs++;
+    }
+    return __real_calloc(n, m);
+}
+void *__wrap_realloc(void *p, size_t n) {
+    if (g_count_alloc) {
+        g_allocs++;
+    }
+    return __real_realloc(p, n);
+}
+#endif
+
 #define CHECK(cond)                                                                  \
     do {                                                                             \
         g_checks++;                                                                  \
@@ -701,6 +728,58 @@ static void test_large_idle_table(void) {
     su_host_world_destroy(one);
 }
 
+/* The tick allocates nothing: applying a record that touches both tables and running both tables' systems
+ * allocates no memory (static Linux build only; the wrapper counts malloc, calloc and realloc). */
+static void test_no_allocation_in_tick(void) {
+#ifdef SU_TEST_WRAP_ALLOC
+    TableSchema ship, pool;
+    SuHostWorld *w;
+    SuHostError e;
+    SuHostValue sv;
+    SuHostInput in[2];
+    uint64_t ships[2] = {0, 0};
+    uint64_t proj[2] = {0, 0};
+    uint64_t done = 0;
+    uint32_t i;
+
+    ship_schema(&ship);
+    pool_schema(&pool);
+    w = make_two(&ship, &pool, 4u, 4u, NULL, 0u, NULL, 0u, &e);
+    sv.field_id = 2u;
+    sv.value = 1u;
+    for (i = 0; i < 2u; i++) {
+        CHECK(su_host_spawn_in(w, 0u, &sv, 1u, i, &ships[i], &e) == SU_OK);
+        CHECK(su_host_spawn_in(w, 1u, &sv, 1u, i, &proj[i], &e) == SU_OK);
+    }
+    /* The first tick builds the entity runtime's cache (allocates), as documented. */
+    CHECK(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u);
+    in[0].entity = ships[0];
+    in[0].field_id = 2u;
+    in[0].value = 2u;
+    in[1].entity = proj[0];
+    in[1].field_id = 2u;
+    in[1].value = 3u;
+    CHECK(su_host_input_push(w, su_host_tick(w), in, 2u, &e) == SU_OK);
+    g_allocs = 0u;
+    g_count_alloc = 1;
+    CHECK(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u);
+    g_count_alloc = 0;
+    CHECK(g_allocs == 0u);
+    /* A failing tick (a write to an entity that dies before it) allocates nothing either. */
+    in[0].entity = ships[1];
+    in[0].field_id = 2u;
+    in[0].value = 4u;
+    CHECK(su_host_input_push(w, su_host_tick(w), in, 1u, &e) == SU_OK);
+    CHECK(su_host_despawn(w, ships[1], &e) == SU_OK);
+    g_allocs = 0u;
+    g_count_alloc = 1;
+    CHECK(su_host_step(w, 1u, &done, &e) == SU_E_STALE_HANDLE && done == 0u);
+    g_count_alloc = 0;
+    CHECK(g_allocs == 0u);
+    su_host_world_destroy(w);
+#endif
+}
+
 /* Descriptor versioning: the 96-byte descriptor of the previous release is still a valid single-table world
  * (fields beyond struct_size read as zero, so no tables), and a size that ends inside a field is refused. */
 static void test_descriptor_versions(void) {
@@ -759,6 +838,7 @@ int main(void) {
     test_refusals();
     test_large_idle_table();
     test_descriptor_versions();
+    test_no_allocation_in_tick();
     printf("test_host_tables: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

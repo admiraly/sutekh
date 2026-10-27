@@ -724,6 +724,11 @@ add_test(NAME host_api_dll COMMAND test_host_dll WORKING_DIRECTORY "${CMAKE_CURR
 # Host events, in-place restore and the fast digest (static: also the internal XXH64 vectors; DLL: public API only).
 add_executable(test_host_tables tests/host/test_host_tables.c)
 target_link_libraries(test_host_tables PRIVATE su_host)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Count allocations inside su_host_step (issue 140: a tick allocates nothing, also across tables).
+    target_compile_definitions(test_host_tables PRIVATE SU_TEST_WRAP_ALLOC)
+    target_link_options(test_host_tables PRIVATE "LINKER:--wrap=malloc,--wrap=calloc,--wrap=realloc")
+endif()
 sutekh_apply_warnings(test_host_tables)
 add_test(NAME host_tables COMMAND test_host_tables WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 add_executable(test_host_tables_dll tests/host/test_host_tables.c)
