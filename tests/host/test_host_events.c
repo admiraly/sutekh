@@ -36,6 +36,7 @@
  *   verify <dir> cap      the operator registered with another max_events_per_tick: both are refused
  *                         (SU_E_SCHEMA_MISMATCH, world identity). */
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -204,6 +205,13 @@ typedef struct OldRun {
 
 _Static_assert(sizeof(OldRun) == SU_HOST_OPERATOR_RUN_STATE_SIZE,
                "the pre-2026-10-27 run layout is SU_HOST_OPERATOR_RUN_STATE_SIZE");
+/* The event fields start where the older layout ends, and the 2026-10-27 layout ends after emit_ctx. */
+_Static_assert(offsetof(SuHostOperatorRun, emit_event) == SU_HOST_OPERATOR_RUN_STATE_SIZE,
+               "emit_event is appended right after state");
+_Static_assert(sizeof(SuHostOperatorRun) >= SU_HOST_OPERATOR_RUN_EVENTS_SIZE,
+               "SU_HOST_OPERATOR_RUN_EVENTS_SIZE covers this header's run layout");
+_Static_assert(offsetof(SuHostOperatorRun, emit_ctx) + sizeof(void *) == SU_HOST_OPERATOR_RUN_EVENTS_SIZE,
+               "the 2026-10-27 run layout ends after emit_ctx");
 
 static unsigned g_old_calls;
 
@@ -644,15 +652,23 @@ static void test_order(const SuHostOperatorDesc *d) {
 
 /* ---------- 3. the declared cap ---------- */
 
-/* The world is refused no further than its last committed tick: same tick, same digest, same log, same columns. */
-static void check_unchanged(SuHostWorld *w, uint64_t tick, const char *digest, uint64_t next_seq) {
+/* The world is refused no further than its last committed tick: same tick, same digest, same log, same columns and
+ * the same canonical snapshot bytes. */
+static void check_unchanged(SuHostWorld *w, uint64_t tick, const char *digest, uint64_t next_seq, const uint8_t *snap,
+                            size_t snap_len) {
     char now[65];
+    uint8_t *again;
+    size_t again_len = 0u;
     digest_hex(w, now);
     check(su_host_tick(w) == tick, "tick is still %llu (%llu)", (unsigned long long)tick,
           (unsigned long long)su_host_tick(w));
     check(strcmp(now, digest) == 0, "digest unchanged");
     check(su_host_event_next_seq(w) == next_seq, "log unchanged (%llu events)",
           (unsigned long long)su_host_event_next_seq(w));
+    again = snapshot(w, &again_len);
+    check(again != NULL && again_len == snap_len && memcmp(again, snap, snap_len) == 0,
+          "snapshot bytes unchanged (%zu, %zu)", snap_len, again_len);
+    free(again);
 }
 
 static void test_cap(const SuHostOperatorDesc *cap4, const SuHostOperatorDesc *swallow) {
@@ -663,6 +679,8 @@ static void test_cap(const SuHostOperatorDesc *cap4, const SuHostOperatorDesc *s
     uint64_t done = 0u, tick;
     uint32_t st, n;
     char digest[65];
+    uint8_t *snap;
+    size_t snap_len = 0u;
     unsigned pass;
 
     for (pass = 0; pass < 2u; pass++) {
@@ -685,13 +703,15 @@ static void test_cap(const SuHostOperatorDesc *cap4, const SuHostOperatorDesc *s
         g_op.mode = pass == 0u ? MODE_RETURN : MODE_SWALLOW;
         tick = su_host_tick(w);
         digest_hex(w, digest);
+        snap = snapshot(w, &snap_len);
         st = su_host_step(w, 1u, &done, &err);
         check(st == SU_E_RESOURCE_LIMIT && done == 0u, "%s: over-cap tick refused (%s, done %llu)", d->system_id,
               su_host_status_name(st), (unsigned long long)done);
         check(err.index == 1u, "%s: the failing system is the operator (index %u)", d->system_id, (unsigned)err.index);
         check(strstr(err.message, "event") != NULL, "%s: the message names the refusal: %s", d->system_id,
               err.message);
-        check_unchanged(w, tick, digest, 2u * ENT + 4u);
+        check_unchanged(w, tick, digest, 2u * ENT + 4u, snap, snap_len);
+        free(snap);
         check(g_op.refusals >= 1u, "%s: emit_event returned a code (%u)", d->system_id, g_op.refusals);
         su_host_world_destroy(w);
         scene_free(&sc);
@@ -707,6 +727,8 @@ static void test_world_cap(const SuHostOperatorDesc *d) {
     uint64_t done = 0u;
     uint32_t st;
     char digest[65];
+    uint8_t *snap;
+    size_t snap_len = 0u;
 
     memset(&g_op, 0, sizeof g_op);
     scene_build(&sc, d, 4u, 1);
@@ -716,11 +738,13 @@ static void test_world_cap(const SuHostOperatorDesc *d) {
         return;
     }
     digest_hex(w, digest);
+    snap = snapshot(w, &snap_len);
     st = su_host_step(w, 1u, &done, &err);
     check(st == SU_E_RESOURCE_LIMIT && done == 0u, "the world's per-tick event cap counts host records (%s)",
           su_host_status_name(st));
     check(err.index == UINT32_MAX, "the boundary refused the tick, not a system (index %u)", (unsigned)err.index);
-    check_unchanged(w, 0u, digest, 0u);
+    check_unchanged(w, 0u, digest, 0u, snap, snap_len);
+    free(snap);
     check(su_host_event_next_seq(w) == 0u, "nothing was appended");
     su_host_world_destroy(w);
     scene_free(&sc);

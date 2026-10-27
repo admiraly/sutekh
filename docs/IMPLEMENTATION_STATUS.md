@@ -476,7 +476,8 @@ refuses the first one that crosses the budget with `SU_E_RESOURCE_LIMIT`. Not pa
 Downstream request work outside the milestone order (issue 172; M3 gates unchanged). Implemented and tested: a
 registered host operator appends events to the world's event log from `run` through `SuHostOperatorRun.emit_event`
 (appended to the run struct, so an operator built against the shorter struct keeps running;
-`SU_HOST_OPERATOR_RUN_STATE_SIZE` pins that layout). The records are the IR `emit_event` records: the same 40-byte
+`SU_HOST_OPERATOR_RUN_STATE_SIZE` and `SU_HOST_OPERATOR_RUN_EVENTS_SIZE` pin the two layouts). The records are the IR
+`emit_event` records: the same 40-byte
 `SuEvent`/`SuHostEvent` layout, the same kind range, the operator's schedule position as `system_index`, and `seq`
 numbering its emissions in the run. A tick's log is ordered by schedule position and then by the order each system
 produced its records, so an operator's records keep their emission order between the IR systems before and after it,

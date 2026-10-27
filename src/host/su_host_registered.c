@@ -478,7 +478,7 @@ static void reg_identity(const void *inst, uint8_t semantic[32]) {
         b[4u + i] = (uint8_t)(sb >> (8u * i));
     }
     su_sha256_init(&c);
-    su_sha256_update(&c, (const uint8_t *)"sutekh.host.registered.v1", 26u);
+    su_sha256_update(&c, (const uint8_t *)"sutekh.host.registered.v1", sizeof "sutekh.host.registered.v1");
     su_sha256_update(&c, semantic, 32u);
     su_sha256_update(&c, b, sizeof b);
     su_sha256_final(&c, semantic);
@@ -489,7 +489,7 @@ static void reg_identity(const void *inst, uint8_t semantic[32]) {
             b[k] = (uint8_t)(ri->reg->pub.max_events_per_tick >> (8u * k));
         }
         su_sha256_init(&c);
-        su_sha256_update(&c, (const uint8_t *)"sutekh.host.events.v1", 21u);
+        su_sha256_update(&c, (const uint8_t *)"sutekh.host.events.v1", sizeof "sutekh.host.events.v1");
         su_sha256_update(&c, semantic, 32u);
         su_sha256_update(&c, b, 4u);
         su_sha256_final(&c, semantic);
@@ -505,7 +505,7 @@ static void reg_identity(const void *inst, uint8_t semantic[32]) {
             }
         }
         su_sha256_init(&c);
-        su_sha256_update(&c, (const uint8_t *)"sutekh.host.state.v1", 21u);
+        su_sha256_update(&c, (const uint8_t *)"sutekh.host.state.v1", sizeof "sutekh.host.state.v1");
         su_sha256_update(&c, semantic, 32u);
         su_sha256_update(&c, b, 12u);
         su_sha256_final(&c, semantic);
