@@ -1866,6 +1866,276 @@ static void test_registered_target(void) {
     free(o.record.p);
 }
 
+/* ---------- a 64-bit lane in the target set (issue 182) ---------- */
+
+#define I64(id, name) {id, SU_TYPE_I64, name}
+
+/* The target table's schema: a q32 position (lanes 10/11), an i64 clock (lanes 20/21), a 32-bit team and the lane
+ * demo.wide_src writes. */
+static const SField k_wide_schema[] = {Q(10, "pos_x"), I64(20, "clock64"), U(30, "team"), U(31, "seen")};
+#define N_WIDE (sizeof k_wide_schema / sizeof k_wide_schema[0])
+
+/* demo.wide_src: reads the target lanes (a lane some system reads is readable, so it can be a target lane) and
+ * copies team into seen, so the table's systems are an ordinary read/write pair. */
+static const IrField k_wide_src_fields[] = {
+    {10, "pos_x", "q32", 1, 0},
+    {20, "clock64", "i64", 1, 0},
+    {30, "team", "u32", 1, 0},
+    {31, "seen", "u32", 0, 1},
+};
+static const char k_wide_src_lir[] =
+    "{\"ir_version\":\"0.3\",\"system_id\":\"demo.wide_src\",\"numeric_profile\":\"fixed_q32_v1\","
+    "\"query\":\"demo.wide\",\"instructions\":["
+    "{\"op\":\"load_q32\",\"dst\":\"p\",\"field\":\"pos_x\"},"
+    "{\"op\":\"load_i64\",\"dst\":\"c\",\"field\":\"clock64\"},"
+    "{\"op\":\"load_u32\",\"dst\":\"t\",\"field\":\"team\"},"
+    "{\"op\":\"store_u32\",\"field\":\"seen\",\"src\":\"t\"}]}";
+
+enum { WR_MARK = 1 };
+static const SuHostOperatorField k_wide_own_fields[] = {{WR_MARK, SU_TYPE_U32, SU_ACCESS_WRITE, 0, "mark"}};
+
+/* game.wide_reach: reads a target set that mixes 64-bit lanes with a 32-bit one. A 64-bit value is two storage
+ * lanes, so each q32/i64 target field is the pair ".lo" (id I) and ".hi" (id I + 1), as for the operator's own
+ * fields. The run reassembles both pairs, keeps what it read for the test, and writes the q32's low word into its
+ * own table's mark lane. */
+static const SuHostOperatorField k_wide_target_fields[] = {
+    {10u, SU_TYPE_Q32, SU_ACCESS_READ, 0, "pos_x.lo"},
+    {11u, SU_TYPE_Q32, SU_ACCESS_READ, 0, "pos_x.hi"},
+    {20u, SU_TYPE_I64, SU_ACCESS_READ, 0, "clock64.lo"},
+    {21u, SU_TYPE_I64, SU_ACCESS_READ, 0, "clock64.hi"},
+    {30u, SU_TYPE_U32, SU_ACCESS_READ, 0, "team"},
+};
+#define N_WIDE_TARGET (uint32_t)(sizeof k_wide_target_fields / sizeof k_wide_target_fields[0])
+
+static uint32_t g_wr_runs, g_wr_cols, g_wr_alive, g_wr_team;
+static int64_t g_wr_pos, g_wr_clock;
+
+static int64_t lanes64(uint32_t lo, uint32_t hi) {
+    return (int64_t)(((uint64_t)hi << 32) | (uint64_t)lo);
+}
+
+static uint32_t wide_reach_run(const SuHostOperatorRun *r, void *user) {
+    uint64_t i;
+    uint32_t alive = 0;
+    (void)user;
+    g_wr_runs++;
+    if (r->target_column_count != N_WIDE_TARGET || r->target_columns == NULL || r->target_alive == NULL ||
+        r->target_generation == NULL || r->target_table != 0u || r->target_rows < 1u) {
+        return SU_E_INTERNAL;
+    }
+    for (i = 0; i < N_WIDE_TARGET; i++) {
+        if (r->target_columns[i].in == NULL || r->target_columns[i].out != NULL) {
+            return SU_E_INTERNAL;
+        }
+    }
+    for (i = 0; i < r->target_rows; i++) {
+        alive += r->target_alive[i] != 0u;
+    }
+    g_wr_cols = r->target_column_count;
+    g_wr_alive = alive;
+    g_wr_pos = lanes64(r->target_columns[0].in[0], r->target_columns[1].in[0]);
+    g_wr_clock = lanes64(r->target_columns[2].in[0], r->target_columns[3].in[0]);
+    g_wr_team = r->target_columns[4].in[0];
+    for (i = 0; i < r->rows; i++) {
+        r->columns[0].out[i] = (uint32_t)(uint64_t)g_wr_pos;
+    }
+    return SU_OK;
+}
+
+static void wide_desc(SuHostOperatorDesc *d) {
+    uint32_t i;
+    SU_HOST_OPERATOR_DESC_INIT(d);
+    d->system_id = "game.wide_reach";
+    d->schema_id = "demo.pool";
+    d->operator_name = "wide_ops_v1";
+    d->operator_version = 1u;
+    d->field_count = 1u;
+    d->fields = k_wide_own_fields;
+    for (i = 0; i < 32u; i++) {
+        d->constants_hash[i] = (uint8_t)(0xE0u + i);
+    }
+    d->scratch_size = pulse_scratch;
+    d->run = wide_reach_run;
+    d->target_field_count = N_WIDE_TARGET;
+    d->target_fields = k_wide_target_fields;
+}
+
+typedef struct WideWorld {
+    Buf src_cap, record;
+    SuHostCapsule caps[2];
+    SuHostTableDesc td[2];
+    SuHostSchemaField wf[N_WIDE], pf[2];
+    SuHostSchema ws, ps;
+    SuHostWorldDesc desc;
+    uint32_t tables[2], targets[2];
+} WideWorld;
+
+static void wide_free(WideWorld *x) {
+    free(x->src_cap.p);
+    free(x->record.p);
+}
+
+/* Table 0 is the target table (demo.wide), table 1 the operator's own (demo.pool). */
+static SuHostWorld *wide_world(WideWorld *x, const SuHostOperatorDesc *op, SuHostError *err) {
+    static const SField pool_schema[] = {U(1, "mark"), U(2, "n")};
+    SuHostWorld *w = NULL;
+    memset(x, 0, sizeof *x);
+    x->src_cap = ir_capsule("demo.wide_src", "demo.wide", "simulate", "", k_wide_src_fields,
+                            (uint32_t)(sizeof k_wide_src_fields / sizeof k_wide_src_fields[0]), "0.3",
+                            "fixed_q32_v1", "", 0u, 0u);
+    x->record = host_record(op->system_id, op->schema_id, op->operator_name, op->operator_version,
+                            op->constants_hash, op->fields, op->field_count, "simulate", "u32_mod_v1");
+    x->caps[0].capsule_json = (const uint8_t *)x->src_cap.p;
+    x->caps[0].capsule_len = x->src_cap.n;
+    x->caps[0].lir_json = (const uint8_t *)k_wide_src_lir;
+    x->caps[0].lir_len = strlen(k_wide_src_lir);
+    x->caps[1].capsule_json = (const uint8_t *)x->record.p;
+    x->caps[1].capsule_len = x->record.n;
+    fill_schema(&x->ws, x->wf, k_wide_schema, (uint32_t)N_WIDE, "demo.wide");
+    fill_schema(&x->ps, x->pf, pool_schema, 2u, "demo.pool");
+    memset(x->td, 0, sizeof x->td);
+    x->td[0].struct_size = (uint32_t)sizeof x->td[0];
+    x->td[0].schema = &x->ws;
+    x->td[0].max_entities = 4u;
+    x->td[1].struct_size = (uint32_t)sizeof x->td[1];
+    x->td[1].schema = &x->ps;
+    x->td[1].max_entities = 4u;
+    x->tables[0] = 0u;
+    x->tables[1] = 1u;
+    x->targets[0] = SU_HOST_TABLE_NONE;
+    x->targets[1] = 0u;
+    memset(&x->desc, 0, sizeof x->desc);
+    x->desc.struct_size = (uint32_t)sizeof x->desc;
+    x->desc.capsule_count = 2;
+    x->desc.capsules = x->caps;
+    x->desc.tick_rate_hz = 120;
+    x->desc.max_events_per_tick = 8;
+    x->desc.table_count = 2;
+    x->desc.tables = x->td;
+    x->desc.capsule_table = x->tables;
+    x->desc.capsule_target_table = x->targets;
+    if (su_host_world_create(&x->desc, &w, err) != SU_OK) {
+        return NULL;
+    }
+    return w;
+}
+
+/* Spawns one target row: pos_x and clock64 as 64-bit values (two lanes each), team, and seen 0. */
+static void spawn_wide(SuHostWorld *w, int64_t pos, int64_t clock, uint32_t team, SuHostError *err) {
+    SuHostValue v[8];
+    uint64_t h = 0;
+    uint32_t n = 0;
+    n = put_q32(v, n, 10u, pos);
+    n = put_q32(v, n, 20u, clock);
+    v[n].field_id = 30u;
+    v[n++].value = team;
+    v[n].field_id = 31u;
+    v[n++].value = 0u;
+    check(su_host_spawn_in(w, 0u, v, n, 0u, &h, err) == SU_OK, "wide target spawn: %s", err->message);
+}
+
+static void test_target_64bit_lanes(void) {
+    SuHostOperatorDesc wd;
+    WideWorld x;
+    SuHostWorld *w = NULL;
+    SuHostError e;
+    uint64_t done = 0;
+    uint32_t mark[2] = {0, 0};
+    const int64_t pos = q32(3) + INT64_C(7); /* 3 + 7/2^32: both lanes carry a nonzero word */
+    const int64_t clock = -INT64_C(5000000000);
+    uint32_t i;
+
+    wide_desc(&wd);
+    check(su_host_register_operator(&wd, &e) == SU_OK, "register game.wide_reach: %s", e.message);
+    w = wide_world(&x, &wd, &e);
+    check(w != NULL, "64-bit target world: %s", e.message);
+    if (w == NULL) {
+        wide_free(&x);
+        return;
+    }
+    spawn_wide(w, pos, clock, 7u, &e);
+    spawn_wide(w, q32(1), INT64_C(1), 9u, &e);
+    spawn_pool(w, 2u, &e);
+    check(su_host_step(w, 1u, &done, &e) == SU_OK && done == 1u, "the 64-bit target tick: %s", e.message);
+    check(g_wr_runs == 1u, "the operator ran once (%u)", (unsigned)g_wr_runs);
+    check(g_wr_cols == N_WIDE_TARGET, "the target set has %u columns (%u)", (unsigned)N_WIDE_TARGET,
+          (unsigned)g_wr_cols);
+    check(g_wr_alive == 2u, "both target rows are alive (%u)", (unsigned)g_wr_alive);
+    check(g_wr_pos == pos, "the q32 target pair reads as one 64-bit value (%lld)", (long long)g_wr_pos);
+    check(g_wr_clock == clock, "the i64 target pair reads as one 64-bit value (%lld)", (long long)g_wr_clock);
+    check(g_wr_team == 7u, "the 32-bit target lane next to the pairs reads its row's value (%u)",
+          (unsigned)g_wr_team);
+    check(su_host_read_in(w, 1u, WR_MARK, 0u, 2u, mark) == SU_OK, "check failed at line %d", __LINE__);
+    for (i = 0; i < 2u; i++) {
+        check(mark[i] == (uint32_t)(uint64_t)pos, "row %u's mark lane is the q32's low word (%u)", (unsigned)i,
+              (unsigned)mark[i]);
+    }
+    /* The world carries the target table's lanes, both halves of each 64-bit field. */
+    {
+        uint32_t id = 0;
+        check(su_host_field_id_in(w, 0u, "pos_x.hi", &id) == SU_OK && id == 11u,
+              "the target table names the q32's high lane (id %u)", (unsigned)id);
+        check(su_host_field_id_in(w, 0u, "clock64.hi", &id) == SU_OK && id == 21u,
+              "the target table names the i64's high lane (id %u)", (unsigned)id);
+    }
+    su_host_world_destroy(w);
+    wide_free(&x);
+}
+
+/* The 64-bit pair rules are unchanged for a target set: an unpaired, wrong-id or wrong-type .hi entry, and a
+ * 64-bit lane with no partner after it, are refused with the existing message. */
+static void test_target_64bit_refusals(void) {
+    /* A q32 lane at 10 followed by a u32 lane at 30: the pair's .hi is missing. */
+    static const SuHostOperatorField unpaired[] = {
+        {10u, SU_TYPE_Q32, SU_ACCESS_READ, 0, "pos_x.lo"},
+        {30u, SU_TYPE_U32, SU_ACCESS_READ, 0, "team"},
+    };
+    /* The .hi at 12 instead of 11. */
+    static const SuHostOperatorField wrong_id[] = {
+        {10u, SU_TYPE_Q32, SU_ACCESS_READ, 0, "pos_x.lo"},
+        {12u, SU_TYPE_Q32, SU_ACCESS_READ, 0, "pos_x.hi"},
+    };
+    /* The .hi typed i64. */
+    static const SuHostOperatorField wrong_type[] = {
+        {10u, SU_TYPE_Q32, SU_ACCESS_READ, 0, "pos_x.lo"},
+        {11u, SU_TYPE_I64, SU_ACCESS_READ, 0, "pos_x.hi"},
+    };
+    /* A u32 lane, then a q32 lane with no partner after it. */
+    static const SuHostOperatorField trailing[] = {
+        {30u, SU_TYPE_U32, SU_ACCESS_READ, 0, "team"},
+        {40u, SU_TYPE_Q32, SU_ACCESS_READ, 0, "pos_x.lo"},
+    };
+    /* A valid pair whose .hi half is not read-only. */
+    static const SuHostOperatorField writable_hi[] = {
+        {10u, SU_TYPE_Q32, SU_ACCESS_READ, 0, "pos_x.lo"},
+        {11u, SU_TYPE_Q32, SU_ACCESS_WRITE, 0, "pos_x.hi"},
+    };
+    static const char pair_rule[] = "is a 64-bit lane: the next entry must be id + 1 with the same type";
+    SuHostOperatorDesc d, bad;
+    SuHostError e;
+    uint32_t st, base = su_host_operator_count();
+
+#define REFUSE_TARGET(arr, what, at, msgpart)                                                         \
+    do {                                                                                              \
+        bad = d;                                                                                      \
+        bad.target_fields = (arr);                                                                    \
+        bad.target_field_count = (uint32_t)(sizeof(arr) / sizeof((arr)[0]));                           \
+        st = su_host_register_operator(&bad, &e);                                                     \
+        check(st == SU_E_INVALID_ARGUMENT, "%s: got %s (%s)", what, su_host_status_name(st), e.message); \
+        check(e.index == (at), "%s: err->index %u", what, (unsigned)e.index);                          \
+        check(strstr(e.message, (msgpart)) != NULL, "%s: the message (%s)", what, e.message);          \
+    } while (0)
+    wide_desc(&d);
+    d.system_id = "game.wide_bad"; /* never registered: every variant below is refused */
+    REFUSE_TARGET(unpaired, "an unpaired .hi (a u32 lane where the .hi belongs)", 0u, pair_rule);
+    REFUSE_TARGET(wrong_id, "a .hi at id + 2", 0u, pair_rule);
+    REFUSE_TARGET(wrong_type, "a .hi of another type", 0u, pair_rule);
+    REFUSE_TARGET(trailing, "a trailing 64-bit lane with no partner", 1u, pair_rule);
+    REFUSE_TARGET(writable_hi, "a writable .hi half", 1u, "must be a read-only lane");
+#undef REFUSE_TARGET
+    check(su_host_operator_count() == base, "refused target sets register nothing");
+}
+
 /* ---------- descriptor sizes: v4 (no target set) and v5 describe the same world ---------- */
 
 static void test_descriptor_sizes(void) {
@@ -2027,6 +2297,8 @@ int main(void) {
     test_idle_target_table();
     test_operator_events();
     test_registered_target();
+    test_target_64bit_lanes();
+    test_target_64bit_refusals();
     test_pair_budget_cross_table();
     test_stateful_operator_table1();
     test_descriptor_sizes();

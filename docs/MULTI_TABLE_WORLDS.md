@@ -270,7 +270,9 @@ the motivating benchmark. It refused IR entity operations and operator events in
   inside any table.
 - **Cross-table `space3d`.** The operator descriptor declares target lanes (descriptor version 4), the world
   descriptor names each capsule's target table (version 5), and `SuHostOperatorRun` carries the target table,
-  columns, rows, base and entity views. `space3d.query` takes its movers from its own table and its collidables
+  columns, rows, base and entity views. A q32 or i64 target lane is its two storage lanes, ".lo" (id I) and
+  ".hi" (id I + 1), so a cross-table operator reads 64-bit geometry as it reads its own fields.
+  `space3d.query` takes its movers from its own table and its collidables
   and gates from the target table; the mover table's own non-mover rows are neither movers nor targets. The
   target table may have no system (its committed columns are read). A target row is static for the query: it is
   never swept (the target set has no previous position), so a moving ship is tested at its end position.

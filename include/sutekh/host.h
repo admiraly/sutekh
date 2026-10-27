@@ -1126,9 +1126,10 @@ SU_HOST_API uint32_t su_host_memory(const SuHostWorld *w, SuHostMemory *out);
  *
  *  - SuHostOperatorDesc.target_field_count/target_fields (descriptor version 4): 1..SU_LIMIT_FIELDS read-only
  *    lanes of ANOTHER table, ascending ID and unique, named as the target table declares them (lane names, so
- *    "pos_x.lo" for a q32 field). The operator keeps its own IDs and sees the lanes through
- *    run->target_columns; run_targets is the run function of an operator with a target set (run is used when
- *    the entry names no target table, and both are refused if only one is present).
+ *    "pos_x.lo" for a q32 field). A q32 or i64 lane is its two storage lanes, the ".lo" at id I and the ".hi" at
+ *    id I + 1 with the same type, as in the operator's own field table. The operator keeps its own IDs and sees the
+ *    lanes through run->target_columns; run_targets is the run function of an operator with a target set (run is
+ *    used when the entry names no target table, and both are refused if only one is present).
  *  - SuHostWorldDesc.capsule_target_table (descriptor version 5): per capsule, the table its operator's target
  *    set reads, or SU_HOST_TABLE_NONE. It must differ from the capsule's own table, and only a host operator
  *    that declares target lanes may name one (an IR system cannot).
