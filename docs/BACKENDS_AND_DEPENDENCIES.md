@@ -52,6 +52,7 @@ Do not fetch dependencies at runtime in a shipped game. Development builds can o
 | Engine license | PolyForm Perimeter 1.0.1, selected by owner (licence card, 12 October 2026); `LICENSE` is authoritative | Third-party components retain their own terms |
 | Repository / final name | Public `admiraly/sutekh`; final branding pending | Before commercial branding |
 | Linux window, surface and input (issue 138) | Selected (26 October 2026): SDL 3 (zlib) opened at run time by `su_window`; pinned 3.2 headers `release-3.2.30` (commit `f5e5f6588921eed3d7d048ce43d9eb1ff0da0ffc`); the renderer creates the Wayland/Xlib surface itself. Section 8 | A platform target where SDL 3 is unavailable or measurably adds input latency; Steam Input or gamepad behaviour SDL cannot provide; owner preference for vendoring |
+| Non-Windows audio output (issue 174) | Selected (27 October 2026): the same runtime-loaded SDL 3, in `su_audio`, for the default playback device; headers at build time only. Section 8 | A platform whose SDL 3 audio adds too much latency; a target without SDL 3 (then the defined refusal stays) |
 
 ## 8. Linux window, surface and input backend (issue 138)
 
@@ -116,6 +117,17 @@ another 3.2.x tag (or raise the minimum runtime deliberately); the lock file rec
 
 Known limits: Wayland has no client request to unminimize a window (a minimized window stays minimized until the
 user restores it; the compositor may report it as occluded, which pauses presentation); X11 iconify needs a window
-manager (none under bare Xvfb). Linux audio output is still the no-device backend (separate work).
+manager (none under bare Xvfb).
+
+**Audio output (issue 174) reuses this decision.** `src/audio/su_audio_sdl3.c` opens the default playback device
+through the same runtime-loaded SDL 3 (`libSDL3.so.0` or `SUTEKH_SDL3_LIBRARY`, the pinned 3.2 headers at build
+time) and the same one-discovery-of-the-headers rule, so a non-Windows build with the headers gets both backends
+and nothing links against SDL. The loader is a separate copy in `su_audio`, because audio must work with
+`SUTEKH_WINDOW=OFF` and in a host that never creates a window; the two share the process's loaded library and SDL
+subsystem reference counts, and each stops only the subsystem it started. SDL owns the audio thread and calls the
+backend once per device period (`SDL_OpenAudioDeviceStream`), which replaces the WASAPI render thread. The endpoint
+name in `SuAudioDeviceInfo` carries SDL's driver in parentheses. Footprint: one translation unit, `libsu_audio.a`
+grows by it; a process that opens no device never loads SDL. The device timing and underrun mapping is in
+`docs/AUDIO_DEVICE_LATENCY.md`.
 
 Sources: [SOURCE_NOTES.md](SOURCE_NOTES.md).

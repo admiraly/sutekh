@@ -53,6 +53,16 @@ int main(void) {
         fails++;
     }
     t0 = wall_s();
+    /* A device backend may take a moment to start (a PipeWire or PulseAudio node connects before its first pull);
+     * the 0.4 s below are measured from the first rendered block, so that start-up is not counted as audio. */
+    while (su_audio_device_frames(dev) == 0u && wall_s() - t0 < 5.0) {
+        su_audio_update(m);
+    }
+    if (su_audio_device_frames(dev) == 0u) {
+        printf("FAIL: the device thread never rendered\n");
+        fails++;
+    }
+    t0 = wall_s();
     while (wall_s() - t0 < 0.4) {
         /* sweep left to right at a 200 Hz "frame rate", as a game thread would from interpolated transforms */
         double now = wall_s();

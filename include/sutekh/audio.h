@@ -10,8 +10,9 @@
  * preallocated; the render path never allocates, locks or blocks. Without an output device the mixer still runs
  * offline (render to a buffer), which is how the tests check it.
  *
- * Library: su_audio (always built; WASAPI output on Windows; Ogg Vorbis decoding when the pinned stb_vorbis is
- * present, see tools/bootstrap_asset_deps.py). */
+ * Library: su_audio (always built; WASAPI output on Windows, SDL3 output on other platforms where the SDL3 headers
+ * were found, otherwise a defined refusal; Ogg Vorbis decoding when the pinned stb_vorbis is present, see
+ * tools/bootstrap_asset_deps.py). */
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 #ifndef SUTEKH_AUDIO_H
@@ -227,15 +228,19 @@ float su_audio_doppler(SuVec3f listener_pos, SuVec3f listener_vel, SuVec3f sourc
 typedef struct SuAudioDevice SuAudioDevice;
 
 typedef struct SuAudioDeviceInfo {
-    char name[128];
+    char name[128];                /* endpoint; the SDL3 backend adds SDL's audio driver in parentheses */
     uint32_t sample_rate;          /* the stream's rate (the mixer's; the system converts) */
-    uint32_t buffer_frames;        /* device buffer */
-    double latency_ms;             /* stream latency reported by the device */
+    uint32_t buffer_frames;        /* device buffer, in the stream's (the mixer's) frames */
+    double latency_ms;             /* stream latency: WASAPI's GetStreamLatency; the SDL3 backend's device buffer
+                                    * plus the one device period it keeps queued in SDL's stream */
 } SuAudioDeviceInfo;
 
-/* Opens the default output (WASAPI shared mode, event driven, float32 stereo at the mixer's rate) and starts a
- * thread that renders the mixer. SU_E_UNSUPPORTED_METHOD where no backend exists (non-Windows builds) or no device
- * is present; message says which. */
+/* Opens the default output and starts rendering the mixer. Windows: WASAPI shared mode, event driven. Other
+ * platforms: SDL3's default playback device, with the SDL3 library opened at run time (SUTEKH_SDL3_LIBRARY
+ * overrides its name); SDL's own audio thread calls back once per device period instead of a thread of ours. Both
+ * take float32 stereo at the mixer's rate and let the system convert. SU_E_UNSUPPORTED_METHOD where no backend
+ * exists (a build without SDL3 headers), the SDL3 library cannot be loaded, or no device is present; the message
+ * says which. */
 uint32_t su_audio_device_open(SuAudioMixer *m, SuAudioDevice **out, SuAudioDeviceInfo *info, char message[256]);
 /* Stops the thread and closes the device. */
 void su_audio_device_close(SuAudioDevice *d);
@@ -261,6 +266,11 @@ typedef struct SuAudioDeviceStats {
     char name[128];
 } SuAudioDeviceStats;
 
+/* Cumulative device-thread timing, read from any thread (approximate snapshot: counters are race-free, the set is
+ * not a transaction). callback_* measure one submission (SDL3: one stream callback), interval_us the time between
+ * submissions. empty_buffers counts submissions that found the device buffer (WASAPI) or SDL's stream empty,
+ * startup included: a starvation indicator, not a hardware glitch count. wait_timeouts is always 0 on the SDL3
+ * backend, which has no event wait. See docs/AUDIO_DEVICE_LATENCY.md. */
 void su_audio_device_stats(const SuAudioDevice *device, SuAudioDeviceStats *out);
 
 /* ---- host events ---- */

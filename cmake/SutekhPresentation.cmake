@@ -37,20 +37,25 @@ if(WIN32 AND SUTEKH_BUILD_EXAMPLES)
     sutekh_apply_warnings(input_probe)
 endif()
 
-# ---- Linux window and input (sutekh/window.h): SDL3 opened at run time, built against the pinned headers ----
+# ---- SDL3 headers: the Linux window (sutekh/window.h) and the non-Windows audio device backend ----
 # tools/bootstrap_sdl3_headers.py fetches the SDL 3.2 headers into third_party/sdl3 (SUTEKH_DEPS_DIR/sdl3 with --dest;
-# SUTEKH_SDL3_INCLUDE_DIR overrides). Nothing links against SDL; su_window is a separate library that neither the core nor a headless
-# target uses. Windows hosts use an HWND and su_input_win32 instead. SUTEKH_WINDOW=OFF skips it.
-set(SUTEKH_WINDOW "AUTO" CACHE STRING "Build the Linux window backend su_window: AUTO (when SDL3 headers are found), ON, OFF")
+# SUTEKH_SDL3_INCLUDE_DIR overrides). Nothing links against SDL: both backends open the library at run time, and a
+# process that creates neither a window nor an audio device never loads it. The headers are searched once, for both,
+# so SUTEKH_WINDOW=OFF does not take the audio backend away; a build without them keeps
+# src/audio/su_audio_nodevice.c. Windows hosts use an HWND and su_input_win32, and WASAPI for audio.
 set(SUTEKH_SDL3_INCLUDE_DIR "" CACHE PATH "SDL 3.2+ include directory (default: <deps>/sdl3/include)")
 set(SUTEKH_SDL3_INCLUDE "")
-if(NOT WIN32 AND NOT SUTEKH_WINDOW STREQUAL "OFF")
+if(NOT WIN32)
     foreach(cand "${SUTEKH_SDL3_INCLUDE_DIR}" "${SUTEKH_THIRD_PARTY_DIR}/sdl3/include")
         if(SUTEKH_SDL3_INCLUDE STREQUAL "" AND NOT cand STREQUAL "" AND EXISTS "${cand}/SDL3/SDL_version.h")
             set(SUTEKH_SDL3_INCLUDE "${cand}")
         endif()
     endforeach()
 endif()
+
+# ---- Linux window and input (sutekh/window.h): SDL3 opened at run time, built against the pinned headers ----
+# su_window is a separate library that neither the core nor a headless target uses. SUTEKH_WINDOW=OFF skips it.
+set(SUTEKH_WINDOW "AUTO" CACHE STRING "Build the Linux window backend su_window: AUTO (when SDL3 headers are found), ON, OFF")
 if(SUTEKH_WINDOW STREQUAL "ON" AND SUTEKH_SDL3_INCLUDE STREQUAL "")
     message(FATAL_ERROR "SUTEKH_WINDOW=ON needs a non-Windows target and the SDL3 headers: run tools/bootstrap_sdl3_headers.py")
 endif()
@@ -437,12 +442,16 @@ add_test(NAME render_portable COMMAND test_render_portable)
 add_test(NAME render_font_fresh COMMAND ${SUTEKH_PYTHON} -I "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_font.py" --check)
 endif() # SUTEKH_BUILD_TESTS
 
-# ---- audio (M5): mixer always; WASAPI output on Windows; Ogg Vorbis when the pinned stb_vorbis is present ----
+# ---- audio (M5): mixer always; WASAPI output on Windows, SDL3 output elsewhere; Ogg Vorbis when the pinned stb_vorbis is present ----
 set(SU_AUDIO_SOURCES src/audio/su_audio_mix.c src/audio/su_audio_stream.c src/audio/su_audio_adpcm.c src/audio/su_audio_asset.c)
+set(SUTEKH_AUDIO_SDL3 OFF)
 if(WIN32)
     list(APPEND SU_AUDIO_SOURCES src/audio/su_audio_wasapi.c)
-else()
+elseif(SUTEKH_SDL3_INCLUDE STREQUAL "")
     list(APPEND SU_AUDIO_SOURCES src/audio/su_audio_nodevice.c)
+else()
+    list(APPEND SU_AUDIO_SOURCES src/audio/su_audio_sdl3.c)
+    set(SUTEKH_AUDIO_SDL3 ON)
 endif()
 if(EXISTS "${SUTEKH_STB_DIR}/stb_vorbis.c" AND NOT SUTEKH_ASSET_IMPORT STREQUAL "OFF")
     add_library(su_audio_thirdparty OBJECT src/audio/su_audio_thirdparty.c)
@@ -459,6 +468,11 @@ if(WIN32)
     target_link_libraries(su_audio PRIVATE ole32)
 else()
     target_link_libraries(su_audio PUBLIC m)
+endif()
+if(SUTEKH_AUDIO_SDL3)
+    # Headers at build time only: the SDL3 library is opened with dlopen by su_audio_sdl3.c.
+    target_include_directories(su_audio SYSTEM PRIVATE "${SUTEKH_SDL3_INCLUDE}")
+    target_link_libraries(su_audio PRIVATE ${CMAKE_DL_LIBS})
 endif()
 sutekh_apply_warnings(su_audio)
 target_sources(su_audio PRIVATE src/audio/su_audio_spatial.c)
@@ -526,6 +540,46 @@ target_link_libraries(test_audio_device PRIVATE su_audio)
 sutekh_apply_warnings(test_audio_device)
 add_test(NAME audio_device COMMAND test_audio_device)
 set_tests_properties(audio_device PROPERTIES SKIP_RETURN_CODE 77)
+if(NOT WIN32)
+    # Backend selection: no SDL3 library, no audio driver and no device each give the defined refusal, not a crash.
+    add_executable(test_audio_device_backend tests/audio/test_audio_device_backend.c)
+    target_link_libraries(test_audio_device_backend PRIVATE su_audio)
+    if(SUTEKH_AUDIO_SDL3)
+        target_compile_definitions(test_audio_device_backend PRIVATE SU_TEST_SDL3_AUDIO=1)
+    endif()
+    sutekh_apply_warnings(test_audio_device_backend)
+    add_test(NAME audio_device_backend COMMAND test_audio_device_backend)
+    if(SUTEKH_AUDIO_SDL3)
+        # A driver that does not exist: SDL reads the environment once, so this needs its own process.
+        add_test(NAME audio_device_backend_no_driver COMMAND test_audio_device_backend --no-driver)
+        set_tests_properties(audio_device_backend_no_driver PROPERTIES
+            ENVIRONMENT "SDL_AUDIO_DRIVER=sutekh-no-such-driver")
+    endif()
+endif()
+if(SUTEKH_AUDIO_SDL3)
+    # A real open/render/close on SDL's dummy audio driver (no hardware); skipped (77) without the SDL3 library.
+    add_executable(test_audio_device_sdl3 tests/audio/test_audio_device_sdl3.c)
+    target_include_directories(test_audio_device_sdl3 PRIVATE src)
+    target_link_libraries(test_audio_device_sdl3 PRIVATE su_audio)
+    sutekh_apply_warnings(test_audio_device_sdl3)
+    add_test(NAME audio_device_sdl3 COMMAND test_audio_device_sdl3)
+    set_tests_properties(audio_device_sdl3 PROPERTIES SKIP_RETURN_CODE 77)
+    # The same test with the backend compiled against counting allocators: the render callback allocates nothing.
+    add_library(su_audio_sdl3_alloc_objs OBJECT src/audio/su_audio_sdl3.c)
+    target_include_directories(su_audio_sdl3_alloc_objs PRIVATE "${SUTEKH_CONTRACT_INCLUDE}" src)
+    target_include_directories(su_audio_sdl3_alloc_objs SYSTEM PRIVATE "${SUTEKH_SDL3_INCLUDE}")
+    target_compile_definitions(su_audio_sdl3_alloc_objs PRIVATE
+        malloc=sdl_test_malloc calloc=sdl_test_calloc realloc=sdl_test_realloc free=sdl_test_free)
+    sutekh_apply_warnings(su_audio_sdl3_alloc_objs)
+    add_executable(test_audio_device_sdl3_alloc tests/audio/test_audio_device_sdl3.c
+        $<TARGET_OBJECTS:su_audio_sdl3_alloc_objs>)
+    target_include_directories(test_audio_device_sdl3_alloc PRIVATE src)
+    target_compile_definitions(test_audio_device_sdl3_alloc PRIVATE SU_AUDIO_SDL3_ALLOC_TEST=1)
+    target_link_libraries(test_audio_device_sdl3_alloc PRIVATE su_audio ${CMAKE_DL_LIBS})
+    sutekh_apply_warnings(test_audio_device_sdl3_alloc)
+    add_test(NAME audio_device_sdl3_alloc COMMAND test_audio_device_sdl3_alloc)
+    set_tests_properties(audio_device_sdl3_alloc PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 add_executable(test_audio_adpcm tests/audio/test_audio_adpcm.c)
 target_link_libraries(test_audio_adpcm PRIVATE su_audio)
 sutekh_apply_warnings(test_audio_adpcm)
