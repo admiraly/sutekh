@@ -96,6 +96,17 @@ uint32_t su_input_state_apply(SuInputState *s, const SuInputEvent *e) {
         s->mouse_dy = sat_add(s->mouse_dy, e->y);
         s->mouse_ns = e->time_ns;
         return SU_OK;
+    case SU_INPUT_EV_MOUSE_POS:
+        if (e->value != 0) {
+            s->pointer_x = e->x;
+            s->pointer_y = e->y;
+            s->pointer_inside = 1u;
+            s->flags |= SU_INPUT_FLAG_POINTER_VALID;
+        } else {
+            s->pointer_inside = 0u;
+        }
+        s->mouse_ns = e->time_ns;
+        return SU_OK;
     case SU_INPUT_EV_MOUSE_BUTTON:
         if (!one_bit(e->code, MOUSE_BITS)) {
             return SU_E_INVALID_ARGUMENT;

@@ -47,7 +47,7 @@ extern "C" {
 #endif
 
 #define SU_WINDOW_API
-#define SU_WINDOW_API_VERSION 1u
+#define SU_WINDOW_API_VERSION 2u
 
 typedef struct SuWindow SuWindow;
 
@@ -87,6 +87,11 @@ typedef struct SuWindowEvents {
     uint32_t focused;          /* 1 while the window has keyboard focus */
     uint32_t pads_connected;   /* bit i: pad slot i has a controller */
     uint32_t events;           /* SDL events processed by this poll */
+    int32_t pointer_x;         /* last reported pointer X in window coordinates (pixels at pixel_density == 1) */
+    int32_t pointer_y;         /* last reported pointer Y in window coordinates (pixels at pixel_density == 1) */
+    uint32_t pointer_inside;   /* 1 while the pointer is inside the window client area, 0 outside or unknown */
+    float pixel_density;       /* drawable pixels per window coordinate; multiply pointer_x and pointer_y by
+                                  pixel_density to convert window coordinates to framebuffer/drawable pixels */
 } SuWindowEvents;
 
 /* Processes every pending window-system event: window state, and keyboard, mouse and gamepad events into the
@@ -98,6 +103,14 @@ SU_WINDOW_API uint32_t su_window_sample_input(SuWindow *w, SuInputState *out);
 /* Relative mouse mode (hidden, confined pointer; unaccelerated device motion): on for a mouse-driven camera.
  * SU_E_UNSUPPORTED_METHOD when the window system refuses it (the mode is then unchanged). */
 SU_WINDOW_API uint32_t su_window_set_relative_mouse(SuWindow *w, int on);
+/* Shows (visible != 0) or hides (visible == 0) the OS cursor. SU_E_INVALID_ARGUMENT if w is NULL;
+ * SU_E_UNSUPPORTED_METHOD if the window system refuses it. Relative mouse mode keeps the cursor hidden
+ * regardless of this setting; the requested visibility applies when relative mode is disabled. */
+SU_WINDOW_API uint32_t su_window_set_cursor_visible(SuWindow *w, int visible);
+/* Confines (confined != 0) or releases (confined == 0) the pointer to the window client area without entering
+ * relative mouse mode. Cursor visibility and relative mode keep their independent settings. SU_E_INVALID_ARGUMENT if w is
+ * NULL; SU_E_UNSUPPORTED_METHOD if the window system refuses it. */
+SU_WINDOW_API uint32_t su_window_set_mouse_confine(SuWindow *w, int confined);
 
 SU_WINDOW_API void su_window_set_title(SuWindow *w, const char *title);
 /* Requests a size (window coordinates), minimizes or restores. Requests: the window system may refuse or delay
@@ -113,7 +126,8 @@ typedef struct SuWindowInfo {
     uint32_t window_system;    /* SU_RENDER_WINDOW_WAYLAND or SU_RENDER_WINDOW_XLIB */
     uint32_t gamepads;         /* 1 when the gamepad subsystem is running */
     uint32_t relative_mouse;   /* 1 while relative mouse mode is on */
-    float pixel_density;       /* drawable pixels per window coordinate */
+    float pixel_density;       /* drawable pixels per window coordinate (multiply window coords by pixel_density
+                                  to get framebuffer/drawable pixels) */
 } SuWindowInfo;
 SU_WINDOW_API uint32_t su_window_info(const SuWindow *w, SuWindowInfo *out);
 

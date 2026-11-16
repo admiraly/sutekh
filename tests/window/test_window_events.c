@@ -47,13 +47,19 @@ static SDL_Event key(SDL_Scancode sc, int down) {
     return e;
 }
 
-static SDL_Event mmove(float x, float y) {
+static SDL_Event mmove_abs(float px, float py, float xrel, float yrel) {
     SDL_Event e;
     memset(&e, 0, sizeof e);
     e.type = SDL_EVENT_MOUSE_MOTION;
-    e.motion.xrel = x;
-    e.motion.yrel = y;
+    e.motion.x = px;
+    e.motion.y = py;
+    e.motion.xrel = xrel;
+    e.motion.yrel = yrel;
     return e;
+}
+
+static SDL_Event mmove(float x, float y) {
+    return mmove_abs(0.0f, 0.0f, x, y);
 }
 
 static SDL_Event wheel(float y, int flipped) {
@@ -105,25 +111,30 @@ static void test_keys_mouse(void) {
     e = key(SDL_SCANCODE_RALT, 0);
     CHECK(tr(&e) == 1u && su_input_key_from_hid(g_out[0].code) == SU_KEY_RALT && g_out[0].value == 0);
 
-    /* fractions carry: 0.25 x 3 -> nothing, then 1.0 total at the fourth */
+    /* fractions carry: 0.25 x 3 -> POS only, then POS + MOTION(1, 0) at the fourth */
     e = mmove(0.25f, 0.0f);
-    CHECK(tr(&e) == 0u);
-    CHECK(tr(&e) == 0u);
-    CHECK(tr(&e) == 0u);
-    CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_MOTION && g_out[0].x == 1 && g_out[0].y == 0);
+    CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS && g_out[0].value == 1);
+    CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS);
+    CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS);
+    CHECK(tr(&e) == 2u && g_out[0].type == SU_INPUT_EV_MOUSE_POS && g_out[1].type == SU_INPUT_EV_MOUSE_MOTION &&
+          g_out[1].x == 1 && g_out[1].y == 0);
     e = mmove(-0.5f, 3.0f); /* truncated: 0, remainder -0.5 */
-    CHECK(tr(&e) == 1u && g_out[0].x == 0 && g_out[0].y == 3);
+    CHECK(tr(&e) == 2u && g_out[1].type == SU_INPUT_EV_MOUSE_MOTION && g_out[1].x == 0 && g_out[1].y == 3);
     e = mmove(-0.75f, 0.0f); /* -1.25: -1, remainder -0.25 */
-    CHECK(tr(&e) == 1u && g_out[0].x == -1 && g_out[0].y == 0);
-    e = mmove(0.25f, 0.0f); /* back to 0: nothing */
-    CHECK(tr(&e) == 0u);
+    CHECK(tr(&e) == 2u && g_out[1].type == SU_INPUT_EV_MOUSE_MOTION && g_out[1].x == -1 && g_out[1].y == 0);
+    e = mmove(0.25f, 0.0f); /* back to 0: POS only */
+    CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS);
     /* conservation over many exact binary fractions: emitted + carried remainder = sum of inputs, exactly */
     memset(&g_t, 0, sizeof g_t);
     for (i = 0; i < 1000u; i++) {
         float v = (float)((int)(i % 7u) - 3) * 0.375f; /* -1.125 .. 1.125 */
+        uint32_t m;
         e = mmove(v, 0.0f);
-        if (tr(&e) == 1u) {
-            sum += g_out[0].x;
+        m = tr(&e);
+        if (m == 2u) {
+            sum += g_out[1].x;
+        } else {
+            CHECK(m == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS);
         }
     }
     {
@@ -133,6 +144,39 @@ static void test_keys_mouse(void) {
         }
         CHECK(total - (double)sum == g_t.rem_x && g_t.rem_x > -1.0 && g_t.rem_x < 1.0);
     }
+
+    /* absolute pointer coordinates: rounding, clamping, enter/leave */
+    memset(&g_t, 0, sizeof g_t);
+    memset(&e, 0, sizeof e);
+    e.type = SDL_EVENT_WINDOW_MOUSE_ENTER;
+    CHECK(tr(&e) == 0u); /* no fabricated valid (0, 0) on first enter */
+    e.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+    CHECK(tr(&e) == 1u && g_out[0].value == 0);
+    e = mmove_abs(123.6f, -12.4f, 0.0f, 0.0f);
+    CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS && g_out[0].value == 1 && g_out[0].x == 124 &&
+          g_out[0].y == -12);
+    memset(&e, 0, sizeof e);
+    e.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+    CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS && g_out[0].value == 0 && g_out[0].x == 124 &&
+          g_out[0].y == -12);
+    e.type = SDL_EVENT_WINDOW_MOUSE_ENTER;
+    CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS && g_out[0].value == 1 && g_out[0].x == 124 &&
+          g_out[0].y == -12);
+    e = mmove_abs(NAN, INFINITY, 0.0f, 0.0f);
+    CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS && g_out[0].x == 0 && g_out[0].y == 0);
+    e = mmove_abs(1e20f, -1e20f, 0.0f, 0.0f);
+    CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS && g_out[0].x == INT32_MAX &&
+          g_out[0].y == INT32_MIN);
+
+    /* Auto-captured drags can deliver motion beyond the logical client bounds. */
+    g_t.window_width = 320;
+    g_t.window_height = 200;
+    e = mmove_abs(-0.1f, 50.0f, -1.0f, 0.0f);
+    CHECK(tr(&e) == 2u && g_out[0].value == 0 && g_out[1].x == -1);
+    e = mmove_abs(320.0f, 50.0f, 0.0f, 0.0f);
+    CHECK(tr(&e) == 1u && g_out[0].value == 0);
+    e = mmove_abs(319.9f, 199.9f, 0.0f, 0.0f);
+    CHECK(tr(&e) == 1u && g_out[0].value == 1);
 
     /* wheel: 120 per notch, physical direction */
     memset(&g_t, 0, sizeof g_t);
@@ -292,9 +336,9 @@ static void test_record_identity(void) {
     feed(&live, &e);
     e = key(SDL_SCANCODE_RIGHT, 1);
     feed(&live, &e);
-    e = mmove(10.5f, -4.25f);
+    e = mmove_abs(300.25f, 150.75f, 10.5f, -4.25f);
     feed(&live, &e);
-    e = mmove(9.5f, -0.75f); /* 20, -5 in total */
+    e = mmove_abs(320.6f, 180.4f, 9.5f, -0.75f); /* 20, -5 in total */
     feed(&live, &e);
     e = pad_dev(SDL_EVENT_GAMEPAD_ADDED, 5);
     feed(&live, &e);
@@ -320,6 +364,8 @@ static void test_record_identity(void) {
     b.pads[0].lx = 16000;
     b.pads[0].rt = 200u;
     b.pads[0].buttons = SU_PAD_A;
+    CHECK(a.pointer_x == 321 && a.pointer_y == 180 && a.pointer_inside == 1u &&
+          (a.flags & SU_INPUT_FLAG_POINTER_VALID) != 0u);
     CHECK(a.mouse_dx == 20 && a.mouse_dy == -5 && a.pads[0].ly == 20000 && a.pads[0].rt == 200u &&
           memcmp(a.keys, b.keys, sizeof a.keys) == 0);
     CHECK(su_input_mapper_tick(&ma, &a, 0, &ra) == SU_OK && su_input_mapper_tick(&mb, &b, 0, &rb) == SU_OK);

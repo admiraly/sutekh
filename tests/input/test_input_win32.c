@@ -74,11 +74,76 @@ static unsigned long fake_get_state(unsigned long slot, void *out) {
     return ERROR_SUCCESS;
 }
 
+/* Probe without changing the thread's display counter. */
+static int cursor_count(void) {
+    int count = ShowCursor(TRUE) - 1;
+    (void)ShowCursor(FALSE);
+    return count;
+}
+
+static void set_cursor_count(int target) {
+    int count = cursor_count();
+    while (count < target) count = ShowCursor(TRUE);
+    while (count > target) count = ShowCursor(FALSE);
+}
+
+static void test_cursor_balance(void) {
+    static const int initial[] = {-3, 0, 3};
+    int saved = cursor_count();
+    size_t i;
+    for (i = 0; i < sizeof initial / sizeof initial[0]; i++) {
+        SuInputWin32 *c = NULL;
+        int hidden;
+        set_cursor_count(initial[i]);
+        CHECK(su_input_win32_create(NULL, 0, &c) == SU_OK);
+        if (c == NULL) continue;
+        su_input_win32_set_cursor_visible(c, 0);
+        hidden = cursor_count();
+        CHECK(hidden < 0);
+        su_input_win32_set_cursor_visible(c, 0);
+        CHECK(cursor_count() == hidden);
+        su_input_win32_set_cursor_visible(c, 1);
+        CHECK(cursor_count() == initial[i]);
+        su_input_win32_set_cursor_visible(c, 1);
+        CHECK(cursor_count() == initial[i]);
+        su_input_win32_set_cursor_visible(c, 0);
+        su_input_win32_destroy(c);
+        CHECK(cursor_count() == initial[i]);
+    }
+    set_cursor_count(saved);
+}
+
+static void test_client_pointer(void) {
+    HWND hwnd = CreateWindowExW(0, L"STATIC", L"pointer test", WS_OVERLAPPEDWINDOW,
+                                 0, 0, 320, 240, NULL, NULL, GetModuleHandleW(NULL), NULL);
+    SuInputWin32 *c = NULL;
+    SuInputState s;
+    CHECK(hwnd != NULL);
+    if (hwnd == NULL) return;
+    CHECK(su_input_win32_create(hwnd, 0, &c) == SU_OK);
+    if (c != NULL) {
+        CHECK(su_input_win32_message(c, hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(10, 20)) == 0);
+        CHECK(su_input_win32_sample(c, &s) == SU_OK && s.pointer_inside == 1u &&
+              s.pointer_x == 10 && s.pointer_y == 20);
+        /* Captured motion can follow WM_MOUSELEAVE while the drag continues outside. */
+        CHECK(su_input_win32_message(c, hwnd, WM_MOUSELEAVE, 0, 0) == 0);
+        CHECK(su_input_win32_message(c, hwnd, WM_MOUSEMOVE, 0, MAKELPARAM((WORD)-5, 20)) == 0);
+        CHECK(su_input_win32_sample(c, &s) == SU_OK && s.pointer_inside == 0u && s.pointer_x == -5);
+        CHECK(su_input_win32_message(c, hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(10, 20)) == 0);
+        CHECK(su_input_win32_sample(c, &s) == SU_OK && s.pointer_inside == 1u);
+        su_input_win32_destroy(c);
+    }
+    DestroyWindow(hwnd);
+}
+
 int main(void) {
     SuInputWin32 *c = NULL;
     SuInputState s;
     RAWINPUT ri;
-    uint32_t st = su_input_win32_create(NULL, 0, &c);
+    uint32_t st;
+    test_cursor_balance();
+    test_client_pointer();
+    st = su_input_win32_create(NULL, 0, &c);
     CHECK(st == SU_OK && c != NULL);
     if (c == NULL) {
         printf("test_input_win32: %ld checks, %ld failures (no context: %u)\n", g_checks, g_fail, (unsigned)st);
@@ -129,6 +194,16 @@ int main(void) {
         CHECK(s.mouse_dx == w && s.mouse_dy == (LONG)((int64_t)32768 * h / 65535));
         CHECK((s.flags & SU_INPUT_FLAG_MOUSE_ABSOLUTE) != 0u);
     }
+    /* Client pointer messages use signed coordinates, preserve relative deltas and survive samples. */
+    CHECK(su_input_win32_message(c, NULL, WM_MOUSEMOVE, 0,
+                                (intptr_t)MAKELPARAM((WORD)-12, (WORD)-34)) == 0);
+    CHECK(su_input_win32_sample(c, &s) == SU_OK);
+    CHECK(s.pointer_x == -12 && s.pointer_y == -34 && s.pointer_inside == 0u &&
+          (s.flags & SU_INPUT_FLAG_POINTER_VALID) != 0u && s.mouse_dx == 0 && s.mouse_dy == 0);
+    CHECK(su_input_win32_sample(c, &s) == SU_OK && s.pointer_x == -12 && s.pointer_y == -34);
+    CHECK(su_input_win32_message(c, NULL, WM_MOUSELEAVE, 0, 0) == 0);
+    CHECK(su_input_win32_sample(c, &s) == SU_OK && s.pointer_inside == 0u &&
+          s.pointer_x == -12 && s.pointer_y == -34 && (s.flags & SU_INPUT_FLAG_POINTER_VALID) != 0u);
     /* Focus loss releases everything and is reported once. */
     CHECK(su_input_win32_message(c, NULL, WM_KILLFOCUS, 0, 0) == 0);
     CHECK(su_input_win32_sample(c, &s) == SU_OK);
