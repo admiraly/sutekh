@@ -939,6 +939,7 @@ static uint64_t cook_material(Cook *c, const cgltf_material *gm, uint32_t *st) {
 
 typedef struct Build {
     SuAssetVertex *v;
+    SuAssetSkinVertex *skin;
     uint32_t nv;
     uint32_t cv;
     uint32_t *idx;
@@ -947,6 +948,10 @@ typedef struct Build {
     SuAssetSubmesh *sm;
     uint32_t ns;
     uint32_t cs;
+    uint32_t cs_skin;
+    uint32_t max_joint;
+    int has_skin;
+    int skin_overflow;
 } Build;
 
 static int grow(void **p, uint32_t *cap, uint32_t need, size_t elem) {
@@ -1071,6 +1076,14 @@ static void gen_tangents(Build *b, uint32_t v0, uint32_t i0) {
     free(tan);
 }
 
+static void init_default_skin(SuAssetSkinVertex *s, uint32_t count) {
+    uint32_t i;
+    for (i = 0; i < count; i++) {
+        memset(&s[i], 0, sizeof s[i]);
+        s[i].weights[0] = 1.0f;
+    }
+}
+
 /* Appends one primitive as a submesh. Returns SU_OK, or SU_E_PARSE / SU_E_RESOURCE_LIMIT. Skipped primitives
  * (non-triangle) return SU_OK and add nothing. */
 static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_t mi, size_t pi, uint32_t *st_mat) {
@@ -1079,6 +1092,8 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
     const cgltf_accessor *tng = attr(p, cgltf_attribute_type_tangent, 0);
     const cgltf_accessor *uv0 = attr(p, cgltf_attribute_type_texcoord, 0);
     const cgltf_accessor *uv1 = attr(p, cgltf_attribute_type_texcoord, 1);
+    const cgltf_accessor *jnt = attr(p, cgltf_attribute_type_joints, 0);
+    const cgltf_accessor *wgt = attr(p, cgltf_attribute_type_weights, 0);
     uint32_t nv;
     uint32_t nsrc;
     uint32_t ntri;
@@ -1087,6 +1102,7 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
     uint32_t i0 = b->ni;
     uint32_t i;
     int flat = nrm == NULL;
+    int prim_skin = jnt != NULL && wgt != NULL;
     SuAssetSubmesh s;
     if (p->type != cgltf_primitive_type_triangles && p->type != cgltf_primitive_type_triangle_strip &&
         p->type != cgltf_primitive_type_triangle_fan) {
@@ -1108,9 +1124,14 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
     if ((nrm != NULL && (nrm->count != nv || nrm->type != cgltf_type_vec3)) ||
         (tng != NULL && (tng->count != nv || tng->type != cgltf_type_vec4)) ||
         (uv0 != NULL && (uv0->count != nv || uv0->type != cgltf_type_vec2)) ||
-        (uv1 != NULL && (uv1->count != nv || uv1->type != cgltf_type_vec2))) {
+        (uv1 != NULL && (uv1->count != nv || uv1->type != cgltf_type_vec2)) ||
+        (jnt != NULL && (jnt->count != nv || jnt->type != cgltf_type_vec4)) ||
+        (wgt != NULL && (wgt->count != nv || wgt->type != cgltf_type_vec4))) {
         msgf(c->msg, "mesh %u primitive %u: attribute counts or types disagree", (unsigned)mi, (unsigned)pi);
         return SU_E_PARSE;
+    }
+    if ((jnt != NULL) != (wgt != NULL)) {
+        warn(c, "mesh %u primitive %u: JOINTS_0 without matching WEIGHTS_0; skin ignored", (unsigned)mi, (unsigned)pi);
     }
     nsrc = p->indices != NULL ? (uint32_t)(p->indices->count <= 0x3FFFFFFFu ? p->indices->count : 0u) : nv;
     if (p->indices != NULL && p->indices->count > 0x3FFFFFFFu) {
@@ -1161,11 +1182,30 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
             free(tri);
             return SU_E_RESOURCE_LIMIT;
         }
+        if (prim_skin && !b->has_skin) {
+            b->has_skin = 1;
+        }
+        if (b->has_skin) {
+            uint32_t had = b->cs_skin;
+            if (!grow((void **)&b->skin, &b->cs_skin, b->nv + out_v, sizeof *b->skin)) {
+                free(tri);
+                return SU_E_RESOURCE_LIMIT;
+            }
+            if (had == 0u && b->nv > 0u) {
+                init_default_skin(b->skin, b->nv);
+            }
+        }
     }
     /* source vertices */
     {
         SuAssetVertex *src = flat ? malloc((size_t)nv * sizeof *src) : b->v + b->nv;
-        if (src == NULL) {
+        SuAssetSkinVertex *src_skin =
+            prim_skin ? (flat ? malloc((size_t)nv * sizeof *src_skin) : b->skin + b->nv) : NULL;
+        if (src == NULL || (prim_skin && src_skin == NULL)) {
+            if (flat) {
+                free(src);
+                free(src_skin);
+            }
             free(tri);
             return SU_E_RESOURCE_LIMIT;
         }
@@ -1185,6 +1225,43 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
             if (uv1 != NULL) {
                 (void)cgltf_accessor_read_float(uv1, i, src[i].uv1, 2);
             }
+            if (prim_skin) {
+                cgltf_uint jj[4] = {0, 0, 0, 0};
+                float ww[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                float sum = 0.0f;
+                int k;
+                (void)cgltf_accessor_read_uint(jnt, i, jj, 4);
+                (void)cgltf_accessor_read_float(wgt, i, ww, 4);
+                for (k = 0; k < 4; k++) {
+                    if (!isfinite(ww[k]) || ww[k] < 0.0f) {
+                        ww[k] = 0.0f;
+                    }
+                    sum += ww[k];
+                }
+                if (sum > 0.0f) {
+                    for (k = 0; k < 4; k++) {
+                        ww[k] /= sum;
+                    }
+                } else {
+                    jj[0] = 0;
+                    ww[0] = 1.0f;
+                    ww[1] = ww[2] = ww[3] = 0.0f;
+                }
+                for (k = 0; k < 4; k++) {
+                    if (ww[k] == 0.0f) {
+                        src_skin[i].joints[k] = 0u;
+                    } else if (jj[k] >= SU_ASSET_MAX_JOINTS) {
+                        b->skin_overflow = 1;
+                        src_skin[i].joints[k] = 0u;
+                    } else {
+                        src_skin[i].joints[k] = (uint16_t)jj[k];
+                        if ((uint32_t)jj[k] > b->max_joint) {
+                            b->max_joint = (uint32_t)jj[k];
+                        }
+                    }
+                    src_skin[i].weights[k] = ww[k];
+                }
+            }
         }
         if (flat) {
             for (i = 0; i < ntri; i++) {
@@ -1203,12 +1280,22 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
                     SuAssetVertex v = src[tri[i * 3u + (uint32_t)j]];
                     memcpy(v.normal, n, sizeof n);
                     b->v[b->nv + i * 3u + (uint32_t)j] = v;
+                    if (prim_skin) {
+                        b->skin[b->nv + i * 3u + (uint32_t)j] = src_skin[tri[i * 3u + (uint32_t)j]];
+                    }
                     b->idx[b->ni + i * 3u + (uint32_t)j] = b->nv + i * 3u + (uint32_t)j - v0;
                 }
             }
+            if (b->has_skin && !prim_skin) {
+                init_default_skin(b->skin + b->nv, ntri * 3u);
+            }
             free(src);
+            free(src_skin);
             b->nv += ntri * 3u;
         } else {
+            if (b->has_skin && !prim_skin) {
+                init_default_skin(b->skin + b->nv, nv);
+            }
             for (i = 0; i < ntri * 3u; i++) {
                 b->idx[b->ni + i] = tri[i];
             }
@@ -1239,7 +1326,7 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
 }
 
 /* Writes mesh mi (or its winding-flipped variant); *id_out = 0 when it has no triangles. */
-static uint32_t cook_mesh(Cook *c, size_t mi, int mirrored, uint64_t *id_out) {
+static uint32_t cook_mesh(Cook *c, size_t mi, const cgltf_skin *skin, int mirrored, uint64_t *id_out) {
     uint8_t *state = mirrored ? c->mirror_state : c->mesh_state;
     const cgltf_mesh *m = &c->data->meshes[mi];
     Build b;
@@ -1272,7 +1359,24 @@ static uint32_t cook_mesh(Cook *c, size_t mi, int mirrored, uint64_t *id_out) {
             }
         }
         *id_out = mesh_id(c, mi, mirrored);
-        st = su_asset_writer_add_mesh(c->w, *id_out, b.v, b.nv, b.idx, b.ni, b.sm, b.ns);
+        if (b.has_skin) {
+            uint32_t jc = b.max_joint + 1u;
+            if (skin != NULL && skin->joints_count > jc) {
+                if (skin->joints_count <= SU_ASSET_MAX_JOINTS) {
+                    jc = (uint32_t)skin->joints_count;
+                } else {
+                    b.skin_overflow = 1;
+                }
+            }
+            if (b.skin_overflow) {
+                warn(c, "mesh %u: skin joints exceed %u; cooked unskinned", (unsigned)mi, SU_ASSET_MAX_JOINTS);
+                st = su_asset_writer_add_mesh(c->w, *id_out, b.v, b.nv, b.idx, b.ni, b.sm, b.ns);
+            } else {
+                st = su_asset_writer_add_skinned_mesh(c->w, *id_out, b.v, b.nv, b.idx, b.ni, b.sm, b.ns, b.skin, jc);
+            }
+        } else {
+            st = su_asset_writer_add_mesh(c->w, *id_out, b.v, b.nv, b.idx, b.ni, b.sm, b.ns);
+        }
         if (st != SU_OK) {
             msgf(c->msg, "mesh %u could not be written (status %u)", (unsigned)mi, (unsigned)st);
             *id_out = 0;
@@ -1284,6 +1388,7 @@ static uint32_t cook_mesh(Cook *c, size_t mi, int mirrored, uint64_t *id_out) {
         }
     }
     free(b.v);
+    free(b.skin);
     free(b.idx);
     free(b.sm);
     return st;
@@ -1434,7 +1539,8 @@ static uint32_t cook_model(Cook *c) {
         mn->lod_count = 0;
         for (j = 0; j < nm && st == SU_OK; j++) {
             uint64_t id = 0;
-            st = cook_mesh(c, cgltf_mesh_index(d, list[members[j]].node->mesh), mirrored, &id);
+            st = cook_mesh(c, cgltf_mesh_index(d, list[members[j]].node->mesh), list[members[j]].node->skin, mirrored,
+                           &id);
             if (st == SU_OK && id != 0u) {
                 mn->lod_mesh[mn->lod_count] = id;
                 mn->lod_screen[mn->lod_count] = c->lod_screen[mn->lod_count];
@@ -1553,9 +1659,6 @@ uint32_t su_asset_cook_gltf(const char *path, const SuAssetCookOptions *options,
     }
     if (c.data->animations_count > 0u) {
         warn(&c, "%u animations ignored", (unsigned)c.data->animations_count);
-    }
-    if (c.data->skins_count > 0u) {
-        warn(&c, "%u skins ignored (meshes cooked in bind pose)", (unsigned)c.data->skins_count);
     }
     if (c.data->lights_count > 0u) {
         warn(&c, "%u KHR_lights_punctual lights ignored", (unsigned)c.data->lights_count);

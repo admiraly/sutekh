@@ -213,6 +213,8 @@ typedef struct Frame {
     VkDescriptorPool fx_pool; /* one sampler set per textured batch, reset every frame */
     Buffer hud;
     Buffer ubo;           /* FrameUbo */
+    Buffer skin_ssbo;     /* per-frame joint palette (SuMat4f[]) */
+    uint32_t skin_cap;    /* capacity of skin_ssbo in SuMat4f matrices */
     Buffer staging;       /* upload_budget bytes */
     VkDescriptorSet frame_set;
     uint64_t serial;      /* serial of the submission that used this slot last */
@@ -242,16 +244,20 @@ typedef struct SubGpu {
 typedef struct MeshRes {
     Buffer vb;
     Buffer ib;
+    Buffer skin_vb;
     uint32_t vertex_count;
     uint32_t index_count;
     uint32_t sub_count;
+    uint32_t is_skinned;
+    uint32_t joint_count;
     SubGpu *subs;
     float center[3];
     float radius;
     const uint8_t *src_v;
     const uint8_t *src_i;
+    const uint8_t *src_skin;
     uint8_t *owned;           /* SU_RENDER_UPLOAD_COPY */
-    uint64_t done;            /* bytes uploaded (vertices then indices) */
+    uint64_t done;            /* bytes uploaded (vertices, indices, then skin) */
 } MeshRes;
 
 typedef struct TexRes {
@@ -327,6 +333,7 @@ typedef struct Retired {
     uint64_t serial;
     Buffer a;
     Buffer b;
+    Buffer c;
     VkImage img;
     VkDeviceMemory mem;
     VkImageView view;
@@ -432,9 +439,10 @@ typedef struct FxQuad {
 
 /* One caster of the shadow pass: an instance of a submesh. */
 typedef struct ShadowItem {
-    uint64_t key;             /* mesh << 16 | submesh */
+    uint64_t key;             /* cascade << 56 | skinned << 55 | mesh << 16 | submesh */
     uint32_t mesh;
     uint32_t sub;
+    uint32_t skinned;
     DrawInstance inst;
 } ShadowItem;
 
@@ -446,6 +454,7 @@ typedef struct DrawItem {
     uint32_t mat;             /* resource index, or UINT32_MAX for the default material */
     uint32_t pipe;
     uint32_t kind;            /* 0: PBR-lite, 1: layered paint, 2: unlit FX */
+    uint32_t skinned;         /* 1: vertex buffer includes skin_vb */
     float dist2;              /* blend sorting */
     uint32_t forced;          /* 1: opaque or masked material drawn in the blend pass because the instance tint is translucent */
     DrawInstance inst;
@@ -503,7 +512,9 @@ struct SuRenderer {
     VkDescriptorSet depth_in_set;
     VkPipelineLayout skycube_layout;    /* frame, one cube sampler, SkyPush */
     VkPipeline pbr_pipe[PIPE_PBR_COUNT];
+    VkPipeline pbr_skinned_pipe[PIPE_PBR_COUNT];
     VkPipeline paint_pipe[PIPE_PBR_COUNT];
+    VkPipeline paint_skinned_pipe[PIPE_PBR_COUNT];
     VkDescriptorSetLayout paint_dsl;    /* paint samplers and the PaintUbo */
     VkDescriptorSetLayout env_dsl;      /* one cube sampler */
     VkPipelineLayout paint_layout;      /* frame, paint material, environment */
@@ -583,6 +594,7 @@ struct SuRenderer {
     VkFormat shadow_format;
     VkRenderPass shadow_pass;
     VkPipeline shadow_pipe;
+    VkPipeline shadow_skinned_pipe;
     VkSampler shadow_sampler;           /* compare LESS_OR_EQUAL, clamp to border (lit) */
     VkImage shadow_img;
     VkDeviceMemory shadow_mem;

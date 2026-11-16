@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 12u
+#define SU_RENDER_API_VERSION 13u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -574,6 +574,21 @@ typedef struct SuRenderMeshDesc {
     uint32_t flags;                    /* SU_RENDER_UPLOAD_COPY */
 } SuRenderMeshDesc;
 
+typedef struct SuRenderSkinnedMeshDesc {
+    const SuAssetVertex *vertices;
+    uint32_t vertex_count;
+    const uint32_t *indices;
+    uint32_t index_count;
+    const SuAssetSubmesh *submeshes;   /* ranges and bounding spheres; their material ids are ignored */
+    uint32_t submesh_count;
+    const SuRenderHandle *materials;   /* per submesh, 0 = the default material; NULL = all default */
+    const SuAssetSkinVertex *skin;     /* per-vertex joints and weights (vertex_count entries) */
+    uint32_t joint_count;              /* 1..SU_ASSET_MAX_JOINTS */
+    float center[3];                   /* bounding sphere of the mesh */
+    float radius;
+    uint32_t flags;                    /* SU_RENDER_UPLOAD_COPY */
+} SuRenderSkinnedMeshDesc;
+
 typedef struct SuRenderTextureDesc {
     uint32_t width, height;
     uint32_t format;                   /* SU_TEX_* (sutekh/asset.h); BCn needs device support */
@@ -688,6 +703,8 @@ typedef struct SuRenderModelNode {
 } SuRenderModelNode;
 
 SU_RENDER_API uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRenderHandle *out);
+SU_RENDER_API uint32_t su_render_skinned_mesh_create(SuRenderer *r, const SuRenderSkinnedMeshDesc *d,
+                                                     SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_texture_create(SuRenderer *r, const SuRenderTextureDesc *d, SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d, SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_fx_material_create(SuRenderer *r, const SuRenderFxMaterialDesc *d, SuRenderHandle *out);
@@ -791,7 +808,8 @@ typedef struct SuRenderObject {
     float tint[4];                     /* multiplies base colour and alpha. tint[3] < 1 draws the object translucent\n                                        * whatever its material's alpha mode: in the blended pass (depth-tested, no\n                                        * depth write, back to front by node distance, after opaque and masked), with\n                                        * a masked material's cutoff not applied. tint[3] <= 0 or NaN: not drawn\n                                        * (counted in objects_culled). 1 = unchanged behaviour. */
     float emissive;                    /* multiplies emission; 1 = as authored */
     SuRenderHandle model;
-    uint32_t reserved[2];
+    uint32_t skin_offset;              /* first SuMat4f in SuRenderFrameDesc.skin_matrices for this object */
+    uint32_t skin_count;               /* joint matrices in the slice; 0 = bind pose / unskinned */
     float scale3[3];                   /* per-axis scale in the object's own frame, multiplying scale: the model is
                                         * scaled by scale * scale3 along its local x, y, z, then rotated by rot. All
                                         * zero = (1, 1, 1), uniform as before; otherwise each must be > 0. Normals use
@@ -962,6 +980,8 @@ typedef struct SuRenderFrameDesc {
     SuRenderHandle distortion_cube;
     float distortion_cube_intensity;
     uint32_t output_alpha;
+    const SuMat4f *skin_matrices;      /* per-frame joint palette (column-major 4x4 matrices); NULL when count is 0 */
+    uint32_t skin_matrix_count;
 } SuRenderFrameDesc;
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object

@@ -73,17 +73,23 @@ typedef struct SuAssetSubmesh {
     float radius;
 } SuAssetSubmesh;
 
-/* 64 bytes, followed by submesh_count SuAssetSubmesh, vertex_count SuAssetVertex, index_count u32. */
+#define SU_ASSET_MESH_SKIN_VERSION 2u
+#define SU_ASSET_MESH_FLAG_SKINNED 0x1u
+#define SU_ASSET_MAX_JOINTS 256u
+
+/* 64 bytes, followed by submesh_count SuAssetSubmesh, vertex_count SuAssetVertex, index_count u32,
+ * and (when type_version == SU_ASSET_MESH_SKIN_VERSION) vertex_count SuAssetSkinVertex. */
 typedef struct SuAssetMeshHeader {
     uint32_t vertex_count;
     uint32_t index_count;      /* a multiple of 3: triangle list, counter-clockwise front faces */
     uint32_t submesh_count;
-    uint32_t flags;            /* 0 */
+    uint32_t flags;            /* 0 or SU_ASSET_MESH_FLAG_SKINNED */
     float aabb_min[3];
     float aabb_max[3];
     float center[3];           /* bounding sphere of the whole mesh */
     float radius;
-    uint32_t reserved[2];
+    uint32_t joint_count;      /* 0 unless SU_ASSET_MESH_FLAG_SKINNED (1..SU_ASSET_MAX_JOINTS) */
+    uint32_t reserved;
 } SuAssetMeshHeader;
 
 typedef struct SuAssetMeshView {
@@ -93,6 +99,21 @@ typedef struct SuAssetMeshView {
     const SuAssetVertex *vertices;
     const uint32_t *indices;
 } SuAssetMeshView;
+
+/* 24 bytes: per-vertex skinning data for SU_ASSET_MESH type_version 2. */
+typedef struct SuAssetSkinVertex {
+    uint16_t joints[4];
+    float weights[4];
+} SuAssetSkinVertex;
+
+typedef struct SuAssetSkinMeshView {
+    uint64_t id;
+    const SuAssetMeshHeader *header;
+    const SuAssetSubmesh *submeshes;
+    const SuAssetVertex *vertices;
+    const uint32_t *indices;
+    const SuAssetSkinVertex *skin;
+} SuAssetSkinMeshView;
 
 /* Texture formats. BCn are block-compressed 4x4 (BC1/BC4: 8 bytes per block, others 16). */
 #define SU_TEX_RGBA8_UNORM 1u
@@ -323,6 +344,7 @@ void su_asset_pak_digest(const SuAssetPak *pak, uint8_t sha256[32]);
 const uint8_t *su_asset_pak_bytes(const SuAssetPak *pak, size_t *len);
 
 uint32_t su_asset_pak_mesh(const SuAssetPak *pak, uint64_t id, SuAssetMeshView *out);
+uint32_t su_asset_pak_mesh_skin(const SuAssetPak *pak, uint64_t id, SuAssetSkinMeshView *out);
 uint32_t su_asset_pak_texture(const SuAssetPak *pak, uint64_t id, SuAssetTextureView *out);
 uint32_t su_asset_pak_material(const SuAssetPak *pak, uint64_t id, SuAssetMaterial *out);
 /* The paint part of a material entry of type_version 2 (SU_E_INVALID_ARGUMENT for a plain PBR material or unknown id).
@@ -340,6 +362,11 @@ void su_asset_writer_destroy(SuAssetWriter *w);
 uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices, uint32_t vertex_count,
                                   const uint32_t *indices, uint32_t index_count, const SuAssetSubmesh *submeshes,
                                   uint32_t submesh_count);
+/* A skinned mesh (type_version SU_ASSET_MESH_SKIN_VERSION). joint_count in 1..SU_ASSET_MAX_JOINTS. */
+uint32_t su_asset_writer_add_skinned_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices,
+                                          uint32_t vertex_count, const uint32_t *indices, uint32_t index_count,
+                                          const SuAssetSubmesh *submeshes, uint32_t submesh_count,
+                                          const SuAssetSkinVertex *skin, uint32_t joint_count);
 /* mip_data[i] holds level i (su_asset_texture_level_size bytes). */
 uint32_t su_asset_writer_add_texture(SuAssetWriter *w, uint64_t id, uint32_t width, uint32_t height, uint32_t format,
                                      uint32_t flags, uint32_t mip_count, const uint8_t *const *mip_data);

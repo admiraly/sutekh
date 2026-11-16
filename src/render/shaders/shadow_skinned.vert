@@ -1,0 +1,40 @@
+// SPDX-FileCopyrightText: 2026 admiraly
+// SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
+// Sun shadow map: skinned asset mesh casters, depth only, in the sun's clip space.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#define SU_SKINNED
+#include "frame.glsl"
+
+layout(location = 0) in vec3 in_pos;
+layout(location = 5) in vec4 i_r0;
+layout(location = 6) in vec4 i_r1;
+layout(location = 7) in vec4 i_r2;
+layout(location = 9) in vec4 i_extra;
+layout(location = 11) in uvec4 in_joints;
+layout(location = 12) in vec4 in_weights;
+layout(push_constant) uniform Cascade {
+    uint index;
+} pc;
+
+void main() {
+    vec3 p_local = in_pos;
+    uint skin_base = floatBitsToUint(i_extra.y);
+    uint skin_cnt = floatBitsToUint(i_extra.z);
+    if (skin_cnt > 0u) {
+        float wsum = in_weights.x + in_weights.y + in_weights.z + in_weights.w;
+        if (wsum > 1e-6) {
+            uint j0 = min(in_joints.x, skin_cnt - 1u);
+            uint j1 = min(in_joints.y, skin_cnt - 1u);
+            uint j2 = min(in_joints.z, skin_cnt - 1u);
+            uint j3 = min(in_joints.w, skin_cnt - 1u);
+            mat4 sm = (skin_mats[skin_base + j0] * in_weights.x +
+                       skin_mats[skin_base + j1] * in_weights.y +
+                       skin_mats[skin_base + j2] * in_weights.z +
+                       skin_mats[skin_base + j3] * in_weights.w) / wsum;
+            p_local = (sm * vec4(in_pos, 1.0)).xyz;
+        }
+    }
+    vec3 p = vec3(dot(i_r0.xyz, p_local) + i_r0.w, dot(i_r1.xyz, p_local) + i_r1.w, dot(i_r2.xyz, p_local) + i_r2.w);
+    gl_Position = fr.shadow_vp[pc.index] * vec4(p, 1.0);
+}
