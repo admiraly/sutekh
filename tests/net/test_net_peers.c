@@ -281,17 +281,23 @@ static void push_tick_inputs(PeerSim *ps, uint64_t tick, int use_prediction) {
 }
 
 static void test_fault_injected_3peers_and_desync(void) {
-    FaultNet net;
+    /* Multi-megabyte fixtures must fit the default Windows 1 MiB stack. */
+    FaultNet *net = calloc(1u, sizeof *net);
     FaultEnd ends[NUM_PEERS];
-    PeerSim peers[NUM_PEERS];
+    PeerSim *peers = calloc(NUM_PEERS, sizeof *peers);
     uint8_t world_id[32];
     uint8_t content_hash[32];
     uint32_t p;
     uint32_t iter;
     uint64_t rollbacks = 0u;
 
-    memset(&net, 0, sizeof net);
-    net.rng = 0x5EED2026u;
+    if (net == NULL || peers == NULL) {
+        free(net);
+        free(peers);
+        CHECK(0);
+        return;
+    }
+    net->rng = 0x5EED2026u;
     memset(content_hash, 0x3Cu, sizeof content_hash);
 
     for (p = 0u; p < NUM_PEERS; p++) {
@@ -315,7 +321,7 @@ static void test_fault_injected_3peers_and_desync(void) {
     for (p = 0u; p < NUM_PEERS; p++) {
         SuNetSessionDesc d;
         uint32_t k;
-        ends[p].net = &net;
+        ends[p].net = net;
         ends[p].peer = p;
         memset(&d, 0, sizeof d);
         d.struct_size = sizeof d;
@@ -340,7 +346,7 @@ static void test_fault_injected_3peers_and_desync(void) {
     /* 1. Handshake under packet loss, delay, duplication, and reordering. */
     for (iter = 0u; iter < 120u; iter++) {
         int all_ready = 1;
-        net.step++;
+        net->step++;
         for (p = 0u; p < NUM_PEERS; p++) {
             CHECK(su_net_poll(peers[p].sess) == SU_OK);
             if (!su_net_is_ready(peers[p].sess)) {
@@ -385,7 +391,7 @@ static void test_fault_injected_3peers_and_desync(void) {
             }
         }
 
-        net.step++;
+        net->step++;
         for (p = 0u; p < NUM_PEERS; p++) {
             PeerSim *ps = &peers[p];
             uint32_t k;
@@ -470,15 +476,15 @@ static void test_fault_injected_3peers_and_desync(void) {
 
     /* Drain trailing ACK/CHECKSUM packets. */
     for (iter = 0u; iter < 20u; iter++) {
-        net.step++;
+        net->step++;
         for (p = 0u; p < NUM_PEERS; p++) {
             CHECK(su_net_poll(peers[p].sess) == SU_OK);
         }
     }
 
-    CHECK(net.dropped > 0u);
-    CHECK(net.duplicated > 0u);
-    CHECK(net.reordered > 0u);
+    CHECK(net->dropped > 0u);
+    CHECK(net->duplicated > 0u);
+    CHECK(net->reordered > 0u);
     CHECK(rollbacks > 0u);
 
     {
@@ -515,7 +521,7 @@ static void test_fault_injected_3peers_and_desync(void) {
             }
         }
         for (iter = 0u; iter < 30u; iter++) {
-            net.step++;
+            net->step++;
             for (p = 0u; p < NUM_PEERS; p++) {
                 CHECK(su_net_poll(peers[p].sess) == SU_OK);
             }
@@ -537,6 +543,8 @@ static void test_fault_injected_3peers_and_desync(void) {
         su_host_world_destroy(peers[p].enc);
         free(peers[p].confirmed_snap);
     }
+    free(peers);
+    free(net);
 }
 
 static void test_udp_loopback_3peers(void) {

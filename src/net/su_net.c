@@ -9,6 +9,7 @@
 
 #include "sutekh/net.h"
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -216,6 +217,9 @@ static uint32_t udp_recv(void *user, SuNetAddr *from, void *buf, size_t cap, siz
     if (sock == NULL || buf == NULL || cap == 0u) {
         return SU_E_INVALID_ARGUMENT;
     }
+    if (cap > INT_MAX) {
+        return SU_E_RESOURCE_LIMIT;
+    }
     memset(&ss, 0, sizeof ss);
 #ifdef _WIN32
     {
@@ -235,8 +239,21 @@ static uint32_t udp_recv(void *user, SuNetAddr *from, void *buf, size_t cap, siz
     }
 #else
     for (;;) {
-        got = recvfrom(sock->fd, buf, cap, 0, (struct sockaddr *)&ss, &ss_len);
+        struct iovec iov;
+        struct msghdr msg;
+        memset(&msg, 0, sizeof msg);
+        iov.iov_base = buf;
+        iov.iov_len = cap;
+        msg.msg_name = &ss;
+        msg.msg_namelen = ss_len;
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1u;
+        got = recvmsg(sock->fd, &msg, 0);
         if (got >= 0) {
+            /* Never parse a truncated datagram as a valid shorter packet. */
+            if ((msg.msg_flags & MSG_TRUNC) != 0) {
+                return SU_E_RESOURCE_LIMIT;
+            }
             *out_len = (size_t)got;
             break;
         }
@@ -511,7 +528,16 @@ static uint32_t send_input_to(SuNetSession *s, uint32_t dst_peer) {
         if (start <= newest) {
             uint64_t span = newest - start + 1u;
             uint64_t t;
-            if (span <= (uint64_t)s->redundancy) {
+            if (s->redundancy == 1u) {
+                /* With one frame per packet, prioritize recovery of the oldest gap. */
+                for (t = start; t <= newest; t++) {
+                    const SuNetInputSlot *slot = &s->local_ring[t % SU_NET_INPUT_RING_CAP];
+                    if (slot->valid && slot->tick == t) {
+                        ticks[frame_count++] = t;
+                        break;
+                    }
+                }
+            } else if (span <= (uint64_t)s->redundancy) {
                 for (t = start; t <= newest && frame_count < s->redundancy; t++) {
                     const SuNetInputSlot *slot = &s->local_ring[t % SU_NET_INPUT_RING_CAP];
                     if (slot->valid && slot->tick == t) {
@@ -685,7 +711,8 @@ static void handle_input_packet(SuNetSession *s, uint32_t src_peer, const uint8_
             s->stats.packets_malformed++;
             return;
         }
-        if (f_tick < first_tick || f_tick > last_tick || (i > 0u && f_tick <= prev_tick)) {
+        if (f_tick == SU_NET_TICK_NONE || f_tick < first_tick || f_tick > last_tick ||
+            (i > 0u && f_tick <= prev_tick)) {
             s->stats.packets_malformed++;
             return;
         }
@@ -693,6 +720,13 @@ static void handle_input_packet(SuNetSession *s, uint32_t src_peer, const uint8_
         off += SU_NET_INPUT_FRAME_HEADER_BYTES + (size_t)f_len;
     }
     if (off != len) {
+        s->stats.packets_malformed++;
+        return;
+    }
+
+    /* An ACK may only cover input we have actually sent; reject atomically. */
+    if (ack_tick != SU_NET_TICK_NONE &&
+        (s->local_highest_tick == SU_NET_TICK_NONE || ack_tick > s->local_highest_tick)) {
         s->stats.packets_malformed++;
         return;
     }
@@ -716,7 +750,7 @@ static void handle_input_packet(SuNetSession *s, uint32_t src_peer, const uint8_
             s->stats.duplicate_frames++;
             continue;
         }
-        if (f_tick >= ps->next_pop_tick + (uint64_t)SU_NET_INPUT_RING_CAP) {
+        if (f_tick - ps->next_pop_tick >= (uint64_t)SU_NET_INPUT_RING_CAP) {
             s->stats.out_of_window_frames++;
             continue;
         }
@@ -772,9 +806,17 @@ static void handle_checksum_packet(SuNetSession *s, uint32_t src_peer, const uin
     }
     tick = rd_u64(pkt + 24);
     digest = rd_u64(pkt + 32);
+    if (tick == SU_NET_TICK_NONE) {
+        s->stats.packets_malformed++;
+        return;
+    }
     s->stats.checksums_recv++;
 
     idx = (size_t)(tick % SU_NET_CHECKSUM_RING_CAP);
+    /* Delayed packets must not evict a newer checksum at the same ring index. */
+    if (ps->checksum_ring[idx].valid && ps->checksum_ring[idx].tick > tick) {
+        return;
+    }
     ps->checksum_ring[idx].tick = tick;
     ps->checksum_ring[idx].digest = digest;
     ps->checksum_ring[idx].valid = 1u;
@@ -984,7 +1026,7 @@ static uint32_t read_remote_input(SuNetSession *s, uint32_t peer_index, uint64_t
         return SU_E_INVALID_ARGUMENT;
     }
     ps = &s->peers_state[peer_index];
-    if (tick < ps->next_pop_tick || tick >= ps->next_pop_tick + (uint64_t)SU_NET_INPUT_RING_CAP) {
+    if (tick < ps->next_pop_tick || tick - ps->next_pop_tick >= (uint64_t)SU_NET_INPUT_RING_CAP) {
         return SU_OK;
     }
     slot = &ps->rx_ring[tick % SU_NET_INPUT_RING_CAP];

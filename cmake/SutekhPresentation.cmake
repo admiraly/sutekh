@@ -603,6 +603,8 @@ target_compile_definitions(test_audio_callback PRIVATE SU_AUDIO_INSTRUMENTED=1)
 target_link_libraries(test_audio_callback PRIVATE su_audio)
 sutekh_apply_warnings(test_audio_callback)
 add_test(NAME audio_callback COMMAND test_audio_callback "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/audio/tone440_stereo.ogg")
+# Both executables create/delete the same synthetic WAV fixtures in the build directory.
+set_tests_properties(audio_asset audio_callback PROPERTIES RESOURCE_LOCK audio_asset_fixtures)
 add_executable(test_audio_spatial tests/audio/test_audio_spatial.c)
 target_link_libraries(test_audio_spatial PRIVATE su_audio)
 sutekh_apply_warnings(test_audio_spatial)

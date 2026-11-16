@@ -514,8 +514,128 @@ static void test_input_malformed_and_bounds(void) {
     CHECK(su_net_poll(s0) == SU_OK);
     CHECK(su_net_stats(s0, &st) == SU_OK && st.out_of_window_frames == 1u);
 
+    /* Future ACKs cannot suppress retransmission or commit accompanying frames. */
+    put_u64(pkt + 24, 2u);
+    put_u64(pkt + 32, 2u);
+    put_u64(pkt + 40, UINT64_MAX - 1u);
+    put_u64(pkt + 52, 2u);
+    q_push(&bus.rx[0], NULL, pkt, 64u);
+    CHECK(su_net_poll(s0) == SU_OK);
+    {
+        SuNetPeerInfo pi;
+        CHECK(su_net_peer_info(s0, 1u, &pi) == SU_OK && pi.remote_ack_tick == SU_NET_TICK_NONE);
+    }
+    CHECK(su_net_pop_remote_input(s0, 1u, 2u, out, sizeof out, &out_len, &avail) == SU_OK && avail == 0u);
+
+    /* The sentinel is never a valid input tick, even on the wire. */
+    put_u64(pkt + 24, SU_NET_TICK_NONE);
+    put_u64(pkt + 32, SU_NET_TICK_NONE);
+    put_u64(pkt + 40, SU_NET_TICK_NONE);
+    put_u64(pkt + 52, SU_NET_TICK_NONE);
+    q_push(&bus.rx[0], NULL, pkt, 64u);
+    CHECK(su_net_poll(s0) == SU_OK);
+    CHECK(su_net_stats(s0, &st) == SU_OK && st.packets_malformed == 6u);
+
+    /* Reordered old checksums cannot evict a newer one before local comparison. */
+    build_header(pkt, SU_NET_MSG_CHECKSUM, 1u, 2u, d0.session_salt);
+    put_u64(pkt + 24, SU_NET_CHECKSUM_RING_CAP);
+    put_u64(pkt + 32, 123u);
+    q_push(&bus.rx[0], NULL, pkt, SU_NET_CHECKSUM_BYTES);
+    put_u64(pkt + 24, 0u);
+    q_push(&bus.rx[0], NULL, pkt, SU_NET_CHECKSUM_BYTES);
+    CHECK(su_net_poll(s0) == SU_OK);
+    CHECK(su_net_send_checksum(s0, SU_NET_CHECKSUM_RING_CAP, 456u) == SU_OK);
+    {
+        SuNetDesyncInfo di;
+        CHECK(su_net_check_desync(s0, &di) == SU_OK && di.detected == 1u &&
+              di.tick == SU_NET_CHECKSUM_RING_CAP && di.remote_digest == 123u);
+    }
+
     su_net_session_destroy(s0);
     su_net_session_destroy(s1);
+}
+
+static void test_udp_transport(uint8_t family) {
+    SuNetUdpSocket *sockets[3] = {NULL, NULL, NULL};
+    SuNetAddr bind_addr;
+    SuNetAddr addrs[3];
+    SuNetTransport tx, rx;
+    uint8_t bytes[2] = {11u, 22u};
+    uint8_t got[2] = {0u, 0u};
+    size_t len = 0u;
+    uint32_t i, st = SU_OK;
+    if (family == SU_NET_AF_IPV4) {
+        CHECK(su_net_addr_ipv4(127u, 0u, 0u, 1u, 0u, &bind_addr) == SU_OK);
+    } else {
+        uint8_t ip[16] = {0u};
+        ip[15] = 1u;
+        CHECK(su_net_addr_ipv6(ip, 0u, &bind_addr) == SU_OK);
+    }
+    for (i = 0u; i < 3u; i++) {
+        st = su_net_udp_open(&bind_addr, &sockets[i], &addrs[i]);
+        CHECK(st == SU_OK);
+        if (st != SU_OK) {
+            goto cleanup;
+        }
+        CHECK(addrs[i].family == family && addrs[i].port != 0u);
+    }
+    /* Closing one socket must leave the other Winsock startup references alive. */
+    su_net_udp_close(sockets[0]);
+    sockets[0] = NULL;
+    tx = su_net_udp_transport(sockets[1]);
+    rx = su_net_udp_transport(sockets[2]);
+    CHECK(tx.send_fn(tx.user, &addrs[2], bytes, sizeof bytes) == SU_OK);
+    for (i = 0u; i < 10000u; i++) {
+        st = rx.recv_fn(rx.user, NULL, got, 1u, &len);
+        if (st != SU_OK || len != 0u) {
+            break;
+        }
+    }
+    CHECK(st == SU_E_RESOURCE_LIMIT && len == 0u);
+    CHECK(tx.send_fn(tx.user, &addrs[2], bytes, sizeof bytes) == SU_OK);
+    for (i = 0u; i < 10000u; i++) {
+        st = rx.recv_fn(rx.user, NULL, got, sizeof got, &len);
+        if (st != SU_OK || len != 0u) {
+            break;
+        }
+    }
+    CHECK(st == SU_OK && len == sizeof bytes && memcmp(got, bytes, sizeof bytes) == 0);
+cleanup:
+    for (i = 0u; i < 3u; i++) {
+        su_net_udp_close(sockets[i]);
+    }
+}
+
+static void test_single_frame_recovery(void) {
+    PairBus *bus = calloc(1u, sizeof *bus);
+    PairEnd ends[2];
+    SuNetSession *sessions[2] = {NULL, NULL};
+    uint32_t i;
+    uint8_t blob = 42u;
+    CHECK(bus != NULL);
+    if (bus == NULL) {
+        return;
+    }
+    for (i = 0u; i < 2u; i++) {
+        SuNetTransport tr = {pair_send, pair_recv, &ends[i]};
+        SuNetSessionDesc d = make_desc(i, 2u, tr);
+        ends[i].bus = bus;
+        ends[i].self = i;
+        d.redundancy = 1u;
+        CHECK(su_net_session_create(&d, &sessions[i]) == SU_OK);
+    }
+    for (i = 0u; i < 4u; i++) {
+        CHECK(su_net_poll(sessions[0]) == SU_OK);
+        CHECK(su_net_poll(sessions[1]) == SU_OK);
+    }
+    CHECK(su_net_send_input(sessions[0], 0u, &blob, 1u) == SU_OK);
+    memset(bus, 0, sizeof *bus); /* lose tick 0 */
+    CHECK(su_net_send_input(sessions[0], 1u, &blob, 1u) == SU_OK);
+    CHECK(bus->rx[1].count == 1u);
+    CHECK(rd_u64(bus->rx[1].pkts[bus->rx[1].head] + 52) == 0u);
+    su_net_session_destroy(sessions[0]);
+    su_net_session_destroy(sessions[1]);
+    free(bus);
 }
 
 static void test_ring_wrap_bye_and_zero_alloc(void) {
@@ -607,6 +727,9 @@ int main(void) {
     test_creation_validation();
     test_malformed_and_schema_rejection();
     test_input_malformed_and_bounds();
+    test_udp_transport(SU_NET_AF_IPV4);
+    test_udp_transport(SU_NET_AF_IPV6);
+    test_single_frame_recovery();
     test_ring_wrap_bye_and_zero_alloc();
 #ifndef SU_TEST_WRAP_ALLOC
     printf("note: allocation counting not built in (non-Linux or ASan)\n");
