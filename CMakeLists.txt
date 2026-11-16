@@ -824,6 +824,32 @@ endif()
 include(cmake/SutekhHostOps.cmake)
 include(cmake/SutekhDeterminism.cmake)
 include(cmake/SutekhPresentation.cmake)
+# ---- BEGIN UDP peer session & deterministic input/checksum sync (include/sutekh/net.h) ----
+# Standalone host-side static library; su_agent and core VM never link to it (ENGINE_CONSTITUTION C07/C11).
+add_library(su_net STATIC src/net/su_net.c)
+target_include_directories(su_net PUBLIC "${SUTEKH_CONTRACT_INCLUDE}" PRIVATE src)
+if(WIN32)
+    target_link_libraries(su_net PRIVATE ws2_32)
+else()
+    target_compile_definitions(su_net PRIVATE _POSIX_C_SOURCE=200809L)
+endif()
+sutekh_apply_warnings(su_net)
+if(SUTEKH_BUILD_TESTS)
+    add_executable(test_net_protocol tests/net/test_net_protocol.c)
+    target_link_libraries(test_net_protocol PRIVATE su_net)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT SUTEKH_ASAN_BUILD)
+        target_compile_definitions(test_net_protocol PRIVATE SU_TEST_WRAP_ALLOC)
+        target_link_options(test_net_protocol PRIVATE "LINKER:--wrap=malloc,--wrap=calloc,--wrap=realloc")
+    endif()
+    sutekh_apply_warnings(test_net_protocol)
+    add_test(NAME net_protocol COMMAND test_net_protocol)
+
+    add_executable(test_net_peers tests/net/test_net_peers.c)
+    target_link_libraries(test_net_peers PRIVATE su_net su_host)
+    sutekh_apply_warnings(test_net_peers)
+    add_test(NAME net_peers COMMAND test_net_peers WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif() # SUTEKH_BUILD_TESTS
+# ---- END UDP peer session ----
 include(cmake/SutekhPublic.cmake)
 # Sanitizer builds only: the documented worker environment (cmake/SutekhSanitizers.cmake). Deferred so it runs
 # after every test, including those registered by earlier deferred calls (cmake/SutekhNumeric3D.cmake).

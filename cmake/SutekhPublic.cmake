@@ -19,7 +19,8 @@ set(_sutekh_public_libraries
     audio_events su_audio_events      # audio_event.h, audio_graph.h, audio_bus.h, audio_parameter.h, ...
     audio_offline su_audio_offline    # audio_offline.h
     audio_inspect su_audio_inspect    # audio_inspect.h
-    audio_system su_audio_system)     # audio_system.h
+    audio_system su_audio_system      # audio_system.h
+    net su_net)                       # net.h (host-side UDP peer session)
 set(_sutekh_public "")
 while(_sutekh_public_libraries)
     list(POP_FRONT _sutekh_public_libraries _sutekh_alias _sutekh_target)
