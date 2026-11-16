@@ -1562,6 +1562,9 @@ static int make_pipelines(SuRenderer *r) {
     s.post = 1;
     s.blend = BLEND_ALPHA;
     ok = ok && make_pipe(r, &s, &r->hud_pipe);
+    s.fs = su_shader_hud_tex_frag;
+    s.fs_bytes = sizeof su_shader_hud_tex_frag;
+    ok = ok && make_pipe(r, &s, &r->hud_tex_pipe);
     r->stats.pipeline_create_ms = su_rvk_now_ms() - t0;
     return ok;
 }
@@ -2007,6 +2010,19 @@ static int make_fx_pool(SuRenderer *r, Frame *fr) {
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &ps;
     return r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &fr->fx_pool) == VK_SUCCESS;
+}
+
+static int make_hud_pool(SuRenderer *r, Frame *fr) {
+    VkDescriptorPoolSize ps;
+    VkDescriptorPoolCreateInfo pi;
+    ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ps.descriptorCount = MAX_HUD_BATCHES;
+    memset(&pi, 0, sizeof pi);
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = MAX_HUD_BATCHES;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &ps;
+    return r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &fr->hud_pool) == VK_SUCCESS;
 }
 
 static int make_frame_sets(SuRenderer *r) {
@@ -2588,6 +2604,9 @@ void su_render_destroy(SuRenderer *r) {
                 r->f.vkDestroyDescriptorPool(r->dev, fr->fx_pool, NULL);
             }
             su_rvk_free_buffer(r, &fr->hud);
+            if (fr->hud_pool != VK_NULL_HANDLE) {
+                r->f.vkDestroyDescriptorPool(r->dev, fr->hud_pool, NULL);
+            }
             su_rvk_free_buffer(r, &fr->ubo);
             su_rvk_free_buffer(r, &fr->staging);
             if (fr->fence != VK_NULL_HANDLE) {
@@ -2633,6 +2652,9 @@ void su_render_destroy(SuRenderer *r) {
             all[9] = r->skycube_pipe;
             all[10] = r->haze_pipe[0];
             all[11] = r->haze_pipe[1];
+            if (r->hud_tex_pipe != VK_NULL_HANDLE) {
+                r->f.vkDestroyPipeline(r->dev, r->hud_tex_pipe, NULL);
+            }
             if (r->bloom_up_pipe != VK_NULL_HANDLE) {
                 r->f.vkDestroyPipeline(r->dev, r->bloom_up_pipe, NULL);
             }
@@ -3060,6 +3082,7 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
                                 host, &fr->flames) ||
             !su_rvk_make_buffer(r, (VkDeviceSize)r->max_hud * sizeof(SuHudVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                 host, &fr->hud) ||
+            !make_hud_pool(r, fr) ||
             !su_rvk_make_buffer(r, sizeof(FrameUbo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, host, &fr->ubo) ||
             !su_rvk_make_buffer(r, r->budget, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, host, &fr->staging)) {
             return create_fail(r, SU_E_RESOURCE_LIMIT, message, "per-frame resources");
@@ -3193,6 +3216,8 @@ typedef struct FrameIn {
     uint32_t fx_count;
     const SuHudVertex *hud;
     uint32_t hud_count;
+    const SuHudBatch *hud_batches;
+    uint32_t hud_batch_count;
     const SuFxVertex *fx_tex;
     uint32_t fx_tex_count;
     const SuFxBatch *batches;
@@ -3373,6 +3398,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     (void)r->f.vkResetFences(r->dev, 1, &fr->fence);
     su_rvk_collect_retired(r);
     (void)r->f.vkResetDescriptorPool(r->dev, fr->fx_pool, 0);
+    (void)r->f.vkResetDescriptorPool(r->dev, fr->hud_pool, 0);
 
     (void)r->f.vkResetCommandBuffer(cmd, 0);
     memset(&bi, 0, sizeof bi);
@@ -3885,15 +3911,111 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
         }
         r->f.vkCmdDraw(cmd, 3, 1, 0, 0);
         r->stats.draws++;
-        if (n_hud > 0u) {
-            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->hud_pipe);
-            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->post_layout, 0, 1, &r->font_set, 0, NULL);
-            /* the HUD shaders read the output size from the post push constants, whichever pass drew the tonemap */
-            r->f.vkCmdPushConstants(cmd, r->post_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                                    sizeof pp, &pp);
-            r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->hud.buf, &zero);
-            r->f.vkCmdDraw(cmd, n_hud, 1, 0, 0);
-            r->stats.draws++;
+        r->stats.hud_batches_drawn = 0;
+        r->stats.hud_batches_skipped = 0;
+        if (in->hud_batch_count == 0u) {
+            if (n_hud > 0u) {
+                r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->hud_pipe);
+                r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->post_layout, 0, 1, &r->font_set,
+                                             0, NULL);
+                /* the HUD shaders read the output size from the post push constants, whichever pass drew the tonemap */
+                r->f.vkCmdPushConstants(cmd, r->post_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                        0, sizeof pp, &pp);
+                r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->hud.buf, &zero);
+                r->f.vkCmdDraw(cmd, n_hud, 1, 0, 0);
+                r->stats.draws++;
+            }
+        } else {
+            uint32_t drawn = 0;
+            uint32_t hud_skipped = 0;
+            int bound_vb = 0;
+            VkPipeline last_pipe = VK_NULL_HANDLE;
+            for (i = 0; i < in->hud_batch_count; i++) {
+                const SuHudBatch *bt = &in->hud_batches[i];
+                VkPipeline pipe;
+                VkDescriptorSet set;
+                VkRect2D sc;
+                if (bt->vertex_count == 0u) {
+                    continue;
+                }
+                if (bt->first_vertex >= n_hud || bt->vertex_count > n_hud - bt->first_vertex ||
+                    (bt->first_vertex % 3u) != 0u || (bt->vertex_count % 3u) != 0u || drawn >= MAX_HUD_BATCHES) {
+                    hud_skipped++;
+                    continue;
+                }
+                if ((bt->flags & SU_HUD_BATCH_SCISSOR) != 0u) {
+                    int64_t x0 = bt->scissor_x;
+                    int64_t y0 = bt->scissor_y;
+                    int64_t x1 = x0 + (int64_t)bt->scissor_w;
+                    int64_t y1 = y0 + (int64_t)bt->scissor_h;
+                    if (x0 < 0) {
+                        x0 = 0;
+                    }
+                    if (y0 < 0) {
+                        y0 = 0;
+                    }
+                    if (x1 > (int64_t)r->width) {
+                        x1 = (int64_t)r->width;
+                    }
+                    if (y1 > (int64_t)r->height) {
+                        y1 = (int64_t)r->height;
+                    }
+                    if (x1 <= x0 || y1 <= y0) {
+                        continue;
+                    }
+                    sc.offset.x = (int32_t)x0;
+                    sc.offset.y = (int32_t)y0;
+                    sc.extent.width = (uint32_t)(x1 - x0);
+                    sc.extent.height = (uint32_t)(y1 - y0);
+                } else {
+                    sc.offset.x = 0;
+                    sc.offset.y = 0;
+                    sc.extent.width = r->width;
+                    sc.extent.height = r->height;
+                }
+                if (bt->texture == 0u) {
+                    pipe = r->hud_pipe;
+                    set = r->font_set;
+                } else {
+                    Res *texture = su_rvk_get(r, bt->texture, RES_TEXTURE, NULL);
+                    VkDescriptorSetAllocateInfo alloc;
+                    if (texture == NULL || texture->state != SU_RENDER_STATE_READY || texture->u.tex.layers != 1u ||
+                        texture->u.tex.depth > 1u) {
+                        hud_skipped++;
+                        continue;
+                    }
+                    memset(&alloc, 0, sizeof alloc);
+                    alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                    alloc.descriptorPool = fr->hud_pool;
+                    alloc.descriptorSetCount = 1;
+                    alloc.pSetLayouts = &r->tex_dsl;
+                    if (r->f.vkAllocateDescriptorSets(r->dev, &alloc, &set) != VK_SUCCESS) {
+                        hud_skipped++;
+                        continue;
+                    }
+                    write_image_set(r, set, texture->u.tex.view,
+                                    (bt->flags & SU_HUD_BATCH_NEAREST) != 0u ? r->nearest : r->bloom_sampler);
+                    pipe = r->hud_tex_pipe;
+                }
+                if (!bound_vb) {
+                    /* the HUD shaders read the output size from the post push constants, whichever pass drew the tonemap */
+                    r->f.vkCmdPushConstants(cmd, r->post_layout,
+                                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pp, &pp);
+                    r->f.vkCmdBindVertexBuffers(cmd, 0, 1, &fr->hud.buf, &zero);
+                    bound_vb = 1;
+                }
+                if (pipe != last_pipe) {
+                    r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+                    last_pipe = pipe;
+                }
+                r->f.vkCmdSetScissor(cmd, 0, 1, &sc);
+                r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->post_layout, 0, 1, &set, 0, NULL);
+                r->f.vkCmdDraw(cmd, bt->vertex_count, 1, bt->first_vertex, 0);
+                r->stats.draws++;
+                drawn++;
+            }
+            r->stats.hud_batches_drawn = drawn;
+            r->stats.hud_batches_skipped = hud_skipped;
         }
     }
     r->f.vkCmdEndRenderPass(cmd);
@@ -4056,10 +4178,12 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
     SuVec3f sd;
     SuVec3f up;
     float len;
-    if (r == NULL || f == NULL || f->struct_size != sizeof *f || (f->objects == NULL && f->object_count > 0u) ||
+    if (r == NULL || f == NULL || (f->struct_size != sizeof *f && f->struct_size != SU_RENDER_FRAME_DESC_V12_SIZE) ||
+        (f->objects == NULL && f->object_count > 0u) ||
         (f->debug_instances == NULL && f->debug_instance_count > 0u) || (f->lines == NULL && f->line_vertex_count > 0u) ||
         (f->fx == NULL && f->fx_vertex_count > 0u) || (f->hud == NULL && f->hud_vertex_count > 0u) ||
         (f->fx_tex == NULL && f->fx_tex_vertex_count > 0u) || (f->fx_batches == NULL && f->fx_batch_count > 0u) ||
+        (f->struct_size == sizeof *f && f->hud_batches == NULL && f->hud_batch_count > 0u) ||
         (f->haze == NULL && f->haze_count > 0u) || f->haze_count > SU_HAZE_MAX_VOLUMES ||
         !isfinite(f->distortion_cube_intensity) || f->distortion_cube_intensity < 0.0f ||
         f->output_alpha > SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED ||
@@ -4148,6 +4272,10 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
     in.fx_count = f->fx_vertex_count;
     in.hud = f->hud;
     in.hud_count = f->hud_vertex_count;
+    if (f->struct_size == sizeof *f) {
+        in.hud_batches = f->hud_batches;
+        in.hud_batch_count = f->hud_batch_count;
+    }
     in.fx_tex = f->fx_tex;
     in.fx_tex_count = f->fx_tex_vertex_count;
     in.batches = f->fx_batches;

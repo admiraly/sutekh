@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 12u
+#define SU_RENDER_API_VERSION 13u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -430,6 +430,25 @@ SU_RENDER_API float su_hud_text(SuHud *h, float x, float y, float scale, uint32_
 SU_RENDER_API float su_hud_textf(SuHud *h, float x, float y, float scale, uint32_t rgba, const char *fmt, ...);
 /* Size of text in pixels at scale. */
 SU_RENDER_API void su_hud_measure(const char *text, float scale, float *w, float *hgt);
+
+#define SU_HUD_BATCH_SCISSOR 0x1u
+#define SU_HUD_BATCH_NEAREST 0x2u
+
+typedef struct SuHudBatch {
+    uint32_t first_vertex;
+    uint32_t vertex_count;
+    SuRenderHandle texture; /* 0 = built-in font/solid atlas; else READY 2D texture */
+    uint32_t flags;         /* SU_HUD_BATCH_* */
+    int32_t scissor_x;
+    int32_t scissor_y;
+    uint32_t scissor_w;
+    uint32_t scissor_h;
+} SuHudBatch;
+
+/* Screen-space textured quad at (x, y) of size w x hgt in pixels; uv_rect NULL uses (0, 0, 1, 1). */
+SU_RENDER_API void su_hud_sprite(SuHud *h, float x, float y, float w, float hgt, const float uv_rect[4], uint32_t rgba);
+/* A batch covering the vertices written to h since first_vertex; flags = 0, full scissor 0. */
+SU_RENDER_API SuHudBatch su_hud_batch(SuRenderHandle texture, uint32_t first_vertex, const SuHud *h);
 
 typedef struct SuRenderView {
     SuMat4f view;
@@ -962,7 +981,12 @@ typedef struct SuRenderFrameDesc {
     SuRenderHandle distortion_cube;
     float distortion_cube_intensity;
     uint32_t output_alpha;
+    /* ---- API 13: textured 2D HUD batches and per-batch scissor rects. Fields after this line need
+     * struct_size == sizeof(SuRenderFrameDesc); SU_RENDER_FRAME_DESC_V12_SIZE is API 12 and earlier. ---- */
+    const SuHudBatch *hud_batches;
+    uint32_t hud_batch_count;
 } SuRenderFrameDesc;
+#define SU_RENDER_FRAME_DESC_V12_SIZE ((uint32_t)offsetof(SuRenderFrameDesc, hud_batches))
 
 /* Draws one camera-relative frame: procedural sky (or clear colour), PBR-lite opaque, masked and blended object
  * meshes, debug instances and lines, additive effects into an RGBA16F target; then tonemapping to the sRGB output
@@ -1033,6 +1057,8 @@ typedef struct SuRenderStats {
     uint32_t flames_drawn, flames_skipped, flame_draws;
     uint32_t particles_alive, particles_dropped, particle_emitters_drawn, particle_draws;
     uint32_t distortion_draws;
+    uint32_t hud_batches_drawn;
+    uint32_t hud_batches_skipped;
 } SuRenderStats;
 
 /* Draws one debug frame: instances (any order; sorted by mesh internally) and line-list vertices with the given

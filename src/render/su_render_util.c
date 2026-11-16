@@ -1068,6 +1068,24 @@ void su_hud_measure(const char *text, float scale, float *w, float *hgt) {
     }
 }
 
+void su_hud_sprite(SuHud *h, float x, float y, float w, float hgt, const float uv_rect[4], uint32_t rgba) {
+    float r[4];
+    if (h == NULL) {
+        return;
+    }
+    uv_default(uv_rect, r);
+    hud_quad(h, x, y, x + w, y + hgt, r[0], r[1], r[2], r[3], rgba);
+}
+
+SuHudBatch su_hud_batch(SuRenderHandle texture, uint32_t first_vertex, const SuHud *h) {
+    SuHudBatch b;
+    memset(&b, 0, sizeof b);
+    b.texture = texture;
+    b.first_vertex = first_vertex;
+    b.vertex_count = (h != NULL && h->count > first_vertex) ? (h->count - first_vertex) : 0u;
+    return b;
+}
+
 /* ---------- image-based lighting: cube faces, prefiltered specular chain ---------- */
 
 #include <stdlib.h>

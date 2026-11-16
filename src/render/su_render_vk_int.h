@@ -42,6 +42,7 @@
 #define DEFAULT_HUD_VERTICES 49152u
 #define DEFAULT_FX_TEX_VERTICES 98304u
 #define DEFAULT_FX_BATCHES 256u
+#define MAX_HUD_BATCHES 512u
 #define MAX_DEVICES 16u
 #define HDR_FORMAT VK_FORMAT_R16G16B16A16_SFLOAT
 #define SU_RVK_DEFAULT_ACQUIRE_TIMEOUT_US 50000u /* SuRenderDesc.acquire_timeout_us 0: 50 ms (see render.h) */
@@ -212,6 +213,7 @@ typedef struct Frame {
     Buffer shadow_inst;   /* shadow caster instances (DrawInstance) */
     VkDescriptorPool fx_pool; /* one sampler set per textured batch, reset every frame */
     Buffer hud;
+    VkDescriptorPool hud_pool; /* one sampler set per textured HUD batch, reset every frame */
     Buffer ubo;           /* FrameUbo */
     Buffer staging;       /* upload_budget bytes */
     VkDescriptorSet frame_set;
@@ -512,6 +514,7 @@ struct SuRenderer {
     SuRenderHandle default_env;
     VkPipeline post_pipe;
     VkPipeline hud_pipe;
+    VkPipeline hud_tex_pipe;
     VkSampler samplers[9];              /* linear, mipmapped, by wrap S * 3 + wrap T */
     VkSampler nearest;
     VkDescriptorSet post_set;

@@ -281,6 +281,12 @@ if(NOT SUTEKH_VULKAN_INCLUDE STREQUAL "")
     sutekh_apply_warnings(test_render_paint)
     add_test(NAME render_paint COMMAND test_render_paint)
     set_tests_properties(render_paint PROPERTIES SKIP_RETURN_CODE 77)
+    # Textured 2D HUD batches and scissor rects, pixel-checked; skipped (77) without a usable Vulkan device.
+    add_executable(test_render_hud tests/render/test_render_hud.c)
+    target_link_libraries(test_render_hud PRIVATE su_render su_asset)
+    sutekh_apply_warnings(test_render_hud)
+    add_test(NAME render_hud COMMAND test_render_hud)
+    set_tests_properties(render_hud PROPERTIES SKIP_RETURN_CODE 77)
     if(TARGET su_window)
         # Window and swapchain on the session's display, and under Xvfb when it is installed; skipped (77) with
         # the reason when there is no display, no SDL3 library or no Vulkan device that can present.

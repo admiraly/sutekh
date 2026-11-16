@@ -404,6 +404,46 @@ static void test_textured_fx(void) {
     printf("textured fx: atlas rectangles, sprite uv, axis sprites at %d camera positions\n", 3 * 5 * 18);
 }
 
+static void test_hud_batches(void) {
+    SuHudVertex store[12];
+    SuHud h;
+    float uv[4] = {0.25f, 0.5f, 0.75f, 1.0f};
+    SuHudBatch b;
+    su_hud_begin(&h, store, 12, 640, 360);
+    /* NULL uv_rect -> full (0, 0, 1, 1) */
+    su_hud_sprite(&h, 10.0f, 20.0f, 40.0f, 30.0f, NULL, 0x11223344u);
+    CHECK(h.count == 6u && h.dropped == 0u);
+    CHECK(store[0].pos[0] == 10.0f && store[0].pos[1] == 20.0f && store[0].uv[0] == 0.0f && store[0].uv[1] == 0.0f);
+    CHECK(store[1].pos[0] == 50.0f && store[1].pos[1] == 20.0f && store[1].uv[0] == 1.0f && store[1].uv[1] == 0.0f);
+    CHECK(store[2].pos[0] == 50.0f && store[2].pos[1] == 50.0f && store[2].uv[0] == 1.0f && store[2].uv[1] == 1.0f);
+    CHECK(store[3].pos[0] == 10.0f && store[3].pos[1] == 20.0f && store[3].uv[0] == 0.0f && store[3].uv[1] == 0.0f);
+    CHECK(store[4].pos[0] == 50.0f && store[4].pos[1] == 50.0f && store[4].uv[0] == 1.0f && store[4].uv[1] == 1.0f);
+    CHECK(store[5].pos[0] == 10.0f && store[5].pos[1] == 50.0f && store[5].uv[0] == 0.0f && store[5].uv[1] == 1.0f);
+    CHECK(store[0].rgba == 0x11223344u && store[5].rgba == 0x11223344u);
+
+    /* custom uv_rect and batch range */
+    su_hud_sprite(&h, 100.0f, 80.0f, 16.0f, 8.0f, uv, 0xAABBCCDDu);
+    CHECK(h.count == 12u && h.dropped == 0u);
+    CHECK(store[6].uv[0] == 0.25f && store[6].uv[1] == 0.5f);
+    CHECK(store[7].uv[0] == 0.75f && store[7].uv[1] == 0.5f);
+    CHECK(store[8].uv[0] == 0.75f && store[8].uv[1] == 1.0f);
+    CHECK(store[11].uv[0] == 0.25f && store[11].uv[1] == 1.0f);
+
+    /* overflow drops quad cleanly */
+    su_hud_sprite(&h, 0.0f, 0.0f, 10.0f, 10.0f, NULL, 0xFFFFFFFFu);
+    CHECK(h.count == 12u && h.dropped == 1u);
+    su_hud_sprite(NULL, 0.0f, 0.0f, 10.0f, 10.0f, NULL, 0u);
+
+    b = su_hud_batch(42u, 6u, &h);
+    CHECK(b.texture == 42u && b.first_vertex == 6u && b.vertex_count == 6u);
+    CHECK(b.flags == 0u && b.scissor_x == 0 && b.scissor_y == 0 && b.scissor_w == 0u && b.scissor_h == 0u);
+    b = su_hud_batch(42u, 18u, &h);
+    CHECK(b.vertex_count == 0u);
+    b = su_hud_batch(42u, 0u, NULL);
+    CHECK(b.vertex_count == 0u);
+    printf("hud batches: sprite quad vertices, uv rects, overflow and batch builder ok\n");
+}
+
 int main(void) {
     test_projection();
     test_quat_and_cameras();
@@ -412,6 +452,7 @@ int main(void) {
     test_ppm();
     test_env();
     test_textured_fx();
+    test_hud_batches();
     printf("test_render_util: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
