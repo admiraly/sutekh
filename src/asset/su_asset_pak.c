@@ -14,6 +14,7 @@
 #include "sutekh/asset.h"
 
 _Static_assert(sizeof(SuAssetVertex) == 56, "vertex layout");
+_Static_assert(sizeof(SuAssetVertexColor) == 16, "vertex color layout");
 _Static_assert(sizeof(SuAssetSubmesh) == 32, "submesh layout");
 _Static_assert(sizeof(SuAssetMeshHeader) == 64, "mesh header layout");
 _Static_assert(sizeof(SuAssetTextureHeader) == 64, "texture header layout");
@@ -21,6 +22,7 @@ _Static_assert(sizeof(SuAssetMip) == 16, "mip layout");
 _Static_assert(sizeof(SuAssetMaterial) == 128, "material layout");
 _Static_assert(sizeof(SuAssetPaintLayer) == 48, "paint layer layout");
 _Static_assert(sizeof(SuAssetPaint) == 336, "paint layout");
+_Static_assert(sizeof(SuAssetToon) == 112, "toon material layout");
 _Static_assert(sizeof(SuAssetModelNode) == 128, "model node layout");
 _Static_assert(sizeof(SuAssetModelHeader) == 64, "model header layout");
 
@@ -255,13 +257,14 @@ static void sphere_of(const SuAssetVertex *v, const uint32_t *idx, uint32_t firs
     *r = rr * 1.0001f + 1e-6f;
 }
 
-uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices, uint32_t vertex_count,
-                                  const uint32_t *indices, uint32_t index_count, const SuAssetSubmesh *submeshes,
-                                  uint32_t submesh_count) {
+static uint32_t writer_add_mesh_impl(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices,
+                                     const SuAssetVertexColor *colors, uint32_t vertex_count, const uint32_t *indices,
+                                     uint32_t index_count, const SuAssetSubmesh *submeshes, uint32_t submesh_count) {
     SuAssetMeshHeader h;
     SuAssetSubmesh *sm;
     uint8_t *buf;
     size_t size;
+    size_t idx_off;
     uint32_t i;
     int k;
     if (w == NULL || vertices == NULL || indices == NULL || submeshes == NULL || vertex_count == 0u ||
@@ -284,9 +287,12 @@ uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVe
         if (!finite_n(vertices[i].pos, 14u)) {
             return SU_E_INVALID_ARGUMENT;
         }
+        if (colors != NULL && !finite_n(colors[i].rgba, 4u)) {
+            return SU_E_INVALID_ARGUMENT;
+        }
     }
-    size = sizeof h + (size_t)submesh_count * sizeof *sm + (size_t)vertex_count * sizeof *vertices +
-           (size_t)index_count * 4u;
+    idx_off = sizeof h + (size_t)submesh_count * sizeof *sm + (size_t)vertex_count * sizeof *vertices;
+    size = idx_off + (size_t)index_count * 4u + (colors != NULL ? (size_t)vertex_count * sizeof *colors : 0u);
     buf = calloc(1, size);
     if (buf == NULL) {
         return SU_E_RESOURCE_LIMIT;
@@ -295,6 +301,7 @@ uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVe
     h.vertex_count = vertex_count;
     h.index_count = index_count;
     h.submesh_count = submesh_count;
+    h.flags = colors != NULL ? SU_ASSET_MESH_FLAG_COLOR : 0u;
     for (k = 0; k < 3; k++) {
         h.aabb_min[k] = INFINITY;
         h.aabb_max[k] = -INFINITY;
@@ -313,9 +320,27 @@ uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVe
         sphere_of(vertices, indices, sm[i].first_index, sm[i].index_count, sm[i].center, &sm[i].radius);
     }
     memcpy(buf + sizeof h + (size_t)submesh_count * sizeof *sm, vertices, (size_t)vertex_count * sizeof *vertices);
-    memcpy(buf + sizeof h + (size_t)submesh_count * sizeof *sm + (size_t)vertex_count * sizeof *vertices, indices,
-           (size_t)index_count * 4u);
-    return writer_put(w, id, SU_ASSET_MESH, buf, size);
+    memcpy(buf + idx_off, indices, (size_t)index_count * 4u);
+    if (colors != NULL) {
+        memcpy(buf + idx_off + (size_t)index_count * 4u, colors, (size_t)vertex_count * sizeof *colors);
+    }
+    return writer_put_v(w, id, SU_ASSET_MESH, colors != NULL ? SU_ASSET_MESH_COLOR_VERSION : 1u, buf, size);
+}
+
+uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices, uint32_t vertex_count,
+                                  const uint32_t *indices, uint32_t index_count, const SuAssetSubmesh *submeshes,
+                                  uint32_t submesh_count) {
+    return writer_add_mesh_impl(w, id, vertices, NULL, vertex_count, indices, index_count, submeshes, submesh_count);
+}
+
+uint32_t su_asset_writer_add_colored_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices,
+                                          const SuAssetVertexColor *colors, uint32_t vertex_count,
+                                          const uint32_t *indices, uint32_t index_count, const SuAssetSubmesh *submeshes,
+                                          uint32_t submesh_count) {
+    if (colors == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return writer_add_mesh_impl(w, id, vertices, colors, vertex_count, indices, index_count, submeshes, submesh_count);
 }
 
 uint32_t su_asset_writer_add_texture(SuAssetWriter *w, uint64_t id, uint32_t width, uint32_t height, uint32_t format,
@@ -390,6 +415,51 @@ uint32_t su_asset_writer_add_paint_material(SuAssetWriter *w, uint64_t id, const
     return st;
 }
 
+static int toon_valid(const SuAssetToon *t) {
+    if (!finite_n(t->uv_scale, 2u) || !finite_n(t->uv_offset, 2u) || !isfinite(t->uv_rotation) ||
+        !finite_n(t->shadow_color, 3u) || !isfinite(t->shade_threshold) || !isfinite(t->shade_softness) ||
+        !finite_n(t->specular_color, 3u) || !isfinite(t->specular_threshold) || !isfinite(t->specular_softness) ||
+        !isfinite(t->specular_intensity) || !isfinite(t->glossiness) || !finite_n(t->rim_color, 3u) ||
+        !isfinite(t->rim_power) || !isfinite(t->rim_intensity)) {
+        return 0;
+    }
+    if (t->shade_threshold < -1.0f || t->shade_threshold > 1.0f || t->shade_softness < 0.0f ||
+        t->diffuse_bands < 1u || t->diffuse_bands > 8u || t->specular_threshold < 0.0f ||
+        t->specular_threshold > 1.0f || t->specular_softness < 0.0f || t->specular_intensity < 0.0f ||
+        t->glossiness < 1.0f || t->rim_power <= 0.0f || t->rim_intensity < 0.0f ||
+        (t->flags & ~(SU_TOON_HALF_LAMBERT | SU_TOON_USE_VERTEX_COLOR | SU_TOON_RIM_LIT_MASK)) != 0u) {
+        return 0;
+    }
+    return 1;
+}
+
+uint32_t su_asset_writer_add_toon_material(SuAssetWriter *w, uint64_t id, const SuAssetMaterial *m, const SuAssetToon *t) {
+    uint8_t *buf;
+    uint32_t i;
+    if (w == NULL || m == NULL || t == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (!finite_n(m->base_color, 13u) || m->alpha_mode > SU_ASSET_ALPHA_BLEND || m->double_sided > 1u || m->unlit > 1u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    for (i = 0; i < SU_ASSET_SLOT_COUNT; i++) {
+        uint32_t ti = m->tex_info[i];
+        if ((ti & 0xFFu) > 1u || ((ti >> 8) & 0xFu) > 2u || ((ti >> 12) & 0xFu) > 2u || (ti >> 16) != 0u) {
+            return SU_E_INVALID_ARGUMENT;
+        }
+    }
+    if (!toon_valid(t)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    buf = malloc(sizeof *m + sizeof *t);
+    if (buf == NULL) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    memcpy(buf, m, sizeof *m);
+    memcpy(buf + sizeof *m, t, sizeof *t);
+    return writer_put_v(w, id, SU_ASSET_MATERIAL, SU_ASSET_MATERIAL_TOON_VERSION, buf, sizeof *m + sizeof *t);
+}
+
 void su_asset_paint_default(SuAssetPaint *p) {
     uint32_t i;
     memset(p, 0, sizeof *p);
@@ -407,6 +477,25 @@ void su_asset_paint_default(SuAssetPaint *p) {
         p->layer[i].roughness = 1.0f;
         p->layer[i].opacity = 1.0f;
     }
+}
+
+void su_asset_toon_default(SuAssetToon *t) {
+    if (t == NULL) {
+        return;
+    }
+    memset(t, 0, sizeof *t);
+    t->uv_scale[0] = t->uv_scale[1] = 1.0f;
+    t->shadow_color[0] = 0.35f;
+    t->shadow_color[1] = 0.35f;
+    t->shadow_color[2] = 0.45f;
+    t->shade_softness = 0.05f;
+    t->diffuse_bands = 1u;
+    t->specular_color[0] = t->specular_color[1] = t->specular_color[2] = 1.0f;
+    t->specular_threshold = 0.9f;
+    t->specular_softness = 0.02f;
+    t->glossiness = 32.0f;
+    t->rim_color[0] = t->rim_color[1] = t->rim_color[2] = 1.0f;
+    t->rim_power = 3.0f;
 }
 
 static void xform_point(const float *m, const float *p, float *out) {
@@ -600,10 +689,12 @@ static const uint8_t *payload(const SuAssetPak *p, uint32_t i) {
 static uint32_t check_mesh(const SuAssetPak *p, uint32_t ei, char *msg) {
     const uint8_t *b = payload(p, ei);
     uint64_t size = p->entries[ei].size;
+    int colored = p->entries[ei].type_version == SU_ASSET_MESH_COLOR_VERSION;
     SuAssetMeshHeader h;
     const SuAssetSubmesh *sm;
     const SuAssetVertex *v;
     const uint32_t *idx;
+    const uint8_t *col_bytes;
     uint64_t want;
     uint32_t i;
     if (size < sizeof h) {
@@ -612,16 +703,17 @@ static uint32_t check_mesh(const SuAssetPak *p, uint32_t ei, char *msg) {
     }
     memcpy(&h, b, sizeof h);
     want = sizeof h + (uint64_t)h.submesh_count * sizeof *sm + (uint64_t)h.vertex_count * sizeof *v +
-           (uint64_t)h.index_count * 4u;
+           (uint64_t)h.index_count * 4u + (colored ? (uint64_t)h.vertex_count * sizeof(SuAssetVertexColor) : 0u);
     if (h.vertex_count == 0u || h.index_count < 3u || h.index_count % 3u != 0u || h.submesh_count == 0u ||
-        h.flags != 0u || want != size || !finite3(h.aabb_min) || !finite3(h.aabb_max) || !finite3(h.center) ||
-        !isfinite(h.radius) || h.radius < 0.0f) {
+        h.flags != (colored ? SU_ASSET_MESH_FLAG_COLOR : 0u) || want != size || !finite3(h.aabb_min) ||
+        !finite3(h.aabb_max) || !finite3(h.center) || !isfinite(h.radius) || h.radius < 0.0f) {
         msgf(msg, "mesh %016llx: inconsistent header", (unsigned long long)p->entries[ei].id);
         return SU_E_PARSE;
     }
     sm = (const SuAssetSubmesh *)(b + sizeof h);
     v = (const SuAssetVertex *)(b + sizeof h + (size_t)h.submesh_count * sizeof *sm);
     idx = (const uint32_t *)(b + sizeof h + (size_t)h.submesh_count * sizeof *sm + (size_t)h.vertex_count * sizeof *v);
+    col_bytes = (const uint8_t *)(idx + h.index_count);
     for (i = 0; i < h.submesh_count; i++) {
         if (sm[i].index_count == 0u || sm[i].index_count % 3u != 0u || sm[i].first_index % 3u != 0u ||
             sm[i].first_index > h.index_count || sm[i].index_count > h.index_count - sm[i].first_index ||
@@ -635,6 +727,15 @@ static uint32_t check_mesh(const SuAssetPak *p, uint32_t ei, char *msg) {
         if (!finite_n(v[i].pos, 14u)) {
             msgf(msg, "mesh %016llx: vertex %u is not finite", (unsigned long long)p->entries[ei].id, (unsigned)i);
             return SU_E_PARSE;
+        }
+        if (colored) {
+            SuAssetVertexColor c;
+            memcpy(&c, col_bytes + (size_t)i * sizeof c, sizeof c);
+            if (!finite_n(c.rgba, 4u)) {
+                msgf(msg, "mesh %016llx: vertex color %u is not finite", (unsigned long long)p->entries[ei].id,
+                     (unsigned)i);
+                return SU_E_PARSE;
+            }
         }
     }
     for (i = 0; i < h.index_count; i++) {
@@ -738,10 +839,23 @@ static uint32_t check_paint(const SuAssetPak *p, uint32_t ei, char *msg) {
     return SU_OK;
 }
 
+static uint32_t check_toon(const SuAssetPak *p, uint32_t ei, char *msg) {
+    SuAssetToon t;
+    memcpy(&t, payload(p, ei) + sizeof(SuAssetMaterial), sizeof t);
+    if (!toon_valid(&t)) {
+        msgf(msg, "material %016llx: toon parameters invalid", (unsigned long long)p->entries[ei].id);
+        return SU_E_PARSE;
+    }
+    return SU_OK;
+}
+
 static uint32_t check_material(const SuAssetPak *p, uint32_t ei, char *msg) {
     SuAssetMaterial m;
     uint32_t i;
-    if (p->entries[ei].size != sizeof m + (p->entries[ei].type_version == 2u ? sizeof(SuAssetPaint) : 0u)) {
+    size_t extra = p->entries[ei].type_version == 2u                             ? sizeof(SuAssetPaint)
+                   : p->entries[ei].type_version == SU_ASSET_MATERIAL_TOON_VERSION ? sizeof(SuAssetToon)
+                                                                                   : 0u;
+    if (p->entries[ei].size != sizeof m + extra) {
         msgf(msg, "material %016llx: wrong size", (unsigned long long)p->entries[ei].id);
         return SU_E_PARSE;
     }
@@ -758,7 +872,13 @@ static uint32_t check_material(const SuAssetPak *p, uint32_t ei, char *msg) {
             return SU_E_PARSE;
         }
     }
-    return p->entries[ei].type_version == 2u ? check_paint(p, ei, msg) : SU_OK;
+    if (p->entries[ei].type_version == 2u) {
+        return check_paint(p, ei, msg);
+    }
+    if (p->entries[ei].type_version == SU_ASSET_MATERIAL_TOON_VERSION) {
+        return check_toon(p, ei, msg);
+    }
+    return SU_OK;
 }
 
 static uint32_t check_model(const SuAssetPak *p, uint32_t ei, char *msg) {
@@ -881,8 +1001,11 @@ uint32_t su_asset_pak_open(const void *bytes, size_t len, uint32_t flags, SuAsse
         memcpy(en->sha256, e + 32, 32);
         if (en->id == 0u || (i > 0u && en->id <= p->entries[i - 1u].id) || en->type < SU_ASSET_MESH ||
             en->type > SU_ASSET_MODEL ||
-            (en->type_version != 1u && !(en->type == SU_ASSET_MATERIAL && en->type_version == 2u)) || (en->offset & 15u) != 0u || en->offset < prev_end ||
-            en->offset > (uint64_t)len || en->size > (uint64_t)len - en->offset) {
+            (en->type_version != 1u && !(en->type == SU_ASSET_MESH && en->type_version == SU_ASSET_MESH_COLOR_VERSION) &&
+             !(en->type == SU_ASSET_MATERIAL &&
+               (en->type_version == 2u || en->type_version == SU_ASSET_MATERIAL_TOON_VERSION))) ||
+            (en->offset & 15u) != 0u || en->offset < prev_end || en->offset > (uint64_t)len ||
+            en->size > (uint64_t)len - en->offset) {
             msgf(message, "entry %u: id order, type, version or byte range invalid", (unsigned)i);
             su_asset_pak_close(p);
             return SU_E_PARSE;
@@ -1028,6 +1151,28 @@ uint32_t su_asset_pak_mesh(const SuAssetPak *pak, uint64_t id, SuAssetMeshView *
     return SU_OK;
 }
 
+uint32_t su_asset_pak_mesh_colors(const SuAssetPak *pak, uint64_t id, const SuAssetVertexColor **out) {
+    uint32_t i;
+    const uint8_t *b;
+    const SuAssetMeshHeader *h;
+    const SuAssetVertex *v;
+    const uint32_t *idx;
+    if (out == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    if (su_asset_pak_find(pak, id, SU_ASSET_MESH, &i) != SU_OK ||
+        pak->entries[i].type_version != SU_ASSET_MESH_COLOR_VERSION) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    b = payload(pak, i);
+    h = (const SuAssetMeshHeader *)b;
+    v = (const SuAssetVertex *)(b + sizeof(SuAssetMeshHeader) + (size_t)h->submesh_count * sizeof(SuAssetSubmesh));
+    idx = (const uint32_t *)(v + h->vertex_count);
+    *out = (const SuAssetVertexColor *)(idx + h->index_count);
+    return SU_OK;
+}
+
 uint32_t su_asset_pak_texture(const SuAssetPak *pak, uint64_t id, SuAssetTextureView *out) {
     uint32_t i;
     uint32_t m;
@@ -1060,6 +1205,16 @@ uint32_t su_asset_pak_material(const SuAssetPak *pak, uint64_t id, SuAssetMateri
 uint32_t su_asset_pak_paint(const SuAssetPak *pak, uint64_t id, SuAssetPaint *out) {
     uint32_t i;
     if (out == NULL || su_asset_pak_find(pak, id, SU_ASSET_MATERIAL, &i) != SU_OK || pak->entries[i].type_version != 2u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    memcpy(out, payload(pak, i) + sizeof(SuAssetMaterial), sizeof *out);
+    return SU_OK;
+}
+
+uint32_t su_asset_pak_toon(const SuAssetPak *pak, uint64_t id, SuAssetToon *out) {
+    uint32_t i;
+    if (out == NULL || su_asset_pak_find(pak, id, SU_ASSET_MATERIAL, &i) != SU_OK ||
+        pak->entries[i].type_version != SU_ASSET_MATERIAL_TOON_VERSION) {
         return SU_E_INVALID_ARGUMENT;
     }
     memcpy(out, payload(pak, i) + sizeof(SuAssetMaterial), sizeof *out);

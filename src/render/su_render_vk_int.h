@@ -242,16 +242,19 @@ typedef struct SubGpu {
 typedef struct MeshRes {
     Buffer vb;
     Buffer ib;
+    Buffer cb;                /* optional per-vertex color buffer (SU_ASSET_MESH_COLOR_VERSION) */
     uint32_t vertex_count;
     uint32_t index_count;
     uint32_t sub_count;
+    int has_color;
     SubGpu *subs;
     float center[3];
     float radius;
     const uint8_t *src_v;
     const uint8_t *src_i;
+    const uint8_t *src_c;
     uint8_t *owned;           /* SU_RENDER_UPLOAD_COPY */
-    uint64_t done;            /* bytes uploaded (vertices then indices) */
+    uint64_t done;            /* bytes uploaded (vertices, indices, then colors) */
 } MeshRes;
 
 typedef struct TexRes {
@@ -287,12 +290,24 @@ typedef struct PaintUbo {
     uint32_t extra[4];
 } PaintUbo;
 
+/* The per-material uniform block of a toon material (std140; toon.frag, block Toon; 112 bytes). */
+typedef struct ToonUbo {
+    float uv_xform[4];        /* scale.xy, offset.zw */
+    float uv_rot[4];          /* cos(rot), sin(rot), shade_threshold, shade_softness */
+    float shadow_color[4];    /* rgb, 0 */
+    float spec_color[4];      /* rgb, specular_threshold */
+    float spec_params[4];     /* specular_softness, specular_intensity, glossiness, rim_power */
+    float rim_color[4];       /* rgb, rim_intensity */
+    uint32_t params[4];       /* diffuse_bands, flags, 0, 0 */
+} ToonUbo;
+
 typedef struct MatRes {
     SuAssetMaterial f;
-    uint32_t kind;            /* 0: PBR-lite, 1: layered paint, 2: unlit FX */
+    uint32_t kind;            /* 0: PBR-lite, 1: layered paint, 2: unlit FX, 3: stylized toon */
     SuAssetPaint paint;       /* kind 1 */
+    SuAssetToon toon;         /* kind 3 */
     SuRenderFxMaterialDesc fx;
-    Buffer ubo;               /* kind 1: PaintUbo, host visible, written once */
+    Buffer ubo;               /* kind 1: PaintUbo, kind 3: ToonUbo, host visible, written once */
     SuRenderHandle tex[SU_RENDER_PAINT_SLOT_COUNT];
     uint32_t paint_tex_info[SU_RENDER_PAINT_SLOT_COUNT];
     VkDescriptorSet set;
@@ -327,6 +342,7 @@ typedef struct Retired {
     uint64_t serial;
     Buffer a;
     Buffer b;
+    Buffer c;
     VkImage img;
     VkDeviceMemory mem;
     VkImageView view;
@@ -445,9 +461,10 @@ typedef struct DrawItem {
     uint32_t sub;
     uint32_t mat;             /* resource index, or UINT32_MAX for the default material */
     uint32_t pipe;
-    uint32_t kind;            /* 0: PBR-lite, 1: layered paint, 2: unlit FX */
+    uint32_t kind;            /* 0: PBR-lite, 1: layered paint, 2: unlit FX, 3: stylized toon */
     float dist2;              /* blend sorting */
     uint32_t forced;          /* 1: opaque or masked material drawn in the blend pass because the instance tint is translucent */
+    uint8_t colored;          /* 1: mesh has per-vertex color buffer (binding 2) */
     DrawInstance inst;
 } DrawItem;
 
@@ -503,10 +520,15 @@ struct SuRenderer {
     VkDescriptorSet depth_in_set;
     VkPipelineLayout skycube_layout;    /* frame, one cube sampler, SkyPush */
     VkPipeline pbr_pipe[PIPE_PBR_COUNT];
+    VkPipeline pbr_color_pipe[PIPE_PBR_COUNT];
     VkPipeline paint_pipe[PIPE_PBR_COUNT];
+    VkPipeline toon_pipe[PIPE_PBR_COUNT];
+    VkPipeline toon_color_pipe[PIPE_PBR_COUNT];
     VkDescriptorSetLayout paint_dsl;    /* paint samplers and the PaintUbo */
+    VkDescriptorSetLayout toon_dsl;     /* 5 samplers and the ToonUbo */
     VkDescriptorSetLayout env_dsl;      /* one cube sampler */
     VkPipelineLayout paint_layout;      /* frame, paint material, environment */
+    VkPipelineLayout toon_layout;       /* frame, toon material */
     VkDescriptorSet frame_env_set;      /* the environment bound for this frame (built-in black cube when none) */
     SuRenderHandle black_tex;
     SuRenderHandle default_env;
