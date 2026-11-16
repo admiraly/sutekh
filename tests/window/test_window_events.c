@@ -147,6 +147,11 @@ static void test_keys_mouse(void) {
 
     /* absolute pointer coordinates: rounding, clamping, enter/leave */
     memset(&g_t, 0, sizeof g_t);
+    memset(&e, 0, sizeof e);
+    e.type = SDL_EVENT_WINDOW_MOUSE_ENTER;
+    CHECK(tr(&e) == 0u); /* no fabricated valid (0, 0) on first enter */
+    e.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+    CHECK(tr(&e) == 1u && g_out[0].value == 0);
     e = mmove_abs(123.6f, -12.4f, 0.0f, 0.0f);
     CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS && g_out[0].value == 1 && g_out[0].x == 124 &&
           g_out[0].y == -12);
@@ -162,6 +167,16 @@ static void test_keys_mouse(void) {
     e = mmove_abs(1e20f, -1e20f, 0.0f, 0.0f);
     CHECK(tr(&e) == 1u && g_out[0].type == SU_INPUT_EV_MOUSE_POS && g_out[0].x == INT32_MAX &&
           g_out[0].y == INT32_MIN);
+
+    /* Auto-captured drags can deliver motion beyond the logical client bounds. */
+    g_t.window_width = 320;
+    g_t.window_height = 200;
+    e = mmove_abs(-0.1f, 50.0f, -1.0f, 0.0f);
+    CHECK(tr(&e) == 2u && g_out[0].value == 0 && g_out[1].x == -1);
+    e = mmove_abs(320.0f, 50.0f, 0.0f, 0.0f);
+    CHECK(tr(&e) == 1u && g_out[0].value == 0);
+    e = mmove_abs(319.9f, 199.9f, 0.0f, 0.0f);
+    CHECK(tr(&e) == 1u && g_out[0].value == 1);
 
     /* wheel: 120 per notch, physical direction */
     memset(&g_t, 0, sizeof g_t);

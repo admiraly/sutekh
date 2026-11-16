@@ -40,6 +40,7 @@
     X(void *, SDL_GetPointerProperty, (SDL_PropertiesID props, const char *name, void *default_value))       \
     X(Sint64, SDL_GetNumberProperty, (SDL_PropertiesID props, const char *name, Sint64 default_value))       \
     X(SDL_WindowFlags, SDL_GetWindowFlags, (SDL_Window * window))                                            \
+    X(bool, SDL_GetWindowSize, (SDL_Window * window, int *w, int *h))                                        \
     X(bool, SDL_GetWindowSizeInPixels, (SDL_Window * window, int *w, int *h))                                \
     X(float, SDL_GetWindowPixelDensity, (SDL_Window * window))                                               \
     X(bool, SDL_SetWindowTitle, (SDL_Window * window, const char *title))                                    \
@@ -256,7 +257,10 @@ uint32_t su_window_sdl3_translate(SuSdlTranslate *t, const SDL_Event *e, uint64_
         ev_init(&out[0], SU_INPUT_EV_MOUSE_POS, now_ns);
         out[0].x = px;
         out[0].y = py;
-        out[0].value = 1;
+        out[0].value = t->window_width > 0 && t->window_height > 0 &&
+                               (e->motion.x < 0.0f || e->motion.y < 0.0f ||
+                                e->motion.x >= (float)t->window_width || e->motion.y >= (float)t->window_height)
+                           ? 0 : 1;
         if (dx != 0 || dy != 0) {
             ev_init(&out[1], SU_INPUT_EV_MOUSE_MOTION, now_ns);
             out[1].x = dx;
@@ -266,6 +270,9 @@ uint32_t su_window_sdl3_translate(SuSdlTranslate *t, const SDL_Event *e, uint64_
         return n;
     }
     case SDL_EVENT_WINDOW_MOUSE_ENTER:
+        if (!t->have_pointer) {
+            return 0u;
+        }
         ev_init(out, SU_INPUT_EV_MOUSE_POS, now_ns);
         out->x = t->last_pointer_x;
         out->y = t->last_pointer_y;
@@ -612,17 +619,18 @@ uint32_t su_window_poll(SuWindow *w, SuWindowEvents *out) {
             w->close = 1;
             continue;
         }
-        m = su_window_sdl3_translate(&w->tr, &e, now_ns(), ev, &slot);
-        if (e.type == SDL_EVENT_WINDOW_MOUSE_ENTER && m > 0u && g_sdl.SDL_GetMouseFocus() == w->win) {
+        if (e.type == SDL_EVENT_MOUSE_MOTION) {
+            (void)g_sdl.SDL_GetWindowSize(w->win, &w->tr.window_width, &w->tr.window_height);
+        }
+        if (e.type == SDL_EVENT_WINDOW_MOUSE_ENTER && g_sdl.SDL_GetMouseFocus() == w->win) {
             float mx = 0.0f;
             float my = 0.0f;
             (void)g_sdl.SDL_GetMouseState(&mx, &my);
-            ev[0].x = round_coord(mx);
-            ev[0].y = round_coord(my);
-            w->tr.last_pointer_x = ev[0].x;
-            w->tr.last_pointer_y = ev[0].y;
+            w->tr.last_pointer_x = round_coord(mx);
+            w->tr.last_pointer_y = round_coord(my);
             w->tr.have_pointer = 1;
         }
+        m = su_window_sdl3_translate(&w->tr, &e, now_ns(), ev, &slot);
         if (slot != UINT32_MAX && m > 0u) {
             on_pad_slot(w, &e, slot, &ev[0]);
         }

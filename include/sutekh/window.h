@@ -104,10 +104,11 @@ SU_WINDOW_API uint32_t su_window_sample_input(SuWindow *w, SuInputState *out);
  * SU_E_UNSUPPORTED_METHOD when the window system refuses it (the mode is then unchanged). */
 SU_WINDOW_API uint32_t su_window_set_relative_mouse(SuWindow *w, int on);
 /* Shows (visible != 0) or hides (visible == 0) the OS cursor. SU_E_INVALID_ARGUMENT if w is NULL;
- * SU_E_UNSUPPORTED_METHOD if the window system refuses it. */
+ * SU_E_UNSUPPORTED_METHOD if the window system refuses it. Relative mouse mode keeps the cursor hidden
+ * regardless of this setting; the requested visibility applies when relative mode is disabled. */
 SU_WINDOW_API uint32_t su_window_set_cursor_visible(SuWindow *w, int visible);
 /* Confines (confined != 0) or releases (confined == 0) the pointer to the window client area without entering
- * relative mouse mode (cursor remains visible and reports absolute coordinates). SU_E_INVALID_ARGUMENT if w is
+ * relative mouse mode. Cursor visibility and relative mode keep their independent settings. SU_E_INVALID_ARGUMENT if w is
  * NULL; SU_E_UNSUPPORTED_METHOD if the window system refuses it. */
 SU_WINDOW_API uint32_t su_window_set_mouse_confine(SuWindow *w, int confined);
 

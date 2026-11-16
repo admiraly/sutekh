@@ -35,7 +35,7 @@ struct SuInputWin32 {
     LONG abs_x;
     LONG abs_y;
     int tracking_mouse;
-    int cursor_hidden;
+    uint32_t cursor_hide_calls;
 };
 
 static uint64_t now_ns(void) {
@@ -133,9 +133,14 @@ void su_input_win32_destroy(SuInputWin32 *c) {
     rid[1].usUsage = 0x02;
     rid[0].dwFlags = rid[1].dwFlags = RIDEV_REMOVE;
     (void)RegisterRawInputDevices(rid, 2, sizeof rid[0]);
-    if (c->cursor_hidden) {
-        while (ShowCursor(TRUE) < 0) {
-        }
+    su_input_win32_set_cursor_visible(c, 1);
+    if (c->tracking_mouse) {
+        TRACKMOUSEEVENT tme;
+        memset(&tme, 0, sizeof tme);
+        tme.cbSize = sizeof tme;
+        tme.dwFlags = TME_CANCEL | TME_LEAVE;
+        tme.hwndTrack = c->hwnd;
+        (void)TrackMouseEvent(&tme);
     }
     if (c->own_window) {
         DestroyWindow(c->hwnd);
@@ -164,17 +169,17 @@ void su_input_win32_set_cursor_visible(SuInputWin32 *c, int visible) {
         return;
     }
     if (visible != 0) {
-        if (c->cursor_hidden) {
-            while (ShowCursor(TRUE) < 0) {
-            }
-            c->cursor_hidden = 0;
+        /* Undo exactly our decrements, preserving the caller's display counter. */
+        while (c->cursor_hide_calls != 0u) {
+            (void)ShowCursor(TRUE);
+            c->cursor_hide_calls--;
         }
-    } else {
-        if (!c->cursor_hidden) {
-            while (ShowCursor(FALSE) >= 0) {
-            }
-            c->cursor_hidden = 1;
-        }
+    } else if (c->cursor_hide_calls == 0u) {
+        int count;
+        do {
+            count = ShowCursor(FALSE);
+            c->cursor_hide_calls++;
+        } while (count >= 0);
     }
 }
 
@@ -285,10 +290,14 @@ int su_input_win32_message(SuInputWin32 *c, void *hwnd, uint32_t msg, uintptr_t 
         }
         return 1;
     }
-    case WM_MOUSEMOVE:
+    case WM_MOUSEMOVE: {
+        RECT client;
+        POINT pos;
         c->st.pointer_x = (int32_t)GET_X_LPARAM((LPARAM)lparam);
         c->st.pointer_y = (int32_t)GET_Y_LPARAM((LPARAM)lparam);
-        c->st.pointer_inside = 1u;
+        pos.x = c->st.pointer_x;
+        pos.y = c->st.pointer_y;
+        c->st.pointer_inside = GetClientRect(c->hwnd, &client) && PtInRect(&client, pos) ? 1u : 0u;
         c->st.flags |= SU_INPUT_FLAG_POINTER_VALID;
         c->st.mouse_ns = now_ns();
         if (!c->tracking_mouse && !c->own_window && c->hwnd != NULL) {
@@ -302,6 +311,7 @@ int su_input_win32_message(SuInputWin32 *c, void *hwnd, uint32_t msg, uintptr_t 
             }
         }
         return 0;
+    }
     case WM_MOUSELEAVE:
         c->tracking_mouse = 0;
         c->st.pointer_inside = 0u;

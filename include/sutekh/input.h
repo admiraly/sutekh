@@ -456,7 +456,9 @@ SU_INPUT_API int su_input_win32_message(SuInputWin32 *c, void *hwnd, uint32_t ms
 SU_INPUT_API void su_input_win32_pump(SuInputWin32 *c);
 /* Losing focus releases every key and button (no stuck keys) and sets SU_INPUT_FLAG_FOCUS_LOST. */
 SU_INPUT_API void su_input_win32_set_focus(SuInputWin32 *c, int focused);
-/* Shows (visible != 0) or hides (visible == 0) the Win32 cursor for this context (balanced across calls). */
+/* Hides (visible == 0) the Win32 cursor, or releases this context's hide request (visible != 0).
+ * Repeated calls are idempotent; showing or destroying restores exactly this context's ShowCursor decrements,
+ * preserving other code's display counter. Call on the same thread as create/destroy and the window procedure. */
 SU_INPUT_API void su_input_win32_set_cursor_visible(SuInputWin32 *c, int visible);
 /* Polls XInput, copies the state with sample_ns = now, then clears the relative quantities and the per-sample
  * flags. Disconnected gamepad slots are polled at most once per second (XInput is slow on empty slots). */

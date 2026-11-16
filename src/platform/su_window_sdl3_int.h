@@ -17,14 +17,16 @@ typedef struct SuSdlTranslate {
     double rem_x, rem_y, rem_wheel;
     int32_t last_pointer_x, last_pointer_y;
     int have_pointer;
+    int window_width, window_height; /* logical bounds; zero when unknown in standalone translation */
 } SuSdlTranslate;
 
 #define SU_SDL_MAX_EVENTS_PER_SDL_EVENT 3u
 
 /* Translates one SDL event into at most SU_SDL_MAX_EVENTS_PER_SDL_EVENT portable events stamped now_ns; returns
  * how many (0 for an event without input meaning). SDL_EVENT_MOUSE_MOTION always emits SU_INPUT_EV_MOUSE_POS
- * (rounded/clamped window coordinates, value = 1) and, when the truncated motion delta is non-zero, also emits
- * SU_INPUT_EV_MOUSE_MOTION. SDL_EVENT_WINDOW_MOUSE_ENTER/LEAVE emit SU_INPUT_EV_MOUSE_POS (value = 1 or 0).
+ * (rounded/clamped window coordinates, value = 1 inside) and, when the truncated motion delta is non-zero, also emits
+ * SU_INPUT_EV_MOUSE_MOTION. SDL_EVENT_WINDOW_MOUSE_ENTER/LEAVE emit SU_INPUT_EV_MOUSE_POS (value = 1 or 0); ENTER
+ * without a known position emits nothing. Motion outside known window bounds emits value = 0.
  * GAMEPAD_ADDED takes the first free slot (none free: ignored) and emits PAD_CONNECT; GAMEPAD_REMOVED frees it.
  * *slot (optional) receives the slot of an ADDED/REMOVED event, or UINT32_MAX. Integer conversions: sticks keep
  * SDL's value with y negated to +up (clamped to 32767), triggers are value >> 7 (0..32767 to 0..255), motion and
