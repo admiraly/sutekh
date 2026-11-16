@@ -188,6 +188,38 @@ static void test_apply(void) {
     CHECK(su_input_state_apply(&s, &e) == SU_OK);
     CHECK(s.pads[1].connected == 0u && s.pads[1].buttons == 0u && s.pads[1].lx == 0 && s.pads[1].lt == 0u &&
           s.pads[1].changed_ns == 550u);
+
+    /* absolute pointer position: does not touch mouse_dx/dy, persists across take and split */
+    {
+        SuInputState part;
+        SuInputState p0;
+        memset(&p0, 0, sizeof p0);
+        CHECK((p0.flags & SU_INPUT_FLAG_POINTER_VALID) == 0u && p0.pointer_inside == 0u &&
+              p0.pointer_x == 0 && p0.pointer_y == 0);
+        e = ev(SU_INPUT_EV_MOUSE_POS, 0, 0, 1, 600);
+        e.x = 320;
+        e.y = -12;
+        p0.mouse_dx = 15;
+        p0.mouse_dy = -9;
+        CHECK(su_input_state_apply(&p0, &e) == SU_OK);
+        CHECK(p0.pointer_x == 320 && p0.pointer_y == -12 && p0.pointer_inside == 1u);
+        CHECK((p0.flags & SU_INPUT_FLAG_POINTER_VALID) != 0u && p0.mouse_ns == 600u);
+        CHECK(p0.mouse_dx == 15 && p0.mouse_dy == -9);
+        su_input_state_take(&p0, 610, &o);
+        CHECK(o.pointer_x == 320 && o.pointer_y == -12 && o.pointer_inside == 1u &&
+              (o.flags & SU_INPUT_FLAG_POINTER_VALID) != 0u);
+        CHECK(p0.pointer_x == 320 && p0.pointer_y == -12 && p0.pointer_inside == 1u &&
+              (p0.flags & SU_INPUT_FLAG_POINTER_VALID) != 0u && p0.mouse_dx == 0 && p0.mouse_dy == 0);
+        CHECK(su_input_state_split(&o, 3, 1, &part) == SU_OK);
+        CHECK(part.pointer_x == 320 && part.pointer_y == -12 && part.pointer_inside == 1u &&
+              (part.flags & SU_INPUT_FLAG_POINTER_VALID) != 0u);
+        /* pointer leave clears pointer_inside while preserving last coordinates and POINTER_VALID */
+        e = ev(SU_INPUT_EV_MOUSE_POS, 0, 0, 0, 620);
+        CHECK(su_input_state_apply(&p0, &e) == SU_OK);
+        CHECK(p0.pointer_inside == 0u && p0.pointer_x == 320 && p0.pointer_y == -12 &&
+              (p0.flags & SU_INPUT_FLAG_POINTER_VALID) != 0u && p0.mouse_ns == 620u);
+    }
+    CHECK(SU_INPUT_API_VERSION == 3u && SU_INPUT_RECORD_BYTES == 92u);
 }
 
 /* ---- cross-platform identity ---- */
@@ -258,6 +290,13 @@ static void linux_frame(uint32_t f, SuInputState *live, SuInputState *out) {
     if (f == 15u) APPLY(ev(SU_INPUT_EV_PAD_BUTTON, SU_PAD_A, 0, 0, t));
     if (f == 50u) APPLY(ev(SU_INPUT_EV_PAD_BUTTON, SU_PAD_Y, 0, 1, t));
     if (f == 51u) APPLY(ev(SU_INPUT_EV_PAD_BUTTON, SU_PAD_Y, 0, 0, t));
+    /* Feed absolute pointer updates on even frames; SuInputMapper/SuInputRecord must ignore them completely. */
+    if ((f & 1u) == 0u) {
+        SuInputEvent pe = ev(SU_INPUT_EV_MOUSE_POS, 0, 0, (f % 4u) == 0u ? 1 : 0, t);
+        pe.x = (int32_t)(f * 17u);
+        pe.y = (int32_t)(f * 9u);
+        APPLY(pe);
+    }
 #undef APPLY
     su_input_state_take(live, t, out);
 }

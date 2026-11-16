@@ -3,8 +3,10 @@
  *
  * Layers
  *   1. Device state (SuInputState): what the platform layer samples: keys, mouse motion and buttons, gamepads,
- *      with monotonic timestamps. Relative quantities (mouse motion, wheel) are accumulated between samples.
- *      On Windows it comes from Raw Input (keyboard, mouse) and XInput (gamepads): see the Win32 section below.
+ *      the last reported absolute pointer position (pointer_x, pointer_y, pointer_inside), with monotonic
+ *      timestamps. Relative quantities (mouse motion, wheel) are accumulated between samples.
+ *      On Windows it comes from Raw Input (keyboard, mouse), client pointer messages (WM_MOUSEMOVE,
+ *      WM_MOUSELEAVE), and XInput (gamepads): see the Win32 section below.
  *      On Linux it comes from the window backend (sutekh/window.h, SDL3), through the portable device events
  *      below, which convert to the same conventions. Tests and other platforms can fill it directly.
  *   2. Mapping (SuInputMap, SuInputMapper): a table of bindings from device sources to actions, applied once
@@ -14,6 +16,12 @@
  *   3. Record (SuInputRecord): the fixed-layout result for one tick: 32 buttons and 16 axes. This, not raw
  *      device events, is what a game stores in replays and sends over a network: su_input_record_writes turns
  *      it into SuHostInput writes for su_host_input_push, and su_host_input_encode records those canonically.
+ *
+ * UI/presentation vs simulation boundary:
+ *   Absolute pointer state (pointer_x, pointer_y, pointer_inside, SU_INPUT_FLAG_POINTER_VALID,
+ *   SU_INPUT_EV_MOUSE_POS) is presentation/UI input only (hit-testing, menus, cursors, touch-style UI). It is
+ *   intentionally NOT a source for SuInputMapper and is NOT part of SuInputRecord (92 bytes), so deterministic
+ *   simulation, replays, and network ticks never depend on window size, pixel density, or cursor placement.
  *
  * Axis values are Q16.16 integers in [-SU_INPUT_ONE, SU_INPUT_ONE] (1.0 = 65536), written to u32 columns as
  * two's complement. Keys are named by physical position: the PC scan code set 1 make code, with 0x100 added for
@@ -39,7 +47,7 @@ extern "C" {
 /* su_input is a static library: its functions are never imported from the host DLL. */
 #define SU_INPUT_API
 
-#define SU_INPUT_API_VERSION 2u              /* 2: portable device events (su_input_state_apply) */
+#define SU_INPUT_API_VERSION 3u              /* 3: absolute pointer position (SU_INPUT_EV_MOUSE_POS) */
 #define SU_INPUT_ONE 65536              /* Q16.16 full deflection */
 #define SU_INPUT_KEY_COUNT 512u         /* scan code set 1, E0-prefixed keys at 0x100 + code */
 #define SU_INPUT_MAX_PADS 4u
@@ -201,6 +209,8 @@ typedef struct SuInputPad {
 #define SU_INPUT_FLAG_NO_XINPUT 0x2u       /* no XInput library (Linux: no gamepad subsystem): gamepads are never
                                               connected */
 #define SU_INPUT_FLAG_FOCUS_LOST 0x4u      /* focus was lost since the previous sample: keys and buttons were released */
+#define SU_INPUT_FLAG_POINTER_VALID 0x8u   /* pointer_x and pointer_y hold a valid reported position in window
+                                              coordinates (UI/presentation input only, not mapped into SuInputRecord) */
 
 typedef struct SuInputState {
     uint64_t sample_ns;               /* monotonic time of the sample */
@@ -213,6 +223,9 @@ typedef struct SuInputState {
     SuInputPad pads[SU_INPUT_MAX_PADS];
     uint32_t focused;                 /* 1 while the input window has focus */
     uint32_t flags;                   /* SU_INPUT_FLAG_* */
+    int32_t pointer_x, pointer_y;     /* last reported pointer position in window coordinates (pixels at density 1,
+                                         +x right, +y down); multiply by pixel_density for framebuffer pixels */
+    uint32_t pointer_inside;          /* 1 while the pointer is inside the window client area, 0 outside or unknown */
 } SuInputState;
 
 static inline int su_input_key_down(const SuInputState *s, uint32_t key) {
@@ -386,6 +399,8 @@ SU_INPUT_API uint32_t su_input_record_writes(const SuInputRecord *r, const SuInp
 #define SU_INPUT_EV_PAD_AXIS 7u      /* device: pad slot; code: SU_INPUT_PAD_AXIS_*; value: sticks -32768..32767
                                         (+y up), triggers 0..255; out-of-range values are clamped */
 #define SU_INPUT_EV_FOCUS 8u         /* value: 1 focused; 0 releases every key and button (SU_INPUT_FLAG_FOCUS_LOST) */
+#define SU_INPUT_EV_MOUSE_POS 9u     /* x, y: absolute pointer position in window coordinates; value: 1 inside/moved,
+                                        0 pointer left window (UI/presentation input only, never simulation input) */
 
 #define SU_INPUT_PAD_AXIS_LX 0u
 #define SU_INPUT_PAD_AXIS_LY 1u
@@ -399,7 +414,7 @@ typedef struct SuInputEvent {
     uint32_t code;
     uint32_t device;    /* pad slot, 0..SU_INPUT_MAX_PADS - 1, for pad events; else 0 */
     int32_t value;
-    int32_t x, y;       /* mouse motion */
+    int32_t x, y;       /* mouse motion or absolute pointer position */
     uint64_t time_ns;   /* monotonic time of the event (key_ns, mouse_ns, changed_ns) */
 } SuInputEvent;
 
@@ -415,7 +430,8 @@ SU_INPUT_API uint32_t su_input_key_from_hid(uint32_t usage);
 SU_INPUT_API uint32_t su_input_state_apply(SuInputState *live, const SuInputEvent *e);
 
 /* One sample: copies live to out with sample_ns = now_ns, then clears the relative quantities (motion, wheel)
- * and the per-sample flags (SU_INPUT_FLAG_FOCUS_LOST) of live. */
+ * and the per-sample flags (SU_INPUT_FLAG_FOCUS_LOST) of live. Absolute pointer state (pointer_x, pointer_y,
+ * pointer_inside, SU_INPUT_FLAG_POINTER_VALID) is kept across samples. */
 SU_INPUT_API void su_input_state_take(SuInputState *live, uint64_t now_ns, SuInputState *out);
 
 /* ---- Windows: Raw Input (keyboard, mouse) and XInput (gamepads) ---- */
@@ -431,14 +447,17 @@ typedef struct SuInputWin32 SuInputWin32;
  * the context works and reports SU_INPUT_FLAG_NO_XINPUT. */
 SU_INPUT_API uint32_t su_input_win32_create(void *hwnd, uint32_t flags, SuInputWin32 **out);
 SU_INPUT_API void su_input_win32_destroy(SuInputWin32 *c);
-/* For the game window's procedure: handles WM_INPUT, WM_SETFOCUS, WM_KILLFOCUS and WM_ACTIVATEAPP. Returns 1
- * when the message was WM_INPUT (the caller then still calls DefWindowProc, as Raw Input requires). */
+/* For the game window's procedure: handles WM_INPUT, WM_MOUSEMOVE, WM_MOUSELEAVE, WM_SETFOCUS, WM_KILLFOCUS
+ * and WM_ACTIVATEAPP. Returns 1 when the message was WM_INPUT (the caller then still calls DefWindowProc, as
+ * Raw Input requires). */
 SU_INPUT_API int su_input_win32_message(SuInputWin32 *c, void *hwnd, uint32_t msg, uintptr_t wparam, intptr_t lparam);
 /* Processes pending messages of the context's own hidden window (NULL hwnd at create); su_input_win32_sample
  * also does this. */
 SU_INPUT_API void su_input_win32_pump(SuInputWin32 *c);
 /* Losing focus releases every key and button (no stuck keys) and sets SU_INPUT_FLAG_FOCUS_LOST. */
 SU_INPUT_API void su_input_win32_set_focus(SuInputWin32 *c, int focused);
+/* Shows (visible != 0) or hides (visible == 0) the Win32 cursor for this context (balanced across calls). */
+SU_INPUT_API void su_input_win32_set_cursor_visible(SuInputWin32 *c, int visible);
 /* Polls XInput, copies the state with sample_ns = now, then clears the relative quantities and the per-sample
  * flags. Disconnected gamepad slots are polled at most once per second (XInput is slow on empty slots). */
 SU_INPUT_API uint32_t su_input_win32_sample(SuInputWin32 *c, SuInputState *out);

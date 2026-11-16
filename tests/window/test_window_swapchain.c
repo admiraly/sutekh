@@ -182,6 +182,9 @@ static int no_display(void) {
     wd.width = 320;
     wd.struct_size = 4;
     CHECK(su_window_create(&wd, &w, msg) == SU_E_INVALID_ARGUMENT);
+    CHECK(SU_WINDOW_API_VERSION == 2u);
+    CHECK(su_window_set_cursor_visible(NULL, 0) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_window_set_mouse_confine(NULL, 1) == SU_E_INVALID_ARGUMENT);
 
     /* bad window fields are refused before any Vulkan work */
     memset(&d, 0, sizeof d);
@@ -335,6 +338,15 @@ int main(int argc, char **argv) {
            (unsigned long long)run.ok, now_ms() - t0, (double)run.ok * 1000.0 / (now_ms() - t0), rs.width, rs.height,
            rs.present_mode, rs.cpu_ms, rs.wait_ms, rs.present_ms, rs.gpu_ms);
     CHECK(run.ok >= frames * 3u / 4u && run.failed == 0u);
+    CHECK(run.ev.pixel_density > 0.0f && run.ev.pixel_density == info.pixel_density);
+    CHECK(su_window_set_cursor_visible(run.w, 0) == SU_OK);
+    CHECK(su_window_set_cursor_visible(run.w, 1) == SU_OK);
+    {
+        uint32_t mc = su_window_set_mouse_confine(run.w, 1);
+        CHECK(mc == SU_OK || mc == SU_E_UNSUPPORTED_METHOD);
+        mc = su_window_set_mouse_confine(run.w, 0);
+        CHECK(mc == SU_OK || mc == SU_E_UNSUPPORTED_METHOD);
+    }
     w0 = rs.width;
     h0 = rs.height;
 

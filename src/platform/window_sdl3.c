@@ -47,6 +47,11 @@
     X(bool, SDL_MinimizeWindow, (SDL_Window * window))                                                       \
     X(bool, SDL_RestoreWindow, (SDL_Window * window))                                                        \
     X(bool, SDL_SetWindowRelativeMouseMode, (SDL_Window * window, bool enabled))                             \
+    X(SDL_Window *, SDL_GetMouseFocus, (void))                                                               \
+    X(SDL_MouseButtonFlags, SDL_GetMouseState, (float *x, float *y))                                         \
+    X(bool, SDL_ShowCursor, (void))                                                                          \
+    X(bool, SDL_HideCursor, (void))                                                                          \
+    X(bool, SDL_SetWindowMouseGrab, (SDL_Window * window, bool grabbed))                                     \
     X(bool, SDL_PollEvent, (SDL_Event * event))                                                              \
     X(SDL_Gamepad *, SDL_OpenGamepad, (SDL_JoystickID instance_id))                                          \
     X(void, SDL_CloseGamepad, (SDL_Gamepad * gamepad))
@@ -202,6 +207,21 @@ static int32_t take_whole(double *rem, double v) {
     return (int32_t)whole;
 }
 
+static int32_t round_coord(float v) {
+    double d;
+    if (!isfinite((double)v)) {
+        return 0;
+    }
+    d = round((double)v);
+    if (d >= (double)INT32_MAX) {
+        return INT32_MAX;
+    }
+    if (d <= (double)INT32_MIN) {
+        return INT32_MIN;
+    }
+    return (int32_t)d;
+}
+
 static void ev_init(SuInputEvent *o, uint32_t type, uint64_t now_ns) {
     memset(o, 0, sizeof *o);
     o->type = type;
@@ -225,16 +245,38 @@ uint32_t su_window_sdl3_translate(SuSdlTranslate *t, const SDL_Event *e, uint64_
         out->value = e->key.down ? 1 : 0;
         return 1u;
     case SDL_EVENT_MOUSE_MOTION: {
+        int32_t px = round_coord(e->motion.x);
+        int32_t py = round_coord(e->motion.y);
         int32_t dx = take_whole(&t->rem_x, (double)e->motion.xrel);
         int32_t dy = take_whole(&t->rem_y, (double)e->motion.yrel);
-        if (dx == 0 && dy == 0) {
-            return 0u;
+        uint32_t n = 1u;
+        t->last_pointer_x = px;
+        t->last_pointer_y = py;
+        t->have_pointer = 1;
+        ev_init(&out[0], SU_INPUT_EV_MOUSE_POS, now_ns);
+        out[0].x = px;
+        out[0].y = py;
+        out[0].value = 1;
+        if (dx != 0 || dy != 0) {
+            ev_init(&out[1], SU_INPUT_EV_MOUSE_MOTION, now_ns);
+            out[1].x = dx;
+            out[1].y = dy;
+            n = 2u;
         }
-        ev_init(out, SU_INPUT_EV_MOUSE_MOTION, now_ns);
-        out->x = dx;
-        out->y = dy;
-        return 1u;
+        return n;
     }
+    case SDL_EVENT_WINDOW_MOUSE_ENTER:
+        ev_init(out, SU_INPUT_EV_MOUSE_POS, now_ns);
+        out->x = t->last_pointer_x;
+        out->y = t->last_pointer_y;
+        out->value = 1;
+        return 1u;
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+        ev_init(out, SU_INPUT_EV_MOUSE_POS, now_ns);
+        out->x = t->last_pointer_x;
+        out->y = t->last_pointer_y;
+        out->value = 0;
+        return 1u;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP: {
         uint32_t bit = mouse_button_bit(e->button.button);
@@ -343,6 +385,8 @@ struct SuWindow {
     uint64_t xid;
     int gamepads;
     int relative;
+    int cursor_hidden;
+    int confined;
     int close;
     uint32_t last_w, last_h;  /* reported by the previous poll */
     SuSdlTranslate tr;
@@ -463,7 +507,22 @@ uint32_t su_window_create(const SuWindowDesc *d, SuWindow **out, char message[25
     } else {
         return fail(w, msg, "SDL chose the video driver \"%s\"; only wayland and x11 can present", w->driver);
     }
-    w->st.focused = (g_sdl.SDL_GetWindowFlags(w->win) & SDL_WINDOW_INPUT_FOCUS) != 0u ? 1u : 0u;
+    {
+        SDL_WindowFlags init_flags = g_sdl.SDL_GetWindowFlags(w->win);
+        w->st.focused = (init_flags & SDL_WINDOW_INPUT_FOCUS) != 0u ? 1u : 0u;
+        if ((init_flags & SDL_WINDOW_MOUSE_FOCUS) != 0u) {
+            float mx = 0.0f;
+            float my = 0.0f;
+            (void)g_sdl.SDL_GetMouseState(&mx, &my);
+            w->tr.last_pointer_x = round_coord(mx);
+            w->tr.last_pointer_y = round_coord(my);
+            w->tr.have_pointer = 1;
+            w->st.pointer_x = w->tr.last_pointer_x;
+            w->st.pointer_y = w->tr.last_pointer_y;
+            w->st.pointer_inside = 1u;
+            w->st.flags |= SU_INPUT_FLAG_POINTER_VALID;
+        }
+    }
     w->st.flags |= SU_INPUT_FLAG_MOUSE_ABSOLUTE; /* relative mode off */
     {
         int pw = 0;
@@ -489,6 +548,12 @@ void su_window_destroy(SuWindow *w) {
     }
     if (w->relative) {
         (void)g_sdl.SDL_SetWindowRelativeMouseMode(w->win, false);
+    }
+    if (w->confined) {
+        (void)g_sdl.SDL_SetWindowMouseGrab(w->win, false);
+    }
+    if (w->cursor_hidden) {
+        (void)g_sdl.SDL_ShowCursor();
     }
     g_sdl.SDL_DestroyWindow(w->win);
     g_sdl.SDL_QuitSubSystem(OUR_SUBSYSTEMS(w));
@@ -548,6 +613,16 @@ uint32_t su_window_poll(SuWindow *w, SuWindowEvents *out) {
             continue;
         }
         m = su_window_sdl3_translate(&w->tr, &e, now_ns(), ev, &slot);
+        if (e.type == SDL_EVENT_WINDOW_MOUSE_ENTER && m > 0u && g_sdl.SDL_GetMouseFocus() == w->win) {
+            float mx = 0.0f;
+            float my = 0.0f;
+            (void)g_sdl.SDL_GetMouseState(&mx, &my);
+            ev[0].x = round_coord(mx);
+            ev[0].y = round_coord(my);
+            w->tr.last_pointer_x = ev[0].x;
+            w->tr.last_pointer_y = ev[0].y;
+            w->tr.have_pointer = 1;
+        }
         if (slot != UINT32_MAX && m > 0u) {
             on_pad_slot(w, &e, slot, &ev[0]);
         }
@@ -577,6 +652,10 @@ uint32_t su_window_poll(SuWindow *w, SuWindowEvents *out) {
             out->pads_connected |= w->st.pads[i].connected ? 1u << i : 0u;
         }
         out->events = n;
+        out->pointer_x = w->st.pointer_x;
+        out->pointer_y = w->st.pointer_y;
+        out->pointer_inside = w->st.pointer_inside;
+        out->pixel_density = g_sdl.SDL_GetWindowPixelDensity(w->win);
     }
     w->last_w = cw;
     w->last_h = ch;
@@ -604,6 +683,35 @@ uint32_t su_window_set_relative_mouse(SuWindow *w, int on) {
     } else {
         w->st.flags |= SU_INPUT_FLAG_MOUSE_ABSOLUTE;
     }
+    return SU_OK;
+}
+
+uint32_t su_window_set_cursor_visible(SuWindow *w, int visible) {
+    if (w == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (visible != 0) {
+        if (!g_sdl.SDL_ShowCursor()) {
+            return SU_E_UNSUPPORTED_METHOD;
+        }
+        w->cursor_hidden = 0;
+    } else {
+        if (!g_sdl.SDL_HideCursor()) {
+            return SU_E_UNSUPPORTED_METHOD;
+        }
+        w->cursor_hidden = 1;
+    }
+    return SU_OK;
+}
+
+uint32_t su_window_set_mouse_confine(SuWindow *w, int confined) {
+    if (w == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (!g_sdl.SDL_SetWindowMouseGrab(w->win, confined != 0)) {
+        return SU_E_UNSUPPORTED_METHOD;
+    }
+    w->confined = confined != 0;
     return SU_OK;
 }
 
