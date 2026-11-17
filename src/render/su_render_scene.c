@@ -36,6 +36,58 @@ static float len3(const float *v) {
     return sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 }
 
+/* Nonnegative normalized skin weights form a convex combination of joint-transformed spheres.
+ * Keep the bind-pose sphere too (zero weights), and enclose every LOD about the existing node center. */
+static float posed_node_radius(SuRenderer *r, const SuRenderFrameDesc *f, const SuRenderObject *obj,
+                               const SuRenderModelNode *nd, const float *nc) {
+    float radius = nc[3];
+    uint32_t lod;
+    if (obj->skin_count == 0u) return radius;
+    for (lod = 0; lod < nd->lod_count; lod++) {
+        Res *res = su_rvk_get(r, nd->lod_mesh[lod], RES_MESH, NULL);
+        uint32_t j;
+        uint32_t count;
+        if (res == NULL || !res->u.mesh.is_skinned) continue;
+        count = obj->skin_count < res->u.mesh.joint_count ? obj->skin_count : res->u.mesh.joint_count;
+        for (j = 0; j < count; j++) {
+            const MeshRes *mesh = &res->u.mesh;
+            SuMat4f node;
+            SuMat4f m;
+            float delta[3];
+            float norm = 0.0f;
+            float bound;
+            int a, b;
+            memcpy(node.m, nd->transform, sizeof node.m);
+            m = su_mat4f_mul(node, f->skin_matrices[obj->skin_offset + j]);
+            for (a = 0; a < 3; a++) {
+                delta[a] = m.m[12 + a] - nc[a];
+                for (b = 0; b < 3; b++) {
+                    delta[a] += m.m[4 * b + a] * mesh->center[b];
+                    norm += m.m[4 * b + a] * m.m[4 * b + a];
+                }
+            }
+            /* Frobenius norm bounds the largest singular value, including shears. */
+            bound = len3(delta) + sqrtf(norm) * mesh->radius;
+            if (bound > radius) radius = bound;
+        }
+    }
+    return radius;
+}
+
+static float posed_model_radius(SuRenderer *r, const SuRenderFrameDesc *f, const SuRenderObject *obj,
+                                const ModelRes *model) {
+    float radius = model->radius;
+    uint32_t i;
+    if (obj->skin_count == 0u) return radius;
+    for (i = 0; i < model->count; i++) {
+        const float *nc = &model->node_center[i * 4u];
+        float delta[3] = {nc[0] - model->center[0], nc[1] - model->center[1], nc[2] - model->center[2]};
+        float bound = len3(delta) + posed_node_radius(r, f, obj, &model->nodes[i], nc);
+        if (bound > radius) radius = bound;
+    }
+    return radius;
+}
+
 void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, const SuMat4f *view_proj, float proj_y,
                         uint32_t *item_count) {
     SuFrustum fru;
@@ -86,7 +138,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
         c.x = rel.x + sr[0] * model->center[0] + sr[3] * model->center[1] + sr[6] * model->center[2];
         c.y = rel.y + sr[1] * model->center[0] + sr[4] * model->center[1] + sr[7] * model->center[2];
         c.z = rel.z + sr[2] * model->center[0] + sr[5] * model->center[1] + sr[8] * model->center[2];
-        if (!su_frustum_sphere(&fru, c, model->radius * smax)) {
+        if (!su_frustum_sphere(&fru, c, posed_model_radius(r, f, obj, model) * smax)) {
             r->stats.objects_culled++;
             continue;
         }
@@ -95,7 +147,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
             const float *nc = &model->node_center[i * 4u];
             const float *t = nd->transform;
             float ncw[3];
-            float nr = nc[3] * smax;
+            float nr = posed_node_radius(r, f, obj, nd, nc) * smax;
             uint32_t lod;
             uint32_t pick = UINT32_MAX;
             uint32_t mesh_index = 0;
@@ -168,6 +220,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
                 it = &r->items[n];
                 it->pipe = mat != NULL ? mat->u.mat.pipeline : PIPE_OPAQUE;
                 it->kind = mat != NULL ? mat->u.mat.kind : 0u;
+                it->skinned = (mesh->u.mesh.is_skinned && it->kind != 2u) ? 1u : 0u;
                 it->forced = 0;
                 if (obj->tint[3] < 1.0f && it->pipe < PIPE_OVERLAY) {
                     /* translucent instance of an opaque or masked material: the blend pass, same face culling */
@@ -177,7 +230,8 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
                 it->mat = mat_index;
                 it->mesh = mesh_index;
                 it->sub = sub;
-                it->key = ((uint64_t)it->kind << 63) | ((uint64_t)it->pipe << 60) | ((uint64_t)(mat_index & 0xFFFFFu) << 40) |
+                it->key = ((uint64_t)(it->kind & 3u) << 62) | ((uint64_t)(it->pipe & 7u) << 59) |
+                          ((uint64_t)it->skinned << 58) | ((uint64_t)(mat_index & 0x3FFFFu) << 40) |
                           ((uint64_t)(mesh_index & 0xFFFFFFu) << 16) | (uint64_t)(sub & 0xFFFFu);
                 it->dist2 = ncw[0] * ncw[0] + ncw[1] * ncw[1] + ncw[2] * ncw[2];
                 memcpy(it->inst.r0, &m[0], sizeof it->inst.r0);
@@ -186,6 +240,12 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
                 memcpy(it->inst.tint, obj->tint, sizeof it->inst.tint);
                 it->inst.extra[0] = obj->emissive;
                 it->inst.extra[1] = it->inst.extra[2] = it->inst.extra[3] = 0.0f;
+                if (mesh->u.mesh.is_skinned && obj->skin_count > 0u) {
+                    uint32_t off = obj->skin_offset;
+                    uint32_t cnt = obj->skin_count < mesh->u.mesh.joint_count ? obj->skin_count : mesh->u.mesh.joint_count;
+                    memcpy(&it->inst.extra[1], &off, sizeof off);
+                    memcpy(&it->inst.extra[2], &cnt, sizeof cnt);
+                }
                 memcpy(it->inst.light_mask, light_mask, sizeof light_mask);
                 r->order[n] = n;
                 n++;
@@ -265,6 +325,7 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
     uint32_t i = 0;
     uint32_t bound_pipe = UINT32_MAX;
     uint32_t bound_kind = UINT32_MAX;
+    uint32_t bound_skinned = UINT32_MAX;
     uint32_t bound_mat = UINT32_MAX - 1u;
     uint32_t bound_forced = 0;
     uint32_t bound_mesh = UINT32_MAX;
@@ -282,28 +343,32 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
         }
         while (i + run < item_count) {
             const DrawItem *nx = &r->items[r->order[i + run]];
-            if (nx->kind != it->kind || nx->pipe != it->pipe || nx->mat != it->mat || nx->forced != it->forced || nx->mesh != it->mesh || nx->sub != it->sub) {
+            if (nx->kind != it->kind || nx->pipe != it->pipe || nx->skinned != it->skinned || nx->mat != it->mat ||
+                nx->forced != it->forced || nx->mesh != it->mesh || nx->sub != it->sub) {
                 break;
             }
             run++;
         }
         if (it->kind == 2u) {
             fx_mesh_draw(r, fr, cmd, i, run, frame);
-            bound_kind = bound_pipe = bound_mesh = UINT32_MAX;
+            bound_kind = bound_pipe = bound_skinned = bound_mesh = UINT32_MAX;
             bound_mat = UINT32_MAX - 1u;
             i += run;
             continue;
         }
-        if (it->pipe != bound_pipe || it->kind != bound_kind) {
+        if (it->pipe != bound_pipe || it->kind != bound_kind || it->skinned != bound_skinned) {
             VkPipelineLayout layout = it->kind != 0u ? r->paint_layout : r->scene_layout;
-            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                   it->kind != 0u ? r->paint_pipe[it->pipe] : r->pbr_pipe[it->pipe]);
+            VkPipeline pipe = it->skinned
+                                  ? (it->kind != 0u ? r->paint_skinned_pipe[it->pipe] : r->pbr_skinned_pipe[it->pipe])
+                                  : (it->kind != 0u ? r->paint_pipe[it->pipe] : r->pbr_pipe[it->pipe]);
+            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
             r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &fr->frame_set, 0, NULL);
             if (it->kind != bound_kind) {
                 bound_mat = UINT32_MAX - 1u; /* the layouts differ from set 1 on: bind the material again */
             }
             bound_pipe = it->pipe;
             bound_kind = it->kind;
+            bound_skinned = it->skinned;
         }
         if (it->mat != bound_mat || it->forced != bound_forced) {
             MatPush mp;
@@ -323,11 +388,14 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
         }
         if (it->mesh != bound_mesh) {
             const MeshRes *m = &r->res[it->mesh].u.mesh;
-            VkBuffer vbs[2];
-            VkDeviceSize offs[2] = {0, 0};
+            VkBuffer vbs[3];
+            VkDeviceSize offs[3] = {0, 0, 0};
             vbs[0] = m->vb.buf;
             vbs[1] = fr->draw_inst.buf;
-            r->f.vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
+            if (m->is_skinned) {
+                vbs[2] = m->skin_vb.buf;
+            }
+            r->f.vkCmdBindVertexBuffers(cmd, 0, m->is_skinned ? 3u : 2u, vbs, offs);
             r->f.vkCmdBindIndexBuffer(cmd, m->ib.buf, 0, VK_INDEX_TYPE_UINT32);
             bound_mesh = it->mesh;
         }
@@ -413,7 +481,7 @@ static int object_frame(SuRenderer *r, const SuRenderFrameDesc *f, const SuRende
     for (k = 0; k < 3; k++) {
         c[k] = rel[k] + sr[k] * (*model)->center[0] + sr[3 + k] * (*model)->center[1] + sr[6 + k] * (*model)->center[2];
     }
-    *radius = (*model)->radius * *smax;
+    *radius = posed_model_radius(r, f, obj, *model) * *smax;
     return 1;
 }
 
@@ -540,7 +608,7 @@ static float gather_casters(SuRenderer *r, const SuRenderFrameDesc *f, float pro
             const float *t = nd->transform;
             float ncw[3];
             float np[3];
-            float nr = nc[3] * smax;
+            float nr = posed_node_radius(r, f, obj, nd, nc) * smax;
             uint32_t lod;
             uint32_t mesh_index = 0;
             Res *mesh = NULL;
@@ -601,12 +669,20 @@ static float gather_casters(SuRenderer *r, const SuRenderFrameDesc *f, float pro
                 it = &r->sitems[*n];
                 it->mesh = mesh_index;
                 it->sub = sub;
-                it->key = ((uint64_t)cascade << 56) | ((uint64_t)mesh_index << 16) | (uint64_t)(sub & 0xFFFFu);
+                it->skinned = mesh->u.mesh.is_skinned;
+                it->key = ((uint64_t)cascade << 56) | ((uint64_t)it->skinned << 55) |
+                          ((uint64_t)(mesh_index & 0xFFFFFFFFu) << 16) | (uint64_t)(sub & 0xFFFFu);
                 memcpy(it->inst.r0, &m[0], sizeof it->inst.r0);
                 memcpy(it->inst.r1, &m[4], sizeof it->inst.r1);
                 memcpy(it->inst.r2, &m[8], sizeof it->inst.r2);
                 memset(it->inst.tint, 0, sizeof it->inst.tint);
                 memset(it->inst.extra, 0, sizeof it->inst.extra);
+                if (mesh->u.mesh.is_skinned && obj->skin_count > 0u) {
+                    uint32_t off = obj->skin_offset;
+                    uint32_t cnt = obj->skin_count < mesh->u.mesh.joint_count ? obj->skin_count : mesh->u.mesh.joint_count;
+                    memcpy(&it->inst.extra[1], &off, sizeof off);
+                    memcpy(&it->inst.extra[2], &cnt, sizeof cnt);
+                }
                 r->sorder[*n] = *n;
                 (*n)++;
             }
@@ -843,20 +919,32 @@ void su_rvk_shadow_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t 
     uint32_t i = first;
     uint32_t end = first + count;
     uint32_t bound_mesh = UINT32_MAX;
+    uint32_t bound_skinned = UINT32_MAX;
     while (i < end) {
         const ShadowItem *it = &r->sitems[r->sorder[i]];
         const SubGpu *sub;
         uint32_t run = 1;
-        while (i + run < end && r->sitems[r->sorder[i + run]].key == it->key) {
+        while (i + run < end && r->sitems[r->sorder[i + run]].key == it->key &&
+               r->sitems[r->sorder[i + run]].skinned == it->skinned &&
+               r->sitems[r->sorder[i + run]].mesh == it->mesh &&
+               r->sitems[r->sorder[i + run]].sub == it->sub) {
             run++;
+        }
+        if (it->skinned != bound_skinned) {
+            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                   it->skinned ? r->shadow_skinned_pipe : r->shadow_pipe);
+            bound_skinned = it->skinned;
         }
         if (it->mesh != bound_mesh) {
             const MeshRes *m = &r->res[it->mesh].u.mesh;
-            VkBuffer vbs[2];
-            VkDeviceSize offs[2] = {0, 0};
+            VkBuffer vbs[3];
+            VkDeviceSize offs[3] = {0, 0, 0};
             vbs[0] = m->vb.buf;
             vbs[1] = fr->shadow_inst.buf;
-            r->f.vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
+            if (m->is_skinned) {
+                vbs[2] = m->skin_vb.buf;
+            }
+            r->f.vkCmdBindVertexBuffers(cmd, 0, m->is_skinned ? 3u : 2u, vbs, offs);
             r->f.vkCmdBindIndexBuffer(cmd, m->ib.buf, 0, VK_INDEX_TYPE_UINT32);
             bound_mesh = it->mesh;
         }

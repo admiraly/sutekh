@@ -1059,6 +1059,8 @@ static VkShaderModule shader(SuRenderer *r, const uint32_t *code, size_t bytes) 
 #define VIN_HUD 5
 #define VIN_FXMESH 8
 #define VIN_SHADOW 6 /* asset vertex position and the instance rows only (shadow casters) */
+#define VIN_PBR_SKINNED 9
+#define VIN_SHADOW_SKINNED 10
 
 #define BLEND_NONE 0
 #define BLEND_ALPHA 1
@@ -1098,8 +1100,8 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
     VkShaderModule vs = shader(r, s->vs, s->vs_bytes);
     VkShaderModule fs = shader(r, s->fs, s->fs_bytes);
     VkPipelineShaderStageCreateInfo st[2];
-    VkVertexInputBindingDescription bind[2];
-    VkVertexInputAttributeDescription at[12];
+    VkVertexInputBindingDescription bind[3];
+    VkVertexInputAttributeDescription at[13];
     uint32_t nb = 0;
     uint32_t na = 0;
     VkPipelineVertexInputStateCreateInfo vin;
@@ -1154,31 +1156,42 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         attr(at, &na, 1, 0, VK_FORMAT_R8G8B8A8_UNORM, 12);
         break;
     case VIN_PBR:
-    case VIN_FXMESH:
+    case VIN_PBR_SKINNED:
+    case VIN_FXMESH: {
+        int pbr = s->vin == VIN_PBR || s->vin == VIN_PBR_SKINNED;
         bind[0].stride = sizeof(SuAssetVertex);
         bind[1].binding = 1;
         bind[1].stride = sizeof(DrawInstance);
         bind[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
         nb = 2;
         attr(at, &na, 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0);
-        if (s->vin == VIN_PBR) {
+        if (pbr) {
             attr(at, &na, 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12);
             attr(at, &na, 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 24);
         }
         attr(at, &na, 3, 0, VK_FORMAT_R32G32_SFLOAT, 40);
-        if (s->vin == VIN_PBR) {
+        if (pbr) {
             attr(at, &na, 4, 0, VK_FORMAT_R32G32_SFLOAT, 48);
         }
         attr(at, &na, 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0);
         attr(at, &na, 6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16);
         attr(at, &na, 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32);
         attr(at, &na, 8, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48);
-        if (s->vin == VIN_PBR) {
+        if (pbr) {
             attr(at, &na, 9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 64);
             attr(at, &na, 10, 1, VK_FORMAT_R32G32B32A32_UINT, (uint32_t)offsetof(DrawInstance, light_mask));
         }
+        if (s->vin == VIN_PBR_SKINNED) {
+            bind[2].binding = 2;
+            bind[2].stride = sizeof(SuAssetSkinVertex);
+            nb = 3;
+            attr(at, &na, 11, 2, VK_FORMAT_R16G16B16A16_UINT, (uint32_t)offsetof(SuAssetSkinVertex, joints));
+            attr(at, &na, 12, 2, VK_FORMAT_R32G32B32A32_SFLOAT, (uint32_t)offsetof(SuAssetSkinVertex, weights));
+        }
         break;
+    }
     case VIN_SHADOW:
+    case VIN_SHADOW_SKINNED:
         bind[0].stride = sizeof(SuAssetVertex);
         bind[1].binding = 1;
         bind[1].stride = sizeof(DrawInstance);
@@ -1188,6 +1201,14 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         attr(at, &na, 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0);
         attr(at, &na, 6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16);
         attr(at, &na, 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32);
+        if (s->vin == VIN_SHADOW_SKINNED) {
+            attr(at, &na, 9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 64);
+            bind[2].binding = 2;
+            bind[2].stride = sizeof(SuAssetSkinVertex);
+            nb = 3;
+            attr(at, &na, 11, 2, VK_FORMAT_R16G16B16A16_UINT, (uint32_t)offsetof(SuAssetSkinVertex, joints));
+            attr(at, &na, 12, 2, VK_FORMAT_R32G32B32A32_SFLOAT, (uint32_t)offsetof(SuAssetSkinVertex, weights));
+        }
         break;
     case VIN_FX:
         bind[0].stride = sizeof(SuFxVertex);
@@ -1444,6 +1465,12 @@ static int make_pipelines(SuRenderer *r) {
         s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
         s.subpass = i >= PIPE_BLEND ? 3 : 0;
         ok = make_pipe(r, &s, &r->pbr_pipe[i]);
+        if (ok) {
+            s.vs = su_shader_pbr_skinned_vert;
+            s.vs_bytes = sizeof su_shader_pbr_skinned_vert;
+            s.vin = VIN_PBR_SKINNED;
+            ok = make_pipe(r, &s, &r->pbr_skinned_pipe[i]);
+        }
     }
     /* sun shadow casters: depth only */
     if (ok) {
@@ -1456,6 +1483,12 @@ static int make_pipelines(SuRenderer *r) {
         s.depth_test = s.depth_write = 1;
         s.shadow = 1;
         ok = make_pipe(r, &s, &r->shadow_pipe);
+        if (ok) {
+            s.vs = su_shader_shadow_skinned_vert;
+            s.vs_bytes = sizeof su_shader_shadow_skinned_vert;
+            s.vin = VIN_SHADOW_SKINNED;
+            ok = make_pipe(r, &s, &r->shadow_skinned_pipe);
+        }
     }
     /* layered paint variants (same states, same vertex stage, own layout and fragment shader) */
     for (i = 0; i < PIPE_PBR_COUNT && ok; i++) {
@@ -1473,6 +1506,12 @@ static int make_pipelines(SuRenderer *r) {
         s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
         s.subpass = i >= PIPE_BLEND ? 3 : 0;
         ok = make_pipe(r, &s, &r->paint_pipe[i]);
+        if (ok) {
+            s.vs = su_shader_pbr_skinned_vert;
+            s.vs_bytes = sizeof su_shader_pbr_skinned_vert;
+            s.vin = VIN_PBR_SKINNED;
+            ok = make_pipe(r, &s, &r->paint_skinned_pipe[i]);
+        }
     }
     memset(&s, 0, sizeof s);
     s.vs = su_shader_fx_layer_vert;
@@ -1574,7 +1613,7 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
     VkDescriptorSetLayout sets[2];
     VkPushConstantRange pcr;
     VkPipelineLayoutCreateInfo pli;
-    VkDescriptorPoolSize ps[3];
+    VkDescriptorPoolSize ps[4];
     VkDescriptorPoolCreateInfo pi;
     uint32_t i;
     memset(b, 0, sizeof b);
@@ -1586,14 +1625,18 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
     b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     b[1].descriptorCount = 1;
     b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    b[2].binding = 2; /* per-frame skinning joint matrices */
+    b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[2].descriptorCount = 1;
+    b[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     memset(&li, 0, sizeof li);
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = 2;
+    li.bindingCount = 3;
     li.pBindings = b;
     if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->frame_dsl) != VK_SUCCESS) {
         return 0;
     }
-    memset(&b[1], 0, sizeof b[1]);
+    memset(b, 0, sizeof b);
     for (i = 0; i < SU_ASSET_SLOT_COUNT; i++) {
         b[i].binding = i;
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1788,10 +1831,12 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
     ps[1].descriptorCount = 5u + FRAMES_IN_FLIGHT;
     ps[2].type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
     ps[2].descriptorCount = 1;
+    ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    ps[3].descriptorCount = FRAMES_IN_FLIGHT;
     memset(&pi, 0, sizeof pi);
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pi.maxSets = FRAMES_IN_FLIGHT + 4u;
-    pi.poolSizeCount = 3;
+    pi.poolSizeCount = 4;
     pi.pPoolSizes = ps;
     if (r->f.vkCreateDescriptorPool(r->dev, &pi, NULL, &r->pool_frame) != VK_SUCCESS) {
         return 0;
@@ -2030,19 +2075,29 @@ static int make_frame_sets(SuRenderer *r) {
         return 0;
     }
     for (i = 0; i < FRAMES_IN_FLIGHT; i++) {
-        VkDescriptorBufferInfo bi;
-        VkWriteDescriptorSet w;
+        VkDescriptorBufferInfo bi[2];
+        VkWriteDescriptorSet w[2];
         r->frames[i].frame_set = sets[i];
-        bi.buffer = r->frames[i].ubo.buf;
-        bi.offset = 0;
-        bi.range = sizeof(FrameUbo);
-        memset(&w, 0, sizeof w);
-        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet = sets[i];
-        w.descriptorCount = 1;
-        w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        w.pBufferInfo = &bi;
-        r->f.vkUpdateDescriptorSets(r->dev, 1, &w, 0, NULL);
+        bi[0].buffer = r->frames[i].ubo.buf;
+        bi[0].offset = 0;
+        bi[0].range = sizeof(FrameUbo);
+        bi[1].buffer = r->frames[i].skin_ssbo.buf;
+        bi[1].offset = 0;
+        bi[1].range = VK_WHOLE_SIZE;
+        memset(w, 0, sizeof w);
+        w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[0].dstSet = sets[i];
+        w[0].dstBinding = 0;
+        w[0].descriptorCount = 1;
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w[0].pBufferInfo = &bi[0];
+        w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[1].dstSet = sets[i];
+        w[1].dstBinding = 2;
+        w[1].descriptorCount = 1;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[1].pBufferInfo = &bi[1];
+        r->f.vkUpdateDescriptorSets(r->dev, 2, w, 0, NULL);
     }
     r->post_set = sets[FRAMES_IN_FLIGHT];
     r->font_set = sets[FRAMES_IN_FLIGHT + 1u];
@@ -2589,6 +2644,7 @@ void su_render_destroy(SuRenderer *r) {
             }
             su_rvk_free_buffer(r, &fr->hud);
             su_rvk_free_buffer(r, &fr->ubo);
+            su_rvk_free_buffer(r, &fr->skin_ssbo);
             su_rvk_free_buffer(r, &fr->staging);
             if (fr->fence != VK_NULL_HANDLE) {
                 r->f.vkDestroyFence(r->dev, fr->fence, NULL);
@@ -2603,7 +2659,7 @@ void su_render_destroy(SuRenderer *r) {
         su_rvk_free_buffer(r, &r->mesh_vb);
         su_rvk_free_buffer(r, &r->mesh_ib);
         {
-            VkPipeline all[12 + 2 * PIPE_PBR_COUNT];
+            VkPipeline all[12 + 4 * PIPE_PBR_COUNT];
             uint32_t k;
             VkPipeline distortion_pipes[4] = {r->distortion_quad_pipe, r->distortion_mesh_pipe[0],
                                               r->distortion_mesh_pipe[1], r->distortion_resolve_pipe};
@@ -2672,8 +2728,10 @@ void su_render_destroy(SuRenderer *r) {
             for (k = 0; k < PIPE_PBR_COUNT; k++) {
                 all[12 + k] = r->pbr_pipe[k];
                 all[12 + PIPE_PBR_COUNT + k] = r->paint_pipe[k];
+                all[12 + 2 * PIPE_PBR_COUNT + k] = r->pbr_skinned_pipe[k];
+                all[12 + 3 * PIPE_PBR_COUNT + k] = r->paint_skinned_pipe[k];
             }
-            for (k = 0; k < 12 + 2 * PIPE_PBR_COUNT; k++) {
+            for (k = 0; k < 12 + 4 * PIPE_PBR_COUNT; k++) {
                 if (all[k] != VK_NULL_HANDLE) {
                     r->f.vkDestroyPipeline(r->dev, all[k], NULL);
                 }
@@ -2708,6 +2766,9 @@ void su_render_destroy(SuRenderer *r) {
         free_shadow_map(r);
         if (r->shadow_pipe != VK_NULL_HANDLE) {
             r->f.vkDestroyPipeline(r->dev, r->shadow_pipe, NULL);
+        }
+        if (r->shadow_skinned_pipe != VK_NULL_HANDLE) {
+            r->f.vkDestroyPipeline(r->dev, r->shadow_skinned_pipe, NULL);
         }
         if (r->shadow_pass != VK_NULL_HANDLE) {
             r->f.vkDestroyRenderPass(r->dev, r->shadow_pass, NULL);
@@ -3061,8 +3122,14 @@ uint32_t su_render_create(const SuRenderDesc *desc, SuRenderer **out, char messa
             !su_rvk_make_buffer(r, (VkDeviceSize)r->max_hud * sizeof(SuHudVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                 host, &fr->hud) ||
             !su_rvk_make_buffer(r, sizeof(FrameUbo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, host, &fr->ubo) ||
+            !su_rvk_make_buffer(r, 4096u * sizeof(SuMat4f), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, host, &fr->skin_ssbo) ||
             !su_rvk_make_buffer(r, r->budget, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, host, &fr->staging)) {
             return create_fail(r, SU_E_RESOURCE_LIMIT, message, "per-frame resources");
+        }
+        fr->skin_cap = 4096u;
+        {
+            SuMat4f id = su_mat4f_identity();
+            memcpy(fr->skin_ssbo.map, &id, sizeof id);
         }
         if (r->info.timestamps) {
             memset(&qpi, 0, sizeof qpi);
@@ -3273,6 +3340,50 @@ static void push_legacy(SuRenderer *r, VkCommandBuffer cmd, const FrameIn *in) {
                             &pc);
 }
 
+static int prepare_skin_ssbo(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *scene) {
+    uint32_t need = scene != NULL && scene->skin_matrix_count > 0u ? scene->skin_matrix_count : 1u;
+    if (need > fr->skin_cap) {
+        uint32_t cap = fr->skin_cap ? fr->skin_cap : 4096u;
+        Buffer nb;
+        VkDescriptorBufferInfo bi;
+        VkWriteDescriptorSet w;
+        while (cap < need) {
+            if (cap > UINT32_MAX / 2u) {
+                cap = need;
+                break;
+            }
+            cap *= 2u;
+        }
+        if ((uint64_t)cap * sizeof(SuMat4f) > r->props.limits.maxStorageBufferRange) cap = need;
+        memset(&nb, 0, sizeof nb);
+        if (!su_rvk_make_buffer(r, (VkDeviceSize)cap * sizeof(SuMat4f), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &nb)) {
+            return 0;
+        }
+        su_rvk_free_buffer(r, &fr->skin_ssbo);
+        fr->skin_ssbo = nb;
+        fr->skin_cap = cap;
+        bi.buffer = fr->skin_ssbo.buf;
+        bi.offset = 0;
+        bi.range = VK_WHOLE_SIZE;
+        memset(&w, 0, sizeof w);
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = fr->frame_set;
+        w.dstBinding = 2;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w.pBufferInfo = &bi;
+        r->f.vkUpdateDescriptorSets(r->dev, 1, &w, 0, NULL);
+    }
+    if (scene != NULL && scene->skin_matrix_count > 0u) {
+        memcpy(fr->skin_ssbo.map, scene->skin_matrices, (size_t)scene->skin_matrix_count * sizeof(SuMat4f));
+    } else {
+        SuMat4f id = su_mat4f_identity();
+        memcpy(fr->skin_ssbo.map, &id, sizeof id);
+    }
+    return 1;
+}
+
 static uint32_t render(SuRenderer *r, const FrameIn *in) {
     Frame *fr;
     double t0;
@@ -3347,6 +3458,7 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
     }
     collect_gpu_time(r, fr);
     if (!su_rvk_particles_prepare(r, fr, in->scene)) return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "particle buffers");
+    if (!prepare_skin_ssbo(r, fr, in->scene)) return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "skinning palette buffer");
     if (!r->offscreen) {
         /* Bounded (SuRenderDesc.acquire_timeout_us): a compositor that stops releasing images (a hidden window
          * without a "suspended" report) must not block the host loop; such a frame is skipped like a minimized one,
@@ -3587,7 +3699,6 @@ static uint32_t render(SuRenderer *r, const FrameIn *in) {
                 ssc.extent.width = ssc.extent.height = r->shadow_size;
                 r->f.vkCmdSetViewport(cmd, 0, 1, &svp);
                 r->f.vkCmdSetScissor(cmd, 0, 1, &ssc);
-                r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->shadow_pipe);
                 r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->scene_layout, 0, 1, &fr->frame_set, 0,
                                              NULL);
                 r->f.vkCmdPushConstants(cmd, r->scene_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -4050,17 +4161,27 @@ static float vlen(SuVec3f v) {
 
 uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
     FrameIn in;
+    SuRenderFrameDesc compat;
     SuMat4f view;
     SuMat4f proj;
     const SuRenderLighting *l;
     SuVec3f sd;
     SuVec3f up;
     float len;
+    /* v12 ends before the palette. Copy only the caller's bytes before reading new fields. */
+    if (f != NULL && f->struct_size == offsetof(SuRenderFrameDesc, skin_matrices)) {
+        memset(&compat, 0, sizeof compat);
+        memcpy(&compat, f, f->struct_size);
+        compat.struct_size = sizeof compat;
+        f = &compat;
+    }
     if (r == NULL || f == NULL || f->struct_size != sizeof *f || (f->objects == NULL && f->object_count > 0u) ||
         (f->debug_instances == NULL && f->debug_instance_count > 0u) || (f->lines == NULL && f->line_vertex_count > 0u) ||
         (f->fx == NULL && f->fx_vertex_count > 0u) || (f->hud == NULL && f->hud_vertex_count > 0u) ||
         (f->fx_tex == NULL && f->fx_tex_vertex_count > 0u) || (f->fx_batches == NULL && f->fx_batch_count > 0u) ||
         (f->haze == NULL && f->haze_count > 0u) || f->haze_count > SU_HAZE_MAX_VOLUMES ||
+        (f->skin_matrices == NULL && f->skin_matrix_count > 0u) ||
+        (uint64_t)f->skin_matrix_count * sizeof(SuMat4f) > r->props.limits.maxStorageBufferRange ||
         !isfinite(f->distortion_cube_intensity) || f->distortion_cube_intensity < 0.0f ||
         f->output_alpha > SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED ||
         !isfinite(f->time_seconds) || !(f->camera.fov_y > 0.0f && f->camera.fov_y < 3.1f) || !(f->camera.near_z > 0.0f)) {
@@ -4072,6 +4193,16 @@ uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
         HazePush push;
         for (index = 0; index < f->haze_count; index++) {
             if (!su_haze_prepare(&f->haze[index], f->camera.pos, &push)) return SU_E_INVALID_ARGUMENT;
+        }
+        for (index = 0; index < f->object_count; index++) {
+            const SuRenderObject *o = &f->objects[index];
+            if (o->skin_count > 0u &&
+                (o->skin_offset > f->skin_matrix_count || o->skin_count > f->skin_matrix_count - o->skin_offset)) {
+                return su_rvk_fail(r, SU_E_INVALID_ARGUMENT,
+                                   "object %u skin slice [%u, +%u) exceeds skin_matrix_count %u",
+                                   (unsigned)index, (unsigned)o->skin_offset, (unsigned)o->skin_count,
+                                   (unsigned)f->skin_matrix_count);
+            }
         }
     }
     if (!su_rvk_particles_valid(f)) return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "invalid particle emitters or capacity");

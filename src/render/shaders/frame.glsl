@@ -26,6 +26,12 @@ layout(set = 0, binding = 0) uniform Frame {
     PointLight point_lights[128];
 } fr;
 
+#ifdef SU_SKINNED
+layout(std430, set = 0, binding = 2) readonly buffer SkinMatrices {
+    mat4 skin_mats[];
+};
+#endif
+
 #ifdef SU_SHADOW_RECEIVER
 // The sun's shadow map, one layer per cascade (compare sampler: 1 where the reference depth is not farther).
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow t_shadow;

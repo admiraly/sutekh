@@ -14,6 +14,7 @@
 #include "sutekh/asset.h"
 
 _Static_assert(sizeof(SuAssetVertex) == 56, "vertex layout");
+_Static_assert(sizeof(SuAssetSkinVertex) == 24, "skin vertex layout");
 _Static_assert(sizeof(SuAssetSubmesh) == 32, "submesh layout");
 _Static_assert(sizeof(SuAssetMeshHeader) == 64, "mesh header layout");
 _Static_assert(sizeof(SuAssetTextureHeader) == 64, "texture header layout");
@@ -255,17 +256,23 @@ static void sphere_of(const SuAssetVertex *v, const uint32_t *idx, uint32_t firs
     *r = rr * 1.0001f + 1e-6f;
 }
 
-uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices, uint32_t vertex_count,
-                                  const uint32_t *indices, uint32_t index_count, const SuAssetSubmesh *submeshes,
-                                  uint32_t submesh_count) {
+static uint32_t add_mesh_impl(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices, uint32_t vertex_count,
+                              const uint32_t *indices, uint32_t index_count, const SuAssetSubmesh *submeshes,
+                              uint32_t submesh_count, const SuAssetSkinVertex *skin, uint32_t joint_count) {
     SuAssetMeshHeader h;
     SuAssetSubmesh *sm;
     uint8_t *buf;
     size_t size;
+    size_t v_off;
+    size_t i_off;
     uint32_t i;
     int k;
+    int skinned = skin != NULL;
     if (w == NULL || vertices == NULL || indices == NULL || submeshes == NULL || vertex_count == 0u ||
         index_count < 3u || index_count % 3u != 0u || submesh_count == 0u) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (skinned && (joint_count == 0u || joint_count > SU_ASSET_MAX_JOINTS)) {
         return SU_E_INVALID_ARGUMENT;
     }
     for (i = 0; i < index_count; i++) {
@@ -284,9 +291,18 @@ uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVe
         if (!finite_n(vertices[i].pos, 14u)) {
             return SU_E_INVALID_ARGUMENT;
         }
+        if (skinned) {
+            for (k = 0; k < 4; k++) {
+                if (!isfinite(skin[i].weights[k]) || skin[i].weights[k] < 0.0f ||
+                    skin[i].joints[k] >= joint_count) {
+                    return SU_E_INVALID_ARGUMENT;
+                }
+            }
+        }
     }
-    size = sizeof h + (size_t)submesh_count * sizeof *sm + (size_t)vertex_count * sizeof *vertices +
-           (size_t)index_count * 4u;
+    v_off = sizeof h + (size_t)submesh_count * sizeof *sm;
+    i_off = v_off + (size_t)vertex_count * sizeof *vertices;
+    size = i_off + (size_t)index_count * 4u + (skinned ? (size_t)vertex_count * sizeof *skin : 0u);
     buf = calloc(1, size);
     if (buf == NULL) {
         return SU_E_RESOURCE_LIMIT;
@@ -295,6 +311,10 @@ uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVe
     h.vertex_count = vertex_count;
     h.index_count = index_count;
     h.submesh_count = submesh_count;
+    if (skinned) {
+        h.flags = SU_ASSET_MESH_FLAG_SKINNED;
+        h.joint_count = joint_count;
+    }
     for (k = 0; k < 3; k++) {
         h.aabb_min[k] = INFINITY;
         h.aabb_max[k] = -INFINITY;
@@ -312,10 +332,30 @@ uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVe
         sm[i] = submeshes[i];
         sphere_of(vertices, indices, sm[i].first_index, sm[i].index_count, sm[i].center, &sm[i].radius);
     }
-    memcpy(buf + sizeof h + (size_t)submesh_count * sizeof *sm, vertices, (size_t)vertex_count * sizeof *vertices);
-    memcpy(buf + sizeof h + (size_t)submesh_count * sizeof *sm + (size_t)vertex_count * sizeof *vertices, indices,
-           (size_t)index_count * 4u);
+    memcpy(buf + v_off, vertices, (size_t)vertex_count * sizeof *vertices);
+    memcpy(buf + i_off, indices, (size_t)index_count * 4u);
+    if (skinned) {
+        memcpy(buf + i_off + (size_t)index_count * 4u, skin, (size_t)vertex_count * sizeof *skin);
+        return writer_put_v(w, id, SU_ASSET_MESH, SU_ASSET_MESH_SKIN_VERSION, buf, size);
+    }
     return writer_put(w, id, SU_ASSET_MESH, buf, size);
+}
+
+uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices, uint32_t vertex_count,
+                                  const uint32_t *indices, uint32_t index_count, const SuAssetSubmesh *submeshes,
+                                  uint32_t submesh_count) {
+    return add_mesh_impl(w, id, vertices, vertex_count, indices, index_count, submeshes, submesh_count, NULL, 0u);
+}
+
+uint32_t su_asset_writer_add_skinned_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices,
+                                          uint32_t vertex_count, const uint32_t *indices, uint32_t index_count,
+                                          const SuAssetSubmesh *submeshes, uint32_t submesh_count,
+                                          const SuAssetSkinVertex *skin, uint32_t joint_count) {
+    if (skin == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return add_mesh_impl(w, id, vertices, vertex_count, indices, index_count, submeshes, submesh_count, skin,
+                         joint_count);
 }
 
 uint32_t su_asset_writer_add_texture(SuAssetWriter *w, uint64_t id, uint32_t width, uint32_t height, uint32_t format,
@@ -600,6 +640,8 @@ static const uint8_t *payload(const SuAssetPak *p, uint32_t i) {
 static uint32_t check_mesh(const SuAssetPak *p, uint32_t ei, char *msg) {
     const uint8_t *b = payload(p, ei);
     uint64_t size = p->entries[ei].size;
+    uint32_t ver = p->entries[ei].type_version;
+    int skinned = ver == SU_ASSET_MESH_SKIN_VERSION;
     SuAssetMeshHeader h;
     const SuAssetSubmesh *sm;
     const SuAssetVertex *v;
@@ -612,10 +654,13 @@ static uint32_t check_mesh(const SuAssetPak *p, uint32_t ei, char *msg) {
     }
     memcpy(&h, b, sizeof h);
     want = sizeof h + (uint64_t)h.submesh_count * sizeof *sm + (uint64_t)h.vertex_count * sizeof *v +
-           (uint64_t)h.index_count * 4u;
+           (uint64_t)h.index_count * 4u + (skinned ? (uint64_t)h.vertex_count * sizeof(SuAssetSkinVertex) : 0u);
     if (h.vertex_count == 0u || h.index_count < 3u || h.index_count % 3u != 0u || h.submesh_count == 0u ||
-        h.flags != 0u || want != size || !finite3(h.aabb_min) || !finite3(h.aabb_max) || !finite3(h.center) ||
-        !isfinite(h.radius) || h.radius < 0.0f) {
+        want != size || !finite3(h.aabb_min) || !finite3(h.aabb_max) || !finite3(h.center) ||
+        !isfinite(h.radius) || h.radius < 0.0f ||
+        (!skinned && h.flags != 0u) ||
+        (skinned && (h.flags != SU_ASSET_MESH_FLAG_SKINNED || h.joint_count == 0u ||
+                     h.joint_count > SU_ASSET_MAX_JOINTS))) {
         msgf(msg, "mesh %016llx: inconsistent header", (unsigned long long)p->entries[ei].id);
         return SU_E_PARSE;
     }
@@ -641,6 +686,20 @@ static uint32_t check_mesh(const SuAssetPak *p, uint32_t ei, char *msg) {
         if (idx[i] >= h.vertex_count) {
             msgf(msg, "mesh %016llx: index %u out of range", (unsigned long long)p->entries[ei].id, (unsigned)i);
             return SU_E_PARSE;
+        }
+    }
+    if (skinned) {
+        const SuAssetSkinVertex *sk = (const SuAssetSkinVertex *)(idx + h.index_count);
+        for (i = 0; i < h.vertex_count; i++) {
+            int k;
+            for (k = 0; k < 4; k++) {
+                if (!isfinite(sk[i].weights[k]) || sk[i].weights[k] < 0.0f ||
+                    sk[i].joints[k] >= h.joint_count) {
+                    msgf(msg, "mesh %016llx: skin vertex %u invalid",
+                         (unsigned long long)p->entries[ei].id, (unsigned)i);
+                    return SU_E_PARSE;
+                }
+            }
         }
     }
     return SU_OK;
@@ -881,7 +940,10 @@ uint32_t su_asset_pak_open(const void *bytes, size_t len, uint32_t flags, SuAsse
         memcpy(en->sha256, e + 32, 32);
         if (en->id == 0u || (i > 0u && en->id <= p->entries[i - 1u].id) || en->type < SU_ASSET_MESH ||
             en->type > SU_ASSET_MODEL ||
-            (en->type_version != 1u && !(en->type == SU_ASSET_MATERIAL && en->type_version == 2u)) || (en->offset & 15u) != 0u || en->offset < prev_end ||
+            (en->type_version != 1u &&
+             !(en->type == SU_ASSET_MESH && en->type_version == SU_ASSET_MESH_SKIN_VERSION) &&
+             !(en->type == SU_ASSET_MATERIAL && en->type_version == 2u)) ||
+            (en->offset & 15u) != 0u || en->offset < prev_end ||
             en->offset > (uint64_t)len || en->size > (uint64_t)len - en->offset) {
             msgf(message, "entry %u: id order, type, version or byte range invalid", (unsigned)i);
             su_asset_pak_close(p);
@@ -1025,6 +1087,24 @@ uint32_t su_asset_pak_mesh(const SuAssetPak *pak, uint64_t id, SuAssetMeshView *
     out->vertices = (const SuAssetVertex *)(b + sizeof(SuAssetMeshHeader) +
                                             (size_t)out->header->submesh_count * sizeof(SuAssetSubmesh));
     out->indices = (const uint32_t *)(out->vertices + out->header->vertex_count);
+    return SU_OK;
+}
+
+uint32_t su_asset_pak_mesh_skin(const SuAssetPak *pak, uint64_t id, SuAssetSkinMeshView *out) {
+    uint32_t i;
+    const uint8_t *b;
+    if (out == NULL || su_asset_pak_find(pak, id, SU_ASSET_MESH, &i) != SU_OK ||
+        pak->entries[i].type_version != SU_ASSET_MESH_SKIN_VERSION) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    b = payload(pak, i);
+    out->id = id;
+    out->header = (const SuAssetMeshHeader *)b;
+    out->submeshes = (const SuAssetSubmesh *)(b + sizeof(SuAssetMeshHeader));
+    out->vertices = (const SuAssetVertex *)(b + sizeof(SuAssetMeshHeader) +
+                                            (size_t)out->header->submesh_count * sizeof(SuAssetSubmesh));
+    out->indices = (const uint32_t *)(out->vertices + out->header->vertex_count);
+    out->skin = (const SuAssetSkinVertex *)(out->indices + out->header->index_count);
     return SU_OK;
 }
 

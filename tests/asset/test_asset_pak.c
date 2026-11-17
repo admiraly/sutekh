@@ -568,6 +568,122 @@ static void test_files_and_loader(void) {
     free(a);
 }
 
+static void test_skinned_mesh(void) {
+    SuAssetWriter *w = NULL;
+    SuAssetVertex v[24];
+    SuAssetSkinVertex sk[24];
+    uint32_t idx[36];
+    SuAssetSubmesh sm;
+    uint64_t id_v1 = su_asset_id("test/mesh/v1_control");
+    uint64_t id_v2 = su_asset_id("test/mesh/skinned");
+    uint8_t *a = NULL;
+    uint8_t *b = NULL;
+    size_t la = 0;
+    size_t lb = 0;
+    SuAssetPak *p = NULL;
+    SuAssetMeshView mv;
+    SuAssetSkinMeshView smv;
+    char msg[256];
+    uint32_t i;
+    cube(v, idx);
+    memset(&sm, 0, sizeof sm);
+    sm.index_count = 36;
+    for (i = 0; i < 24u; i++) {
+        sk[i].joints[0] = (uint16_t)(i % 4u);
+        sk[i].joints[1] = (uint16_t)((i + 1u) % 4u);
+        sk[i].joints[2] = 0u;
+        sk[i].joints[3] = 0u;
+        sk[i].weights[0] = 0.75f;
+        sk[i].weights[1] = 0.25f;
+        sk[i].weights[2] = 0.0f;
+        sk[i].weights[3] = 0.0f;
+    }
+    CHECK(su_asset_writer_create(&w) == SU_OK);
+    CHECK(su_asset_writer_add_mesh(w, id_v1, v, 24, idx, 36, &sm, 1) == SU_OK);
+    CHECK(su_asset_writer_add_skinned_mesh(w, id_v2, v, 24, idx, 36, &sm, 1, sk, 4u) == SU_OK);
+    CHECK(su_asset_writer_finish(w, &a, &la) == SU_OK);
+    su_asset_writer_destroy(w);
+
+    w = NULL;
+    CHECK(su_asset_writer_create(&w) == SU_OK);
+    CHECK(su_asset_writer_add_skinned_mesh(w, id_v2, v, 24, idx, 36, &sm, 1, sk, 4u) == SU_OK);
+    CHECK(su_asset_writer_add_mesh(w, id_v1, v, 24, idx, 36, &sm, 1) == SU_OK);
+    CHECK(su_asset_writer_finish(w, &b, &lb) == SU_OK);
+    su_asset_writer_destroy(w);
+
+    CHECK(a != NULL && b != NULL && la == lb && memcmp(a, b, la) == 0);
+    free(b);
+    CHECK(su_asset_pak_open(a, la, 0, &p, msg) == SU_OK);
+    if (p != NULL) {
+        CHECK(su_asset_pak_mesh_skin(p, id_v1, &smv) == SU_E_INVALID_ARGUMENT);
+        CHECK(su_asset_pak_mesh(p, id_v2, &mv) == SU_OK);
+        CHECK((mv.header->flags & SU_ASSET_MESH_FLAG_SKINNED) != 0u && mv.header->joint_count == 4u);
+        CHECK(su_asset_pak_mesh_skin(p, id_v2, &smv) == SU_OK);
+        CHECK(smv.header == mv.header && ((uintptr_t)smv.skin & 3u) == 0u);
+        CHECK(memcmp(smv.skin, sk, sizeof sk) == 0);
+        su_asset_pak_close(p);
+    }
+
+    /* Writer validation refusals */
+    CHECK(su_asset_writer_create(&w) == SU_OK);
+    CHECK(su_asset_writer_add_skinned_mesh(w, id_v2, v, 24, idx, 36, &sm, 1, NULL, 4u) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_asset_writer_add_skinned_mesh(w, id_v2, v, 24, idx, 36, &sm, 1, sk, 0u) == SU_E_INVALID_ARGUMENT);
+    CHECK(su_asset_writer_add_skinned_mesh(w, id_v2, v, 24, idx, 36, &sm, 1, sk, SU_ASSET_MAX_JOINTS + 1u) ==
+          SU_E_INVALID_ARGUMENT);
+    sk[2].joints[1] = 4u;
+    CHECK(su_asset_writer_add_skinned_mesh(w, id_v2, v, 24, idx, 36, &sm, 1, sk, 4u) == SU_E_INVALID_ARGUMENT);
+    sk[2].joints[1] = 3u;
+    sk[2].weights[0] = -0.1f;
+    CHECK(su_asset_writer_add_skinned_mesh(w, id_v2, v, 24, idx, 36, &sm, 1, sk, 4u) == SU_E_INVALID_ARGUMENT);
+    sk[2].weights[0] = NAN;
+    CHECK(su_asset_writer_add_skinned_mesh(w, id_v2, v, 24, idx, 36, &sm, 1, sk, 4u) == SU_E_INVALID_ARGUMENT);
+    su_asset_writer_destroy(w);
+
+    /* Structural corruptions on v2 skinned payload with recomputed hashes */
+    if (a != NULL) {
+        size_t skin_off = 64u + 32u + 24u * sizeof(SuAssetVertex) + 36u * 4u;
+        const Forge skin_forges[] = {
+            {"v2 zero joint_count", 0, 56u, 0u, "header"},
+            {"v2 overflow joint_count", 0, 56u, SU_ASSET_MAX_JOINTS + 1u, "header"},
+            {"v2 joint out of range", 0, skin_off, 4u, "skin"},
+            {"v2 negative weight", 0, skin_off + 8u, 0xBF800000u, "skin"},
+            {"v2 nan weight", 0, skin_off + 8u, 0x7FC00000u, "skin"},
+        };
+        size_t k;
+        for (k = 0; k < sizeof skin_forges / sizeof skin_forges[0]; k++) {
+            uint8_t *c = malloc(la);
+            SuAssetPak *cp = NULL;
+            uint64_t off;
+            uint32_t st;
+            memcpy(c, a, la);
+            off = entry_offset(c, id_v2) + skin_forges[k].at;
+            c[off] = (uint8_t)skin_forges[k].value;
+            c[off + 1u] = (uint8_t)(skin_forges[k].value >> 8);
+            c[off + 2u] = (uint8_t)(skin_forges[k].value >> 16);
+            c[off + 3u] = (uint8_t)(skin_forges[k].value >> 24);
+            rehash(c, la);
+            msg[0] = '\0';
+            st = su_asset_pak_open(c, la, 0, &cp, msg);
+            CHECK(st == SU_E_PARSE && strstr(msg, skin_forges[k].expect) != NULL);
+            if (st != SU_E_PARSE || strstr(msg, skin_forges[k].expect) == NULL) {
+                fprintf(stderr, "  forged skin case '%s': status %u, msg '%s'\n", skin_forges[k].what, (unsigned)st,
+                        msg);
+            }
+            su_asset_pak_close(cp);
+            free(c);
+        }
+        /* v1 reserved words were ignored by the old reader and remain ignored. */
+        {
+            uint64_t off = entry_offset(a, id_v1) + 56u;
+            a[off] = 7u;
+            rehash(a, la);
+            CHECK(su_asset_pak_open(a, la, 0, &p, msg) == SU_OK);
+            su_asset_pak_close(p);
+        }
+        free(a);
+    }
+}
+
 int main(void) {
     ID_MESH = su_asset_id("test/mesh/cube");
     ID_MESH_LOD = su_asset_id("test/mesh/cube_lod1");
@@ -581,6 +697,7 @@ int main(void) {
     test_forged();
     test_fuzz();
     test_files_and_loader();
+    test_skinned_mesh();
     printf("test_asset_pak: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

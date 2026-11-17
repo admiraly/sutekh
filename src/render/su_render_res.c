@@ -124,6 +124,7 @@ static void retire(SuRenderer *r, const Retired *t) {
             copy.serial = 0;
             su_rvk_free_buffer(r, &copy.a);
             su_rvk_free_buffer(r, &copy.b);
+            su_rvk_free_buffer(r, &copy.c);
             if (copy.view != VK_NULL_HANDLE) {
                 r->f.vkDestroyImageView(r->dev, copy.view, NULL);
             }
@@ -149,6 +150,7 @@ static void retire(SuRenderer *r, const Retired *t) {
 static void destroy_retired(SuRenderer *r, Retired *t) {
     su_rvk_free_buffer(r, &t->a);
     su_rvk_free_buffer(r, &t->b);
+    su_rvk_free_buffer(r, &t->c);
     if (t->view != VK_NULL_HANDLE) {
         r->f.vkDestroyImageView(r->dev, t->view, NULL);
     }
@@ -185,6 +187,7 @@ static void release_index(SuRenderer *r, uint32_t index) {
     case RES_MESH:
         t.a = s->u.mesh.vb;
         t.b = s->u.mesh.ib;
+        t.c = s->u.mesh.skin_vb;
         free(s->u.mesh.subs);
         free(s->u.mesh.owned);
         break;
@@ -271,28 +274,48 @@ uint32_t su_render_release(SuRenderer *r, SuRenderHandle h) {
 
 /* ---------- meshes ---------- */
 
-uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRenderHandle *out) {
+static uint32_t mesh_create_impl(SuRenderer *r, const SuAssetVertex *vertices, uint32_t vertex_count,
+                                 const uint32_t *indices, uint32_t index_count, const SuAssetSubmesh *submeshes,
+                                 uint32_t submesh_count, const SuRenderHandle *materials, const float center[3],
+                                 float radius, uint32_t flags, const SuAssetSkinVertex *skin, uint32_t joint_count,
+                                 int is_skinned, SuRenderHandle *out) {
     uint32_t idx = 0;
     uint32_t i;
     Res *s;
     MeshRes *m;
     VkDeviceSize vbytes;
     VkDeviceSize ibytes;
-    if (r == NULL || d == NULL || out == NULL || d->vertices == NULL || d->indices == NULL || d->submeshes == NULL ||
-        d->vertex_count == 0u || d->index_count < 3u || d->index_count % 3u != 0u || d->submesh_count == 0u ||
-        (d->flags & ~SU_RENDER_UPLOAD_COPY) != 0u || !(d->radius >= 0.0f)) {
+    VkDeviceSize sbytes;
+    if (r == NULL || out == NULL || vertices == NULL || indices == NULL || submeshes == NULL ||
+        vertex_count == 0u || index_count < 3u || index_count % 3u != 0u || submesh_count == 0u ||
+        (flags & ~SU_RENDER_UPLOAD_COPY) != 0u || !(radius >= 0.0f)) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    if (is_skinned && (skin == NULL || joint_count == 0u || joint_count > SU_ASSET_MAX_JOINTS)) {
         return SU_E_INVALID_ARGUMENT;
     }
     *out = 0;
-    for (i = 0; i < d->index_count; i++) {
-        if (d->indices[i] >= d->vertex_count) {
+    for (i = 0; i < index_count; i++) {
+        if (indices[i] >= vertex_count) {
             return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "mesh index %u out of range", (unsigned)i);
         }
     }
-    for (i = 0; i < d->submesh_count; i++) {
-        const SuAssetSubmesh *sm = &d->submeshes[i];
-        if (sm->index_count == 0u || sm->first_index > d->index_count || sm->index_count > d->index_count - sm->first_index ||
-            (d->materials != NULL && d->materials[i] != 0u && su_rvk_get(r, d->materials[i], RES_MATERIAL, NULL) == NULL)) {
+    if (is_skinned) {
+        for (i = 0; i < vertex_count; i++) {
+            uint32_t k;
+            for (k = 0; k < 4u; k++) {
+                float w = skin[i].weights[k];
+                if (skin[i].joints[k] >= joint_count || !(w >= 0.0f && isfinite(w))) {
+                    return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "skinned vertex %u joint/weight invalid",
+                                       (unsigned)i);
+                }
+            }
+        }
+    }
+    for (i = 0; i < submesh_count; i++) {
+        const SuAssetSubmesh *sm = &submeshes[i];
+        if (sm->index_count == 0u || sm->first_index > index_count || sm->index_count > index_count - sm->first_index ||
+            (materials != NULL && materials[i] != 0u && su_rvk_get(r, materials[i], RES_MATERIAL, NULL) == NULL)) {
             return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "submesh %u: range or material handle invalid", (unsigned)i);
         }
     }
@@ -301,59 +324,87 @@ uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRende
     }
     s = &r->res[idx];
     m = &s->u.mesh;
-    vbytes = (VkDeviceSize)d->vertex_count * sizeof(SuAssetVertex);
-    ibytes = (VkDeviceSize)d->index_count * 4u;
-    m->subs = malloc((size_t)d->submesh_count * sizeof *m->subs);
+    vbytes = (VkDeviceSize)vertex_count * sizeof(SuAssetVertex);
+    ibytes = (VkDeviceSize)index_count * 4u;
+    sbytes = is_skinned ? (VkDeviceSize)vertex_count * sizeof(SuAssetSkinVertex) : 0u;
+    m->subs = malloc((size_t)submesh_count * sizeof *m->subs);
     if (m->subs == NULL) {
         free_slot(r, idx);
         return SU_E_RESOURCE_LIMIT;
     }
-    for (i = 0; i < d->submesh_count; i++) {
-        m->subs[i].first_index = d->submeshes[i].first_index;
-        m->subs[i].index_count = d->submeshes[i].index_count;
-        m->subs[i].material = d->materials != NULL ? d->materials[i] : 0u;
-        memcpy(m->subs[i].center, d->submeshes[i].center, sizeof m->subs[i].center);
-        m->subs[i].radius = d->submeshes[i].radius;
+    for (i = 0; i < submesh_count; i++) {
+        m->subs[i].first_index = submeshes[i].first_index;
+        m->subs[i].index_count = submeshes[i].index_count;
+        m->subs[i].material = materials != NULL ? materials[i] : 0u;
+        memcpy(m->subs[i].center, submeshes[i].center, sizeof m->subs[i].center);
+        m->subs[i].radius = submeshes[i].radius;
     }
-    m->sub_count = d->submesh_count;
-    m->vertex_count = d->vertex_count;
-    m->index_count = d->index_count;
-    memcpy(m->center, d->center, sizeof m->center);
-    m->radius = d->radius;
-    if ((d->flags & SU_RENDER_UPLOAD_COPY) != 0u) {
-        m->owned = malloc((size_t)(vbytes + ibytes));
+    m->sub_count = submesh_count;
+    m->vertex_count = vertex_count;
+    m->index_count = index_count;
+    m->is_skinned = is_skinned ? 1u : 0u;
+    m->joint_count = is_skinned ? joint_count : 0u;
+    memcpy(m->center, center, sizeof m->center);
+    m->radius = radius;
+    if ((flags & SU_RENDER_UPLOAD_COPY) != 0u) {
+        m->owned = malloc((size_t)(vbytes + ibytes + sbytes));
         if (m->owned == NULL) {
             free(m->subs);
             free_slot(r, idx);
             return SU_E_RESOURCE_LIMIT;
         }
-        memcpy(m->owned, d->vertices, (size_t)vbytes);
-        memcpy(m->owned + vbytes, d->indices, (size_t)ibytes);
+        memcpy(m->owned, vertices, (size_t)vbytes);
+        memcpy(m->owned + vbytes, indices, (size_t)ibytes);
         m->src_v = m->owned;
         m->src_i = m->owned + vbytes;
+        if (is_skinned) {
+            memcpy(m->owned + vbytes + ibytes, skin, (size_t)sbytes);
+            m->src_skin = m->owned + vbytes + ibytes;
+        }
     } else {
-        m->src_v = (const uint8_t *)d->vertices;
-        m->src_i = (const uint8_t *)d->indices;
+        m->src_v = (const uint8_t *)vertices;
+        m->src_i = (const uint8_t *)indices;
+        m->src_skin = is_skinned ? (const uint8_t *)skin : NULL;
     }
     if (!su_rvk_make_buffer(r, vbytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m->vb) ||
         !su_rvk_make_buffer(r, ibytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m->ib)) {
+                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m->ib) ||
+        (is_skinned &&
+         !su_rvk_make_buffer(r, sbytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m->skin_vb))) {
         Retired t;
         memset(&t, 0, sizeof t);
         t.a = m->vb;
         t.b = m->ib;
+        t.c = m->skin_vb;
         destroy_retired(r, &t);
         free(m->subs);
         free(m->owned);
         free_slot(r, idx);
         return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "device memory for a mesh of %llu bytes",
-                           (unsigned long long)(vbytes + ibytes));
+                           (unsigned long long)(vbytes + ibytes + sbytes));
     }
     enqueue(r, idx);
     r->stats.resources++;
     *out = make_handle(RES_MESH, s->gen, idx);
     return SU_OK;
+}
+
+uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRenderHandle *out) {
+    if (d == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return mesh_create_impl(r, d->vertices, d->vertex_count, d->indices, d->index_count, d->submeshes, d->submesh_count,
+                            d->materials, d->center, d->radius, d->flags, NULL, 0u, 0, out);
+}
+
+uint32_t su_render_skinned_mesh_create(SuRenderer *r, const SuRenderSkinnedMeshDesc *d, SuRenderHandle *out) {
+    if (d == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    return mesh_create_impl(r, d->vertices, d->vertex_count, d->indices, d->index_count, d->submeshes, d->submesh_count,
+                            d->materials, d->center, d->radius, d->flags, d->skin, d->joint_count, 1, out);
 }
 
 /* ---------- textures ---------- */
@@ -623,22 +674,45 @@ static void tex_barrier(SuRenderer *r, VkCommandBuffer cmd, TexRes *t, int to_sh
 /* Copies as much of mesh m as fits; returns 1 when it is complete. */
 static int upload_mesh(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, MeshRes *m, VkDeviceSize *used) {
     VkDeviceSize vbytes = (VkDeviceSize)m->vertex_count * sizeof(SuAssetVertex);
-    VkDeviceSize total = vbytes + (VkDeviceSize)m->index_count * 4u;
+    VkDeviceSize ibytes = (VkDeviceSize)m->index_count * 4u;
+    VkDeviceSize sbytes = m->is_skinned ? (VkDeviceSize)m->vertex_count * sizeof(SuAssetSkinVertex) : 0u;
+    VkDeviceSize total = vbytes + ibytes + sbytes;
     while (m->done < total && *used < fr->staging.size) {
         VkDeviceSize room = fr->staging.size - *used;
-        int in_v = m->done < vbytes;
-        VkDeviceSize left = in_v ? vbytes - m->done : total - m->done;
-        VkDeviceSize n = left < room ? left : room;
+        const uint8_t *src;
+        VkBuffer dst_buf;
+        VkDeviceSize dst_off;
+        VkDeviceSize left;
+        VkDeviceSize n;
         VkBufferCopy c;
+        if (m->done < vbytes) {
+            src = m->src_v + m->done;
+            dst_buf = m->vb.buf;
+            dst_off = m->done;
+            left = vbytes - m->done;
+        } else if (m->done < vbytes + ibytes) {
+            VkDeviceSize off = m->done - vbytes;
+            src = m->src_i + off;
+            dst_buf = m->ib.buf;
+            dst_off = off;
+            left = ibytes - off;
+        } else {
+            VkDeviceSize off = m->done - vbytes - ibytes;
+            src = m->src_skin + off;
+            dst_buf = m->skin_vb.buf;
+            dst_off = off;
+            left = sbytes - off;
+        }
+        n = left < room ? left : room;
         n &= ~(VkDeviceSize)3u;
         if (n == 0u) {
             break;
         }
-        memcpy((uint8_t *)fr->staging.map + *used, in_v ? m->src_v + m->done : m->src_i + (m->done - vbytes), (size_t)n);
+        memcpy((uint8_t *)fr->staging.map + *used, src, (size_t)n);
         c.srcOffset = *used;
-        c.dstOffset = in_v ? m->done : m->done - vbytes;
+        c.dstOffset = dst_off;
         c.size = n;
-        r->f.vkCmdCopyBuffer(cmd, fr->staging.buf, in_v ? m->vb.buf : m->ib.buf, 1, &c);
+        r->f.vkCmdCopyBuffer(cmd, fr->staging.buf, dst_buf, 1, &c);
         m->done += n;
         *used += n;
     }
@@ -729,7 +803,7 @@ void su_rvk_record_uploads(SuRenderer *r, Frame *fr, VkCommandBuffer cmd) {
         if (s->type == RES_MESH) {
             free(s->u.mesh.owned);
             s->u.mesh.owned = NULL;
-            s->u.mesh.src_v = s->u.mesh.src_i = NULL;
+            s->u.mesh.src_v = s->u.mesh.src_i = s->u.mesh.src_skin = NULL;
         } else {
             free(s->u.tex.owned);
             s->u.tex.owned = NULL;
@@ -1930,30 +2004,64 @@ uint32_t su_render_upload_pak(SuRenderer *r, const SuAssetPak *pak, uint64_t mod
                 }
                 out->materials++;
             } else if (pass == SU_ASSET_MESH) {
+                SuAssetSkinMeshView smv;
                 SuAssetMeshView mv;
-                SuRenderMeshDesc d;
+                const SuAssetMeshHeader *hdr;
+                const SuAssetSubmesh *subs;
+                const SuAssetVertex *verts;
+                const uint32_t *inds;
                 SuRenderHandle *mats;
                 uint32_t k;
-                (void)su_asset_pak_mesh(pak, e.id, &mv);
-                mats = malloc((size_t)mv.header->submesh_count * sizeof *mats);
+                int skinned = su_asset_pak_mesh_skin(pak, e.id, &smv) == SU_OK;
+                if (skinned) {
+                    hdr = smv.header;
+                    subs = smv.submeshes;
+                    verts = smv.vertices;
+                    inds = smv.indices;
+                } else {
+                    (void)su_asset_pak_mesh(pak, e.id, &mv);
+                    hdr = mv.header;
+                    subs = mv.submeshes;
+                    verts = mv.vertices;
+                    inds = mv.indices;
+                }
+                mats = malloc((size_t)hdr->submesh_count * sizeof *mats);
                 if (mats == NULL) {
                     st = SU_E_RESOURCE_LIMIT;
                     break;
                 }
-                for (k = 0; k < mv.header->submesh_count; k++) {
-                    mats[k] = mv.submeshes[k].material != 0u ? pak_lookup(out, ids, mv.submeshes[k].material) : 0u;
+                for (k = 0; k < hdr->submesh_count; k++) {
+                    mats[k] = subs[k].material != 0u ? pak_lookup(out, ids, subs[k].material) : 0u;
                 }
-                memset(&d, 0, sizeof d);
-                d.vertices = mv.vertices;
-                d.vertex_count = mv.header->vertex_count;
-                d.indices = mv.indices;
-                d.index_count = mv.header->index_count;
-                d.submeshes = mv.submeshes;
-                d.submesh_count = mv.header->submesh_count;
-                d.materials = mats;
-                memcpy(d.center, mv.header->center, sizeof d.center);
-                d.radius = mv.header->radius;
-                st = su_render_mesh_create(r, &d, &h);
+                if (skinned) {
+                    SuRenderSkinnedMeshDesc sd;
+                    memset(&sd, 0, sizeof sd);
+                    sd.vertices = verts;
+                    sd.vertex_count = hdr->vertex_count;
+                    sd.indices = inds;
+                    sd.index_count = hdr->index_count;
+                    sd.submeshes = subs;
+                    sd.submesh_count = hdr->submesh_count;
+                    sd.materials = mats;
+                    sd.skin = smv.skin;
+                    sd.joint_count = hdr->joint_count;
+                    memcpy(sd.center, hdr->center, sizeof sd.center);
+                    sd.radius = hdr->radius;
+                    st = su_render_skinned_mesh_create(r, &sd, &h);
+                } else {
+                    SuRenderMeshDesc d;
+                    memset(&d, 0, sizeof d);
+                    d.vertices = verts;
+                    d.vertex_count = hdr->vertex_count;
+                    d.indices = inds;
+                    d.index_count = hdr->index_count;
+                    d.submeshes = subs;
+                    d.submesh_count = hdr->submesh_count;
+                    d.materials = mats;
+                    memcpy(d.center, hdr->center, sizeof d.center);
+                    d.radius = hdr->radius;
+                    st = su_render_mesh_create(r, &d, &h);
+                }
                 free(mats);
                 out->meshes++;
             } else {
