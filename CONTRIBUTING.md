@@ -11,9 +11,10 @@ preserves the owner's ability to offer commercial and other licenses.
 
 ## Scope and workflow
 
-The project currently contains specifications, fixtures, and development tools,
-not an implemented engine. Start with the M0 tasks in
-[planning/tasks.json](planning/tasks.json) and follow [AGENTS.md](AGENTS.md).
+The project contains an implemented headless runtime alongside specifications,
+fixtures, and development tools. Start with the current M3 tasks in
+[planning/tasks.json](planning/tasks.json), read the [implementation status](docs/IMPLEMENTATION_STATUS.md),
+and follow [AGENTS.md](AGENTS.md).
 Discuss significant work in an issue first. Use a scoped branch, preserve
 existing work, and include the problem, change, and relevant evidence in a PR.
 Keep shared-contract changes coordinated with the maintainer. Do not broaden
