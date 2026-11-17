@@ -5,7 +5,7 @@
 
 **An agent-native C17 game execution engine — source-available under PolyForm Perimeter 1.0.1.**
 
-[Build and test](#start-here) · [Specifications](#root-specifications) · [Implementation status](docs/IMPLEMENTATION_STATUS.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Commercial/OEM licensing](COMMERCIAL_LICENSE.md)
+[Build and test](#start-here) · [Specifications](#start-here) · [Implementation status](docs/IMPLEMENTATION_STATUS.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Commercial/OEM licensing](COMMERCIAL_LICENSE.md)
 
 Specification v0.1 • repository status refreshed 17 November 2026
 
