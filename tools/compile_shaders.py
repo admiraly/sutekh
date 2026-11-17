@@ -27,7 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR = os.path.join(ROOT, "src", "render", "shaders")
 HEADER = os.path.join(ROOT, "src", "render", "su_render_shaders.h")
 SHADERS = ["mesh.vert", "mesh.frag", "line.vert", "line.frag", "pbr.vert", "pbr.frag", "fullscreen.vert", "sky.frag",
-           "post.frag", "hud.vert", "hud.frag", "fx.vert", "fx.frag",
+           "post.frag", "hud.vert", "hud.frag", "hud_tex.frag", "fx.vert", "fx.frag",
 "bloom_down.frag", "bloom_up.frag", "post_bloom.frag", "paint.frag", "fx_tex_add.frag", "fx_tex_pm.frag",
            "sky_cube.frag", "shadow.vert", "shadow.frag",
            "env_prefilter.frag", "fx_layer.vert", "fx_mesh.vert", "haze.frag",

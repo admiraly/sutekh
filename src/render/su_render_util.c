@@ -980,7 +980,7 @@ static void hud_quad(SuHud *h, float x0, float y0, float x1, float y1, float u0,
     SuHudVertex q[4];
     static const int order[6] = {0, 1, 2, 0, 2, 3};
     int i;
-    if (h->count + 6u > h->cap) {
+    if (h->v == NULL || h->count > h->cap || h->cap - h->count < 6u) {
         h->dropped++;
         return;
     }
@@ -1066,6 +1066,29 @@ void su_hud_measure(const char *text, float scale, float *w, float *hgt) {
     if (hgt != NULL) {
         *hgt = ((float)(lines - 1u) * LINE_ADVANCE + 7.0f) * scale;
     }
+}
+
+void su_hud_sprite(SuHud *h, float x, float y, float w, float hgt, const float uv_rect[4], uint32_t rgba) {
+    float r[4];
+    if (h == NULL) {
+        return;
+    }
+    uv_default(uv_rect, r);
+    if (!isfinite(x) || !isfinite(y) || !isfinite(w) || !isfinite(hgt) ||
+        !isfinite(x + w) || !isfinite(y + hgt) || w == 0.0f || hgt == 0.0f ||
+        !isfinite(r[0]) || !isfinite(r[1]) || !isfinite(r[2]) || !isfinite(r[3])) {
+        return;
+    }
+    hud_quad(h, x, y, x + w, y + hgt, r[0], r[1], r[2], r[3], rgba);
+}
+
+SuHudBatch su_hud_batch(SuRenderHandle texture, uint32_t first_vertex, const SuHud *h) {
+    SuHudBatch b;
+    memset(&b, 0, sizeof b);
+    b.texture = texture;
+    b.first_vertex = first_vertex;
+    b.vertex_count = (h != NULL && h->count > first_vertex) ? (h->count - first_vertex) : 0u;
+    return b;
 }
 
 /* ---------- image-based lighting: cube faces, prefiltered specular chain ---------- */
