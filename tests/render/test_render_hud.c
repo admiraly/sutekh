@@ -518,6 +518,61 @@ static void test_skips_and_compat(void) {
     printf("hud skips and compat: bad handles/ranges, invalid args, fallback and V12 struct_size ok\n");
 }
 
+static void test_batch_boundaries(void) {
+    static const uint8_t red[4] = {255, 0, 0, 255};
+    SuRenderHandle tex = make_tex_ex(SU_TEX_RGBA8_SRGB, 1, 1, 1, red, 1);
+    SuHudVertex verts[6];
+    SuHud h;
+    SuHudBatch bt[513];
+    SuRenderStats st;
+    SuRenderFrameDesc f;
+    uint32_t i;
+    uint32_t pass;
+    su_hud_begin(&h, verts, 6, W, H);
+    su_hud_rect(&h, 0, 0, W, H, rgba_u32(255, 255, 255, 255));
+    bt[0] = su_hud_batch(tex, 0, &h);
+    bt[0].flags = SU_HUD_BATCH_SCISSOR;
+    bt[0].scissor_w = bt[0].scissor_h = 1;
+    /* A non-scissored batch must restore the full viewport for either pipeline. */
+    for (pass = 0; pass < 2; pass++) {
+        bt[1] = su_hud_batch(pass ? 0u : tex, 0, &h);
+        CHECK(render_hud_frame(&h, bt, 2, NULL, 0, g_img));
+        CHECK(rgb_near(px(g_img, 200, 200), 255, pass ? 255 : 0, pass ? 255 : 0, 2));
+    }
+    bt[0].scissor_x = bt[0].scissor_y = INT32_MIN;
+    bt[0].scissor_w = bt[0].scissor_h = UINT32_MAX;
+    CHECK(render_hud_frame(&h, bt, 1, NULL, 0, g_img));
+    CHECK(rgb_near(px(g_img, W - 1, H - 1), 255, 0, 0, 2));
+    bt[0].scissor_x = bt[0].scissor_y = INT32_MAX;
+    CHECK(render_hud_frame(&h, bt, 1, NULL, 0, g_img));
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.hud_batches_drawn == 0);
+    bt[0] = su_hud_batch(tex, UINT32_MAX - 2u, &h);
+    bt[0].vertex_count = 6;
+    CHECK(render_hud_frame(&h, bt, 1, NULL, 0, g_img));
+    CHECK(su_render_stats(g_r, &st) == SU_OK && st.hud_batches_skipped == 1);
+    for (i = 0; i < 513; i++) {
+        bt[i] = su_hud_batch(tex, 0, &h);
+    }
+    /* Fill the descriptor pool, overflow it, and reuse every frame slot after reset. */
+    for (pass = 0; pass < 4; pass++) {
+        CHECK(render_hud_frame(&h, bt, 513, NULL, 0, g_img));
+        CHECK(su_render_stats(g_r, &st) == SU_OK);
+        CHECK(st.hud_batches_drawn == 512 && st.hud_batches_skipped == 1);
+    }
+    base_frame_desc(&f, NULL);
+    f.struct_size = SU_RENDER_FRAME_DESC_V12_SIZE;
+    {
+        void *old = malloc(SU_RENDER_FRAME_DESC_V12_SIZE);
+        CHECK(old != NULL);
+        if (old != NULL) {
+            memcpy(old, &f, SU_RENDER_FRAME_DESC_V12_SIZE);
+            CHECK(su_render_frame_ex(g_r, old) == SU_OK);
+            free(old);
+        }
+    }
+    CHECK(su_render_release(g_r, tex) == SU_OK);
+}
+
 static const char *type_name(uint32_t t) {
     return t == SU_RENDER_DEVICE_DISCRETE ? "discrete" : t == SU_RENDER_DEVICE_INTEGRATED ? "integrated"
                                                        : t == SU_RENDER_DEVICE_CPU        ? "cpu"
@@ -573,6 +628,7 @@ int main(int argc, char **argv) {
     test_scissor();
     test_mixed_and_order();
     test_skips_and_compat();
+    test_batch_boundaries();
 
     CHECK(su_render_stats(g_r, &st) == SU_OK);
     if (validation) {

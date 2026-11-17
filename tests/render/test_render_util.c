@@ -5,6 +5,7 @@
  * Usage: test_render_util   (writes test_render_util.ppm in the working directory) */
 /* SPDX-FileCopyrightText: 2026 admiraly */
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -441,6 +442,29 @@ static void test_hud_batches(void) {
     CHECK(b.vertex_count == 0u);
     b = su_hud_batch(42u, 0u, NULL);
     CHECK(b.vertex_count == 0u);
+    su_hud_begin(&h, store, 12, 640, 360);
+    su_hud_sprite(&h, NAN, 0, 1, 1, NULL, 0);
+    su_hud_sprite(&h, 0, INFINITY, 1, 1, NULL, 0);
+    su_hud_sprite(&h, 0, 0, NAN, 1, NULL, 0);
+    su_hud_sprite(&h, 0, 0, 1, INFINITY, NULL, 0);
+    su_hud_sprite(&h, FLT_MAX, 0, FLT_MAX, 1, NULL, 0);
+    su_hud_sprite(&h, 0, 0, 0, 1, NULL, 0);
+    su_hud_sprite(&h, 0, 0, 1, 0, NULL, 0);
+    uv[0] = NAN;
+    su_hud_sprite(&h, 0, 0, 1, 1, uv, 0);
+    CHECK(h.count == 0u && h.dropped == 0u);
+    su_hud_sprite(&h, 10, 10, -2, -3, NULL, 0);
+    CHECK(h.count == 6u && store[2].pos[0] == 8 && store[2].pos[1] == 7);
+    su_hud_begin(&h, NULL, 12, 640, 360);
+    su_hud_sprite(&h, 0, 0, 1, 1, NULL, 0);
+    CHECK(h.count == 0u && h.dropped == 1u);
+    su_hud_begin(&h, store, UINT32_MAX, 640, 360);
+    h.count = UINT32_MAX - 2u;
+    su_hud_sprite(&h, 0, 0, 1, 1, NULL, 0);
+    CHECK(h.count == UINT32_MAX - 2u && h.dropped == 1u);
+    h.cap = 0;
+    su_hud_sprite(&h, 0, 0, 1, 1, NULL, 0);
+    CHECK(h.count == UINT32_MAX - 2u && h.dropped == 2u);
     printf("hud batches: sprite quad vertices, uv rects, overflow and batch builder ok\n");
 }
 

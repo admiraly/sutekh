@@ -445,7 +445,8 @@ typedef struct SuHudBatch {
     uint32_t scissor_h;
 } SuHudBatch;
 
-/* Screen-space textured quad at (x, y) of size w x hgt in pixels; uv_rect NULL uses (0, 0, 1, 1). */
+/* Screen-space textured quad at (x, y) of size w x hgt in pixels; uv_rect NULL uses (0, 0, 1, 1).
+ * NULL h, zero dimensions and non-finite positions/endpoints/UVs are ignored; negative sizes mirror the quad. */
 SU_RENDER_API void su_hud_sprite(SuHud *h, float x, float y, float w, float hgt, const float uv_rect[4], uint32_t rgba);
 /* A batch covering the vertices written to h since first_vertex; flags = 0, full scissor 0. */
 SU_RENDER_API SuHudBatch su_hud_batch(SuRenderHandle texture, uint32_t first_vertex, const SuHud *h);
@@ -984,6 +985,8 @@ typedef struct SuRenderFrameDesc {
     /* ---- API 13: textured 2D HUD batches and per-batch scissor rects. Fields after this line need
      * struct_size == sizeof(SuRenderFrameDesc); SU_RENDER_FRAME_DESC_V12_SIZE is API 12 and earlier. ---- */
     const SuHudBatch *hud_batches;
+    /* At most 512 nonempty, valid, visible batches are drawn per frame; later batches are skipped.
+     * Empty batches are ignored. */
     uint32_t hud_batch_count;
 } SuRenderFrameDesc;
 #define SU_RENDER_FRAME_DESC_V12_SIZE ((uint32_t)offsetof(SuRenderFrameDesc, hud_batches))
@@ -997,6 +1000,7 @@ SU_RENDER_API uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc
 /* The rotation-only view matrix of a camera (what su_fx_billboard needs). */
 SU_RENDER_API SuMat4f su_render_camera_view(const SuRenderCamera *c);
 
+/* Native consumers must recompile for API 13: this unsized output structure has grown. */
 typedef struct SuRenderStats {
     uint64_t frame;                /* frames submitted */
     double cpu_ms;                 /* CPU time of the last frame call, excluding wait_ms and present_ms */
