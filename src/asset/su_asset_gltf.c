@@ -939,8 +939,11 @@ static uint64_t cook_material(Cook *c, const cgltf_material *gm, uint32_t *st) {
 
 typedef struct Build {
     SuAssetVertex *v;
+    SuAssetVertexColor *col;
     uint32_t nv;
     uint32_t cv;
+    uint32_t cc;
+    int has_color;
     uint32_t *idx;
     uint32_t ni;
     uint32_t ci;
@@ -1079,6 +1082,7 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
     const cgltf_accessor *tng = attr(p, cgltf_attribute_type_tangent, 0);
     const cgltf_accessor *uv0 = attr(p, cgltf_attribute_type_texcoord, 0);
     const cgltf_accessor *uv1 = attr(p, cgltf_attribute_type_texcoord, 1);
+    const cgltf_accessor *col = attr(p, cgltf_attribute_type_color, 0);
     uint32_t nv;
     uint32_t nsrc;
     uint32_t ntri;
@@ -1108,7 +1112,8 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
     if ((nrm != NULL && (nrm->count != nv || nrm->type != cgltf_type_vec3)) ||
         (tng != NULL && (tng->count != nv || tng->type != cgltf_type_vec4)) ||
         (uv0 != NULL && (uv0->count != nv || uv0->type != cgltf_type_vec2)) ||
-        (uv1 != NULL && (uv1->count != nv || uv1->type != cgltf_type_vec2))) {
+        (uv1 != NULL && (uv1->count != nv || uv1->type != cgltf_type_vec2)) ||
+        (col != NULL && (col->count != nv || (col->type != cgltf_type_vec3 && col->type != cgltf_type_vec4)))) {
         msgf(c->msg, "mesh %u primitive %u: attribute counts or types disagree", (unsigned)mi, (unsigned)pi);
         return SU_E_PARSE;
     }
@@ -1156,18 +1161,34 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
         uint32_t out_v = flat ? ntri * 3u : nv;
         if ((uint64_t)b->nv + out_v > 0xFFFFFFFFu || (uint64_t)b->ni + ntri * 3u > 0xFFFFFFFFu ||
             !grow((void **)&b->v, &b->cv, b->nv + out_v, sizeof *b->v) ||
+            ((col != NULL || b->has_color) && !grow((void **)&b->col, &b->cc, b->nv + out_v, sizeof *b->col)) ||
             !grow((void **)&b->idx, &b->ci, b->ni + ntri * 3u, sizeof *b->idx) ||
             !grow((void **)&b->sm, &b->cs, b->ns + 1u, sizeof *b->sm)) {
             free(tri);
             return SU_E_RESOURCE_LIMIT;
         }
+        if (col != NULL && !b->has_color) {
+            for (i = 0; i < b->nv; i++) {
+                b->col[i].rgba[0] = b->col[i].rgba[1] = b->col[i].rgba[2] = b->col[i].rgba[3] = 1.0f;
+            }
+            b->has_color = 1;
+        }
     }
     /* source vertices */
     {
         SuAssetVertex *src = flat ? malloc((size_t)nv * sizeof *src) : b->v + b->nv;
+        SuAssetVertexColor *src_col = NULL;
         if (src == NULL) {
             free(tri);
             return SU_E_RESOURCE_LIMIT;
+        }
+        if (flat && b->has_color) {
+            src_col = malloc((size_t)nv * sizeof *src_col);
+            if (src_col == NULL) {
+                free(src);
+                free(tri);
+                return SU_E_RESOURCE_LIMIT;
+            }
         }
         memset(src, 0, (size_t)nv * sizeof *src);
         for (i = 0; i < nv; i++) {
@@ -1185,6 +1206,13 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
             if (uv1 != NULL) {
                 (void)cgltf_accessor_read_float(uv1, i, src[i].uv1, 2);
             }
+            if (b->has_color) {
+                SuAssetVertexColor *cdst = flat ? &src_col[i] : &b->col[b->nv + i];
+                cdst->rgba[0] = cdst->rgba[1] = cdst->rgba[2] = cdst->rgba[3] = 1.0f;
+                if (col != NULL) {
+                    (void)cgltf_accessor_read_float(col, i, cdst->rgba, col->type == cgltf_type_vec4 ? 4 : 3);
+                }
+            }
         }
         if (flat) {
             for (i = 0; i < ntri; i++) {
@@ -1200,12 +1228,17 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
                 cross3(e1, e2, n);
                 norm3(n);
                 for (j = 0; j < 3; j++) {
-                    SuAssetVertex v = src[tri[i * 3u + (uint32_t)j]];
+                    uint32_t si = tri[i * 3u + (uint32_t)j];
+                    SuAssetVertex v = src[si];
                     memcpy(v.normal, n, sizeof n);
                     b->v[b->nv + i * 3u + (uint32_t)j] = v;
+                    if (b->has_color) {
+                        b->col[b->nv + i * 3u + (uint32_t)j] = src_col[si];
+                    }
                     b->idx[b->ni + i * 3u + (uint32_t)j] = b->nv + i * 3u + (uint32_t)j - v0;
                 }
             }
+            free(src_col);
             free(src);
             b->nv += ntri * 3u;
         } else {
@@ -1272,7 +1305,8 @@ static uint32_t cook_mesh(Cook *c, size_t mi, int mirrored, uint64_t *id_out) {
             }
         }
         *id_out = mesh_id(c, mi, mirrored);
-        st = su_asset_writer_add_mesh(c->w, *id_out, b.v, b.nv, b.idx, b.ni, b.sm, b.ns);
+        st = b.has_color ? su_asset_writer_add_colored_mesh(c->w, *id_out, b.v, b.col, b.nv, b.idx, b.ni, b.sm, b.ns)
+                         : su_asset_writer_add_mesh(c->w, *id_out, b.v, b.nv, b.idx, b.ni, b.sm, b.ns);
         if (st != SU_OK) {
             msgf(c->msg, "mesh %u could not be written (status %u)", (unsigned)mi, (unsigned)st);
             *id_out = 0;
@@ -1284,6 +1318,7 @@ static uint32_t cook_mesh(Cook *c, size_t mi, int mirrored, uint64_t *id_out) {
         }
     }
     free(b.v);
+    free(b.col);
     free(b.idx);
     free(b.sm);
     return st;

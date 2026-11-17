@@ -1059,6 +1059,8 @@ static VkShaderModule shader(SuRenderer *r, const uint32_t *code, size_t bytes) 
 #define VIN_HUD 5
 #define VIN_FXMESH 8
 #define VIN_SHADOW 6 /* asset vertex position and the instance rows only (shadow casters) */
+/* Per-vertex COLOR_0 stream (binding 2) and toon uniform/push layouts remain orthogonal to DrawInstance / PaintUbo. */
+#define VIN_PBR_COLOR 9
 
 #define BLEND_NONE 0
 #define BLEND_ALPHA 1
@@ -1079,6 +1081,7 @@ typedef struct PipeSpec {
     int post;          /* output pass (no depth attachment) */
     int bloom;         /* 1: bloom downsample, 3: bloom upsample, 2: bloom output pass (all without depth) */
     int paint;         /* 1: the layered paint layout (frame, paint material, environment) */
+    int toon;          /* 1: the stylized toon layout (frame, toon material) */
     int layout;        /* 1: the textured-effects layout (frame, one sampler), 2: the cube sky layout */
     int subpass;       /* scene pass subpass: 0, or 1 for the textured effects */
     int shadow;        /* the shadow pass: depth only, standard depth (less or equal), slope bias */
@@ -1098,8 +1101,8 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
     VkShaderModule vs = shader(r, s->vs, s->vs_bytes);
     VkShaderModule fs = shader(r, s->fs, s->fs_bytes);
     VkPipelineShaderStageCreateInfo st[2];
-    VkVertexInputBindingDescription bind[2];
-    VkVertexInputAttributeDescription at[12];
+    VkVertexInputBindingDescription bind[3];
+    VkVertexInputAttributeDescription at[16];
     uint32_t nb = 0;
     uint32_t na = 0;
     VkPipelineVertexInputStateCreateInfo vin;
@@ -1154,6 +1157,7 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         attr(at, &na, 1, 0, VK_FORMAT_R8G8B8A8_UNORM, 12);
         break;
     case VIN_PBR:
+    case VIN_PBR_COLOR:
     case VIN_FXMESH:
         bind[0].stride = sizeof(SuAssetVertex);
         bind[1].binding = 1;
@@ -1161,21 +1165,28 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
         bind[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
         nb = 2;
         attr(at, &na, 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0);
-        if (s->vin == VIN_PBR) {
+        if (s->vin == VIN_PBR || s->vin == VIN_PBR_COLOR) {
             attr(at, &na, 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12);
             attr(at, &na, 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 24);
         }
         attr(at, &na, 3, 0, VK_FORMAT_R32G32_SFLOAT, 40);
-        if (s->vin == VIN_PBR) {
+        if (s->vin == VIN_PBR || s->vin == VIN_PBR_COLOR) {
             attr(at, &na, 4, 0, VK_FORMAT_R32G32_SFLOAT, 48);
         }
         attr(at, &na, 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0);
         attr(at, &na, 6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16);
         attr(at, &na, 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32);
         attr(at, &na, 8, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48);
-        if (s->vin == VIN_PBR) {
+        if (s->vin == VIN_PBR || s->vin == VIN_PBR_COLOR) {
             attr(at, &na, 9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 64);
             attr(at, &na, 10, 1, VK_FORMAT_R32G32B32A32_UINT, (uint32_t)offsetof(DrawInstance, light_mask));
+        }
+        if (s->vin == VIN_PBR_COLOR) {
+            bind[2].binding = 2;
+            bind[2].stride = sizeof(SuAssetVertexColor);
+            bind[2].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            nb = 3;
+            attr(at, &na, 11, 2, VK_FORMAT_R32G32B32A32_SFLOAT, 0);
         }
         break;
     case VIN_SHADOW:
@@ -1304,7 +1315,7 @@ static int make_pipe(SuRenderer *r, const PipeSpec *s, VkPipeline *out) {
     gi.pDepthStencilState = (s->post || s->bloom) ? NULL : &ds;
     gi.pColorBlendState = &cb;
     gi.pDynamicState = &dy;
-    gi.layout = s->post ? r->post_layout : s->paint ? r->paint_layout : r->scene_layout;
+    gi.layout = s->post ? r->post_layout : s->paint ? r->paint_layout : s->toon ? r->toon_layout : r->scene_layout;
     if (s->layout == 1) {
         gi.layout = r->fxtex_layout;
     } else if (s->layout == 2) {
@@ -1445,6 +1456,22 @@ static int make_pipelines(SuRenderer *r) {
         s.subpass = i >= PIPE_BLEND ? 3 : 0;
         ok = make_pipe(r, &s, &r->pbr_pipe[i]);
     }
+    /* PBR variants with per-vertex COLOR_0 */
+    for (i = 0; i < PIPE_PBR_COUNT && ok; i++) {
+        memset(&s, 0, sizeof s);
+        s.vs = su_shader_pbr_color_vert;
+        s.vs_bytes = sizeof su_shader_pbr_color_vert;
+        s.fs = su_shader_pbr_color_frag;
+        s.fs_bytes = sizeof su_shader_pbr_color_frag;
+        s.vin = VIN_PBR_COLOR;
+        s.cull = (i & 1u) == 0u;
+        s.depth_test = 1;
+        s.depth_write = i < PIPE_OVERLAY;
+        s.blend = i >= PIPE_OVERLAY ? BLEND_ALPHA : BLEND_NONE;
+        s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
+        s.subpass = i >= PIPE_BLEND ? 3 : 0;
+        ok = make_pipe(r, &s, &r->pbr_color_pipe[i]);
+    }
     /* sun shadow casters: depth only */
     if (ok) {
         memset(&s, 0, sizeof s);
@@ -1473,6 +1500,29 @@ static int make_pipelines(SuRenderer *r) {
         s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
         s.subpass = i >= PIPE_BLEND ? 3 : 0;
         ok = make_pipe(r, &s, &r->paint_pipe[i]);
+    }
+    /* stylized / toon variants (with and without per-vertex COLOR_0) */
+    for (i = 0; i < PIPE_PBR_COUNT && ok; i++) {
+        memset(&s, 0, sizeof s);
+        s.vs = su_shader_toon_vert;
+        s.vs_bytes = sizeof su_shader_toon_vert;
+        s.fs = su_shader_toon_frag;
+        s.fs_bytes = sizeof su_shader_toon_frag;
+        s.vin = VIN_PBR;
+        s.toon = 1;
+        s.cull = (i & 1u) == 0u;
+        s.depth_test = 1;
+        s.depth_write = i < PIPE_OVERLAY;
+        s.blend = i >= PIPE_OVERLAY ? BLEND_ALPHA : BLEND_NONE;
+        s.overlay = i >= PIPE_OVERLAY && i < PIPE_BLEND;
+        s.subpass = i >= PIPE_BLEND ? 3 : 0;
+        ok = make_pipe(r, &s, &r->toon_pipe[i]);
+        if (ok) {
+            s.vs = su_shader_toon_color_vert;
+            s.vs_bytes = sizeof su_shader_toon_color_vert;
+            s.vin = VIN_PBR_COLOR;
+            ok = make_pipe(r, &s, &r->toon_color_pipe[i]);
+        }
     }
     memset(&s, 0, sizeof s);
     s.vs = su_shader_fx_layer_vert;
@@ -1656,6 +1706,41 @@ static int make_layouts(SuRenderer *r, uint32_t material_sets) {
         pli.pushConstantRangeCount = 1;
         pli.pPushConstantRanges = &pcr;
         if (r->f.vkCreatePipelineLayout(r->dev, &pli, NULL, &r->paint_layout) != VK_SUCCESS) {
+            return 0;
+        }
+    }
+    {
+        /* stylized toon material: 5 asset texture slots + 1 ToonUbo */
+        VkDescriptorSetLayoutBinding tb[SU_ASSET_SLOT_COUNT + 1u];
+        VkDescriptorSetLayout tsets[2];
+        memset(tb, 0, sizeof tb);
+        for (i = 0; i < SU_ASSET_SLOT_COUNT; i++) {
+            tb[i].binding = i;
+            tb[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            tb[i].descriptorCount = 1;
+            tb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        tb[SU_ASSET_SLOT_COUNT].binding = SU_ASSET_SLOT_COUNT;
+        tb[SU_ASSET_SLOT_COUNT].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        tb[SU_ASSET_SLOT_COUNT].descriptorCount = 1;
+        tb[SU_ASSET_SLOT_COUNT].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        li.bindingCount = SU_ASSET_SLOT_COUNT + 1u;
+        li.pBindings = tb;
+        if (r->f.vkCreateDescriptorSetLayout(r->dev, &li, NULL, &r->toon_dsl) != VK_SUCCESS) {
+            return 0;
+        }
+        memset(&pcr, 0, sizeof pcr);
+        pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        pcr.size = sizeof(LegacyPush) > sizeof(MatPush) ? sizeof(LegacyPush) : sizeof(MatPush);
+        tsets[0] = r->frame_dsl;
+        tsets[1] = r->toon_dsl;
+        memset(&pli, 0, sizeof pli);
+        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pli.setLayoutCount = 2;
+        pli.pSetLayouts = tsets;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges = &pcr;
+        if (r->f.vkCreatePipelineLayout(r->dev, &pli, NULL, &r->toon_layout) != VK_SUCCESS) {
             return 0;
         }
     }
@@ -2603,7 +2688,7 @@ void su_render_destroy(SuRenderer *r) {
         su_rvk_free_buffer(r, &r->mesh_vb);
         su_rvk_free_buffer(r, &r->mesh_ib);
         {
-            VkPipeline all[12 + 2 * PIPE_PBR_COUNT];
+            VkPipeline all[12 + 5 * PIPE_PBR_COUNT];
             uint32_t k;
             VkPipeline distortion_pipes[4] = {r->distortion_quad_pipe, r->distortion_mesh_pipe[0],
                                               r->distortion_mesh_pipe[1], r->distortion_resolve_pipe};
@@ -2672,8 +2757,11 @@ void su_render_destroy(SuRenderer *r) {
             for (k = 0; k < PIPE_PBR_COUNT; k++) {
                 all[12 + k] = r->pbr_pipe[k];
                 all[12 + PIPE_PBR_COUNT + k] = r->paint_pipe[k];
+                all[12 + 2u * PIPE_PBR_COUNT + k] = r->pbr_color_pipe[k];
+                all[12 + 3u * PIPE_PBR_COUNT + k] = r->toon_pipe[k];
+                all[12 + 4u * PIPE_PBR_COUNT + k] = r->toon_color_pipe[k];
             }
-            for (k = 0; k < 12 + 2 * PIPE_PBR_COUNT; k++) {
+            for (k = 0; k < 12 + 5 * PIPE_PBR_COUNT; k++) {
                 if (all[k] != VK_NULL_HANDLE) {
                     r->f.vkDestroyPipeline(r->dev, all[k], NULL);
                 }
@@ -2726,6 +2814,12 @@ void su_render_destroy(SuRenderer *r) {
         }
         if (r->paint_dsl != VK_NULL_HANDLE) {
             r->f.vkDestroyDescriptorSetLayout(r->dev, r->paint_dsl, NULL);
+        }
+        if (r->toon_layout != VK_NULL_HANDLE) {
+            r->f.vkDestroyPipelineLayout(r->dev, r->toon_layout, NULL);
+        }
+        if (r->toon_dsl != VK_NULL_HANDLE) {
+            r->f.vkDestroyDescriptorSetLayout(r->dev, r->toon_dsl, NULL);
         }
         if (r->env_dsl != VK_NULL_HANDLE) {
             r->f.vkDestroyDescriptorSetLayout(r->dev, r->env_dsl, NULL);

@@ -124,6 +124,7 @@ static void retire(SuRenderer *r, const Retired *t) {
             copy.serial = 0;
             su_rvk_free_buffer(r, &copy.a);
             su_rvk_free_buffer(r, &copy.b);
+            su_rvk_free_buffer(r, &copy.c);
             if (copy.view != VK_NULL_HANDLE) {
                 r->f.vkDestroyImageView(r->dev, copy.view, NULL);
             }
@@ -149,6 +150,7 @@ static void retire(SuRenderer *r, const Retired *t) {
 static void destroy_retired(SuRenderer *r, Retired *t) {
     su_rvk_free_buffer(r, &t->a);
     su_rvk_free_buffer(r, &t->b);
+    su_rvk_free_buffer(r, &t->c);
     if (t->view != VK_NULL_HANDLE) {
         r->f.vkDestroyImageView(r->dev, t->view, NULL);
     }
@@ -185,6 +187,7 @@ static void release_index(SuRenderer *r, uint32_t index) {
     case RES_MESH:
         t.a = s->u.mesh.vb;
         t.b = s->u.mesh.ib;
+        t.c = s->u.mesh.cb;
         free(s->u.mesh.subs);
         free(s->u.mesh.owned);
         break;
@@ -271,13 +274,15 @@ uint32_t su_render_release(SuRenderer *r, SuRenderHandle h) {
 
 /* ---------- meshes ---------- */
 
-uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRenderHandle *out) {
+static uint32_t mesh_create_impl(SuRenderer *r, const SuRenderMeshDesc *d, const SuAssetVertexColor *colors,
+                                 SuRenderHandle *out) {
     uint32_t idx = 0;
     uint32_t i;
     Res *s;
     MeshRes *m;
     VkDeviceSize vbytes;
     VkDeviceSize ibytes;
+    VkDeviceSize cbytes;
     if (r == NULL || d == NULL || out == NULL || d->vertices == NULL || d->indices == NULL || d->submeshes == NULL ||
         d->vertex_count == 0u || d->index_count < 3u || d->index_count % 3u != 0u || d->submesh_count == 0u ||
         (d->flags & ~SU_RENDER_UPLOAD_COPY) != 0u || !(d->radius >= 0.0f)) {
@@ -303,6 +308,7 @@ uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRende
     m = &s->u.mesh;
     vbytes = (VkDeviceSize)d->vertex_count * sizeof(SuAssetVertex);
     ibytes = (VkDeviceSize)d->index_count * 4u;
+    cbytes = colors != NULL ? (VkDeviceSize)d->vertex_count * sizeof(SuAssetVertexColor) : 0u;
     m->subs = malloc((size_t)d->submesh_count * sizeof *m->subs);
     if (m->subs == NULL) {
         free_slot(r, idx);
@@ -318,10 +324,11 @@ uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRende
     m->sub_count = d->submesh_count;
     m->vertex_count = d->vertex_count;
     m->index_count = d->index_count;
+    m->has_color = colors != NULL ? 1 : 0;
     memcpy(m->center, d->center, sizeof m->center);
     m->radius = d->radius;
     if ((d->flags & SU_RENDER_UPLOAD_COPY) != 0u) {
-        m->owned = malloc((size_t)(vbytes + ibytes));
+        m->owned = malloc((size_t)(vbytes + ibytes + cbytes));
         if (m->owned == NULL) {
             free(m->subs);
             free_slot(r, idx);
@@ -331,29 +338,60 @@ uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRende
         memcpy(m->owned + vbytes, d->indices, (size_t)ibytes);
         m->src_v = m->owned;
         m->src_i = m->owned + vbytes;
+        if (colors != NULL) {
+            memcpy(m->owned + vbytes + ibytes, colors, (size_t)cbytes);
+            m->src_c = m->owned + vbytes + ibytes;
+        }
     } else {
         m->src_v = (const uint8_t *)d->vertices;
         m->src_i = (const uint8_t *)d->indices;
+        m->src_c = (const uint8_t *)colors;
     }
     if (!su_rvk_make_buffer(r, vbytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m->vb) ||
         !su_rvk_make_buffer(r, ibytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m->ib)) {
+                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m->ib) ||
+        (colors != NULL &&
+         !su_rvk_make_buffer(r, cbytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m->cb))) {
         Retired t;
         memset(&t, 0, sizeof t);
         t.a = m->vb;
         t.b = m->ib;
+        t.c = m->cb;
         destroy_retired(r, &t);
         free(m->subs);
         free(m->owned);
         free_slot(r, idx);
         return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "device memory for a mesh of %llu bytes",
-                           (unsigned long long)(vbytes + ibytes));
+                           (unsigned long long)(vbytes + ibytes + cbytes));
     }
     enqueue(r, idx);
     r->stats.resources++;
     *out = make_handle(RES_MESH, s->gen, idx);
     return SU_OK;
+}
+
+uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRenderHandle *out) {
+    return mesh_create_impl(r, d, NULL, out);
+}
+
+uint32_t su_render_colored_mesh_create(SuRenderer *r, const SuRenderColoredMeshDesc *d, SuRenderHandle *out) {
+    SuRenderMeshDesc md;
+    if (d == NULL || d->colors == NULL) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    md.vertices = d->vertices;
+    md.vertex_count = d->vertex_count;
+    md.indices = d->indices;
+    md.index_count = d->index_count;
+    md.submeshes = d->submeshes;
+    md.submesh_count = d->submesh_count;
+    md.materials = d->materials;
+    memcpy(md.center, d->center, sizeof md.center);
+    md.radius = d->radius;
+    md.flags = d->flags;
+    return mesh_create_impl(r, &md, d->colors, out);
 }
 
 /* ---------- textures ---------- */
@@ -623,22 +661,45 @@ static void tex_barrier(SuRenderer *r, VkCommandBuffer cmd, TexRes *t, int to_sh
 /* Copies as much of mesh m as fits; returns 1 when it is complete. */
 static int upload_mesh(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, MeshRes *m, VkDeviceSize *used) {
     VkDeviceSize vbytes = (VkDeviceSize)m->vertex_count * sizeof(SuAssetVertex);
-    VkDeviceSize total = vbytes + (VkDeviceSize)m->index_count * 4u;
+    VkDeviceSize ibytes = (VkDeviceSize)m->index_count * 4u;
+    VkDeviceSize cbytes = m->has_color ? (VkDeviceSize)m->vertex_count * sizeof(SuAssetVertexColor) : 0u;
+    VkDeviceSize total = vbytes + ibytes + cbytes;
     while (m->done < total && *used < fr->staging.size) {
         VkDeviceSize room = fr->staging.size - *used;
-        int in_v = m->done < vbytes;
-        VkDeviceSize left = in_v ? vbytes - m->done : total - m->done;
-        VkDeviceSize n = left < room ? left : room;
+        const uint8_t *src;
+        VkDeviceSize dst_off;
+        VkBuffer dst_buf;
+        VkDeviceSize left;
+        VkDeviceSize n;
         VkBufferCopy c;
+        if (m->done < vbytes) {
+            left = vbytes - m->done;
+            src = m->src_v + m->done;
+            dst_off = m->done;
+            dst_buf = m->vb.buf;
+        } else if (m->done < vbytes + ibytes) {
+            VkDeviceSize off = m->done - vbytes;
+            left = ibytes - off;
+            src = m->src_i + off;
+            dst_off = off;
+            dst_buf = m->ib.buf;
+        } else {
+            VkDeviceSize off = m->done - vbytes - ibytes;
+            left = cbytes - off;
+            src = m->src_c + off;
+            dst_off = off;
+            dst_buf = m->cb.buf;
+        }
+        n = left < room ? left : room;
         n &= ~(VkDeviceSize)3u;
         if (n == 0u) {
             break;
         }
-        memcpy((uint8_t *)fr->staging.map + *used, in_v ? m->src_v + m->done : m->src_i + (m->done - vbytes), (size_t)n);
+        memcpy((uint8_t *)fr->staging.map + *used, src, (size_t)n);
         c.srcOffset = *used;
-        c.dstOffset = in_v ? m->done : m->done - vbytes;
+        c.dstOffset = dst_off;
         c.size = n;
-        r->f.vkCmdCopyBuffer(cmd, fr->staging.buf, in_v ? m->vb.buf : m->ib.buf, 1, &c);
+        r->f.vkCmdCopyBuffer(cmd, fr->staging.buf, dst_buf, 1, &c);
         m->done += n;
         *used += n;
     }
@@ -729,7 +790,7 @@ void su_rvk_record_uploads(SuRenderer *r, Frame *fr, VkCommandBuffer cmd) {
         if (s->type == RES_MESH) {
             free(s->u.mesh.owned);
             s->u.mesh.owned = NULL;
-            s->u.mesh.src_v = s->u.mesh.src_i = NULL;
+            s->u.mesh.src_v = s->u.mesh.src_i = s->u.mesh.src_c = NULL;
         } else {
             free(s->u.tex.owned);
             s->u.tex.owned = NULL;
@@ -1112,6 +1173,167 @@ uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d,
     return SU_OK;
 }
 
+static VkDescriptorSet write_toon_set(SuRenderer *r, const SuRenderHandle *tex, const SuAssetMaterial *f,
+                                      const Buffer *ubo, uint32_t *ready) {
+    VkDescriptorSetAllocateInfo ai;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkDescriptorImageInfo ii[SU_ASSET_SLOT_COUNT];
+    VkDescriptorBufferInfo bi;
+    VkWriteDescriptorSet w[SU_ASSET_SLOT_COUNT + 1u];
+    VkImageView white = view_of(r, r->white_tex);
+    VkImageView flat = view_of(r, r->normal_tex);
+    uint32_t i;
+    memset(&ai, 0, sizeof ai);
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = r->pool_mat;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &r->toon_dsl;
+    if (r->f.vkAllocateDescriptorSets(r->dev, &ai, &set) != VK_SUCCESS) {
+        return VK_NULL_HANDLE;
+    }
+    if (white == VK_NULL_HANDLE) {
+        white = r->res[(uint32_t)(r->white_tex & 0xFFFFFFFFu) - 1u].u.tex.view;
+    }
+    if (flat == VK_NULL_HANDLE) {
+        flat = r->res[(uint32_t)(r->normal_tex & 0xFFFFFFFFu) - 1u].u.tex.view;
+    }
+    *ready = 0;
+    for (i = 0; i < SU_ASSET_SLOT_COUNT; i++) {
+        VkImageView v = tex != NULL ? view_of(r, tex[i]) : VK_NULL_HANDLE;
+        uint32_t info = f != NULL ? f->tex_info[i] : 0u;
+        uint32_t ws = (info >> 8) & 0xFu;
+        uint32_t wt = (info >> 12) & 0xFu;
+        if (v != VK_NULL_HANDLE) {
+            *ready |= 1u << i;
+        } else {
+            v = i == SU_ASSET_SLOT_NORMAL ? flat : white;
+        }
+        ii[i].sampler = r->samplers[(ws > 2u ? 0u : ws) * 3u + (wt > 2u ? 0u : wt)];
+        ii[i].imageView = v;
+        ii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        memset(&w[i], 0, sizeof w[i]);
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = set;
+        w[i].dstBinding = i;
+        w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[i].pImageInfo = &ii[i];
+    }
+    bi.buffer = ubo->buf;
+    bi.offset = 0;
+    bi.range = sizeof(ToonUbo);
+    memset(&w[SU_ASSET_SLOT_COUNT], 0, sizeof w[0]);
+    w[SU_ASSET_SLOT_COUNT].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[SU_ASSET_SLOT_COUNT].dstSet = set;
+    w[SU_ASSET_SLOT_COUNT].dstBinding = SU_ASSET_SLOT_COUNT;
+    w[SU_ASSET_SLOT_COUNT].descriptorCount = 1;
+    w[SU_ASSET_SLOT_COUNT].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w[SU_ASSET_SLOT_COUNT].pBufferInfo = &bi;
+    r->f.vkUpdateDescriptorSets(r->dev, SU_ASSET_SLOT_COUNT + 1u, w, 0, NULL);
+    return set;
+}
+
+uint32_t su_render_toon_material_create(SuRenderer *r, const SuRenderToonDesc *d, SuRenderHandle *out) {
+    uint32_t idx = 0;
+    uint32_t i;
+    Res *s;
+    ToonUbo u;
+    const SuAssetToon *t;
+    if (r == NULL || d == NULL || out == NULL || d->factors.alpha_mode > SU_ASSET_ALPHA_BLEND) {
+        return SU_E_INVALID_ARGUMENT;
+    }
+    *out = 0;
+    t = &d->toon;
+    if (d->factors.double_sided > 1u || d->factors.unlit > 1u || t->reserved0 != 0u ||
+        t->reserved[0] != 0u || t->reserved[1] != 0u || t->reserved[2] != 0u ||
+        !all_finite(d->factors.base_color, 13u) || !all_finite(t->uv_scale, 2u) || !all_finite(t->uv_offset, 2u) ||
+        !isfinite(t->uv_rotation) || !all_finite(t->shadow_color, 3u) || !isfinite(t->shade_threshold) ||
+        !isfinite(t->shade_softness) || !all_finite(t->specular_color, 3u) || !isfinite(t->specular_threshold) ||
+        !isfinite(t->specular_softness) || !isfinite(t->specular_intensity) || !isfinite(t->glossiness) ||
+        !all_finite(t->rim_color, 3u) || !isfinite(t->rim_power) || !isfinite(t->rim_intensity) ||
+        t->shade_threshold < -1.0f || t->shade_threshold > 1.0f || t->shade_softness < 0.0f ||
+        t->diffuse_bands < 1u || t->diffuse_bands > 8u || t->specular_threshold < 0.0f ||
+        t->specular_threshold > 1.0f || t->specular_softness < 0.0f || t->specular_intensity < 0.0f ||
+        t->glossiness < 1.0f || t->rim_power <= 0.0f || t->rim_intensity < 0.0f ||
+        (t->flags & ~(SU_TOON_HALF_LAMBERT | SU_TOON_USE_VERTEX_COLOR | SU_TOON_RIM_LIT_MASK)) != 0u) {
+        return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "toon material: parameters invalid");
+    }
+    for (i = 0; i < SU_ASSET_SLOT_COUNT; i++) {
+        uint32_t info = d->factors.tex_info[i];
+        if ((info & 0xFFu) > 1u || ((info >> 8) & 0xFu) > 2u || ((info >> 12) & 0xFu) > 2u || (info >> 16) != 0u) {
+            return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "toon material slot %u: invalid tex_info", (unsigned)i);
+        }
+        if (d->textures[i] != 0u) {
+            const Res *x = su_rvk_get(r, d->textures[i], RES_TEXTURE, NULL);
+            if (x == NULL || x->u.tex.layers != 1u || x->u.tex.depth > 1u) {
+                return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "toon material slot %u: unknown texture handle", (unsigned)i);
+            }
+            {
+                int need_srgb = i == SU_ASSET_SLOT_BASE_COLOR || i == SU_ASSET_SLOT_EMISSIVE;
+                if (tex_srgb_format(x->u.tex.format) != need_srgb) {
+                    return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "toon material slot %u needs a %s texture", (unsigned)i,
+                                       need_srgb ? "sRGB" : "linear");
+                }
+            }
+        }
+    }
+    if (alloc_slot(r, RES_MATERIAL, &idx) != SU_OK) {
+        return SU_E_RESOURCE_LIMIT;
+    }
+    s = &r->res[idx];
+    s->u.mat.kind = 3u;
+    s->u.mat.f = d->factors;
+    s->u.mat.toon = d->toon;
+    memcpy(s->u.mat.tex, d->textures, sizeof d->textures);
+    s->u.mat.pipeline = d->overlay ? PIPE_OVERLAY + (d->factors.double_sided ? 1u : 0u) : pipe_of(&d->factors);
+    if (d->overlay) {
+        s->u.mat.f.alpha_mode = SU_ASSET_ALPHA_BLEND;
+    }
+    memset(&u, 0, sizeof u);
+    u.uv_xform[0] = t->uv_scale[0];
+    u.uv_xform[1] = t->uv_scale[1];
+    u.uv_xform[2] = t->uv_offset[0];
+    u.uv_xform[3] = t->uv_offset[1];
+    u.uv_rot[0] = cosf(t->uv_rotation);
+    u.uv_rot[1] = sinf(t->uv_rotation);
+    u.uv_rot[2] = t->shade_threshold;
+    u.uv_rot[3] = t->shade_softness;
+    memcpy(u.shadow_color, t->shadow_color, sizeof t->shadow_color);
+    memcpy(u.spec_color, t->specular_color, sizeof t->specular_color);
+    u.spec_color[3] = t->specular_threshold;
+    u.spec_params[0] = t->specular_softness;
+    u.spec_params[1] = t->specular_intensity;
+    u.spec_params[2] = t->glossiness;
+    u.spec_params[3] = t->rim_power;
+    memcpy(u.rim_color, t->rim_color, sizeof t->rim_color);
+    u.rim_color[3] = t->rim_intensity;
+    u.params[0] = t->diffuse_bands;
+    u.params[1] = t->flags;
+    if (!su_rvk_make_buffer(r, sizeof u, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &s->u.mat.ubo)) {
+        Retired rt;
+        memset(&rt, 0, sizeof rt);
+        rt.a = s->u.mat.ubo;
+        destroy_retired(r, &rt);
+        free_slot(r, idx);
+        return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "device memory for a toon material");
+    }
+    memcpy(s->u.mat.ubo.map, &u, sizeof u);
+    s->u.mat.set = write_toon_set(r, s->u.mat.tex, &s->u.mat.f, &s->u.mat.ubo, &s->u.mat.bound_ready);
+    if (s->u.mat.set == VK_NULL_HANDLE) {
+        Retired rt;
+        memset(&rt, 0, sizeof rt);
+        rt.a = s->u.mat.ubo;
+        destroy_retired(r, &rt);
+        free_slot(r, idx);
+        return su_rvk_fail(r, SU_E_RESOURCE_LIMIT, "material descriptor pool exhausted");
+    }
+    s->state = SU_RENDER_STATE_READY;
+    r->stats.resources++;
+    *out = make_handle(RES_MATERIAL, s->gen, idx);
+    return SU_OK;
+}
+
 void su_rvk_refresh_materials(SuRenderer *r) {
     uint32_t i;
     if (!r->tex_ready_this_frame) {
@@ -1121,18 +1343,26 @@ void su_rvk_refresh_materials(SuRenderer *r) {
         Res *s = &r->res[i];
         uint32_t want = 0;
         uint32_t k;
+        uint32_t slots;
         if (s->type != RES_MATERIAL || s->u.mat.kind == 2u) {
             continue;
         }
-        for (k = 0; k < (s->u.mat.kind != 0u ? SU_RENDER_PAINT_SLOT_COUNT : SU_ASSET_SLOT_COUNT); k++) {
+        slots = s->u.mat.kind == 1u ? SU_RENDER_PAINT_SLOT_COUNT : SU_ASSET_SLOT_COUNT;
+        for (k = 0; k < slots; k++) {
             if (view_of(r, s->u.mat.tex[k]) != VK_NULL_HANDLE) {
                 want |= 1u << k;
             }
         }
         if (want != s->u.mat.bound_ready) {
             uint32_t ready = 0;
-            VkDescriptorSet n = s->u.mat.kind != 0u ? write_paint_set(r, s->u.mat.tex, s->u.mat.paint_tex_info, &s->u.mat.ubo, &ready)
-                                                    : write_material_set(r, s->u.mat.tex, &s->u.mat.f, &ready);
+            VkDescriptorSet n;
+            if (s->u.mat.kind == 1u) {
+                n = write_paint_set(r, s->u.mat.tex, s->u.mat.paint_tex_info, &s->u.mat.ubo, &ready);
+            } else if (s->u.mat.kind == 3u) {
+                n = write_toon_set(r, s->u.mat.tex, &s->u.mat.f, &s->u.mat.ubo, &ready);
+            } else {
+                n = write_material_set(r, s->u.mat.tex, &s->u.mat.f, &ready);
+            }
             if (n != VK_NULL_HANDLE) {
                 Retired t;
                 memset(&t, 0, sizeof t);
@@ -1915,6 +2145,8 @@ uint32_t su_render_upload_pak(SuRenderer *r, const SuAssetPak *pak, uint64_t mod
                 memset(&d, 0, sizeof d);
                 SuRenderPaintDesc pd;
                 memset(&pd, 0, sizeof pd);
+                SuRenderToonDesc td;
+                memset(&td, 0, sizeof td);
                 (void)su_asset_pak_material(pak, e.id, &d.factors);
                 if (su_asset_pak_paint(pak, e.id, &pd.paint) == SU_OK) {
                     pd.factors = d.factors;
@@ -1922,6 +2154,12 @@ uint32_t su_render_upload_pak(SuRenderer *r, const SuAssetPak *pak, uint64_t mod
                         pd.textures[k] = pd.paint.texture[k] != 0u ? pak_lookup(out, ids, pd.paint.texture[k]) : 0u;
                     }
                     st = su_render_paint_material_create(r, &pd, &h);
+                } else if (su_asset_pak_toon(pak, e.id, &td.toon) == SU_OK) {
+                    td.factors = d.factors;
+                    for (k = 0; k < SU_ASSET_SLOT_COUNT; k++) {
+                        td.textures[k] = td.factors.texture[k] != 0u ? pak_lookup(out, ids, td.factors.texture[k]) : 0u;
+                    }
+                    st = su_render_toon_material_create(r, &td, &h);
                 } else {
                     for (k = 0; k < SU_ASSET_SLOT_COUNT; k++) {
                         d.textures[k] = d.factors.texture[k] != 0u ? pak_lookup(out, ids, d.factors.texture[k]) : 0u;
@@ -1931,7 +2169,7 @@ uint32_t su_render_upload_pak(SuRenderer *r, const SuAssetPak *pak, uint64_t mod
                 out->materials++;
             } else if (pass == SU_ASSET_MESH) {
                 SuAssetMeshView mv;
-                SuRenderMeshDesc d;
+                const SuAssetVertexColor *colors = NULL;
                 SuRenderHandle *mats;
                 uint32_t k;
                 (void)su_asset_pak_mesh(pak, e.id, &mv);
@@ -1943,17 +2181,34 @@ uint32_t su_render_upload_pak(SuRenderer *r, const SuAssetPak *pak, uint64_t mod
                 for (k = 0; k < mv.header->submesh_count; k++) {
                     mats[k] = mv.submeshes[k].material != 0u ? pak_lookup(out, ids, mv.submeshes[k].material) : 0u;
                 }
-                memset(&d, 0, sizeof d);
-                d.vertices = mv.vertices;
-                d.vertex_count = mv.header->vertex_count;
-                d.indices = mv.indices;
-                d.index_count = mv.header->index_count;
-                d.submeshes = mv.submeshes;
-                d.submesh_count = mv.header->submesh_count;
-                d.materials = mats;
-                memcpy(d.center, mv.header->center, sizeof d.center);
-                d.radius = mv.header->radius;
-                st = su_render_mesh_create(r, &d, &h);
+                if (su_asset_pak_mesh_colors(pak, e.id, &colors) == SU_OK) {
+                    SuRenderColoredMeshDesc cd;
+                    memset(&cd, 0, sizeof cd);
+                    cd.vertices = mv.vertices;
+                    cd.colors = colors;
+                    cd.vertex_count = mv.header->vertex_count;
+                    cd.indices = mv.indices;
+                    cd.index_count = mv.header->index_count;
+                    cd.submeshes = mv.submeshes;
+                    cd.submesh_count = mv.header->submesh_count;
+                    cd.materials = mats;
+                    memcpy(cd.center, mv.header->center, sizeof cd.center);
+                    cd.radius = mv.header->radius;
+                    st = su_render_colored_mesh_create(r, &cd, &h);
+                } else {
+                    SuRenderMeshDesc d;
+                    memset(&d, 0, sizeof d);
+                    d.vertices = mv.vertices;
+                    d.vertex_count = mv.header->vertex_count;
+                    d.indices = mv.indices;
+                    d.index_count = mv.header->index_count;
+                    d.submeshes = mv.submeshes;
+                    d.submesh_count = mv.header->submesh_count;
+                    d.materials = mats;
+                    memcpy(d.center, mv.header->center, sizeof d.center);
+                    d.radius = mv.header->radius;
+                    st = su_render_mesh_create(r, &d, &h);
+                }
                 free(mats);
                 out->meshes++;
             } else {

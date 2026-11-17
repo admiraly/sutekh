@@ -168,6 +168,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
                 it = &r->items[n];
                 it->pipe = mat != NULL ? mat->u.mat.pipeline : PIPE_OPAQUE;
                 it->kind = mat != NULL ? mat->u.mat.kind : 0u;
+                it->colored = (uint8_t)(mesh->u.mesh.has_color && (it->kind == 0u || it->kind == 3u) ? 1u : 0u);
                 it->forced = 0;
                 if (obj->tint[3] < 1.0f && it->pipe < PIPE_OVERLAY) {
                     /* translucent instance of an opaque or masked material: the blend pass, same face culling */
@@ -177,7 +178,8 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
                 it->mat = mat_index;
                 it->mesh = mesh_index;
                 it->sub = sub;
-                it->key = ((uint64_t)it->kind << 63) | ((uint64_t)it->pipe << 60) | ((uint64_t)(mat_index & 0xFFFFFu) << 40) |
+                it->key = ((uint64_t)(it->kind & 3u) << 62) | ((uint64_t)(it->colored & 1u) << 61) |
+                          ((uint64_t)(it->pipe & 7u) << 58) | ((uint64_t)(mat_index & 0x3FFFFu) << 40) |
                           ((uint64_t)(mesh_index & 0xFFFFFFu) << 16) | (uint64_t)(sub & 0xFFFFu);
                 it->dist2 = ncw[0] * ncw[0] + ncw[1] * ncw[1] + ncw[2] * ncw[2];
                 memcpy(it->inst.r0, &m[0], sizeof it->inst.r0);
@@ -265,9 +267,11 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
     uint32_t i = 0;
     uint32_t bound_pipe = UINT32_MAX;
     uint32_t bound_kind = UINT32_MAX;
+    uint32_t bound_pipe_colored = UINT32_MAX;
     uint32_t bound_mat = UINT32_MAX - 1u;
     uint32_t bound_forced = 0;
     uint32_t bound_mesh = UINT32_MAX;
+    uint32_t bound_vb_colored = UINT32_MAX;
     while (i < item_count) {
         const DrawItem *it = &r->items[r->order[i]];
         uint32_t run = 1;
@@ -282,54 +286,65 @@ void su_rvk_scene_draw(SuRenderer *r, Frame *fr, VkCommandBuffer cmd, uint32_t i
         }
         while (i + run < item_count) {
             const DrawItem *nx = &r->items[r->order[i + run]];
-            if (nx->kind != it->kind || nx->pipe != it->pipe || nx->mat != it->mat || nx->forced != it->forced || nx->mesh != it->mesh || nx->sub != it->sub) {
+            if (nx->kind != it->kind || nx->colored != it->colored || nx->pipe != it->pipe || nx->mat != it->mat ||
+                nx->forced != it->forced || nx->mesh != it->mesh || nx->sub != it->sub) {
                 break;
             }
             run++;
         }
         if (it->kind == 2u) {
             fx_mesh_draw(r, fr, cmd, i, run, frame);
-            bound_kind = bound_pipe = bound_mesh = UINT32_MAX;
+            bound_kind = bound_pipe = bound_mesh = bound_pipe_colored = bound_vb_colored = UINT32_MAX;
             bound_mat = UINT32_MAX - 1u;
             i += run;
             continue;
         }
-        if (it->pipe != bound_pipe || it->kind != bound_kind) {
-            VkPipelineLayout layout = it->kind != 0u ? r->paint_layout : r->scene_layout;
-            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                   it->kind != 0u ? r->paint_pipe[it->pipe] : r->pbr_pipe[it->pipe]);
+        if (it->pipe != bound_pipe || it->kind != bound_kind || (uint32_t)it->colored != bound_pipe_colored) {
+            VkPipelineLayout layout = it->kind == 1u ? r->paint_layout :
+                                      it->kind == 3u ? r->toon_layout : r->scene_layout;
+            VkPipeline pipe = it->kind == 1u ? r->paint_pipe[it->pipe] :
+                              it->kind == 3u ? (it->colored ? r->toon_color_pipe[it->pipe] : r->toon_pipe[it->pipe]) :
+                                               (it->colored ? r->pbr_color_pipe[it->pipe] : r->pbr_pipe[it->pipe]);
+            r->f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
             r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &fr->frame_set, 0, NULL);
             if (it->kind != bound_kind) {
                 bound_mat = UINT32_MAX - 1u; /* the layouts differ from set 1 on: bind the material again */
             }
             bound_pipe = it->pipe;
             bound_kind = it->kind;
+            bound_pipe_colored = (uint32_t)it->colored;
         }
         if (it->mat != bound_mat || it->forced != bound_forced) {
             MatPush mp;
             VkDescriptorSet sets[2];
-            VkPipelineLayout lay = it->kind != 0u ? r->paint_layout : r->scene_layout;
+            VkPipelineLayout lay = it->kind == 1u ? r->paint_layout :
+                                   it->kind == 3u ? r->toon_layout : r->scene_layout;
             sets[0] = su_rvk_material_set(r, it->mat);
             sets[1] = r->frame_env_set;
-            if (it->kind != 0u) {
+            if (it->kind == 1u) {
                 paint_push(r, it->mat, it->forced, &mp);
             } else {
                 mat_push(r, it->mat, it->forced, &mp);
             }
-            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lay, 1, it->kind != 0u ? 2u : 1u, sets, 0, NULL);
-            r->f.vkCmdPushConstants(cmd, lay, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof mp, &mp);
+            r->f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lay, 1, it->kind == 1u ? 2u : 1u, sets, 0,
+                                         NULL);
+            r->f.vkCmdPushConstants(cmd, lay, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof mp,
+                                    &mp);
             bound_mat = it->mat;
             bound_forced = it->forced;
         }
-        if (it->mesh != bound_mesh) {
+        if (it->mesh != bound_mesh || (uint32_t)it->colored != bound_vb_colored) {
             const MeshRes *m = &r->res[it->mesh].u.mesh;
-            VkBuffer vbs[2];
-            VkDeviceSize offs[2] = {0, 0};
+            VkBuffer vbs[3];
+            VkDeviceSize offs[3] = {0, 0, 0};
+            uint32_t vb_count = it->colored ? 3u : 2u;
             vbs[0] = m->vb.buf;
             vbs[1] = fr->draw_inst.buf;
-            r->f.vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
+            vbs[2] = it->colored ? m->cb.buf : VK_NULL_HANDLE;
+            r->f.vkCmdBindVertexBuffers(cmd, 0, vb_count, vbs, offs);
             r->f.vkCmdBindIndexBuffer(cmd, m->ib.buf, 0, VK_INDEX_TYPE_UINT32);
             bound_mesh = it->mesh;
+            bound_vb_colored = (uint32_t)it->colored;
         }
         sub = &r->res[it->mesh].u.mesh.subs[it->sub];
         r->f.vkCmdDrawIndexed(cmd, sub->index_count, run, sub->first_index, 0, i);

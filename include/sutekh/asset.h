@@ -94,6 +94,16 @@ typedef struct SuAssetMeshView {
     const uint32_t *indices;
 } SuAssetMeshView;
 
+/* Mesh type_version 3: same layout as version 1, with flags = SU_ASSET_MESH_FLAG_COLOR and vertex_count
+ * SuAssetVertexColor records appended immediately after the indices. */
+#define SU_ASSET_MESH_COLOR_VERSION 3u
+#define SU_ASSET_MESH_FLAG_COLOR 0x2u
+
+/* 16 bytes: linear RGBA per-vertex color (glTF COLOR_0). */
+typedef struct SuAssetVertexColor {
+    float rgba[4];
+} SuAssetVertexColor;
+
 /* Texture formats. BCn are block-compressed 4x4 (BC1/BC4: 8 bytes per block, others 16). */
 #define SU_TEX_RGBA8_UNORM 1u
 #define SU_TEX_RGBA8_SRGB 2u
@@ -259,6 +269,40 @@ typedef struct SuAssetPaint {
  * dirt amount 0 (darken 0.6, roughen 0.5). Layer defaults: white, roughness 1, metallic 0, opacity 1, lerp. */
 void su_asset_paint_default(SuAssetPaint *p);
 
+/* ---- stylized / toon material (optional third material model) ----
+ *
+ * A material entry of type_version 3 is a SuAssetMaterial followed by a SuAssetToon. The first 128 bytes supply
+ * base_color, emissive/emissive_strength, normal_scale, occlusion_strength, alpha_*, double_sided, unlit,
+ * texture[0..4] (slot 1 metal/roughness unused), and tex_info[0..4]. */
+#define SU_ASSET_MATERIAL_TOON_VERSION 3u
+#define SU_TOON_HALF_LAMBERT 0x1u
+#define SU_TOON_USE_VERTEX_COLOR 0x2u
+#define SU_TOON_RIM_LIT_MASK 0x4u
+
+/* 112 bytes. */
+typedef struct SuAssetToon {
+    float uv_scale[2];          /* default 1, 1 */
+    float uv_offset[2];         /* default 0, 0 */
+    float uv_rotation;          /* radians, default 0 */
+    uint32_t reserved0;         /* must be zero */
+    float shadow_color[3];      /* default 0.35, 0.35, 0.45 */
+    float shade_threshold;      /* [-1, 1], default 0 */
+    float shade_softness;       /* >= 0, default 0.05 */
+    uint32_t diffuse_bands;     /* 1..8, default 1 */
+    float specular_color[3];    /* default 1, 1, 1 */
+    float specular_threshold;   /* 0..1, default 0.9 */
+    float specular_softness;    /* >= 0, default 0.02 */
+    float specular_intensity;   /* >= 0, default 0 */
+    float glossiness;           /* >= 1, default 32 */
+    float rim_color[3];         /* default 1, 1, 1 */
+    float rim_power;            /* > 0, default 3 */
+    float rim_intensity;        /* >= 0, default 0 */
+    uint32_t flags;             /* SU_TOON_* */
+    uint32_t reserved[3];       /* must be zero */
+} SuAssetToon;
+
+void su_asset_toon_default(SuAssetToon *t);
+
 #define SU_ASSET_MAX_LODS 4u
 
 /* 128 bytes: a placed mesh. lod_mesh[0] is the full-detail mesh; lod_mesh[i] is used while the object's projected
@@ -323,11 +367,15 @@ void su_asset_pak_digest(const SuAssetPak *pak, uint8_t sha256[32]);
 const uint8_t *su_asset_pak_bytes(const SuAssetPak *pak, size_t *len);
 
 uint32_t su_asset_pak_mesh(const SuAssetPak *pak, uint64_t id, SuAssetMeshView *out);
+/* Per-vertex colors of a mesh entry of type_version SU_ASSET_MESH_COLOR_VERSION (SU_E_INVALID_ARGUMENT for v1 or unknown id). */
+uint32_t su_asset_pak_mesh_colors(const SuAssetPak *pak, uint64_t id, const SuAssetVertexColor **out);
 uint32_t su_asset_pak_texture(const SuAssetPak *pak, uint64_t id, SuAssetTextureView *out);
 uint32_t su_asset_pak_material(const SuAssetPak *pak, uint64_t id, SuAssetMaterial *out);
 /* The paint part of a material entry of type_version 2 (SU_E_INVALID_ARGUMENT for a plain PBR material or unknown id).
  * su_asset_pak_material still returns the first 128 bytes of either version. */
 uint32_t su_asset_pak_paint(const SuAssetPak *pak, uint64_t id, SuAssetPaint *out);
+/* The toon part of a material entry of type_version SU_ASSET_MATERIAL_TOON_VERSION (SU_E_INVALID_ARGUMENT otherwise). */
+uint32_t su_asset_pak_toon(const SuAssetPak *pak, uint64_t id, SuAssetToon *out);
 uint32_t su_asset_pak_model(const SuAssetPak *pak, uint64_t id, SuAssetModelView *out);
 
 /* ---- writing packs (the importer uses this; hosts can cook procedural content with it too) ---- */
@@ -340,6 +388,11 @@ void su_asset_writer_destroy(SuAssetWriter *w);
 uint32_t su_asset_writer_add_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices, uint32_t vertex_count,
                                   const uint32_t *indices, uint32_t index_count, const SuAssetSubmesh *submeshes,
                                   uint32_t submesh_count);
+/* Mesh with per-vertex linear RGBA colors (type_version SU_ASSET_MESH_COLOR_VERSION). */
+uint32_t su_asset_writer_add_colored_mesh(SuAssetWriter *w, uint64_t id, const SuAssetVertex *vertices,
+                                          const SuAssetVertexColor *colors, uint32_t vertex_count,
+                                          const uint32_t *indices, uint32_t index_count, const SuAssetSubmesh *submeshes,
+                                          uint32_t submesh_count);
 /* mip_data[i] holds level i (su_asset_texture_level_size bytes). */
 uint32_t su_asset_writer_add_texture(SuAssetWriter *w, uint64_t id, uint32_t width, uint32_t height, uint32_t format,
                                      uint32_t flags, uint32_t mip_count, const uint8_t *const *mip_data);
@@ -347,6 +400,8 @@ uint32_t su_asset_writer_add_material(SuAssetWriter *w, uint64_t id, const SuAss
 /* A paint material (type_version 2): m and p are validated as the reader would (finite values, layer order a
  * permutation, channels, texture colour spaces are checked when the pack is opened). */
 uint32_t su_asset_writer_add_paint_material(SuAssetWriter *w, uint64_t id, const SuAssetMaterial *m, const SuAssetPaint *p);
+/* A toon material (type_version 3): m and t are validated both here and when the pack is opened. */
+uint32_t su_asset_writer_add_toon_material(SuAssetWriter *w, uint64_t id, const SuAssetMaterial *m, const SuAssetToon *t);
 uint32_t su_asset_writer_add_model(SuAssetWriter *w, uint64_t id, const SuAssetModelNode *nodes, uint32_t node_count);
 /* Builds the pack (entries sorted by id) into a malloc'd buffer the caller frees with free(). The writer is left
  * empty and reusable. */

@@ -568,6 +568,187 @@ static void test_files_and_loader(void) {
     free(a);
 }
 
+static void test_stylized_roundtrip(void) {
+    SuAssetWriter *w = NULL;
+    SuAssetVertex v[24];
+    SuAssetVertexColor c[24];
+    uint32_t idx[36];
+    SuAssetSubmesh sm;
+    SuAssetMaterial m_pbr;
+    SuAssetMaterial m_toon_base;
+    SuAssetToon toon;
+    SuAssetModelNode node;
+    uint8_t *b1 = NULL;
+    uint8_t *b2 = NULL;
+    size_t l1 = 0;
+    size_t l2 = 0;
+    SuAssetPak *p = NULL;
+    char msg[256];
+    SuAssetMeshView mv;
+    const SuAssetVertexColor *vc = NULL;
+    SuAssetToon toon_out;
+    uint64_t id_cmesh = su_asset_id("test/mesh/colored");
+    uint64_t id_pmesh = su_asset_id("test/mesh/plain");
+    uint64_t id_tmat = su_asset_id("test/mat/toon");
+    uint64_t id_pmat = su_asset_id("test/mat/pbr");
+    uint64_t id_mod = su_asset_id("test/model/stylized");
+    uint32_t i;
+
+    cube(v, idx);
+    for (i = 0; i < 24u; i++) {
+        c[i].rgba[0] = (float)i / 23.0f;
+        c[i].rgba[1] = 1.0f - (float)i / 23.0f;
+        c[i].rgba[2] = 0.25f;
+        c[i].rgba[3] = 0.8f;
+    }
+    memset(&sm, 0, sizeof sm);
+    sm.index_count = 36u;
+    sm.material = id_tmat;
+
+    su_asset_material_default(&m_pbr);
+    su_asset_material_default(&m_toon_base);
+    m_toon_base.base_color[0] = 0.9f;
+    m_toon_base.base_color[1] = 0.8f;
+    m_toon_base.base_color[2] = 0.7f;
+
+    su_asset_toon_default(&toon);
+    CHECK(toon.uv_scale[0] == 1.0f && toon.uv_scale[1] == 1.0f);
+    CHECK(toon.diffuse_bands == 1u && toon.flags == 0u);
+    toon.uv_scale[0] = 2.0f;
+    toon.uv_scale[1] = 3.0f;
+    toon.uv_offset[0] = 0.25f;
+    toon.uv_offset[1] = -0.5f;
+    toon.uv_rotation = 0.75f;
+    toon.shadow_color[0] = 0.2f;
+    toon.shadow_color[1] = 0.15f;
+    toon.shadow_color[2] = 0.35f;
+    toon.shade_threshold = 0.4f;
+    toon.shade_softness = 0.05f;
+    toon.diffuse_bands = 3u;
+    toon.specular_threshold = 0.6f;
+    toon.specular_softness = 0.04f;
+    toon.specular_intensity = 0.9f;
+    toon.glossiness = 24.0f;
+    toon.rim_color[0] = 0.3f;
+    toon.rim_color[1] = 0.7f;
+    toon.rim_color[2] = 1.0f;
+    toon.rim_power = 2.5f;
+    toon.rim_intensity = 0.6f;
+    toon.flags = SU_TOON_HALF_LAMBERT | SU_TOON_USE_VERTEX_COLOR | SU_TOON_RIM_LIT_MASK;
+
+    memset(&node, 0, sizeof node);
+    node.transform[0] = node.transform[5] = node.transform[10] = node.transform[15] = 1.0f;
+    node.lod_count = 1u;
+    node.lod_mesh[0] = id_cmesh;
+    node.lod_screen[0] = 1.0f;
+
+    CHECK(su_asset_writer_create(&w) == SU_OK);
+    CHECK(su_asset_writer_add_material(w, id_pmat, &m_pbr) == SU_OK);
+    CHECK(su_asset_writer_add_toon_material(w, id_tmat, &m_toon_base, &toon) == SU_OK);
+    CHECK(su_asset_writer_add_colored_mesh(w, id_cmesh, v, c, 24u, idx, 36u, &sm, 1u) == SU_OK);
+    sm.material = id_pmat;
+    CHECK(su_asset_writer_add_mesh(w, id_pmesh, v, 24u, idx, 36u, &sm, 1u) == SU_OK);
+    CHECK(su_asset_writer_add_model(w, id_mod, &node, 1u) == SU_OK);
+    CHECK(su_asset_writer_finish(w, &b1, &l1) == SU_OK);
+    su_asset_writer_destroy(w);
+    w = NULL;
+
+    /* Determinism with opposite insertion order */
+    CHECK(su_asset_writer_create(&w) == SU_OK);
+    sm.material = id_pmat;
+    CHECK(su_asset_writer_add_mesh(w, id_pmesh, v, 24u, idx, 36u, &sm, 1u) == SU_OK);
+    sm.material = id_tmat;
+    CHECK(su_asset_writer_add_colored_mesh(w, id_cmesh, v, c, 24u, idx, 36u, &sm, 1u) == SU_OK);
+    CHECK(su_asset_writer_add_model(w, id_mod, &node, 1u) == SU_OK);
+    CHECK(su_asset_writer_add_toon_material(w, id_tmat, &m_toon_base, &toon) == SU_OK);
+    CHECK(su_asset_writer_add_material(w, id_pmat, &m_pbr) == SU_OK);
+    CHECK(su_asset_writer_finish(w, &b2, &l2) == SU_OK);
+    su_asset_writer_destroy(w);
+    w = NULL;
+    CHECK(l1 == l2 && b1 != NULL && b2 != NULL && memcmp(b1, b2, l1) == 0);
+
+    CHECK(su_asset_pak_open(b1, l1, SU_ASSET_PAK_VERIFY_ENTRIES, &p, msg) == SU_OK);
+    if (p != NULL) {
+        CHECK(su_asset_pak_mesh(p, id_cmesh, &mv) == SU_OK);
+        CHECK(mv.header->vertex_count == 24u && (mv.header->flags & SU_ASSET_MESH_FLAG_COLOR) != 0u);
+        CHECK(su_asset_pak_mesh_colors(p, id_cmesh, &vc) == SU_OK && vc != NULL);
+        if (vc != NULL) {
+            CHECK(memcmp(vc, c, sizeof c) == 0);
+        }
+        CHECK(su_asset_pak_mesh_colors(p, id_pmesh, &vc) == SU_E_INVALID_ARGUMENT);
+        CHECK(su_asset_pak_toon(p, id_tmat, &toon_out) == SU_OK);
+        CHECK(memcmp(&toon_out, &toon, sizeof toon) == 0);
+        CHECK(su_asset_pak_toon(p, id_pmat, &toon_out) == SU_E_INVALID_ARGUMENT);
+        su_asset_pak_close(p);
+    }
+
+    /* Reserved toon words must stay zero, including in packs with valid hashes. */
+    {
+        const size_t fields[] = {offsetof(SuAssetToon, reserved0), offsetof(SuAssetToon, reserved),
+                                 offsetof(SuAssetToon, reserved) + 4u, offsetof(SuAssetToon, reserved) + 8u};
+        size_t j;
+        for (j = 0; j < sizeof fields / sizeof fields[0]; j++) {
+            uint64_t off = entry_offset(b1, id_tmat) + sizeof(SuAssetMaterial) + fields[j];
+            b1[off] = 1u;
+            rehash(b1, l1);
+            p = NULL;
+            CHECK(su_asset_pak_open(b1, l1, 0, &p, msg) == SU_E_PARSE);
+            su_asset_pak_close(p);
+            b1[off] = 0u;
+        }
+    }
+
+    /* Forged corruption in toon payload (diffuse_bands = 0) with recomputed hashes is rejected */
+    {
+        uint64_t toff = entry_offset(b1, id_tmat) + sizeof(SuAssetMaterial) + offsetof(SuAssetToon, diffuse_bands);
+        b1[toff] = 0;
+        b1[toff + 1u] = 0;
+        b1[toff + 2u] = 0;
+        b1[toff + 3u] = 0;
+        rehash(b1, l1);
+        p = NULL;
+        CHECK(su_asset_pak_open(b1, l1, 0, &p, msg) == SU_E_PARSE);
+        su_asset_pak_close(p);
+    }
+
+    free(b1);
+    free(b2);
+
+    /* Writer validation refusals for colored meshes and toon materials */
+    CHECK(su_asset_writer_create(&w) == SU_OK);
+    sm.material = 0u;
+    CHECK(su_asset_writer_add_colored_mesh(w, 1u, v, NULL, 24u, idx, 36u, &sm, 1u) == SU_E_INVALID_ARGUMENT);
+    c[2].rgba[1] = NAN;
+    CHECK(su_asset_writer_add_colored_mesh(w, 1u, v, c, 24u, idx, 36u, &sm, 1u) == SU_E_INVALID_ARGUMENT);
+    c[2].rgba[1] = 0.5f;
+    toon.diffuse_bands = 0u;
+    CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    toon.diffuse_bands = 9u;
+    CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    toon.diffuse_bands = 2u;
+    toon.shade_threshold = -1.5f;
+    CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    toon.shade_threshold = 0.4f;
+    toon.glossiness = 0.5f;
+    CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    toon.glossiness = 16.0f;
+    toon.rim_power = 0.0f;
+    CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    toon.rim_power = 2.0f;
+    toon.flags = 0x80u;
+    CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    toon.flags = SU_TOON_HALF_LAMBERT;
+    toon.reserved0 = 1u;
+    CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    toon.reserved0 = 0u;
+    toon.reserved[1] = 1u;
+    CHECK(su_asset_writer_add_toon_material(w, 3u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    toon.reserved[1] = 0u;
+    toon.uv_scale[0] = NAN;
+    CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    su_asset_writer_destroy(w);
+}
+
 int main(void) {
     ID_MESH = su_asset_id("test/mesh/cube");
     ID_MESH_LOD = su_asset_id("test/mesh/cube_lod1");
@@ -581,6 +762,7 @@ int main(void) {
     test_forged();
     test_fuzz();
     test_files_and_loader();
+    test_stylized_roundtrip();
     printf("test_asset_pak: %ld checks, %ld failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

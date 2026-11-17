@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 #define SU_RENDER_API
-#define SU_RENDER_API_VERSION 12u
+#define SU_RENDER_API_VERSION 13u
 
 /* ---- math (column-major 4x4, right-handed world, +y up, cameras look down -z) ---- */
 
@@ -574,6 +574,20 @@ typedef struct SuRenderMeshDesc {
     uint32_t flags;                    /* SU_RENDER_UPLOAD_COPY */
 } SuRenderMeshDesc;
 
+typedef struct SuRenderColoredMeshDesc {
+    const SuAssetVertex *vertices;
+    const SuAssetVertexColor *colors;  /* vertex_count linear RGBA colors (COLOR_0) */
+    uint32_t vertex_count;
+    const uint32_t *indices;
+    uint32_t index_count;
+    const SuAssetSubmesh *submeshes;   /* ranges and bounding spheres; their material ids are ignored */
+    uint32_t submesh_count;
+    const SuRenderHandle *materials;   /* per submesh, 0 = the default material; NULL = all default */
+    float center[3];                   /* bounding sphere of the mesh */
+    float radius;
+    uint32_t flags;                    /* SU_RENDER_UPLOAD_COPY */
+} SuRenderColoredMeshDesc;
+
 typedef struct SuRenderTextureDesc {
     uint32_t width, height;
     uint32_t format;                   /* SU_TEX_* (sutekh/asset.h); BCn needs device support */
@@ -662,6 +676,19 @@ typedef struct SuRenderPaintDesc {
     uint32_t overlay;
 } SuRenderPaintDesc;
 
+/* ---- stylized / toon material ----
+ *
+ * A third material model beside PBR-lite and layered paint, for cel-shaded surfaces with per-material UV
+ * transforms (scale, offset, rotation), stepped/Half-Lambert diffuse with shadow tint, stylized Blinn-Phong
+ * specular bands, Fresnel rim lighting, and optional per-vertex color modulation (SU_TOON_USE_VERTEX_COLOR). */
+typedef struct SuRenderToonDesc {
+    SuAssetMaterial factors;           /* base_color, emissive, emissive_strength, normal_scale, occlusion_strength,
+                                        * alpha_mode, alpha_cutoff, double_sided, unlit, tex_info; texture ids unused */
+    SuAssetToon toon;
+    SuRenderHandle textures[SU_ASSET_SLOT_COUNT]; /* 0 = none (slot 1 unused) */
+    uint32_t overlay;
+} SuRenderToonDesc;
+
 /* ---- image-based lighting: a cubemap with prefiltered specular mips ----
  *
  * Faces are +X -X +Y -Y +Z -Z in world axes (the Vulkan / OpenGL cube convention: the texel at (x, y) of a face
@@ -688,12 +715,16 @@ typedef struct SuRenderModelNode {
 } SuRenderModelNode;
 
 SU_RENDER_API uint32_t su_render_mesh_create(SuRenderer *r, const SuRenderMeshDesc *d, SuRenderHandle *out);
+SU_RENDER_API uint32_t su_render_colored_mesh_create(SuRenderer *r, const SuRenderColoredMeshDesc *d,
+                                                     SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_texture_create(SuRenderer *r, const SuRenderTextureDesc *d, SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_material_create(SuRenderer *r, const SuRenderMaterialDesc *d, SuRenderHandle *out);
 SU_RENDER_API uint32_t su_render_fx_material_create(SuRenderer *r, const SuRenderFxMaterialDesc *d, SuRenderHandle *out);
 /* A layered paint material (see above). SU_E_INVALID_ARGUMENT for an unknown texture handle, a texture of the wrong
  * colour space for its slot, or invalid paint parameters (layer count, order, channels, non-finite values). */
 SU_RENDER_API uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc *d, SuRenderHandle *out);
+/* A stylized / toon material (see above). Texture color spaces follow SU_ASSET_SLOT_*; reserved words must be zero. */
+SU_RENDER_API uint32_t su_render_toon_material_create(SuRenderer *r, const SuRenderToonDesc *d, SuRenderHandle *out);
 /* An environment cubemap with prefiltered mips (see "image-based lighting"); READY when uploaded. Release with
  * su_render_release. SU_E_UNSUPPORTED_METHOD when the device cannot filter RGBA16F cube images. */
 SU_RENDER_API uint32_t su_render_env_create(SuRenderer *r, uint32_t size, const float *faces, SuRenderHandle *out);

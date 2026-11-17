@@ -950,6 +950,112 @@ static void test_loader(void) {
     su_asset_loader_destroy(l);
 }
 
+static void test_scene_color(void) {
+    static const float col3[12] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.5f, 0.5f, 0.0f};
+    static const uint8_t col4_u8[16] = {255, 0, 0, 128, 0, 255, 0, 255, 0, 0, 255, 64, 255, 255, 0, 255};
+    static const float col4_f[16] = {0.2f, 0.4f, 0.6f, 0.8f, 0.1f, 0.2f, 0.3f, 0.4f,
+                                     0.9f, 0.8f, 0.7f, 0.6f, 0.5f, 0.5f, 0.5f, 1.0f};
+    G *g = calloc(1, sizeof *g);
+    char rest[4096];
+    char *json;
+    int ap, an, ai, ac3, ac4u, ac4f;
+    SuAssetCookReport rep;
+    uint32_t st;
+    char msg[256];
+    SuAssetPak *p;
+    SuAssetMeshView mv;
+    const SuAssetVertexColor *vc = NULL;
+    uint32_t i;
+
+    ap = pos_acc(g, QUAD_POS, 4);
+    an = add_acc(g, QUAD_NRM, sizeof QUAD_NRM, 5126, 4, "VEC3", NULL);
+    ai = add_acc(g, QUAD_IDX, sizeof QUAD_IDX, 5123, 6, "SCALAR", NULL);
+    ac3 = add_acc(g, col3, sizeof col3, 5126, 4, "VEC3", NULL);
+    ac4u = add_acc(g, col4_u8, sizeof col4_u8, 5121, 4, "VEC4", ",\"normalized\":true");
+    ac4f = add_acc(g, col4_f, sizeof col4_f, 5126, 4, "VEC4", NULL);
+
+    snprintf(rest, sizeof rest,
+             "\"meshes\":["
+             "{\"name\":\"vec3\",\"primitives\":[{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d,\"COLOR_0\":%d},\"indices\":%d}]},"
+             "{\"name\":\"flat\",\"primitives\":[{\"attributes\":{\"POSITION\":%d,\"COLOR_0\":%d},\"indices\":%d}]},"
+             "{\"name\":\"mixed\",\"primitives\":["
+             "{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d},\"indices\":%d},"
+             "{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d,\"COLOR_0\":%d},\"indices\":%d},"
+             "{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d},\"indices\":%d}]},"
+             "{\"name\":\"plain\",\"primitives\":[{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d},\"indices\":%d}]}"
+             "],"
+             "\"nodes\":[{\"mesh\":0},{\"mesh\":1},{\"mesh\":2},{\"mesh\":3},{\"mesh\":0,\"scale\":[-1,1,1]}],"
+             "\"scenes\":[{\"nodes\":[0,1,2,3,4]}]",
+             ap, an, ac3, ai, ap, ac4u, ai, ap, an, ai, ap, an, ac4f, ai, ap, an, ai, ap, an, ai);
+    json = gltf_json(g, "scene_col.bin", rest);
+    write_file("scene_col.bin", g->bin, g->n);
+    write_file("scene_col.gltf", json, strlen(json));
+    p = cook("scene_col.gltf", "col", &rep, &st, msg);
+    CHECK(st == SU_OK && p != NULL);
+    if (p != NULL) {
+        /* 1. VEC3 COLOR_0: alpha backfilled to 1.0 */
+        CHECK(su_asset_pak_mesh(p, su_asset_id("col/mesh/vec3"), &mv) == SU_OK);
+        CHECK((mv.header->flags & SU_ASSET_MESH_FLAG_COLOR) != 0u);
+        CHECK(su_asset_pak_mesh_colors(p, su_asset_id("col/mesh/vec3"), &vc) == SU_OK && vc != NULL);
+        if (vc != NULL) {
+            for (i = 0; i < 4u; i++) {
+                CHECK(fabsf(vc[i].rgba[0] - col3[i * 3u + 0u]) < 1e-6f);
+                CHECK(fabsf(vc[i].rgba[1] - col3[i * 3u + 1u]) < 1e-6f);
+                CHECK(fabsf(vc[i].rgba[2] - col3[i * 3u + 2u]) < 1e-6f);
+                CHECK(vc[i].rgba[3] == 1.0f);
+            }
+        }
+
+        CHECK(su_asset_pak_mesh(p, su_asset_id("col/mesh/vec3#mirrored"), &mv) == SU_OK);
+        CHECK(su_asset_pak_mesh_colors(p, su_asset_id("col/mesh/vec3#mirrored"), &vc) == SU_OK && vc != NULL);
+        if (vc != NULL) {
+            for (i = 0; i < 4u; i++) {
+                CHECK(vc[i].rgba[0] == col3[i * 3u] && vc[i].rgba[3] == 1.0f);
+            }
+        }
+        CHECK(mv.indices[1] == QUAD_IDX[2] && mv.indices[2] == QUAD_IDX[1]);
+
+        /* 2. Flat normals (no NORMAL): unwelded 6 vertices preserve per-corner normalized VEC4 colors */
+        CHECK(su_asset_pak_mesh(p, su_asset_id("col/mesh/flat"), &mv) == SU_OK);
+        CHECK(mv.header->vertex_count == 6u && (mv.header->flags & SU_ASSET_MESH_FLAG_COLOR) != 0u);
+        CHECK(su_asset_pak_mesh_colors(p, su_asset_id("col/mesh/flat"), &vc) == SU_OK && vc != NULL);
+        if (vc != NULL) {
+            for (i = 0; i < 6u; i++) {
+                uint16_t src = QUAD_IDX[i];
+                CHECK(fabsf(vc[i].rgba[0] - (float)col4_u8[src * 4u + 0u] / 255.0f) < 1e-3f);
+                CHECK(fabsf(vc[i].rgba[1] - (float)col4_u8[src * 4u + 1u] / 255.0f) < 1e-3f);
+                CHECK(fabsf(vc[i].rgba[2] - (float)col4_u8[src * 4u + 2u] / 255.0f) < 1e-3f);
+                CHECK(fabsf(vc[i].rgba[3] - (float)col4_u8[src * 4u + 3u] / 255.0f) < 1e-3f);
+            }
+        }
+
+        /* 3. Uncolored/colored/uncolored primitives backfill both sides with white. */
+        CHECK(su_asset_pak_mesh(p, su_asset_id("col/mesh/mixed"), &mv) == SU_OK);
+        CHECK(mv.header->vertex_count == 12u && (mv.header->flags & SU_ASSET_MESH_FLAG_COLOR) != 0u);
+        CHECK(su_asset_pak_mesh_colors(p, su_asset_id("col/mesh/mixed"), &vc) == SU_OK && vc != NULL);
+        if (vc != NULL) {
+            for (i = 0; i < 4u; i++) {
+                CHECK(fabsf(vc[4u + i].rgba[0] - col4_f[i * 4u + 0u]) < 1e-6f);
+                CHECK(fabsf(vc[4u + i].rgba[3] - col4_f[i * 4u + 3u]) < 1e-6f);
+            }
+            for (i = 0u; i < 12u; i++) {
+                if (i >= 4u && i < 8u) {
+                    continue;
+                }
+                CHECK(vc[i].rgba[0] == 1.0f && vc[i].rgba[1] == 1.0f && vc[i].rgba[2] == 1.0f && vc[i].rgba[3] == 1.0f);
+            }
+        }
+
+        /* 4. Mesh without COLOR_0 keeps version 1 / flags 0 */
+        CHECK(su_asset_pak_mesh(p, su_asset_id("col/mesh/plain"), &mv) == SU_OK);
+        CHECK(mv.header->flags == 0u);
+        CHECK(su_asset_pak_mesh_colors(p, su_asset_id("col/mesh/plain"), &vc) == SU_E_INVALID_ARGUMENT);
+        su_asset_pak_close(p);
+    }
+    free(json);
+    free(g);
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr, "usage: test_asset_gltf WORKDIR\n");
@@ -987,6 +1093,7 @@ int main(int argc, char **argv) {
     test_scene_b();
     test_scene_c();
     test_scene_d();
+    test_scene_color();
     test_errors();
     test_loader();
     printf("test_asset_gltf: %ld checks, %ld failures\n", g_checks, g_fail);
