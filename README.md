@@ -21,6 +21,8 @@ structured control-plane requests, isolated candidate evaluation, tick-boundary
 installation, snapshots, replay, worker replacement after faults, and
 allocation-aware world updates.
 
+## Capabilities
+
 Recent integrated capabilities include:
 
 - **World and simulation:** generational entities, multiple declared tables in
@@ -48,10 +50,12 @@ Recent integrated capabilities include:
   public-header isolation, optional dependency bootstrapping, sanitizer builds,
   cross-compiler determinism checks, and CI validation.
 
-The RTS path has passed model comparisons, hidden fixture experiments, replay
-checks, sanitizer checks, and a checked-mode million-row load/capture/recovery
-run. These are correctness results and engineering evidence, not a claim of
-production throughput or a performance qualification.
+Recorded validation includes the full current existing suite at 55/55,
+Windows Clang validation at 92 passed with 2 POSIX-only skips, model comparisons,
+hidden fixture experiments, replay checks, sanitizer checks, and a checked-mode
+million-row load/capture/recovery run. These are correctness results and
+engineering evidence, not a claim of production throughput or a performance
+qualification.
 
 M3 is still in progress. Remaining work includes final evidence/inventory
 reconciliation, stress and optimization gates, and independent review of a
