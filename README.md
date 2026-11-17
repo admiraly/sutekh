@@ -3,15 +3,15 @@
 <!-- SPDX-FileCopyrightText: 2026 admiraly -->
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
-**An agent-native game execution engine — source-available under PolyForm Perimeter 1.0.1.**
+**An agent-native C17 game execution engine — source-available under PolyForm Perimeter 1.0.1.**
 
-[Specifications](#start-here) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Commercial/OEM licensing](COMMERCIAL_LICENSE.md)
+[Build and test](#start-here) · [Specifications](#root-specifications) · [Implementation status](docs/IMPLEMENTATION_STATUS.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Commercial/OEM licensing](COMMERCIAL_LICENSE.md)
 
-Specification v0.1 • 6 October 2026
+Specification v0.1 • repository status refreshed 17 November 2026
 
-**Objective:** maximize verified game functionality delivered per agent-hour, while retaining a path to workload-specific, near-hardware-limit execution. Ordinary gameplay edits must not trigger native project builds, link steps, or executable restarts.
+**Objective:** deliver verified game functionality through small, reproducible, headless runtime changes while retaining a path to workload-specific, near-hardware-limit execution. Ordinary gameplay edits should not require native project builds, link steps, or executable restarts.
 
-**Status:** Sutekh has an implemented headless C17 runtime, checked JSON gameplay IR, a local structured control plane, worker recovery, generational entities, and a six-system RTS prototype. M0–M2 are owner-accepted with documented caveats; M3 is in progress. There is no full editor, renderer, or Windows-native runtime. Timing observations are not performance qualification, and BFME compatibility has not been established. See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [durable task state](planning/status.json). “Sutekh” remains a working name, not a cleared product name. The owner-authorized [runtime limits v2](planning/handoffs/2026-10-14-m3-limits-v2.md) has validated a million-row load, canonical capture and replacement-worker recovery; this is a correctness result, not a throughput guarantee.
+**Status:** Sutekh has an implemented headless C17 runtime, checked JSON gameplay IR, a structured control plane, worker recovery, generational and multi-table worlds, and an evolving six-system RTS prototype. M0–M2 are owner-accepted with documented caveats; M3 is in progress. Linux presentation and audio paths exist, while a full editor and Windows-native runtime remain future work. Timing observations are not performance qualification, and BFME compatibility has not been established. See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [durable task state](planning/status.json). “Sutekh” remains a working name, not a cleared product name. The owner-authorized [runtime limits v2](planning/handoffs/2026-10-14-m3-limits-v2.md) validated a million-row load, canonical capture, and replacement-worker recovery; this is a correctness result, not a throughput guarantee.
 
 ### Start here
 
@@ -73,8 +73,8 @@ The checker requires Python 3.9 or later and uses Python's standard library. Whe
 
 ### Local Windows development setup
 
-The public remote is https://github.com/admiraly/sutekh. The engine remains
-unimplemented; dependency setup is not M0 acceptance.
+The public remote is https://github.com/admiraly/sutekh. The Windows-native
+runtime remains unimplemented; dependency setup is not M0 acceptance.
 
 ```powershell
 python -m venv .venv
