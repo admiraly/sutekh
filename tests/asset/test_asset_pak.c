@@ -682,6 +682,22 @@ static void test_stylized_roundtrip(void) {
         su_asset_pak_close(p);
     }
 
+    /* Reserved toon words must stay zero, including in packs with valid hashes. */
+    {
+        const size_t fields[] = {offsetof(SuAssetToon, reserved0), offsetof(SuAssetToon, reserved),
+                                 offsetof(SuAssetToon, reserved) + 4u, offsetof(SuAssetToon, reserved) + 8u};
+        size_t j;
+        for (j = 0; j < sizeof fields / sizeof fields[0]; j++) {
+            uint64_t off = entry_offset(b1, id_tmat) + sizeof(SuAssetMaterial) + fields[j];
+            b1[off] = 1u;
+            rehash(b1, l1);
+            p = NULL;
+            CHECK(su_asset_pak_open(b1, l1, 0, &p, msg) == SU_E_PARSE);
+            su_asset_pak_close(p);
+            b1[off] = 0u;
+        }
+    }
+
     /* Forged corruption in toon payload (diffuse_bands = 0) with recomputed hashes is rejected */
     {
         uint64_t toff = entry_offset(b1, id_tmat) + sizeof(SuAssetMaterial) + offsetof(SuAssetToon, diffuse_bands);
@@ -722,6 +738,12 @@ static void test_stylized_roundtrip(void) {
     toon.flags = 0x80u;
     CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
     toon.flags = SU_TOON_HALF_LAMBERT;
+    toon.reserved0 = 1u;
+    CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    toon.reserved0 = 0u;
+    toon.reserved[1] = 1u;
+    CHECK(su_asset_writer_add_toon_material(w, 3u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
+    toon.reserved[1] = 0u;
     toon.uv_scale[0] = NAN;
     CHECK(su_asset_writer_add_toon_material(w, 2u, &m_toon_base, &toon) == SU_E_INVALID_ARGUMENT);
     su_asset_writer_destroy(w);

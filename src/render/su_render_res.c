@@ -1244,7 +1244,9 @@ uint32_t su_render_toon_material_create(SuRenderer *r, const SuRenderToonDesc *d
     }
     *out = 0;
     t = &d->toon;
-    if (!all_finite(d->factors.base_color, 13u) || !all_finite(t->uv_scale, 2u) || !all_finite(t->uv_offset, 2u) ||
+    if (d->factors.double_sided > 1u || d->factors.unlit > 1u || t->reserved0 != 0u ||
+        t->reserved[0] != 0u || t->reserved[1] != 0u || t->reserved[2] != 0u ||
+        !all_finite(d->factors.base_color, 13u) || !all_finite(t->uv_scale, 2u) || !all_finite(t->uv_offset, 2u) ||
         !isfinite(t->uv_rotation) || !all_finite(t->shadow_color, 3u) || !isfinite(t->shade_threshold) ||
         !isfinite(t->shade_softness) || !all_finite(t->specular_color, 3u) || !isfinite(t->specular_threshold) ||
         !isfinite(t->specular_softness) || !isfinite(t->specular_intensity) || !isfinite(t->glossiness) ||
@@ -1258,13 +1260,20 @@ uint32_t su_render_toon_material_create(SuRenderer *r, const SuRenderToonDesc *d
     }
     for (i = 0; i < SU_ASSET_SLOT_COUNT; i++) {
         uint32_t info = d->factors.tex_info[i];
-        if ((info & 0xFFu) > 1u || ((info >> 8) & 0xFu) > 2u || ((info >> 12) & 0xFu) > 2u) {
+        if ((info & 0xFFu) > 1u || ((info >> 8) & 0xFu) > 2u || ((info >> 12) & 0xFu) > 2u || (info >> 16) != 0u) {
             return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "toon material slot %u: invalid tex_info", (unsigned)i);
         }
         if (d->textures[i] != 0u) {
             const Res *x = su_rvk_get(r, d->textures[i], RES_TEXTURE, NULL);
             if (x == NULL || x->u.tex.layers != 1u || x->u.tex.depth > 1u) {
                 return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "toon material slot %u: unknown texture handle", (unsigned)i);
+            }
+            {
+                int need_srgb = i == SU_ASSET_SLOT_BASE_COLOR || i == SU_ASSET_SLOT_EMISSIVE;
+                if (tex_srgb_format(x->u.tex.format) != need_srgb) {
+                    return su_rvk_fail(r, SU_E_INVALID_ARGUMENT, "toon material slot %u needs a %s texture", (unsigned)i,
+                                       need_srgb ? "sRGB" : "linear");
+                }
             }
         }
     }

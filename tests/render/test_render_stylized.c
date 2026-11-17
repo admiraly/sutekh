@@ -665,6 +665,45 @@ static void test_stylized_validation(void) {
     td.toon.flags = 0x10u;
     CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
     td.toon.flags = SU_TOON_HALF_LAMBERT;
+    td.toon.reserved0 = 1u;
+    CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
+    td.toon.reserved0 = 0u;
+    td.toon.reserved[2] = 1u;
+    CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
+    td.toon.reserved[2] = 0u;
+    td.factors.tex_info[0] = 0x10000u;
+    CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
+    td.factors.tex_info[0] = 0u;
+    td.factors.double_sided = 2u;
+    CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
+    td.factors.double_sided = 0u;
+    td.factors.unlit = 2u;
+    CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
+    td.factors.unlit = 0u;
+    {
+        static const uint8_t pixel[4] = {128, 128, 255, 255};
+        SuRenderHandle srgb = mk_tex(SU_TEX_RGBA8_SRGB, 1, 1, pixel);
+        td.textures[SU_ASSET_SLOT_NORMAL] = srgb;
+        CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
+        td.textures[SU_ASSET_SLOT_NORMAL] = 0u;
+        td.textures[SU_ASSET_SLOT_OCCLUSION] = srgb;
+        CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
+        td.textures[SU_ASSET_SLOT_OCCLUSION] = 0u;
+        td.textures[SU_ASSET_SLOT_METAL_ROUGH] = srgb;
+        CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
+        td.textures[SU_ASSET_SLOT_METAL_ROUGH] = 0u;
+        CHECK(su_render_release(g_r, srgb) == SU_OK);
+        {
+            SuRenderHandle linear = mk_tex(SU_TEX_RGBA8_UNORM, 1, 1, pixel);
+            td.textures[SU_ASSET_SLOT_BASE_COLOR] = linear;
+            CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
+            td.textures[SU_ASSET_SLOT_BASE_COLOR] = 0u;
+            td.textures[SU_ASSET_SLOT_EMISSIVE] = linear;
+            CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
+            td.textures[SU_ASSET_SLOT_EMISSIVE] = 0u;
+            CHECK(su_render_release(g_r, linear) == SU_OK);
+        }
+    }
     td.textures[0] = 0xDEADBEEFu;
     CHECK(su_render_toon_material_create(g_r, &td, &h) == SU_E_INVALID_ARGUMENT);
 }

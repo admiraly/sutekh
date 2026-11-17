@@ -284,7 +284,7 @@ typedef struct SuAssetToon {
     float uv_scale[2];          /* default 1, 1 */
     float uv_offset[2];         /* default 0, 0 */
     float uv_rotation;          /* radians, default 0 */
-    uint32_t reserved0;
+    uint32_t reserved0;         /* must be zero */
     float shadow_color[3];      /* default 0.35, 0.35, 0.45 */
     float shade_threshold;      /* [-1, 1], default 0 */
     float shade_softness;       /* >= 0, default 0.05 */
@@ -298,7 +298,7 @@ typedef struct SuAssetToon {
     float rim_power;            /* > 0, default 3 */
     float rim_intensity;        /* >= 0, default 0 */
     uint32_t flags;             /* SU_TOON_* */
-    uint32_t reserved[3];
+    uint32_t reserved[3];       /* must be zero */
 } SuAssetToon;
 
 void su_asset_toon_default(SuAssetToon *t);

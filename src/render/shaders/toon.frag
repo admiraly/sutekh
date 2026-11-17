@@ -116,7 +116,7 @@ void main() {
     float spec_band = smoothstep(spec_thr - spec_soft, spec_thr + spec_soft, spec_raw);
     vec3 spec = toon.spec_color.rgb * (toon.spec_params.y * spec_band * cel) * fr.sun_color.rgb;
 
-    float nv = max(dot(n, v), 0.0);
+    float nv = clamp(dot(n, v), 0.0, 1.0);
     float rim_raw = pow(1.0 - nv, toon.spec_params.w);
     float rim_mask = (toon.params.y & 4u) != 0u ? cel : 1.0;
     vec3 rim = toon.rim_color.rgb * (toon.rim_color.w * rim_raw * rim_mask);

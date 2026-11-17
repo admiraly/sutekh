@@ -423,7 +423,8 @@ static int toon_valid(const SuAssetToon *t) {
         !isfinite(t->rim_power) || !isfinite(t->rim_intensity)) {
         return 0;
     }
-    if (t->shade_threshold < -1.0f || t->shade_threshold > 1.0f || t->shade_softness < 0.0f ||
+    if (t->reserved0 != 0u || t->reserved[0] != 0u || t->reserved[1] != 0u || t->reserved[2] != 0u ||
+        t->shade_threshold < -1.0f || t->shade_threshold > 1.0f || t->shade_softness < 0.0f ||
         t->diffuse_bands < 1u || t->diffuse_bands > 8u || t->specular_threshold < 0.0f ||
         t->specular_threshold > 1.0f || t->specular_softness < 0.0f || t->specular_intensity < 0.0f ||
         t->glossiness < 1.0f || t->rim_power <= 0.0f || t->rim_intensity < 0.0f ||

@@ -979,13 +979,14 @@ static void test_scene_color(void) {
              "{\"name\":\"vec3\",\"primitives\":[{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d,\"COLOR_0\":%d},\"indices\":%d}]},"
              "{\"name\":\"flat\",\"primitives\":[{\"attributes\":{\"POSITION\":%d,\"COLOR_0\":%d},\"indices\":%d}]},"
              "{\"name\":\"mixed\",\"primitives\":["
+             "{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d},\"indices\":%d},"
              "{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d,\"COLOR_0\":%d},\"indices\":%d},"
              "{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d},\"indices\":%d}]},"
              "{\"name\":\"plain\",\"primitives\":[{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d},\"indices\":%d}]}"
              "],"
-             "\"nodes\":[{\"mesh\":0},{\"mesh\":1},{\"mesh\":2},{\"mesh\":3}],"
-             "\"scenes\":[{\"nodes\":[0,1,2,3]}]",
-             ap, an, ac3, ai, ap, ac4u, ai, ap, an, ac4f, ai, ap, an, ai, ap, an, ai);
+             "\"nodes\":[{\"mesh\":0},{\"mesh\":1},{\"mesh\":2},{\"mesh\":3},{\"mesh\":0,\"scale\":[-1,1,1]}],"
+             "\"scenes\":[{\"nodes\":[0,1,2,3,4]}]",
+             ap, an, ac3, ai, ap, ac4u, ai, ap, an, ai, ap, an, ac4f, ai, ap, an, ai, ap, an, ai);
     json = gltf_json(g, "scene_col.bin", rest);
     write_file("scene_col.bin", g->bin, g->n);
     write_file("scene_col.gltf", json, strlen(json));
@@ -1005,6 +1006,15 @@ static void test_scene_color(void) {
             }
         }
 
+        CHECK(su_asset_pak_mesh(p, su_asset_id("col/mesh/vec3#mirrored"), &mv) == SU_OK);
+        CHECK(su_asset_pak_mesh_colors(p, su_asset_id("col/mesh/vec3#mirrored"), &vc) == SU_OK && vc != NULL);
+        if (vc != NULL) {
+            for (i = 0; i < 4u; i++) {
+                CHECK(vc[i].rgba[0] == col3[i * 3u] && vc[i].rgba[3] == 1.0f);
+            }
+        }
+        CHECK(mv.indices[1] == QUAD_IDX[2] && mv.indices[2] == QUAD_IDX[1]);
+
         /* 2. Flat normals (no NORMAL): unwelded 6 vertices preserve per-corner normalized VEC4 colors */
         CHECK(su_asset_pak_mesh(p, su_asset_id("col/mesh/flat"), &mv) == SU_OK);
         CHECK(mv.header->vertex_count == 6u && (mv.header->flags & SU_ASSET_MESH_FLAG_COLOR) != 0u);
@@ -1019,16 +1029,19 @@ static void test_scene_color(void) {
             }
         }
 
-        /* 3. Mixed primitives: primitive 0 has col4_f, primitive 1 is backfilled to {1,1,1,1} */
+        /* 3. Uncolored/colored/uncolored primitives backfill both sides with white. */
         CHECK(su_asset_pak_mesh(p, su_asset_id("col/mesh/mixed"), &mv) == SU_OK);
-        CHECK(mv.header->vertex_count == 8u && (mv.header->flags & SU_ASSET_MESH_FLAG_COLOR) != 0u);
+        CHECK(mv.header->vertex_count == 12u && (mv.header->flags & SU_ASSET_MESH_FLAG_COLOR) != 0u);
         CHECK(su_asset_pak_mesh_colors(p, su_asset_id("col/mesh/mixed"), &vc) == SU_OK && vc != NULL);
         if (vc != NULL) {
             for (i = 0; i < 4u; i++) {
-                CHECK(fabsf(vc[i].rgba[0] - col4_f[i * 4u + 0u]) < 1e-6f);
-                CHECK(fabsf(vc[i].rgba[3] - col4_f[i * 4u + 3u]) < 1e-6f);
+                CHECK(fabsf(vc[4u + i].rgba[0] - col4_f[i * 4u + 0u]) < 1e-6f);
+                CHECK(fabsf(vc[4u + i].rgba[3] - col4_f[i * 4u + 3u]) < 1e-6f);
             }
-            for (i = 4u; i < 8u; i++) {
+            for (i = 0u; i < 12u; i++) {
+                if (i >= 4u && i < 8u) {
+                    continue;
+                }
                 CHECK(vc[i].rgba[0] == 1.0f && vc[i].rgba[1] == 1.0f && vc[i].rgba[2] == 1.0f && vc[i].rgba[3] == 1.0f);
             }
         }

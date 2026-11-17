@@ -723,7 +723,7 @@ SU_RENDER_API uint32_t su_render_fx_material_create(SuRenderer *r, const SuRende
 /* A layered paint material (see above). SU_E_INVALID_ARGUMENT for an unknown texture handle, a texture of the wrong
  * colour space for its slot, or invalid paint parameters (layer count, order, channels, non-finite values). */
 SU_RENDER_API uint32_t su_render_paint_material_create(SuRenderer *r, const SuRenderPaintDesc *d, SuRenderHandle *out);
-/* A stylized / toon material (see above). */
+/* A stylized / toon material (see above). Texture color spaces follow SU_ASSET_SLOT_*; reserved words must be zero. */
 SU_RENDER_API uint32_t su_render_toon_material_create(SuRenderer *r, const SuRenderToonDesc *d, SuRenderHandle *out);
 /* An environment cubemap with prefiltered mips (see "image-based lighting"); READY when uploaded. Release with
  * su_render_release. SU_E_UNSUPPORTED_METHOD when the device cannot filter RGBA16F cube images. */
