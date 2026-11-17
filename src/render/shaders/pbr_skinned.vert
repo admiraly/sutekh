@@ -38,32 +38,36 @@ void main() {
     if (skin_cnt > 0u) {
         float wmax = max(max(in_weights.x, in_weights.y), max(in_weights.z, in_weights.w));
         if (wmax > 0.0) {
-            /* Power-of-two scaling avoids both an overflowing sum and a subnormal reciprocal. */
+            /* Split -exponent across two ldexp calls so each shift stays inside GLSL's
+             * [-126, +128] guaranteed range even for FLT_MAX (128) or subnormals (-148). */
             int exponent;
             frexp(wmax, exponent);
-            vec4 weights = ldexp(in_weights, ivec4(-exponent));
+            int half_exp = exponent / 2;
+            vec4 weights = ldexp(ldexp(in_weights, ivec4(-half_exp)), ivec4(-(exponent - half_exp)));
             float wsum = weights.x + weights.y + weights.z + weights.w;
-            uint j0 = min(in_joints.x, skin_cnt - 1u);
-            uint j1 = min(in_joints.y, skin_cnt - 1u);
-            uint j2 = min(in_joints.z, skin_cnt - 1u);
-            uint j3 = min(in_joints.w, skin_cnt - 1u);
-            mat4 sm = (skin_mats[skin_base + j0] * weights.x +
-                       skin_mats[skin_base + j1] * weights.y +
-                       skin_mats[skin_base + j2] * weights.z +
-                       skin_mats[skin_base + j3] * weights.w) / wsum;
-            p_local = (sm * vec4(in_pos, 1.0)).xyz;
-            mat3 sm3 = mat3(sm);
-            vec3 sc0 = cross(sm3[1], sm3[2]);
-            vec3 sc1 = cross(sm3[2], sm3[0]);
-            vec3 sc2 = cross(sm3[0], sm3[1]);
-            float sdet = dot(sm3[0], sc0);
-            if (abs(sdet) > 1e-20) {
-                n_local = (sc0 * in_normal.x + sc1 * in_normal.y + sc2 * in_normal.z) * (sdet < 0.0 ? -1.0 : 1.0);
-            } else {
-                n_local = sm3 * in_normal;
+            if (wsum > 0.0) {
+                uint j0 = min(in_joints.x, skin_cnt - 1u);
+                uint j1 = min(in_joints.y, skin_cnt - 1u);
+                uint j2 = min(in_joints.z, skin_cnt - 1u);
+                uint j3 = min(in_joints.w, skin_cnt - 1u);
+                mat4 sm = (skin_mats[skin_base + j0] * weights.x +
+                           skin_mats[skin_base + j1] * weights.y +
+                           skin_mats[skin_base + j2] * weights.z +
+                           skin_mats[skin_base + j3] * weights.w) / wsum;
+                p_local = (sm * vec4(in_pos, 1.0)).xyz;
+                mat3 sm3 = mat3(sm);
+                vec3 sc0 = cross(sm3[1], sm3[2]);
+                vec3 sc1 = cross(sm3[2], sm3[0]);
+                vec3 sc2 = cross(sm3[0], sm3[1]);
+                float sdet = dot(sm3[0], sc0);
+                if (abs(sdet) > 1e-20) {
+                    n_local = (sc0 * in_normal.x + sc1 * in_normal.y + sc2 * in_normal.z) * (sdet < 0.0 ? -1.0 : 1.0);
+                } else {
+                    n_local = sm3 * in_normal;
+                }
+                t_local = sm3 * in_tangent.xyz;
+                if (sdet < 0.0) handedness = -handedness;
             }
-            t_local = sm3 * in_tangent.xyz;
-            if (sdet < 0.0) handedness = -handedness;
         }
     }
     mat3 m = mat3(vec3(i_r0.x, i_r1.x, i_r2.x), vec3(i_r0.y, i_r1.y, i_r2.y), vec3(i_r0.z, i_r1.z, i_r2.z));
