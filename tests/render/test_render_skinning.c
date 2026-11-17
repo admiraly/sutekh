@@ -14,6 +14,8 @@
 #if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
+#include <float.h>
+#include <stddef.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -267,6 +269,23 @@ static void test_skin_validation_and_bounds(void) {
     init_frame(&f, &o, 1u, mats, 1u);
     CHECK(su_render_frame_ex(g_r, &f) == SU_E_INVALID_ARGUMENT);
 
+    /* The exact v12 allocation has no readable palette tail (ASan guards the boundary). */
+    {
+        size_t size = offsetof(SuRenderFrameDesc, skin_matrices);
+        SuRenderFrameDesc *old = malloc(size);
+        CHECK(old != NULL);
+        o.skin_count = 0u;
+        init_frame(&f, &o, 1u, NULL, 0u);
+        f.struct_size = (uint32_t)size;
+        if (old != NULL) {
+            memcpy(old, &f, size);
+            CHECK(su_render_frame_ex(g_r, old) == SU_OK);
+            free(old);
+        }
+    }
+    init_frame(&f, &o, 1u, mats, UINT32_MAX);
+    CHECK(su_render_frame_ex(g_r, &f) == SU_E_INVALID_ARGUMENT);
+
     o.skin_offset = UINT32_MAX - 1u;
     o.skin_count = 4u;
     init_frame(&f, &o, 1u, mats, 2u);
@@ -301,8 +320,8 @@ static void test_skin_bind_pose_and_deform(void) {
         sk_j0[i].weights[0] = 1.0f;
         sk_blend[i].joints[0] = 0u;
         sk_blend[i].joints[1] = 1u;
-        sk_blend[i].weights[0] = 0.5f;
-        sk_blend[i].weights[1] = 0.5f;
+        sk_blend[i].weights[0] = FLT_MAX;
+        sk_blend[i].weights[1] = FLT_MAX;
     }
     mod_j0 = make_skinned_model(0.25f, 3.0f, mat, sk_j0, 2u);
     mod_blend = make_skinned_model(0.25f, 3.0f, mat, sk_blend, 2u);
@@ -333,6 +352,17 @@ static void test_skin_bind_pose_and_deform(void) {
     if (render_frames(&f, g_img)) {
         CHECK(px(g_img, 128, 128)[0] < 10u);
         CHECK(px(g_img, 202, 128)[0] > 180u);
+    }
+
+    /* A tight bind-pose sphere lies outside the camera, but the posed quad is at its center. */
+    {
+        SuRenderHandle tight = make_skinned_model(0.25f, 0.36f, mat, sk_j0, 2u);
+        mats[0] = mat_translate(-20.0f, 0.0f, 0.0f);
+        init_obj(&o, tight, 20.0f, 0.0f, -3.0f, 0u, 1u);
+        init_frame(&f, &o, 1u, mats, 2u);
+        if (render_frames(&f, g_img)) CHECK(px(g_img, 128, 128)[0] > 180u);
+        o.skin_count = 0u;
+        if (render_frames(&f, g_img)) CHECK(px(g_img, 128, 128)[0] < 10u);
     }
 
     /* 4. dynamic SSBO growth beyond initial 4096 matrices -> offset 4900 translates -1.0 in X -> (54, 128) lit */

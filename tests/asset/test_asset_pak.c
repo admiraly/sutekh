@@ -672,6 +672,14 @@ static void test_skinned_mesh(void) {
             su_asset_pak_close(cp);
             free(c);
         }
+        /* v1 reserved words were ignored by the old reader and remain ignored. */
+        {
+            uint64_t off = entry_offset(a, id_v1) + 56u;
+            a[off] = 7u;
+            rehash(a, la);
+            CHECK(su_asset_pak_open(a, la, 0, &p, msg) == SU_OK);
+            su_asset_pak_close(p);
+        }
         free(a);
     }
 }

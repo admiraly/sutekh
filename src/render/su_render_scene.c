@@ -36,6 +36,58 @@ static float len3(const float *v) {
     return sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 }
 
+/* Nonnegative normalized skin weights form a convex combination of joint-transformed spheres.
+ * Keep the bind-pose sphere too (zero weights), and enclose every LOD about the existing node center. */
+static float posed_node_radius(SuRenderer *r, const SuRenderFrameDesc *f, const SuRenderObject *obj,
+                               const SuRenderModelNode *nd, const float *nc) {
+    float radius = nc[3];
+    uint32_t lod;
+    if (obj->skin_count == 0u) return radius;
+    for (lod = 0; lod < nd->lod_count; lod++) {
+        Res *res = su_rvk_get(r, nd->lod_mesh[lod], RES_MESH, NULL);
+        uint32_t j;
+        uint32_t count;
+        if (res == NULL || !res->u.mesh.is_skinned) continue;
+        count = obj->skin_count < res->u.mesh.joint_count ? obj->skin_count : res->u.mesh.joint_count;
+        for (j = 0; j < count; j++) {
+            const MeshRes *mesh = &res->u.mesh;
+            SuMat4f node;
+            SuMat4f m;
+            float delta[3];
+            float norm = 0.0f;
+            float bound;
+            int a, b;
+            memcpy(node.m, nd->transform, sizeof node.m);
+            m = su_mat4f_mul(node, f->skin_matrices[obj->skin_offset + j]);
+            for (a = 0; a < 3; a++) {
+                delta[a] = m.m[12 + a] - nc[a];
+                for (b = 0; b < 3; b++) {
+                    delta[a] += m.m[4 * b + a] * mesh->center[b];
+                    norm += m.m[4 * b + a] * m.m[4 * b + a];
+                }
+            }
+            /* Frobenius norm bounds the largest singular value, including shears. */
+            bound = len3(delta) + sqrtf(norm) * mesh->radius;
+            if (bound > radius) radius = bound;
+        }
+    }
+    return radius;
+}
+
+static float posed_model_radius(SuRenderer *r, const SuRenderFrameDesc *f, const SuRenderObject *obj,
+                                const ModelRes *model) {
+    float radius = model->radius;
+    uint32_t i;
+    if (obj->skin_count == 0u) return radius;
+    for (i = 0; i < model->count; i++) {
+        const float *nc = &model->node_center[i * 4u];
+        float delta[3] = {nc[0] - model->center[0], nc[1] - model->center[1], nc[2] - model->center[2]};
+        float bound = len3(delta) + posed_node_radius(r, f, obj, &model->nodes[i], nc);
+        if (bound > radius) radius = bound;
+    }
+    return radius;
+}
+
 void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, const SuMat4f *view_proj, float proj_y,
                         uint32_t *item_count) {
     SuFrustum fru;
@@ -86,7 +138,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
         c.x = rel.x + sr[0] * model->center[0] + sr[3] * model->center[1] + sr[6] * model->center[2];
         c.y = rel.y + sr[1] * model->center[0] + sr[4] * model->center[1] + sr[7] * model->center[2];
         c.z = rel.z + sr[2] * model->center[0] + sr[5] * model->center[1] + sr[8] * model->center[2];
-        if (!su_frustum_sphere(&fru, c, model->radius * smax)) {
+        if (!su_frustum_sphere(&fru, c, posed_model_radius(r, f, obj, model) * smax)) {
             r->stats.objects_culled++;
             continue;
         }
@@ -95,7 +147,7 @@ void su_rvk_scene_build(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *f, co
             const float *nc = &model->node_center[i * 4u];
             const float *t = nd->transform;
             float ncw[3];
-            float nr = nc[3] * smax;
+            float nr = posed_node_radius(r, f, obj, nd, nc) * smax;
             uint32_t lod;
             uint32_t pick = UINT32_MAX;
             uint32_t mesh_index = 0;
@@ -429,7 +481,7 @@ static int object_frame(SuRenderer *r, const SuRenderFrameDesc *f, const SuRende
     for (k = 0; k < 3; k++) {
         c[k] = rel[k] + sr[k] * (*model)->center[0] + sr[3 + k] * (*model)->center[1] + sr[6 + k] * (*model)->center[2];
     }
-    *radius = (*model)->radius * *smax;
+    *radius = posed_model_radius(r, f, obj, *model) * *smax;
     return 1;
 }
 
@@ -556,7 +608,7 @@ static float gather_casters(SuRenderer *r, const SuRenderFrameDesc *f, float pro
             const float *t = nd->transform;
             float ncw[3];
             float np[3];
-            float nr = nc[3] * smax;
+            float nr = posed_node_radius(r, f, obj, nd, nc) * smax;
             uint32_t lod;
             uint32_t mesh_index = 0;
             Res *mesh = NULL;

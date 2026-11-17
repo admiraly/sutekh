@@ -3354,6 +3354,7 @@ static int prepare_skin_ssbo(SuRenderer *r, Frame *fr, const SuRenderFrameDesc *
             }
             cap *= 2u;
         }
+        if ((uint64_t)cap * sizeof(SuMat4f) > r->props.limits.maxStorageBufferRange) cap = need;
         memset(&nb, 0, sizeof nb);
         if (!su_rvk_make_buffer(r, (VkDeviceSize)cap * sizeof(SuMat4f), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &nb)) {
@@ -4160,18 +4161,27 @@ static float vlen(SuVec3f v) {
 
 uint32_t su_render_frame_ex(SuRenderer *r, const SuRenderFrameDesc *f) {
     FrameIn in;
+    SuRenderFrameDesc compat;
     SuMat4f view;
     SuMat4f proj;
     const SuRenderLighting *l;
     SuVec3f sd;
     SuVec3f up;
     float len;
+    /* v12 ends before the palette. Copy only the caller's bytes before reading new fields. */
+    if (f != NULL && f->struct_size == offsetof(SuRenderFrameDesc, skin_matrices)) {
+        memset(&compat, 0, sizeof compat);
+        memcpy(&compat, f, f->struct_size);
+        compat.struct_size = sizeof compat;
+        f = &compat;
+    }
     if (r == NULL || f == NULL || f->struct_size != sizeof *f || (f->objects == NULL && f->object_count > 0u) ||
         (f->debug_instances == NULL && f->debug_instance_count > 0u) || (f->lines == NULL && f->line_vertex_count > 0u) ||
         (f->fx == NULL && f->fx_vertex_count > 0u) || (f->hud == NULL && f->hud_vertex_count > 0u) ||
         (f->fx_tex == NULL && f->fx_tex_vertex_count > 0u) || (f->fx_batches == NULL && f->fx_batch_count > 0u) ||
         (f->haze == NULL && f->haze_count > 0u) || f->haze_count > SU_HAZE_MAX_VOLUMES ||
         (f->skin_matrices == NULL && f->skin_matrix_count > 0u) ||
+        (uint64_t)f->skin_matrix_count * sizeof(SuMat4f) > r->props.limits.maxStorageBufferRange ||
         !isfinite(f->distortion_cube_intensity) || f->distortion_cube_intensity < 0.0f ||
         f->output_alpha > SU_RENDER_OUTPUT_ALPHA_PREMULTIPLIED ||
         !isfinite(f->time_seconds) || !(f->camera.fov_y > 0.0f && f->camera.fov_y < 3.1f) || !(f->camera.near_z > 0.0f)) {

@@ -10,6 +10,7 @@
 #if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
+#include <float.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -968,7 +969,7 @@ static void test_scene_skin(void) {
     static const float weights[16] = {
         1.0f, 0.0f, 0.0f, 0.0f,
         0.0f, 0.0f, 0.0f, 0.0f, /* zero sum -> fallback joint 0 weight 1 */
-        2.0f, 2.0f, 0.0f, 0.0f, /* unnormalized -> 0.5, 0.5 */
+        FLT_MAX, FLT_MAX, 0.0f, 0.0f, /* unnormalized -> 0.5, 0.5 */
         0.25f, 0.75f, 0.0f, 0.0f
     };
     char rest[8192];
@@ -1037,6 +1038,50 @@ static void test_scene_skin(void) {
     su_asset_pak_close(p);
 }
 
+/* Reject unsupported scalar encodings before cgltf's read_uint can silently yield joint zero. */
+static void test_skin_component_types(void) {
+    int variant;
+    for (variant = 0; variant < 4; variant++) {
+        G *g = calloc(1, sizeof *g);
+        const float pos[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+        const float floats[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+        const uint16_t joints[12] = {0};
+        const uint32_t ints[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+        char rest[1024];
+        char msg[256];
+        char *json;
+        uint32_t st;
+        SuAssetCookReport rep;
+        SuAssetPak *p;
+        int ap = pos_acc(g, pos, 3);
+        int aj = variant == 0 ? add_acc(g, floats, sizeof floats, 5126, 3, "VEC4", NULL)
+                             : add_acc(g, joints, sizeof joints, 5123, 3, "VEC4",
+                                       variant == 1 ? ",\"normalized\":true" : NULL);
+        int aw = variant == 2 ? add_acc(g, ints, sizeof ints, 5125, 3, "VEC4", NULL)
+                             : add_acc(g, floats, sizeof floats, 5126, 3, "VEC4", NULL);
+        snprintf(rest, sizeof rest,
+                 "\"meshes\":[{\"name\":\"skin\",\"primitives\":[{\"attributes\":{\"POSITION\":%d,"
+                 "\"JOINTS_0\":%d,\"WEIGHTS_0\":%d}}]}],\"nodes\":[{\"mesh\":0}],\"scenes\":[{\"nodes\":[0]}]", ap, aj, aw);
+        json = gltf_json(g, "skin_types.bin", rest);
+        write_file("skin_types.bin", g->bin, g->n);
+        write_file("skin_types.gltf", json, strlen(json));
+        p = cook("skin_types.gltf", "types", &rep, &st, msg);
+        if (variant < 3) {
+            CHECK(st == SU_E_PARSE && p == NULL);
+        } else {
+            SuAssetSkinMeshView view;
+            CHECK(st == SU_OK && p != NULL);
+            if (p != NULL) {
+                CHECK(su_asset_pak_mesh_skin(p, su_asset_id("types/mesh/skin"), &view) == SU_OK);
+                CHECK(view.header->vertex_count == 3u && view.skin[2].weights[0] == 1.0f);
+            }
+        }
+        su_asset_pak_close(p);
+        free(json);
+        free(g);
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr, "usage: test_asset_gltf WORKDIR\n");
@@ -1075,6 +1120,7 @@ int main(int argc, char **argv) {
     test_scene_c();
     test_scene_d();
     test_scene_skin();
+    test_skin_component_types();
     test_errors();
     test_loader();
     printf("test_asset_gltf: %ld checks, %ld failures\n", g_checks, g_fail);

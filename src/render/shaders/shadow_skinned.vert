@@ -22,16 +22,21 @@ void main() {
     uint skin_base = floatBitsToUint(i_extra.y);
     uint skin_cnt = floatBitsToUint(i_extra.z);
     if (skin_cnt > 0u) {
-        float wsum = in_weights.x + in_weights.y + in_weights.z + in_weights.w;
-        if (wsum > 1e-6) {
+        float wmax = max(max(in_weights.x, in_weights.y), max(in_weights.z, in_weights.w));
+        if (wmax > 0.0) {
+            /* Power-of-two scaling avoids both an overflowing sum and a subnormal reciprocal. */
+            int exponent;
+            frexp(wmax, exponent);
+            vec4 weights = ldexp(in_weights, ivec4(-exponent));
+            float wsum = weights.x + weights.y + weights.z + weights.w;
             uint j0 = min(in_joints.x, skin_cnt - 1u);
             uint j1 = min(in_joints.y, skin_cnt - 1u);
             uint j2 = min(in_joints.z, skin_cnt - 1u);
             uint j3 = min(in_joints.w, skin_cnt - 1u);
-            mat4 sm = (skin_mats[skin_base + j0] * in_weights.x +
-                       skin_mats[skin_base + j1] * in_weights.y +
-                       skin_mats[skin_base + j2] * in_weights.z +
-                       skin_mats[skin_base + j3] * in_weights.w) / wsum;
+            mat4 sm = (skin_mats[skin_base + j0] * weights.x +
+                       skin_mats[skin_base + j1] * weights.y +
+                       skin_mats[skin_base + j2] * weights.z +
+                       skin_mats[skin_base + j3] * weights.w) / wsum;
             p_local = (sm * vec4(in_pos, 1.0)).xyz;
         }
     }

@@ -658,7 +658,7 @@ static uint32_t check_mesh(const SuAssetPak *p, uint32_t ei, char *msg) {
     if (h.vertex_count == 0u || h.index_count < 3u || h.index_count % 3u != 0u || h.submesh_count == 0u ||
         want != size || !finite3(h.aabb_min) || !finite3(h.aabb_max) || !finite3(h.center) ||
         !isfinite(h.radius) || h.radius < 0.0f ||
-        (!skinned && (h.flags != 0u || h.joint_count != 0u)) ||
+        (!skinned && h.flags != 0u) ||
         (skinned && (h.flags != SU_ASSET_MESH_FLAG_SKINNED || h.joint_count == 0u ||
                      h.joint_count > SU_ASSET_MAX_JOINTS))) {
         msgf(msg, "mesh %016llx: inconsistent header", (unsigned long long)p->entries[ei].id);

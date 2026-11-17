@@ -1133,6 +1133,14 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
     if ((jnt != NULL) != (wgt != NULL)) {
         warn(c, "mesh %u primitive %u: JOINTS_0 without matching WEIGHTS_0; skin ignored", (unsigned)mi, (unsigned)pi);
     }
+    if (prim_skin &&
+        ((jnt->component_type != cgltf_component_type_r_8u && jnt->component_type != cgltf_component_type_r_16u) ||
+         jnt->normalized ||
+         (wgt->component_type != cgltf_component_type_r_8u && wgt->component_type != cgltf_component_type_r_16u &&
+          wgt->component_type != cgltf_component_type_r_32f))) {
+        msgf(c->msg, "mesh %u primitive %u: invalid skin component type", (unsigned)mi, (unsigned)pi);
+        return SU_E_PARSE;
+    }
     nsrc = p->indices != NULL ? (uint32_t)(p->indices->count <= 0x3FFFFFFFu ? p->indices->count : 0u) : nv;
     if (p->indices != NULL && p->indices->count > 0x3FFFFFFFu) {
         msgf(c->msg, "mesh %u primitive %u: too many indices", (unsigned)mi, (unsigned)pi);
@@ -1228,7 +1236,7 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
             if (prim_skin) {
                 cgltf_uint jj[4] = {0, 0, 0, 0};
                 float ww[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-                float sum = 0.0f;
+                double sum = 0.0;
                 int k;
                 (void)cgltf_accessor_read_uint(jnt, i, jj, 4);
                 (void)cgltf_accessor_read_float(wgt, i, ww, 4);
@@ -1240,7 +1248,7 @@ static uint32_t add_primitive(Cook *c, Build *b, const cgltf_primitive *p, size_
                 }
                 if (sum > 0.0f) {
                     for (k = 0; k < 4; k++) {
-                        ww[k] /= sum;
+                        ww[k] = (float)((double)ww[k] / sum);
                     }
                 } else {
                     jj[0] = 0;

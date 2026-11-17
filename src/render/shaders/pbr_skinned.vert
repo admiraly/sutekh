@@ -32,19 +32,25 @@ void main() {
     vec3 p_local = in_pos;
     vec3 n_local = in_normal;
     vec3 t_local = in_tangent.xyz;
+    float handedness = in_tangent.w;
     uint skin_base = floatBitsToUint(i_extra.y);
     uint skin_cnt = floatBitsToUint(i_extra.z);
     if (skin_cnt > 0u) {
-        float wsum = in_weights.x + in_weights.y + in_weights.z + in_weights.w;
-        if (wsum > 1e-6) {
+        float wmax = max(max(in_weights.x, in_weights.y), max(in_weights.z, in_weights.w));
+        if (wmax > 0.0) {
+            /* Power-of-two scaling avoids both an overflowing sum and a subnormal reciprocal. */
+            int exponent;
+            frexp(wmax, exponent);
+            vec4 weights = ldexp(in_weights, ivec4(-exponent));
+            float wsum = weights.x + weights.y + weights.z + weights.w;
             uint j0 = min(in_joints.x, skin_cnt - 1u);
             uint j1 = min(in_joints.y, skin_cnt - 1u);
             uint j2 = min(in_joints.z, skin_cnt - 1u);
             uint j3 = min(in_joints.w, skin_cnt - 1u);
-            mat4 sm = (skin_mats[skin_base + j0] * in_weights.x +
-                       skin_mats[skin_base + j1] * in_weights.y +
-                       skin_mats[skin_base + j2] * in_weights.z +
-                       skin_mats[skin_base + j3] * in_weights.w) / wsum;
+            mat4 sm = (skin_mats[skin_base + j0] * weights.x +
+                       skin_mats[skin_base + j1] * weights.y +
+                       skin_mats[skin_base + j2] * weights.z +
+                       skin_mats[skin_base + j3] * weights.w) / wsum;
             p_local = (sm * vec4(in_pos, 1.0)).xyz;
             mat3 sm3 = mat3(sm);
             vec3 sc0 = cross(sm3[1], sm3[2]);
@@ -57,6 +63,7 @@ void main() {
                 n_local = sm3 * in_normal;
             }
             t_local = sm3 * in_tangent.xyz;
+            if (sdet < 0.0) handedness = -handedness;
         }
     }
     mat3 m = mat3(vec3(i_r0.x, i_r1.x, i_r2.x), vec3(i_r0.y, i_r1.y, i_r2.y), vec3(i_r0.z, i_r1.z, i_r2.z));
@@ -67,7 +74,7 @@ void main() {
     float det = dot(m[0], c0);
     v_pos = p;
     v_normal = (c0 * n_local.x + c1 * n_local.y + c2 * n_local.z) * (det < 0.0 ? -1.0 : 1.0);
-    v_tangent = vec4(m * t_local, in_tangent.w);
+    v_tangent = vec4(m * t_local, handedness);
     v_uv = vec4(in_uv0, in_uv1);
     v_tint = i_tint;
     v_emissive = i_extra.x;
